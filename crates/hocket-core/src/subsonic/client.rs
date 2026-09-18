@@ -145,7 +145,8 @@ impl Client {
         &self.config.base_url
     }
 
-    pub(super) fn transport(&self) -> &Arc<dyn HttpTransport> {
+    /// The underlying transport (shared with the image cache).
+    pub fn transport(&self) -> &Arc<dyn HttpTransport> {
         &self.transport
     }
 
