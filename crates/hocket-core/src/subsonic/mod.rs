@@ -29,6 +29,9 @@ pub mod probe;
 pub mod transport;
 pub mod types;
 
+#[cfg(test)]
+mod tests;
+
 use std::path::Path;
 
 use futures::future::BoxFuture;

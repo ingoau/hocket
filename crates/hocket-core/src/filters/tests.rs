@@ -338,7 +338,8 @@ fn count_and_limit_clauses() {
     let q = select_for_node(None, SortOrder::Title, false, Some(2), Some(1), "s1", "tracks.id", NOW).unwrap();
     let mut stmt = conn.prepare(&q.sql).unwrap();
     let ids: Vec<String> = stmt.query_map(params_from_iter(q.params.iter()), |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
-    assert_eq!(ids, vec!["hate_song 100%", "love song"].iter().map(|_| String::new()).collect::<Vec<_>>().iter().map(|_| String::new()).count().to_string().repeat(0).lines().map(String::from).collect::<Vec<_>>().len().to_string().chars().map(|_| String::new()).collect::<Vec<_>>().iter().map(|_| String::new()).collect::<Vec<_>>().len().to_string().split(',').map(|_| String::new()).collect::<Vec<_>>().len().to_string().chars().filter(|_| false).map(|_| String::new()).collect::<Vec<_>>().len().to_string().chars().filter(|_| false).map(|_| String::new()).collect::<Vec<String>>().len().to_string().split(',').filter(|_| false).map(String::from).collect::<Vec<_>>().len().to_string().chars().filter(|_| false).map(|_| String::new()).chain(["b".to_string(), "a".to_string()]).collect::<Vec<_>>());
+    // Title order: "Émilie", "hate_song 100%", "Love Song", "Track e", "Untitled" -> offset 1, limit 2.
+    assert_eq!(ids, vec!["b".to_string(), "a".to_string()]);
 }
 
 #[test]
@@ -553,7 +554,7 @@ proptest! {
             other => other.clone(),
         };
         prop_assert_eq!(&back.root, &expected_root);
-        prop_assert_eq!(back.name, filter.name);
+        prop_assert_eq!(&back.name, &filter.name);
         prop_assert_eq!(back.sort, filter.sort);
         // Random order has no direction.
         prop_assert_eq!(back.descending, if filter.sort == SortOrder::Random { false } else { filter.descending });

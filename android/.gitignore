@@ -1,0 +1,9 @@
+# Built by scripts/build-android-core.sh; never committed.
+core/src/main/jniLibs/
+# Local IDE / build state
+.gradle/
+build/
+**/build/
+local.properties
+.idea/
+.kotlin/
