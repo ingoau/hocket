@@ -244,9 +244,11 @@ pub fn validate_rule(rule: &FilterRule) -> Result<(), FilterError> {
                 }
             }
             (FilterOp::InTheRange, _) => Err(bad("expected a range")),
-            (_, FilterValue::Number(n)) => {
+            (op, FilterValue::Number(n)) => {
                 if !n.is_finite() {
                     Err(bad("number must be finite"))
+                } else if matches!(op, FilterOp::Gt | FilterOp::Lt) && !matches!(rule.field, FilterField::Rating | FilterField::Energy) {
+                    Ok(())
                 } else {
                     check_number_bounds(rule.field, *n).map_err(bad)
                 }
@@ -287,17 +289,9 @@ fn check_number_bounds(field: FilterField, n: f64) -> Result<(), &'static str> {
         FilterField::Rating if !(0.0..=5.0).contains(&n) => Err("rating is 0–5"),
         FilterField::Energy if !(0.0..=1.0).contains(&n) => Err("energy is 0–1"),
         FilterField::Year if !(0.0..=9999.0).contains(&n) => Err("year is 0–9999"),
-        FilterField::PlayCount
-        | FilterField::LocalPlayCount
-        | FilterField::Duration
-        | FilterField::BitRate
-        | FilterField::DiscNumber
-        | FilterField::TrackNumber
-        | FilterField::Bpm
-            if n < 0.0 =>
-        {
-            Err("must not be negative")
-        }
+        // Counts and sizes are never negative, but a negative *threshold*
+        // ("playcount > -1", Navidrome's own "all songs" example) is a valid
+        // comparison, so only exact values are bounded.
         _ => Ok(()),
     }
 }
@@ -366,7 +360,8 @@ mod tests {
         assert!(validate_rule(&rule(FilterField::Rating, FilterOp::Gt, FilterValue::Number(6.0))).is_err());
         assert!(validate_rule(&rule(FilterField::Rating, FilterOp::Gt, FilterValue::Number(3.0))).is_ok());
         assert!(validate_rule(&rule(FilterField::Energy, FilterOp::Lt, FilterValue::Number(1.5))).is_err());
-        assert!(validate_rule(&rule(FilterField::PlayCount, FilterOp::Gt, FilterValue::Number(-1.0))).is_err());
+        assert!(validate_rule(&rule(FilterField::PlayCount, FilterOp::Gt, FilterValue::Number(-1.0))).is_ok());
+        assert!(validate_rule(&rule(FilterField::Year, FilterOp::Is, FilterValue::Number(-1.0))).is_err());
         assert!(validate_rule(&rule(FilterField::Title, FilterOp::Is, FilterValue::Text(String::new()))).is_err());
         assert!(validate_rule(&rule(FilterField::Title, FilterOp::Is, FilterValue::List(vec!["a".into(), "b".into()]))).is_ok());
         assert!(validate_rule(&rule(FilterField::Title, FilterOp::Contains, FilterValue::List(vec!["a".into()]))).is_err());

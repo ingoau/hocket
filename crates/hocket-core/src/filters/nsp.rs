@@ -45,9 +45,11 @@ pub fn to_nsp(filter: &Filter, caps: ServerCaps) -> Result<String, FilterError> 
     }
     if let Some(sort) = sort_name(filter.sort) {
         doc.insert("sort".into(), Value::String(sort.into()));
-        if filter.sort != SortOrder::Random {
-            doc.insert("order".into(), Value::String(if filter.descending { "desc" } else { "asc" }.into()));
-        }
+    }
+    // Random has no direction; the default order still records one so a
+    // document round-trips (Navidrome ignores `order` without `sort`).
+    if filter.sort != SortOrder::Random && (filter.sort != SortOrder::Default || filter.descending) {
+        doc.insert("order".into(), Value::String(if filter.descending { "desc" } else { "asc" }.into()));
     }
     if let Some(limit) = filter.limit {
         doc.insert("limit".into(), json!(limit));

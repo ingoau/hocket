@@ -2,7 +2,8 @@
 //!
 //! Used for live previews, for filtering lists already in memory (the queue,
 //! search results) and for the static-playlist helper. Mirrors the SQL in
-//! [`super::sql`] exactly; the two are cross-checked in tests.
+//! [`super::sql`] exactly; the two are cross-checked in tests. Case folding
+//! is ASCII-only on purpose: that is what SQLite's `NOCASE` and `LIKE` do.
 
 use crate::api::{FilterField, FilterNode, FilterOp, FilterRule, FilterValue, OfflineState, SortOrder, Track, TrackId};
 
@@ -116,18 +117,18 @@ pub fn rule_matches(rule: &FilterRule, track: &Track, facts: &LocalFacts, now_ms
 }
 
 fn text_matches(rule: &FilterRule, actual: Option<&str>) -> bool {
-    let actual_lower = actual.map(|s| s.to_lowercase());
+    let actual_lower = actual.map(|s| s.to_ascii_lowercase());
     let actual_lower = actual_lower.as_deref();
     match (&rule.op, &rule.value) {
-        (FilterOp::Is, FilterValue::Text(t)) => actual_lower == Some(t.to_lowercase().as_str()),
+        (FilterOp::Is, FilterValue::Text(t)) => actual_lower == Some(t.to_ascii_lowercase().as_str()),
         // NULL <> 'x' is NULL in SQL (no match); we mirror that.
-        (FilterOp::IsNot, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a != t.to_lowercase()),
-        (FilterOp::Is, FilterValue::List(items)) => actual_lower.is_some_and(|a| items.iter().any(|i| i.to_lowercase() == a)),
-        (FilterOp::IsNot, FilterValue::List(items)) => actual_lower.is_some_and(|a| !items.iter().any(|i| i.to_lowercase() == a)),
-        (FilterOp::Contains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.contains(&t.to_lowercase())),
-        (FilterOp::NotContains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| !a.contains(&t.to_lowercase())),
-        (FilterOp::StartsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.starts_with(&t.to_lowercase())),
-        (FilterOp::EndsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.ends_with(&t.to_lowercase())),
+        (FilterOp::IsNot, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a != t.to_ascii_lowercase()),
+        (FilterOp::Is, FilterValue::List(items)) => actual_lower.is_some_and(|a| items.iter().any(|i| i.to_ascii_lowercase() == a)),
+        (FilterOp::IsNot, FilterValue::List(items)) => actual_lower.is_some_and(|a| !items.iter().any(|i| i.to_ascii_lowercase() == a)),
+        (FilterOp::Contains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.contains(&t.to_ascii_lowercase())),
+        (FilterOp::NotContains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| !a.contains(&t.to_ascii_lowercase())),
+        (FilterOp::StartsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.starts_with(&t.to_ascii_lowercase())),
+        (FilterOp::EndsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.ends_with(&t.to_ascii_lowercase())),
         _ => false,
     }
 }
@@ -208,7 +209,7 @@ fn sort_key_cmp(sort: SortOrder, a: &Track, b: &Track) -> std::cmp::Ordering {
             (None, None) => Ordering::Equal,
             (None, Some(_)) => Ordering::Less,
             (Some(_), None) => Ordering::Greater,
-            (Some(x), Some(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+            (Some(x), Some(y)) => x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()),
         }
     };
     let num = |x: Option<f64>, y: Option<f64>| -> Ordering {
@@ -241,7 +242,7 @@ fn sort_key_cmp(sort: SortOrder, a: &Track, b: &Track) -> std::cmp::Ordering {
 
 /// Deterministic final tie-break, identical to the SQL: title, then id.
 fn tie_break(a: &Track, b: &Track) -> std::cmp::Ordering {
-    a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.id.cmp(&b.id))
+    a.title.to_ascii_lowercase().cmp(&b.title.to_ascii_lowercase()).then_with(|| a.id.cmp(&b.id))
 }
 
 /// The value-kind a field's rule compares; exposed for builders that want to

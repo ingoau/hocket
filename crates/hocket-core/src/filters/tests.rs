@@ -114,6 +114,7 @@ fn mirror(rows: &[(Track, LocalFacts)]) -> Connection {
             position INTEGER NOT NULL, track_id TEXT NOT NULL, PRIMARY KEY (server_id, playlist_id, position));",
     )
     .expect("schema");
+    let mut position = 0i64;
     for (tr, facts) in rows {
         conn.execute(
             "INSERT INTO tracks (id, server_id, title, album, artist, album_artist, track_number, disc_number, year, genre,
@@ -155,10 +156,11 @@ fn mirror(rows: &[(Track, LocalFacts)]) -> Connection {
             ],
         )
         .expect("insert track");
-        for (pos, pl) in facts.playlist_ids.iter().enumerate() {
+        for pl in &facts.playlist_ids {
+            position += 1;
             conn.execute(
                 "INSERT INTO playlist_tracks (server_id, playlist_id, position, track_id) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![tr.server_id, pl, pos as i64, tr.id],
+                rusqlite::params![tr.server_id, pl, position, tr.id],
             )
             .expect("insert membership");
         }
@@ -338,8 +340,9 @@ fn count_and_limit_clauses() {
     let q = select_for_node(None, SortOrder::Title, false, Some(2), Some(1), "s1", "tracks.id", NOW).unwrap();
     let mut stmt = conn.prepare(&q.sql).unwrap();
     let ids: Vec<String> = stmt.query_map(params_from_iter(q.params.iter()), |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
-    // Title order: "Émilie", "hate_song 100%", "Love Song", "Track e", "Untitled" -> offset 1, limit 2.
-    assert_eq!(ids, vec!["b".to_string(), "a".to_string()]);
+    // NOCASE is ASCII-only, so "Émilie" sorts last: hate_song, Love Song, Track e, Untitled, Émilie
+    // -> offset 1, limit 2.
+    assert_eq!(ids, vec!["a".to_string(), "e".to_string()]);
 }
 
 #[test]
