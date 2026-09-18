@@ -1,0 +1,743 @@
+{
+  "command.play": {
+    "type": "play"
+  },
+  "command.start": {
+    "type": "start"
+  },
+  "command.seekTo": {
+    "type": "seekTo",
+    "data": {
+      "position_ms": 12345
+    }
+  },
+  "command.seekBy": {
+    "type": "seekBy",
+    "data": {
+      "delta_ms": -10000
+    }
+  },
+  "command.playNext": {
+    "type": "playNext",
+    "data": {
+      "server_id": "srv",
+      "track_ids": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  "command.playTracks": {
+    "type": "playTracks",
+    "data": {
+      "server_id": "srv",
+      "track_ids": [
+        "a"
+      ],
+      "start_index": 0,
+      "label": "Search: hello",
+      "shuffle": false
+    }
+  },
+  "command.playContext": {
+    "type": "playContext",
+    "data": {
+      "args": {
+        "context": {
+          "serverId": "srv",
+          "kind": {
+            "type": "album",
+            "data": {
+              "id": "al1"
+            }
+          },
+          "label": "Album",
+          "sort": "default",
+          "tracks": []
+        },
+        "startIndex": 2,
+        "shuffle": true,
+        "saveOutgoing": true
+      }
+    }
+  },
+  "command.setRating": {
+    "type": "setRating",
+    "data": {
+      "targets": [
+        {
+          "type": "track",
+          "data": {
+            "id": "t1"
+          }
+        },
+        {
+          "type": "album",
+          "data": {
+            "id": "al1"
+          }
+        }
+      ],
+      "rating": 4
+    }
+  },
+  "command.setRepeat": {
+    "type": "setRepeat",
+    "data": {
+      "mode": "one"
+    }
+  },
+  "command.setNetworkState": {
+    "type": "setNetworkState",
+    "data": {
+      "state": {
+        "kind": "wifi",
+        "metered": false,
+        "networkId": "abc"
+      }
+    }
+  },
+  "command.backendReport.position": {
+    "type": "backendReport",
+    "data": {
+      "report": {
+        "type": "position",
+        "data": {
+          "key": "k1",
+          "position_ms": 5000
+        }
+      }
+    }
+  },
+  "command.backendReport.error": {
+    "type": "backendReport",
+    "data": {
+      "report": {
+        "type": "error",
+        "data": {
+          "key": "k1",
+          "message": "boom",
+          "fatal": false
+        }
+      }
+    }
+  },
+  "command.backendReport.focus": {
+    "type": "backendReport",
+    "data": {
+      "report": {
+        "type": "audioFocusLost",
+        "data": {
+          "transient": true
+        }
+      }
+    }
+  },
+  "command.mediaSessionCommand": {
+    "type": "mediaSessionCommand",
+    "data": {
+      "action": "seek",
+      "value": 1500.0
+    }
+  },
+  "command.runAction": {
+    "type": "runAction",
+    "data": {
+      "action_id": "track.love",
+      "target": {
+        "type": "tracks",
+        "data": {
+          "ids": [
+            "t1"
+          ]
+        }
+      }
+    }
+  },
+  "command.setSelection.none": {
+    "type": "setSelection",
+    "data": {
+      "target": {
+        "type": "none"
+      }
+    }
+  },
+  "command.pin": {
+    "type": "pin",
+    "data": {
+      "target": {
+        "type": "album",
+        "data": {
+          "id": "al1"
+        }
+      },
+      "transcode": false
+    }
+  },
+  "command.setSleepTimer": {
+    "type": "setSleepTimer",
+    "data": {
+      "timer": {
+        "endsAt": 1700000000000.0,
+        "stopAtEndOfTrack": false
+      }
+    }
+  },
+  "command.setSleepTimer.none": {
+    "type": "setSleepTimer",
+    "data": {
+      "timer": null
+    }
+  },
+  "command.saveFilter": {
+    "type": "saveFilter",
+    "data": {
+      "filter": {
+        "id": "f1",
+        "name": "Loved 2020s",
+        "root": {
+          "type": "all",
+          "data": [
+            {
+              "type": "rule",
+              "data": {
+                "field": "loved",
+                "op": "isTrue",
+                "value": {
+                  "type": "bool",
+                  "data": true
+                }
+              }
+            },
+            {
+              "type": "any",
+              "data": [
+                {
+                  "type": "rule",
+                  "data": {
+                    "field": "year",
+                    "op": "inTheRange",
+                    "value": {
+                      "type": "range",
+                      "data": {
+                        "low": 2020.0,
+                        "high": 2029.0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "sort": "dateAdded",
+        "descending": true,
+        "limit": 500
+      }
+    }
+  },
+  "command.setAudioSettings": {
+    "type": "setAudioSettings",
+    "data": {
+      "settings": {
+        "replayGain": "album",
+        "replayGainPreampDb": -3.0,
+        "normalisation": true,
+        "eq": {
+          "enabled": true,
+          "preampDb": -2.0,
+          "bands": [
+            {
+              "frequencyHz": 60.0,
+              "gainDb": 3.0,
+              "q": 1.0
+            }
+          ],
+          "preset": "Bass"
+        },
+        "gapless": true,
+        "outputDevice": null,
+        "exclusive": false
+      }
+    }
+  },
+  "query.snapshot": {
+    "type": "snapshot"
+  },
+  "query.tracks": {
+    "type": "tracks",
+    "data": {
+      "server_id": "srv",
+      "filter": null,
+      "sort": "title",
+      "descending": false,
+      "page": {
+        "offset": 40,
+        "limit": 40
+      }
+    }
+  },
+  "query.albums": {
+    "type": "albums",
+    "data": {
+      "server_id": "srv",
+      "artist_id": "ar1",
+      "genre": null,
+      "sort": "year",
+      "descending": true,
+      "page": {
+        "offset": 0,
+        "limit": 60
+      }
+    }
+  },
+  "query.artwork": {
+    "type": "artwork",
+    "data": {
+      "id": "al1",
+      "size": 160
+    }
+  },
+  "query.search": {
+    "type": "search",
+    "data": {
+      "server_id": "srv",
+      "query": "hello",
+      "limit": 20,
+      "include_server": true,
+      "request_id": "r1"
+    }
+  },
+  "query.actions": {
+    "type": "actions",
+    "data": {
+      "surface": "contextMenu",
+      "target": {
+        "type": "queueItems",
+        "data": {
+          "keys": [
+            "k1"
+          ]
+        }
+      }
+    }
+  },
+  "result.count": {
+    "type": "count",
+    "data": 42
+  },
+  "result.path.none": {
+    "type": "path",
+    "data": null
+  },
+  "result.path.some": {
+    "type": "path",
+    "data": "/data/x.jpg"
+  },
+  "result.trackDetail.none": {
+    "type": "trackDetail",
+    "data": null
+  },
+  "result.tracks": {
+    "type": "tracks",
+    "data": {
+      "items": [
+        {
+          "id": "t1",
+          "serverId": "srv",
+          "title": "Song",
+          "albumId": null,
+          "album": null,
+          "artistId": null,
+          "artist": null,
+          "albumArtist": null,
+          "trackNumber": null,
+          "discNumber": null,
+          "year": null,
+          "genre": null,
+          "durationMs": 1000,
+          "bitRate": null,
+          "sampleRate": null,
+          "bitDepth": null,
+          "channels": null,
+          "suffix": null,
+          "contentType": null,
+          "sizeBytes": null,
+          "path": null,
+          "coverArt": null,
+          "rating": 0,
+          "loved": false,
+          "playCount": 3,
+          "lastPlayed": null,
+          "created": null,
+          "replayGain": null,
+          "sonic": null,
+          "offline": "none",
+          "musicBrainzId": null,
+          "explicit": false,
+          "comment": null
+        }
+      ],
+      "offset": 0,
+      "total": 1
+    }
+  },
+  "result.queue": {
+    "type": "queue",
+    "data": {
+      "contextLabel": "Album",
+      "history": [
+        {
+          "item": {
+            "key": "h1",
+            "trackId": "t-h1",
+            "source": {
+              "type": "context",
+              "data": {
+                "index": 0
+              }
+            },
+            "unavailable": false
+          },
+          "track": {
+            "id": "t-h1",
+            "serverId": "srv",
+            "title": "Title",
+            "artist": "Artist",
+            "album": "Album",
+            "albumId": "al1",
+            "artistId": null,
+            "durationMs": 213000,
+            "coverArt": "al1",
+            "rating": 3,
+            "loved": true,
+            "offline": "cached"
+          }
+        }
+      ],
+      "current": {
+        "item": {
+          "key": "c",
+          "trackId": "t-c",
+          "source": {
+            "type": "context",
+            "data": {
+              "index": 1
+            }
+          },
+          "unavailable": false
+        },
+        "track": {
+          "id": "t-c",
+          "serverId": "srv",
+          "title": "Title",
+          "artist": "Artist",
+          "album": "Album",
+          "albumId": "al1",
+          "artistId": null,
+          "durationMs": 213000,
+          "coverArt": "al1",
+          "rating": 3,
+          "loved": true,
+          "offline": "cached"
+        }
+      },
+      "playingNext": [
+        {
+          "item": {
+            "key": "n1",
+            "trackId": "t-n1",
+            "source": {
+              "type": "inserted"
+            },
+            "unavailable": false
+          },
+          "track": {
+            "id": "t-n1",
+            "serverId": "srv",
+            "title": "Title",
+            "artist": "Artist",
+            "album": "Album",
+            "albumId": "al1",
+            "artistId": null,
+            "durationMs": 213000,
+            "coverArt": "al1",
+            "rating": 3,
+            "loved": true,
+            "offline": "cached"
+          }
+        }
+      ],
+      "upcoming": [
+        {
+          "item": {
+            "key": "u1",
+            "trackId": "t-u1",
+            "source": {
+              "type": "autoplay",
+              "data": {
+                "provider": "sonicSimilarity",
+                "reason": "Similar to X",
+                "score": 0.91
+              }
+            },
+            "unavailable": false
+          },
+          "track": {
+            "id": "t-u1",
+            "serverId": "srv",
+            "title": "Title",
+            "artist": "Artist",
+            "album": "Album",
+            "albumId": "al1",
+            "artistId": null,
+            "durationMs": 213000,
+            "coverArt": "al1",
+            "rating": 3,
+            "loved": true,
+            "offline": "cached"
+          }
+        }
+      ],
+      "shuffle": false,
+      "repeat": "all",
+      "autoplay": true,
+      "mode": "apple",
+      "totalUpcoming": 1
+    }
+  },
+  "result.lyrics": {
+    "type": "lyricsResult",
+    "data": {
+      "trackId": "t1",
+      "tier": "syllable",
+      "lang": "en",
+      "displayArtist": null,
+      "displayTitle": null,
+      "agents": [
+        {
+          "id": "v1",
+          "name": null,
+          "side": 0
+        },
+        {
+          "id": "v2",
+          "name": "B",
+          "side": 1
+        }
+      ],
+      "lines": [
+        {
+          "startMs": 1000,
+          "endMs": 3000,
+          "text": "Hel lo",
+          "syllables": [
+            {
+              "text": "Hel",
+              "startMs": 1000,
+              "endMs": 1500,
+              "joined": true
+            },
+            {
+              "text": "lo",
+              "startMs": 1500,
+              "endMs": 3000,
+              "joined": false
+            }
+          ],
+          "agent": "v1",
+          "background": false,
+          "translation": null
+        }
+      ],
+      "source": "server",
+      "offsetMs": -250
+    }
+  },
+  "event.backend.load": {
+    "type": "backend",
+    "data": {
+      "command": {
+        "type": "load",
+        "data": {
+          "source": {
+            "key": "k1",
+            "track": {
+              "id": "t1",
+              "serverId": "srv",
+              "title": "Title",
+              "artist": "Artist",
+              "album": "Album",
+              "albumId": "al1",
+              "artistId": null,
+              "durationMs": 213000,
+              "coverArt": "al1",
+              "rating": 3,
+              "loved": true,
+              "offline": "cached"
+            },
+            "url": "https://nd.example/rest/stream?id=t1",
+            "headers": {
+              "X-Test": "1"
+            },
+            "mimeType": "audio/flac",
+            "gainDb": -6.5,
+            "transcoded": false
+          },
+          "next": null,
+          "position_ms": 0,
+          "play": true
+        }
+      }
+    }
+  },
+  "event.backend.play": {
+    "type": "backend",
+    "data": {
+      "command": {
+        "type": "play"
+      }
+    }
+  },
+  "event.mediaSession": {
+    "type": "mediaSession",
+    "data": {
+      "state": {
+        "metadata": {
+          "title": "Song",
+          "artist": "Artist",
+          "album": null,
+          "durationMs": 213000,
+          "artworkPath": "/cache/al1-640.jpg",
+          "trackId": "t1",
+          "loved": false,
+          "rating": 0
+        },
+        "isPlaying": true,
+        "position": {
+          "positionMs": 1000,
+          "takenAt": 1700000000000.0,
+          "rate": 1.0,
+          "isPlaying": true
+        },
+        "shuffle": false,
+        "repeat": "off",
+        "volume": 1.0,
+        "actions": [
+          "play",
+          "love",
+          "rate"
+        ],
+        "ownsTransport": true
+      }
+    }
+  },
+  "event.toast": {
+    "type": "toast",
+    "data": {
+      "toast": {
+        "id": "toast1",
+        "message": "Removed 3 tracks",
+        "actionLabel": "Undo",
+        "actionCommand": "{\"type\":\"undo\"}",
+        "durationMs": 5000
+      }
+    }
+  },
+  "event.playerNotice.none": {
+    "type": "playerNotice",
+    "data": {
+      "message": null
+    }
+  },
+  "event.libraryChanged": {
+    "type": "libraryChanged",
+    "data": {
+      "server_id": "srv",
+      "tables": [
+        "tracks"
+      ],
+      "ids": []
+    }
+  },
+  "event.nowPlaying.none": {
+    "type": "nowPlayingChanged",
+    "data": {
+      "entry": null
+    }
+  },
+  "event.handoffPicker": {
+    "type": "handoffPickerChanged",
+    "data": {
+      "open": true,
+      "targets": [
+        {
+          "id": "d2",
+          "name": "Laptop",
+          "platform": "linux",
+          "appVersion": "0.1.0",
+          "playing": false,
+          "ready": true,
+          "lastSeen": 1700000000000.0,
+          "isSelf": false
+        }
+      ]
+    }
+  },
+  "event.error": {
+    "type": "error",
+    "data": {
+      "kind": "auth",
+      "message": "bad password",
+      "detail": null
+    }
+  },
+  "event.sessionChanged": {
+    "type": "sessionChanged",
+    "data": {
+      "document": {
+        "schemaVersion": 1,
+        "sessionId": "s1",
+        "scope": "srv:me",
+        "revision": 7,
+        "updatedAt": 1700000000000.0,
+        "context": null,
+        "mode": "apple",
+        "cursor": 0,
+        "current": null,
+        "history": [],
+        "insertions": [],
+        "shuffle": null,
+        "repeat": "off",
+        "autoplay": false,
+        "transport": {
+          "lease": {
+            "owner": null,
+            "epoch": 0,
+            "expiresAt": 0.0
+          },
+          "position": {
+            "positionMs": 0,
+            "takenAt": 0.0,
+            "rate": 0.0,
+            "isPlaying": false
+          },
+          "buffering": false,
+          "playedMs": 0,
+          "volume": 0.0
+        },
+        "savedQueues": []
+      }
+    }
+  },
+  "config": {
+    "dataDir": "/data",
+    "cacheDir": "/cache",
+    "deviceId": "dev1",
+    "deviceName": "Pixel",
+    "platform": "android",
+    "appVersion": "0.1.0",
+    "audio": "external",
+    "coordinatorListen": null
+  }
+}

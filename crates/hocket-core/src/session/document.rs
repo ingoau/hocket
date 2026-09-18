@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value};
 
 use crate::api::{self, EpochMs, QueueSource, SessionDocument, SessionId, TransportState};
+use crate::session::saved::is_id_referenced;
 use crate::session::shuffle::is_bijection;
 
 /// Schema version of the session document this build writes.
@@ -109,16 +110,16 @@ pub fn save_value(doc: &SessionDocument) -> Result<Value, DocumentError> {
         return Err(DocumentError::NotAnObject);
     };
     map.remove("extra");
-    let mut merged: Map<String, Value> = Map::new();
-    for (k, raw) in &doc.extra {
-        if map.contains_key(k) {
+    // Known keys first, then the preserved unknown ones in a stable order.
+    let mut merged: Map<String, Value> = map;
+    let mut extra: Vec<(&String, &String)> = doc.extra.iter().collect();
+    extra.sort();
+    for (k, raw) in extra {
+        if merged.contains_key(k) {
             continue;
         }
         let v = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.clone()));
         merged.insert(k.clone(), v);
-    }
-    for (k, v) in map {
-        merged.insert(k, v);
     }
     Ok(Value::Object(merged))
 }
@@ -143,6 +144,12 @@ pub fn same_state(a: &SessionDocument, b: &SessionDocument) -> bool {
 /// should refuse to adopt it.
 pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
     let n = doc.context.as_ref().map(|c| c.tracks.len()).unwrap_or(0);
+    // An ID-referenced context restored from a snapshot has no tracks until
+    // the actor resolves them; its cursor and indices are checked afterwards.
+    let unresolved = doc.context.as_ref().map(|c| c.tracks.is_empty() && is_id_referenced(&c.kind)).unwrap_or(false);
+    if unresolved {
+        return validate_rest(doc);
+    }
     if doc.context.is_none() {
         if doc.cursor != 0 {
             return Err(DocumentError::Invalid("cursor without context".into()));
@@ -150,15 +157,12 @@ pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
         if matches!(doc.current.as_ref().map(|c| &c.source), Some(QueueSource::Context { .. })) {
             return Err(DocumentError::Invalid("context-sourced current without context".into()));
         }
-    } else if n > 0 && doc.cursor as usize >= n {
+    } else if doc.cursor as usize > n {
+        // The cursor is the boundary before the next context item, so it may
+        // sit just past the last one.
         return Err(DocumentError::Invalid(format!("cursor {} out of range for {} tracks", doc.cursor, n)));
     }
-    let mut keys = HashSet::new();
-    let all = doc.history.iter().chain(doc.current.iter()).chain(doc.insertions.iter());
-    for item in all {
-        if !keys.insert(item.key.as_str()) {
-            return Err(DocumentError::Invalid(format!("duplicate queue key {}", item.key)));
-        }
+    for item in doc.history.iter().chain(doc.current.iter()).chain(doc.insertions.iter()) {
         if let QueueSource::Context { index } = item.source {
             if index as usize >= n {
                 return Err(DocumentError::Invalid(format!("context index {index} out of range for {n} tracks")));
@@ -175,6 +179,18 @@ pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
             if a as usize >= n {
                 return Err(DocumentError::Invalid("shuffle anchor out of range".into()));
             }
+        }
+    }
+    validate_rest(doc)
+}
+
+/// The checks that hold even for an unresolved context: unique keys, unique
+/// saved-queue ids.
+fn validate_rest(doc: &SessionDocument) -> Result<(), DocumentError> {
+    let mut keys = HashSet::new();
+    for item in doc.history.iter().chain(doc.current.iter()).chain(doc.insertions.iter()) {
+        if !keys.insert(item.key.as_str()) {
+            return Err(DocumentError::Invalid(format!("duplicate queue key {}", item.key)));
         }
     }
     let mut ids = HashSet::new();
@@ -273,6 +289,8 @@ mod tests {
         assert!(validate(&doc_with_context(3)).is_ok());
         let mut d = doc_with_context(3);
         d.cursor = 3;
+        assert!(validate(&d).is_ok(), "cursor may sit just past the end");
+        d.cursor = 4;
         assert!(validate(&d).is_err());
         let mut d = doc_with_context(3);
         d.history.push(d.current.clone().unwrap());

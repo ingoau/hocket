@@ -21,8 +21,8 @@ android {
 }
 
 kotlin {
-    jvmToolchain(17)
     compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         freeCompilerArgs.addAll("-opt-in=androidx.media3.common.util.UnstableApi")
     }
 }

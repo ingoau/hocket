@@ -672,7 +672,7 @@ impl Reducer<'_, '_> {
         self.doc.current = None;
         self.doc.cursor = 0;
         self.doc.shuffle = if shuffle {
-            Some(ShuffleState { seed: self.ctx.entropy.next_seed(), anchor: start, order: None })
+            Some(ShuffleState { seed: self.ctx.entropy.next_seed(), anchor: start.filter(|_| n > 0), order: None })
         } else {
             None
         };
@@ -879,6 +879,10 @@ impl Reducer<'_, '_> {
     fn advance(&mut self) -> bool {
         let snapshot = self.doc.clone();
         let effects_len = self.effects.len();
+        // The outgoing item precedes anything skipped on the way to the next one.
+        if let Some(cur) = self.doc.current.take() {
+            self.push_history(cur);
+        }
         loop {
             let Some(c) = self.candidate() else {
                 *self.doc = snapshot;
@@ -913,9 +917,6 @@ impl Reducer<'_, '_> {
                     item
                 }
             };
-            if let Some(cur) = self.doc.current.take() {
-                self.push_history(cur);
-            }
             self.doc.current = Some(item);
             return true;
         }
@@ -929,13 +930,23 @@ impl Reducer<'_, '_> {
         }
     }
 
-    /// Push the current item back to the front of the future, preserving its source.
+    /// Push the current item back to the front of the future, preserving its
+    /// source. A context item normally goes back by moving the cursor to its
+    /// position; if the most recent context item in history sits at or after
+    /// that position, the current item was reached by a Repeat-All wrap and
+    /// the cursor goes back to the end instead, so the wrap replays.
     fn push_current_to_future(&mut self) {
         let Some(cur) = self.doc.current.take() else { return };
         match cur.source {
             QueueSource::Context { index } => {
-                if let Some(p) = self.perm().to_position(index) {
-                    self.doc.cursor = p;
+                let p = self.perm();
+                if let Some(pos) = p.to_position(index) {
+                    let last_played = self.doc.history.iter().rev().find_map(|h| match h.source {
+                        QueueSource::Context { index } => p.to_position(index),
+                        _ => None,
+                    });
+                    let wrapped = last_played.map(|q| q >= pos).unwrap_or(false);
+                    self.doc.cursor = if wrapped { p.len() as u32 } else { pos };
                 }
             }
             QueueSource::Inserted | QueueSource::Autoplay { .. } => {
@@ -948,8 +959,9 @@ impl Reducer<'_, '_> {
     /// even when flagged).
     fn previous(&mut self, target: Option<&str>) -> Result<(), ReduceError> {
         let snapshot = self.doc.clone();
-        while let Some(item) = self.doc.history.pop() {
+        while !self.doc.history.is_empty() {
             self.push_current_to_future();
+            let Some(item) = self.doc.history.pop() else { break };
             let is_target = target == Some(item.key.as_str());
             if item.unavailable && !is_target {
                 // Skipped going forward, skipped going back.
@@ -1415,8 +1427,11 @@ mod tests {
         assert_eq!(playing_next_tracks(&d), vec!["x"]);
         assert_eq!(upcoming_tracks(&d), vec!["a-t1", "a-t3", "a-t4"]);
         assert_eq!(cur_track(&d), "a-t0");
-        // Move a context item into playing next: it becomes Inserted.
-        let (d, _) = step(&d, &e, QueueOp::MoveQueueItem { key: context_key(3), to_index: 0 });
+        // Move a context item into playing next: it becomes Inserted. Synthetic
+        // keys are index-based, so they are re-read from the derived queue
+        // after every change (the UI gets a fresh QueueView each time).
+        let t3 = derive(&d).upcoming.iter().find(|i| i.track_id == "a-t3").unwrap().key.clone();
+        let (d, _) = step(&d, &e, QueueOp::MoveQueueItem { key: t3, to_index: 0 });
         assert_eq!(playing_next_tracks(&d), vec!["a-t3", "x"]);
         assert_eq!(d.insertions[0].source, QueueSource::Inserted);
         assert_eq!(upcoming_tracks(&d), vec!["a-t1", "a-t4"]);
@@ -1467,10 +1482,14 @@ mod tests {
         assert_eq!(playing_next_tracks(&j), vec!["x"]);
         assert_eq!(upcoming_tracks(&j), vec!["a-t4"]);
         assert_eq!(j.history.len(), 1);
-        // Jump back into history rewinds.
+        // Jump back into history rewinds; the items the forward jump skipped
+        // stay skipped (Apple / Spotify semantics), the insertion is still pending.
         let h = j.history[0].key.clone();
         let (b, _) = step(&j, &e, QueueOp::JumpToQueueItem { key: h });
-        assert!(same_state(&b, &d));
+        assert_eq!(cur_track(&b), "a-t0");
+        assert!(b.history.is_empty());
+        assert_eq!(playing_next_tracks(&b), vec!["x"]);
+        assert_eq!(upcoming_tracks(&b), vec!["a-t3", "a-t4"]);
         // Jump to current restarts.
         let (_, fx) = step(&d, &e, QueueOp::JumpToQueueItem { key: d.current.as_ref().unwrap().key.clone() });
         assert_eq!(fx, vec![Effect::RestartCurrent]);

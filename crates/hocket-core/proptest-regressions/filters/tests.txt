@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1c3e72a74d206e1654a2ddcb624eeb76d47df59ac3bf8ecc03683643386f2914 # shrinks to node = Rule(FilterRule { field: Title, op: Is, value: Text("a") }), sort_idx = 0, desc = true, limit = None
+cc 7fd30f26a10d660c949a4c2249ad0b98041cfcfc69d82833e8f01cc811b3732a # shrinks to node = Rule(FilterRule { field: Title, op: Is, value: Text("a") }), sort_idx = 0, desc = false

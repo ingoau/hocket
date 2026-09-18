@@ -168,11 +168,12 @@ pub fn parse_lame_header(frame: &[u8]) -> Option<LameInfo> {
     }
     // Layout relative to the version string start:
     //  0..9   version, 9 revision/VBR method, 10 lowpass,
-    //  11..15 peak (f32 BE, LAME >= 3.94; 0 = unset), 15..17 radio gain,
+    //  11..15 peak (9.23 fixed point, LAME >= 3.94; 0 = unset), 15..17 radio gain,
     //  17..19 audiophile gain, 19 flags, 20 bitrate, 21..24 delay/padding.
+    // Peak amplitude in 9.23 fixed point (1.0 = full scale).
     let peak_raw = be_u32(&ext[11..15]);
     if peak_raw != 0 {
-        let peak = f32::from_bits(peak_raw) as f64;
+        let peak = f64::from(peak_raw) / f64::from(1u32 << 23);
         if peak.is_finite() && peak > 0.0 && peak < 100.0 {
             info.gain.peak = Some(peak);
         }
@@ -292,7 +293,7 @@ pub(crate) mod tests {
         f[p..p + 9].copy_from_slice(b"LAME3.99r");
         f[p + 9] = 0x03; // revision 0, VBR method 3
         f[p + 10] = 0xC0; // lowpass
-        f[p + 11..p + 15].copy_from_slice(&0.987_f32.to_bits().to_be_bytes());
+        f[p + 11..p + 15].copy_from_slice(&((0.987 * f64::from(1u32 << 23)) as u32).to_be_bytes());
         // radio gain: name 1, originator 3 (user), negative, 6.5 dB -> 65
         let radio: u16 = (1 << 13) | (3 << 10) | (1 << 9) | 65;
         f[p + 15..p + 17].copy_from_slice(&radio.to_be_bytes());

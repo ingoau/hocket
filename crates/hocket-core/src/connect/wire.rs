@@ -28,8 +28,8 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp, QueueItem, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
+    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp, QueueKey, QueueMode,
+    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
     PROTOCOL_MIN_VERSION, PROTOCOL_VERSION,
 };
 
@@ -251,54 +251,107 @@ pub enum TransportCommand {
 // Session ops
 // ---------------------------------------------------------------------------
 
-/// A session-document mutation as it travels between devices. Mirrors the
-/// queue/session subset of [`crate::api::Command`], with everything a replica
-/// needs to apply it *deterministically* (queue keys, shuffle seeds) chosen by
-/// the originator and carried along. Applied by the session reducer through
-/// [`crate::connect::SessionReducer`].
+/// One autoplay result as it travels in an op.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoplayOpItem {
+    pub track_id: TrackId,
+    pub provider: AutoplayProvider,
+    pub reason: String,
+    pub score: Option<f64>,
+}
+
+/// A session-document mutation as it travels between devices. Mirrors
+/// [`crate::session::QueueOp`] variant for variant (the adapter in
+/// [`crate::connect::session_adapter`] is a mechanical match) plus
+/// [`SessionOp::Replace`] for whole-document pushes. Everything a replica
+/// needs to apply an op *deterministically* (queue keys, shuffle seeds) is
+/// derived from the op id every replica sees, never from local randomness.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum SessionOp {
-    /// Replace the queue with a context. `shuffle_seed` is used when `args.shuffle`.
-    PlayContext { args: PlayContextArgs, shuffle_seed: u32 },
+    PlayContext { args: PlayContextArgs },
     PlayTracks {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
         start_index: u32,
         label: String,
         shuffle: bool,
-        shuffle_seed: u32,
+        save_outgoing: bool,
     },
-    /// Items already keyed by the originator.
-    PlayNext { items: Vec<QueueItem> },
-    PlayLater { items: Vec<QueueItem> },
-    /// Autoplay appended these (source = Autoplay).
-    AppendAutoplay { items: Vec<QueueItem> },
-    Next,
-    Previous,
-    JumpTo { key: QueueKey },
-    Remove { keys: Vec<QueueKey> },
-    Move { key: QueueKey, to_index: u32 },
-    Clear,
+    PlayNext { server_id: ServerId, track_ids: Vec<TrackId> },
+    PlayLater { server_id: ServerId, track_ids: Vec<TrackId> },
+    JumpToQueueItem { key: QueueKey },
+    RemoveQueueItems { keys: Vec<QueueKey> },
+    MoveQueueItem { key: QueueKey, to_index: u32 },
+    ClearQueue,
     ClearInsertions,
-    SetShuffle { enabled: bool, seed: u32 },
+    SetShuffle { enabled: bool },
+    Reshuffle,
     SetRepeat { mode: RepeatMode },
     SetAutoplay { enabled: bool },
     SetQueueMode { mode: QueueMode },
+    Next,
+    Previous,
     /// Mark unplayable and advance; never scrobbles.
     SkipUnavailable { key: QueueKey },
-    RestoreSavedQueue { id: String },
+    AppendAutoplay { items: Vec<AutoplayOpItem> },
+    TrackEnded,
+    RestoreSavedQueue { id: String, tracks: Option<Vec<TrackId>> },
+    SetContextTracks { tracks: Vec<TrackId> },
+    SaveCurrentQueue { pinned: bool },
     PinSavedQueue { id: String, pinned: bool },
     DeleteSavedQueue { id: String },
-    /// Insert or replace a saved queue in the document (auto-save, filed divergence).
-    UpsertSavedQueue { queue: SavedQueue },
+    TouchSavedQueue { id: String },
+    /// LWW merge of a saved-queue set into the document's.
+    MergeSavedQueues { remote: Vec<SavedQueue> },
     /// Whole-document replacement: undo snapshot restore, initial push into an
-    /// empty room. `revision`, `sessionId` and `scope` of the target are kept.
+    /// empty room, a returning device's fast-forward. `revision`, `sessionId`
+    /// and `scope` of the target are kept.
     Replace { document: SessionDocument },
 }
 
 impl SessionOp {
+    /// The wire op for a public command, or `None` when the command does not
+    /// touch the session document.
+    pub fn from_command(cmd: &Command) -> Option<SessionOp> {
+        Some(match cmd {
+            Command::PlayContext { args } => SessionOp::PlayContext { args: args.clone() },
+            Command::PlayTracks { server_id, track_ids, start_index, label, shuffle } => SessionOp::PlayTracks {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                start_index: *start_index,
+                label: label.clone(),
+                shuffle: *shuffle,
+                save_outgoing: true,
+            },
+            Command::PlayNext { server_id, track_ids } => {
+                SessionOp::PlayNext { server_id: server_id.clone(), track_ids: track_ids.clone() }
+            }
+            Command::PlayLater { server_id, track_ids } => {
+                SessionOp::PlayLater { server_id: server_id.clone(), track_ids: track_ids.clone() }
+            }
+            Command::JumpToQueueItem { key } => SessionOp::JumpToQueueItem { key: key.clone() },
+            Command::RemoveQueueItems { keys } => SessionOp::RemoveQueueItems { keys: keys.clone() },
+            Command::MoveQueueItem { key, to_index } => SessionOp::MoveQueueItem { key: key.clone(), to_index: *to_index },
+            Command::ClearQueue => SessionOp::ClearQueue,
+            Command::ClearInsertions => SessionOp::ClearInsertions,
+            Command::SetShuffle { enabled } => SessionOp::SetShuffle { enabled: *enabled },
+            Command::SetRepeat { mode } => SessionOp::SetRepeat { mode: *mode },
+            Command::SetAutoplay { enabled } => SessionOp::SetAutoplay { enabled: *enabled },
+            Command::SetQueueMode { mode } => SessionOp::SetQueueMode { mode: *mode },
+            Command::Next => SessionOp::Next,
+            Command::Previous => SessionOp::Previous,
+            Command::SkipUnavailable { key } => SessionOp::SkipUnavailable { key: key.clone() },
+            Command::RestoreSavedQueue { id } => SessionOp::RestoreSavedQueue { id: id.clone(), tracks: None },
+            Command::PinSavedQueue { id, pinned } => SessionOp::PinSavedQueue { id: id.clone(), pinned: *pinned },
+            Command::DeleteSavedQueue { id } => SessionOp::DeleteSavedQueue { id: id.clone() },
+            _ => return None,
+        })
+    }
+
     /// True for ops that change what is playing (track change) rather than
     /// only the queue around it. Used for the replica write cadence.
     pub fn changes_current(&self) -> bool {
@@ -308,12 +361,18 @@ impl SessionOp {
                 | SessionOp::PlayTracks { .. }
                 | SessionOp::Next
                 | SessionOp::Previous
-                | SessionOp::JumpTo { .. }
-                | SessionOp::Clear
+                | SessionOp::JumpToQueueItem { .. }
+                | SessionOp::ClearQueue
                 | SessionOp::SkipUnavailable { .. }
+                | SessionOp::TrackEnded
                 | SessionOp::RestoreSavedQueue { .. }
                 | SessionOp::Replace { .. }
         )
+    }
+
+    /// Ops only the transport owner issues (they follow playback itself).
+    pub fn is_owner_op(&self) -> bool {
+        matches!(self, SessionOp::TrackEnded | SessionOp::SkipUnavailable { .. })
     }
 }
 

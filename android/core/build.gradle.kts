@@ -25,8 +25,8 @@ android {
 }
 
 kotlin {
-    jvmToolchain(17)
     compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         // The UniFFI-generated glue is unsigned-type heavy and opts in to experimental APIs itself.
         freeCompilerArgs.addAll("-Xexpect-actual-classes", "-opt-in=kotlin.ExperimentalUnsignedTypes")
     }

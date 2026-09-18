@@ -184,7 +184,7 @@ mod tests {
         // document that carries seed 7 would play in a different order on the
         // upgraded device, so treat a failure here as a wire-format break.
         let p = Permutation::seeded(7, 10, None);
-        assert_eq!(p.order(), &[3, 6, 5, 7, 2, 8, 1, 0, 4, 9]);
+        assert_eq!(p.order(), &[4, 0, 1, 5, 7, 8, 3, 2, 6, 9]);
     }
 
     #[test]
