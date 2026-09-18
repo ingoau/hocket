@@ -1,0 +1,21 @@
+[package]
+name = "hocket-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "napi-rs addon of hocket-core for the Electron desktop app."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+hocket-core = { workspace = true, features = ["native-audio", "mdns"] }
+napi.workspace = true
+napi-derive.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

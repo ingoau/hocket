@@ -1,0 +1,4 @@
+[bindings.kotlin]
+package_name = "app.hocket.core.ffi"
+cdylib_name = "hocket_android"
+android = true

@@ -1,0 +1,28 @@
+[package]
+name = "hocket-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UniFFI bindings of hocket-core for the Android app."
+
+[lib]
+name = "hocket_android"
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+default = []
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+hocket-core = { workspace = true, default-features = false, features = ["mdns"] }
+uniffi.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

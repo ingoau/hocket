@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/hocket-core",
+  "crates/hocket-coordinator",
+  "crates/hocket-android",
+  "crates/hocket-node",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/ingoau/hocket"
+
+[workspace.dependencies]
+hocket-core = { path = "crates/hocket-core", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+typeshare = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros", "fs", "io-util"] }
+tokio-util = "0.7"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+rusqlite = { version = "0.34", features = ["bundled", "serde_json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rand = "0.9"
+rand_chacha = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+md-5 = "0.10"
+hex = "0.4"
+url = "2"
+parking_lot = "0.12"
+indexmap = { version = "2", features = ["serde"] }
+bytes = "1"
+base64 = "0.22"
+mdns-sd = "0.13"
+symphonia = { version = "0.5", features = ["all"] }
+cpal = "0.15"
+rubato = "0.16"
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["trace"] }
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
+tempfile = "3"
+uniffi = { version = "0.29", features = ["tokio"] }
+napi = { version = "3", default-features = false, features = ["napi9", "async", "tokio_rt"] }
+napi-derive = "3"
+napi-build = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

@@ -1,0 +1,131 @@
+# Hocket architecture
+
+Read `docs/design.md` first. It is the decision record; this file is how the
+repository is laid out to implement it and the rules that keep parallel work
+from colliding.
+
+## Layout
+
+```
+Cargo.toml                    workspace
+crates/hocket-core/           the shared Rust core (library)
+  src/api.rs                  THE CONTRACT: commands, queries, events, documents (typeshare)
+  src/core.rs                 the actor that owns every subsystem
+  src/session/                session document, queue reducer, history, saved queues
+  src/undo/                   undo stack, command objects with inverses
+  src/actions/                action registry
+  src/connect/                Connect protocol: wire, clock sync, lease/epoch, election, discovery, handoff, replica
+  src/sim/                    deterministic simulation harness (feature "sim")
+  src/subsonic/               Subsonic/OpenSubsonic/Navidrome client, auth, capability probe
+  src/db/                     SQLite mirror, migrations, library sync, queries
+  src/outbox/                 durable mutations, retry, conflict, scrobbler
+  src/jobs/                   job queue + problems
+  src/downloads/              pins + evictable stream cache
+  src/cache/                  image / lyrics / metadata caches
+  src/lyrics/                 v2 structured lyrics -> renderable model
+  src/filters/                NSP-superset filter model, SQL evaluation, .nsp export
+  src/autoplay/               provider chain
+  src/settings/               scoped settings, config document
+  src/stats/                  listening stats
+  src/audio/                  PlaybackBackend seam, native backend (Symphonia+cpal), DSP, external bridge
+  src/media_session/          MediaSessionAdapter seam, state derivation
+crates/hocket-coordinator/    headless binary: relay + replica (axum websocket)
+crates/hocket-android/        UniFFI cdylib: JSON in/out + event callback
+crates/hocket-node/           napi-rs addon: JSON in/out + event callback
+android/                      Gradle project (Kotlin, Compose, Material 3 Expressive, Media3)
+desktop/                      Electron + React + Vite + TypeScript (pnpm)
+docs/                         design notes, this file, protocol notes
+scripts/                      codegen and build helpers
+```
+
+## The seam
+
+`crates/hocket-core/src/api.rs` is the schema authority. Everything crosses the
+FFI as JSON strings of those types:
+
+- `Command` — fire and forget, `Core::dispatch`.
+- `Query` → `QueryResult` — async request/response, `Core::query`.
+- `Event` — streamed to every registered `EventSink`.
+
+Both platforms get generated types from the same file:
+
+```
+scripts/gen-bindings.sh
+  typeshare → desktop/src/core/api.ts                     (TypeScript)
+  typeshare → android/core/src/main/java/app/hocket/core/api/Generated.kt  (Kotlin, kotlinx.serialization)
+  uniffi-bindgen → android/core/src/main/java/app/hocket/core/ffi/         (Kotlin FFI glue)
+  napi → desktop/native/index.js + index.d.ts
+```
+
+Enums with payloads are adjacently tagged: `{"type": "playNext", "data": {...}}`.
+Unit variants are `{"type": "play"}`. Kotlin uses `Json { classDiscriminator = "type"; ignoreUnknownKeys = true; encodeDefaults = true }`.
+
+Changing `api.rs`: additive only once shipped (new `Option` fields or
+`#[serde(default)]`). No `u64`/`i64`, no tuples, no `serde_json::Value`.
+Every enum with data carries `#[serde(tag = "type", content = "data")]`.
+Variant names must not equal their payload's type name (Kotlin nesting clash).
+Rerun `scripts/gen-bindings.sh` after any change and commit the Rust; generated
+files are gitignored and produced by the build.
+
+## The actor
+
+`Core` (in `core.rs`) owns: a tokio runtime (or borrows one), the session
+subsystem, the undo stack, the action registry, the Connect engine, the
+Subsonic client per server, the SQLite mirror, outbox, job queue, downloads,
+caches, filters, autoplay, settings, stats, the playback backend and the
+media-session state. The actor loop receives `Command`s on an unbounded
+channel and handles them sequentially; long work is spawned onto the runtime
+and reports back through internal messages so the loop never blocks.
+
+Subsystems must not reach into each other's state. They communicate by:
+
+- being called by the actor with explicit arguments and returning results, or
+- posting `Internal` messages onto the actor's channel (`core::Internal`).
+
+Anything that needs time uses an injected `util::Clock` so the simulation
+harness can drive it. Anything that needs the network goes through a trait
+that the harness can swap for an in-memory implementation.
+
+## Platform layers are thin
+
+- Android: a `MediaSessionService` owns one `HocketCore`. ExoPlayer is the
+  external `PlaybackBackend`: the service turns `Event::Backend(BackendCommand)`
+  into ExoPlayer calls and posts `Command::BackendReport` back. Media3's
+  `MediaSession` is the `MediaSessionAdapter`, fed by `Event::MediaSession`.
+  The Compose UI talks to the core through the service via a bound
+  `CoreClient` (dispatch / query / event flow). No business logic in Kotlin.
+- Desktop: Electron main process owns one `HocketCore` (napi). Audio is native
+  in the core. The playwire addon (`crates/hocket-node` feature or a sibling
+  crate) is the `MediaSessionAdapter`, fed by `Event::MediaSession`. The React
+  renderer talks to main over a typed IPC bridge (`window.hocket.dispatch`,
+  `query`, `onEvent`). No business logic in the renderer beyond view state.
+- Coordinator: `hocket-coordinator` runs `Core` with `AudioMode::None` and
+  `coordinator_listen` set; it never holds credentials and verifies clients by
+  proxying a Subsonic `ping`.
+
+## Conventions
+
+- Rust 2021, `cargo fmt`, `cargo clippy -D warnings` clean, tests via `cargo test`.
+- Errors: `thiserror` per subsystem, `anyhow` at the actor boundary, never `unwrap` on I/O.
+- Logging: `tracing`. No network telemetry, ever.
+- All persisted state has a schema version and forward-only numbered migrations.
+  The mirror is a cache and may be dropped and rebuilt; downloads, outbox,
+  saved queues and settings are not and get a backup before migrating.
+- Strings shown to users come from the platform layer's resources, keyed by
+  ids the core emits (e.g. `Toast.message` is a plain string for now; keep
+  user-facing text in a small `strings` table so it can be externalised).
+- Every queue/session mutation goes through the reducer and is a command
+  object with an inverse. There is no other path.
+- Symfonium is the reference for any behaviour the design notes don't specify
+  (https://support.symfonium.app/). Match its conventions where sensible.
+
+## Build
+
+```
+cargo build --workspace                         # core, coordinator, bindings
+cargo test --workspace
+scripts/gen-bindings.sh                          # typeshare + uniffi + napi types
+scripts/build-android-core.sh                    # cargo-ndk -> android/core/src/main/jniLibs
+cd desktop && pnpm install && pnpm build         # napi addon + renderer + electron
+cd android && ./gradlew assembleDebug            # ANDROID_HOME=/opt/android-sdk
+```
