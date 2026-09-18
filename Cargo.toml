@@ -51,6 +51,7 @@ uniffi = { version = "0.29", features = ["tokio"] }
 napi = { version = "3", default-features = false, features = ["napi9", "async", "tokio_rt"] }
 napi-derive = "3"
 napi-build = "2"
+playwire = "1.0.0"
 
 [profile.release]
 lto = "thin"

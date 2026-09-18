@@ -463,6 +463,17 @@ pub struct ShuffleState {
     /// The permutation is derived deterministically from the seed over the
     /// context length, so it costs 4 bytes to store and sync.
     pub seed: u32,
+    /// Unshuffled context index pinned to permuted position 0: the item that
+    /// was current when shuffle was enabled, so it keeps its place.
+    #[serde(default)]
+    pub anchor: Option<u32>,
+    /// Explicit permutation (a bijection over `0..tracks.len()`). Only present
+    /// after a structural edit while shuffled (remove, move, YouTube-mode
+    /// splice), where a seed alone can no longer express the order without
+    /// rescrambling what the user already saw. Takes precedence over `seed`
+    /// when present and valid; cleared by a reshuffle.
+    #[serde(default)]
+    pub order: Option<Vec<u32>>,
 }
 
 /// Last known transport sample. Receivers extrapolate; it is never sent on a timer.

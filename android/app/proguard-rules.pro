@@ -1,0 +1,3 @@
+-keep class app.hocket.core.api.** { *; }
+-keepattributes *Annotation*, InnerClasses
+-dontwarn org.slf4j.**

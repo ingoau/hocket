@@ -1,0 +1,1 @@
+{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","serverVersion":"0.63.1 (abcd1234)","openSubsonic":true,"scanStatus":{"scanning":false,"count":12345,"folderCount":900,"lastScan":"2024-06-12T01:02:03.456Z","scanType":"quick","elapsedTime":4200}}}

@@ -76,3 +76,6 @@ pub fn init_logging(level: String) {
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+#[cfg(test)]
+mod fixtures;

@@ -3,19 +3,28 @@ name = "hocket-node"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "napi-rs addon of hocket-core for the Electron desktop app."
+description = "napi-rs addon of hocket-core for the Electron desktop app, plus the playwire OS media-session adapter."
 
 [lib]
 crate-type = ["cdylib"]
+
+[features]
+default = ["media-session"]
+# OS media controls through playwire (MPRIS via zbus on Linux, SMTC on Windows,
+# MPNowPlayingInfoCenter on macOS). Off => `MediaSession` reports unsupported and
+# the app degrades to no OS integration; it never blocks the build.
+media-session = ["dep:playwire"]
 
 [dependencies]
 hocket-core = { workspace = true, features = ["native-audio", "mdns"] }
 napi.workspace = true
 napi-derive.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+playwire = { workspace = true, optional = true }
 
 [build-dependencies]
 napi-build.workspace = true

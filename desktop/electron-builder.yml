@@ -1,0 +1,71 @@
+# electron-builder configuration. Run `pnpm dist` (all targets for the host OS)
+# or `pnpm dist:dir` (unpacked directory, the CI smoke test).
+appId: app.hocket.desktop
+productName: Hocket
+copyright: "Copyright © Hocket contributors. AGPL-3.0-only."
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - LICENSE
+  - "!**/*.map"
+# The napi addon is loaded from process.resourcesPath/native at runtime (see
+# src/main/core-host.ts), so it ships as an extra resource rather than inside
+# the asar archive, per platform.
+extraResources:
+  - from: native/
+    to: native/
+    filter:
+      - "index.js"
+      - "index.d.ts"
+      - "*.node"
+  - from: LICENSE
+    to: LICENSE
+asar: true
+protocols:
+  - name: Hocket
+    schemes: [hocket]
+linux:
+  target:
+    - AppImage
+    - deb
+  category: AudioVideo
+  # Must match PlayerConfig::desktop_entry in the media session addon so MPRIS
+  # widgets resolve the icon and identity.
+  desktop:
+    entry:
+      Name: Hocket
+      StartupWMClass: hocket
+  executableName: hocket
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  mimeTypes: [x-scheme-handler/hocket]
+deb:
+  depends: [libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0]
+mac:
+  target:
+    - dmg
+  category: public.app-category.music
+  # Signing and notarisation are deliberately not configured here (design.md:
+  # "Still open → Code signing, blocked on distribution"). When a distribution
+  # channel is chosen, fill these in and set APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+  # APPLE_TEAM_ID in the environment; electron-builder notarises automatically
+  # when `notarize` is true and the identity is present.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+dmg:
+  sign: false
+win:
+  target:
+    - nsis
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+# Auto-update is intentionally not configured: see src/main/updater.ts.
+publish: null

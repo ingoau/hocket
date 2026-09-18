@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+native/*.node
+native/index.js
+native/index.d.ts
+src/core/api.ts
+test-results/
+playwright-report/
+.e2e-userdata/
