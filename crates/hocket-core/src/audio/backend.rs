@@ -115,7 +115,13 @@ impl NullBackend {
 }
 
 impl PlaybackBackend for NullBackend {
-    fn load(&self, _: MediaSource, _: Option<MediaSource>, _: u32, _: bool) -> Result<(), BackendError> {
+    fn load(
+        &self,
+        _: MediaSource,
+        _: Option<MediaSource>,
+        _: u32,
+        _: bool,
+    ) -> Result<(), BackendError> {
         Ok(())
     }
     fn set_next(&self, _: Option<MediaSource>) -> Result<(), BackendError> {

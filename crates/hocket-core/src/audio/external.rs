@@ -59,7 +59,11 @@ pub struct ExternalBackend {
 
 impl ExternalBackend {
     pub fn new(commands: CommandSink, reports: ReportSink) -> Self {
-        Self { commands, reports, state: Mutex::new(State::default()) }
+        Self {
+            commands,
+            reports,
+            state: Mutex::new(State::default()),
+        }
     }
 
     fn send(&self, command: BackendCommand) -> Result<(), BackendError> {
@@ -92,7 +96,8 @@ impl ExternalBackend {
                 | BackendReport::Position { key, .. }
                 | BackendReport::Ended { key }
                 | BackendReport::Error { key, .. } => !st.retired.contains(key),
-                BackendReport::AudioFocusLost { .. } | BackendReport::OutputDevicesChanged { .. } => true,
+                BackendReport::AudioFocusLost { .. }
+                | BackendReport::OutputDevicesChanged { .. } => true,
             }
         };
         if forward {
@@ -143,14 +148,20 @@ impl PlaybackBackend for ExternalBackend {
                 st.pre_buffer = None;
             }
         }
-        self.send(BackendCommand::Load { source, next, position_ms, play })
+        self.send(BackendCommand::Load {
+            source,
+            next,
+            position_ms,
+            play,
+        })
     }
 
     fn set_next(&self, next: Option<MediaSource>) -> Result<(), BackendError> {
         {
             let mut st = self.state.lock();
             if let Some(old) = st.next.take() {
-                if next.as_ref().map(|n| &n.key) != Some(&old) && st.current.as_ref() != Some(&old) {
+                if next.as_ref().map(|n| &n.key) != Some(&old) && st.current.as_ref() != Some(&old)
+                {
                     st.retired.push(old);
                 }
             }
@@ -173,7 +184,13 @@ impl PlaybackBackend for ExternalBackend {
     fn stop(&self) -> Result<(), BackendError> {
         {
             let mut st = self.state.lock();
-            for k in st.current.take().into_iter().chain(st.next.take()).chain(st.pre_buffer.take()) {
+            for k in st
+                .current
+                .take()
+                .into_iter()
+                .chain(st.next.take())
+                .chain(st.pre_buffer.take())
+            {
                 st.retired.push(k);
             }
         }
@@ -185,7 +202,9 @@ impl PlaybackBackend for ExternalBackend {
     }
 
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
-        self.send(BackendCommand::SetVolume { volume: clamp_volume(volume) })
+        self.send(BackendCommand::SetVolume {
+            volume: clamp_volume(volume),
+        })
     }
 
     fn pre_buffer(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
@@ -194,7 +213,10 @@ impl PlaybackBackend for ExternalBackend {
             st.retired.retain(|k| k != &source.key);
             st.pre_buffer = Some(source.key.clone());
         }
-        self.send(BackendCommand::PreBuffer { source, position_ms })
+        self.send(BackendCommand::PreBuffer {
+            source,
+            position_ms,
+        })
     }
 
     fn discard_pre_buffer(&self) -> Result<(), BackendError> {
@@ -207,7 +229,9 @@ impl PlaybackBackend for ExternalBackend {
     }
 
     fn set_output_device(&self, _id: Option<String>) -> Result<(), BackendError> {
-        Err(BackendError::Unsupported("output device selection is owned by the platform"))
+        Err(BackendError::Unsupported(
+            "output device selection is owned by the platform",
+        ))
     }
 
     fn output_devices(&self) -> Vec<OutputDevice> {
@@ -227,7 +251,11 @@ mod tests {
     fn source(key: &str) -> MediaSource {
         MediaSource {
             key: key.into(),
-            track: TrackSummary { id: format!("t-{key}"), duration_ms: 1000, ..Default::default() },
+            track: TrackSummary {
+                id: format!("t-{key}"),
+                duration_ms: 1000,
+                ..Default::default()
+            },
             url: format!("https://example/{key}"),
             headers: Default::default(),
             mime_type: None,
@@ -236,12 +264,17 @@ mod tests {
         }
     }
 
-    fn harness() -> (ExternalBackend, Arc<Mutex<Vec<BackendCommand>>>, Arc<Mutex<Vec<BackendReport>>>) {
-        let cmds: Arc<Mutex<Vec<BackendCommand>>> = Default::default();
-        let reps: Arc<Mutex<Vec<BackendReport>>> = Default::default();
+    type Log<T> = Arc<Mutex<Vec<T>>>;
+
+    fn harness() -> (ExternalBackend, Log<BackendCommand>, Log<BackendReport>) {
+        let cmds: Log<BackendCommand> = Default::default();
+        let reps: Log<BackendReport> = Default::default();
         let c2 = cmds.clone();
         let r2 = reps.clone();
-        let b = ExternalBackend::new(Arc::new(move |c| c2.lock().push(c)), Arc::new(move |r| r2.lock().push(r)));
+        let b = ExternalBackend::new(
+            Arc::new(move |c| c2.lock().push(c)),
+            Arc::new(move |r| r2.lock().push(r)),
+        );
         (b, cmds, reps)
     }
 
@@ -253,7 +286,9 @@ mod tests {
         b.seek(20).unwrap();
         b.set_gapless(false).unwrap();
         let cmds = cmds.lock();
-        assert!(matches!(&cmds[0], BackendCommand::Load { source, next: Some(n), position_ms: 1500, play: true } if source.key == "a" && n.key == "b"));
+        assert!(
+            matches!(&cmds[0], BackendCommand::Load { source, next: Some(n), position_ms: 1500, play: true } if source.key == "a" && n.key == "b")
+        );
         assert_eq!(cmds[1], BackendCommand::SetVolume { volume: 1.0 });
         assert_eq!(cmds[2], BackendCommand::Seek { position_ms: 20 });
         assert_eq!(cmds[3], BackendCommand::SetGapless { enabled: false });
@@ -265,7 +300,10 @@ mod tests {
         b.load(source("a"), None, 0, true).unwrap();
         b.load(source("b"), None, 0, true).unwrap();
         b.report(BackendReport::Ended { key: "a".into() });
-        b.report(BackendReport::Playing { key: "b".into(), position_ms: 0 });
+        b.report(BackendReport::Playing {
+            key: "b".into(),
+            position_ms: 0,
+        });
         let reps = reps.lock();
         assert_eq!(reps.len(), 1);
         assert!(matches!(&reps[0], BackendReport::Playing { key, .. } if key == "b"));
@@ -278,8 +316,14 @@ mod tests {
         b.report(BackendReport::Ended { key: "a".into() });
         b.report(BackendReport::TransitionedToNext { key: "b".into() });
         assert_eq!(b.current_key().as_deref(), Some("b"));
-        b.report(BackendReport::Position { key: "a".into(), position_ms: 5 });
-        b.report(BackendReport::Position { key: "b".into(), position_ms: 5 });
+        b.report(BackendReport::Position {
+            key: "a".into(),
+            position_ms: 5,
+        });
+        b.report(BackendReport::Position {
+            key: "b".into(),
+            position_ms: 5,
+        });
         let reps = reps.lock();
         assert_eq!(reps.len(), 3);
         assert!(matches!(&reps[2], BackendReport::Position { key, .. } if key == "b"));
@@ -302,7 +346,9 @@ mod tests {
         let (b, _, _) = harness();
         assert_eq!(
             b.set_output_device(None),
-            Err(BackendError::Unsupported("output device selection is owned by the platform"))
+            Err(BackendError::Unsupported(
+                "output device selection is owned by the platform"
+            ))
         );
         assert!(b.output_devices().is_empty());
     }

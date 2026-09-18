@@ -28,17 +28,35 @@ pub const POSITION_INTERVAL_MS: f64 = 1000.0;
 /// What the scripted backend was asked to do, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptedCall {
-    Load { key: QueueKey, next: Option<QueueKey>, position_ms: u32, play: bool },
-    SetNext { next: Option<QueueKey> },
+    Load {
+        key: QueueKey,
+        next: Option<QueueKey>,
+        position_ms: u32,
+        play: bool,
+    },
+    SetNext {
+        next: Option<QueueKey>,
+    },
     Play,
     Pause,
     Stop,
-    Seek { position_ms: u32 },
-    SetVolume { volume: f64 },
-    PreBuffer { key: QueueKey, position_ms: u32 },
+    Seek {
+        position_ms: u32,
+    },
+    SetVolume {
+        volume: f64,
+    },
+    PreBuffer {
+        key: QueueKey,
+        position_ms: u32,
+    },
     DiscardPreBuffer,
-    SetGapless { enabled: bool },
-    SetOutputDevice { id: Option<String> },
+    SetGapless {
+        enabled: bool,
+    },
+    SetOutputDevice {
+        id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -96,8 +114,16 @@ pub struct ScriptedBackend {
 
 impl ScriptedBackend {
     pub fn new(clock: Arc<dyn Clock>, sink: ReportSink) -> Self {
-        let state = State { volume: 1.0, gapless: true, ..Default::default() };
-        Self { clock, sink, state: Mutex::new(state) }
+        let state = State {
+            volume: 1.0,
+            gapless: true,
+            ..Default::default()
+        };
+        Self {
+            clock,
+            sink,
+            state: Mutex::new(state),
+        }
     }
 
     /// Make every future load of `key` fail fatally.
@@ -134,7 +160,9 @@ impl ScriptedBackend {
     pub fn current(&self) -> Option<(QueueKey, u32)> {
         let st = self.state.lock();
         let now = self.clock.now_ms();
-        st.current.as_ref().map(|c| (c.source.key.clone(), c.position_at(now, st.playing) as u32))
+        st.current
+            .as_ref()
+            .map(|c| (c.source.key.clone(), c.position_at(now, st.playing) as u32))
     }
 
     pub fn is_playing(&self) -> bool {
@@ -162,21 +190,39 @@ impl ScriptedBackend {
 
         if st.pending_ready && now >= st.load_started_ms + st.load_latency_ms {
             st.pending_ready = false;
-            let (key, duration, position, failing) = {
+            let (key, duration, position) = {
                 let cur = st.current.as_mut().expect("pending_ready implies current");
                 cur.anchor_ms = now;
-                (cur.source.key.clone(), cur.source.track.duration_ms, cur.position_ms as u32, st.failing.contains(&cur.source.key))
+                (
+                    cur.source.key.clone(),
+                    cur.source.track.duration_ms,
+                    cur.position_ms as u32,
+                )
             };
+            let failing = st.failing.contains(&key);
             if failing {
                 st.current = None;
                 st.playing = false;
-                out.push(BackendReport::Error { key, message: "scripted failure".into(), fatal: true });
+                out.push(BackendReport::Error {
+                    key,
+                    message: "scripted failure".into(),
+                    fatal: true,
+                });
             } else {
-                out.push(BackendReport::Ready { key: key.clone(), duration_ms: Some(duration) });
+                out.push(BackendReport::Ready {
+                    key: key.clone(),
+                    duration_ms: Some(duration),
+                });
                 if st.playing {
-                    out.push(BackendReport::Playing { key, position_ms: position });
+                    out.push(BackendReport::Playing {
+                        key,
+                        position_ms: position,
+                    });
                 } else {
-                    out.push(BackendReport::Paused { key, position_ms: position });
+                    out.push(BackendReport::Paused {
+                        key,
+                        position_ms: position,
+                    });
                 }
                 st.last_position_report_ms = now;
             }
@@ -187,7 +233,9 @@ impl ScriptedBackend {
             if !st.playing || st.pending_ready {
                 break;
             }
-            let Some(cur) = st.current.as_ref() else { break };
+            let Some(cur) = st.current.as_ref() else {
+                break;
+            };
             let end_at = cur.anchor_ms + (cur.duration() - cur.position_ms).max(0.0);
             if now < end_at {
                 break;
@@ -197,15 +245,26 @@ impl ScriptedBackend {
             match st.next.take() {
                 Some(next) if !st.failing.contains(&next.key) => {
                     let key = next.key.clone();
-                    st.current = Some(Item { source: next, position_ms: 0.0, anchor_ms: end_at });
+                    st.current = Some(Item {
+                        source: next,
+                        position_ms: 0.0,
+                        anchor_ms: end_at,
+                    });
                     out.push(BackendReport::TransitionedToNext { key: key.clone() });
-                    out.push(BackendReport::Position { key, position_ms: 0 });
+                    out.push(BackendReport::Position {
+                        key,
+                        position_ms: 0,
+                    });
                     st.last_position_report_ms = end_at;
                 }
                 Some(next) => {
                     st.current = None;
                     st.playing = false;
-                    out.push(BackendReport::Error { key: next.key, message: "scripted failure".into(), fatal: true });
+                    out.push(BackendReport::Error {
+                        key: next.key,
+                        message: "scripted failure".into(),
+                        fatal: true,
+                    });
                 }
                 None => {
                     st.current = None;
@@ -239,7 +298,13 @@ impl ScriptedBackend {
 }
 
 impl PlaybackBackend for ScriptedBackend {
-    fn load(&self, source: MediaSource, next: Option<MediaSource>, position_ms: u32, play: bool) -> Result<(), BackendError> {
+    fn load(
+        &self,
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: u32,
+        play: bool,
+    ) -> Result<(), BackendError> {
         let now = self.clock.now_ms();
         let mut st = self.state.lock();
         st.log.push(ScriptedCall::Load {
@@ -253,7 +318,11 @@ impl PlaybackBackend for ScriptedBackend {
             st.pre_buffer = None;
             st.pending_pre_buffer = false;
         }
-        st.current = Some(Item { source, position_ms: position, anchor_ms: now });
+        st.current = Some(Item {
+            source,
+            position_ms: position,
+            anchor_ms: now,
+        });
         st.next = next;
         st.playing = play;
         st.pending_ready = true;
@@ -263,7 +332,9 @@ impl PlaybackBackend for ScriptedBackend {
 
     fn set_next(&self, next: Option<MediaSource>) -> Result<(), BackendError> {
         let mut st = self.state.lock();
-        st.log.push(ScriptedCall::SetNext { next: next.as_ref().map(|n| n.key.clone()) });
+        st.log.push(ScriptedCall::SetNext {
+            next: next.as_ref().map(|n| n.key.clone()),
+        });
         st.next = next;
         Ok(())
     }
@@ -273,12 +344,18 @@ impl PlaybackBackend for ScriptedBackend {
         let report = {
             let mut st = self.state.lock();
             st.log.push(ScriptedCall::Play);
-            let Some(cur) = st.current.as_mut() else { return Ok(()) };
-            if st.playing {
+            let playing = st.playing;
+            let Some(cur) = st.current.as_mut() else {
+                return Ok(());
+            };
+            if playing {
                 return Ok(());
             }
             cur.anchor_ms = now;
-            let r = BackendReport::Playing { key: cur.source.key.clone(), position_ms: cur.position_ms as u32 };
+            let r = BackendReport::Playing {
+                key: cur.source.key.clone(),
+                position_ms: cur.position_ms as u32,
+            };
             st.playing = true;
             st.last_position_report_ms = now;
             if st.pending_ready {
@@ -297,7 +374,9 @@ impl PlaybackBackend for ScriptedBackend {
             st.log.push(ScriptedCall::Pause);
             let playing = st.playing;
             let pending = st.pending_ready;
-            let Some(cur) = st.current.as_mut() else { return Ok(()) };
+            let Some(cur) = st.current.as_mut() else {
+                return Ok(());
+            };
             if !playing {
                 return Ok(());
             }
@@ -307,7 +386,10 @@ impl PlaybackBackend for ScriptedBackend {
                 return Ok(());
             }
             let cur = st.current.as_ref().expect("checked");
-            BackendReport::Paused { key: cur.source.key.clone(), position_ms: cur.position_ms as u32 }
+            BackendReport::Paused {
+                key: cur.source.key.clone(),
+                position_ms: cur.position_ms as u32,
+            }
         };
         self.emit(report);
         Ok(())
@@ -331,7 +413,9 @@ impl PlaybackBackend for ScriptedBackend {
             let mut st = self.state.lock();
             st.log.push(ScriptedCall::Seek { position_ms });
             let pending = st.pending_ready;
-            let Some(cur) = st.current.as_mut() else { return Ok(()) };
+            let Some(cur) = st.current.as_mut() else {
+                return Ok(());
+            };
             cur.position_ms = f64::from(position_ms).min(cur.duration());
             cur.anchor_ms = now;
             st.last_position_report_ms = now;
@@ -339,7 +423,10 @@ impl PlaybackBackend for ScriptedBackend {
                 return Ok(());
             }
             let cur = st.current.as_ref().expect("checked");
-            BackendReport::Position { key: cur.source.key.clone(), position_ms: cur.position_ms as u32 }
+            BackendReport::Position {
+                key: cur.source.key.clone(),
+                position_ms: cur.position_ms as u32,
+            }
         };
         self.emit(report);
         Ok(())
@@ -356,7 +443,10 @@ impl PlaybackBackend for ScriptedBackend {
     fn pre_buffer(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
         let now = self.clock.now_ms();
         let mut st = self.state.lock();
-        st.log.push(ScriptedCall::PreBuffer { key: source.key.clone(), position_ms });
+        st.log.push(ScriptedCall::PreBuffer {
+            key: source.key.clone(),
+            position_ms,
+        });
         st.pre_buffer = Some(source);
         st.pending_pre_buffer = true;
         if !st.pending_ready {
@@ -382,7 +472,8 @@ impl PlaybackBackend for ScriptedBackend {
 
     fn set_output_device(&self, id: Option<String>) -> Result<(), BackendError> {
         let mut st = self.state.lock();
-        st.log.push(ScriptedCall::SetOutputDevice { id: id.clone() });
+        st.log
+            .push(ScriptedCall::SetOutputDevice { id: id.clone() });
         if let Some(id) = &id {
             if !st.devices.iter().any(|d| &d.id == id) {
                 return Err(BackendError::UnknownDevice(id.clone()));
@@ -423,7 +514,11 @@ mod tests {
     fn source(key: &str, duration_ms: u32) -> MediaSource {
         MediaSource {
             key: key.into(),
-            track: TrackSummary { id: format!("t-{key}"), duration_ms, ..Default::default() },
+            track: TrackSummary {
+                id: format!("t-{key}"),
+                duration_ms,
+                ..Default::default()
+            },
             url: format!("file:///{key}"),
             headers: Default::default(),
             mime_type: None,
@@ -432,7 +527,11 @@ mod tests {
         }
     }
 
-    fn harness() -> (Arc<TestClock>, ScriptedBackend, Arc<Mutex<Vec<BackendReport>>>) {
+    fn harness() -> (
+        Arc<TestClock>,
+        ScriptedBackend,
+        Arc<Mutex<Vec<BackendReport>>>,
+    ) {
         let clock = Arc::new(TestClock(AtomicU64::new(1_000_000)));
         let reps: Arc<Mutex<Vec<BackendReport>>> = Default::default();
         let r2 = reps.clone();
@@ -445,19 +544,38 @@ mod tests {
         let (clock, b, _) = harness();
         b.load(source("a", 5000), None, 500, true).unwrap();
         let r = b.poll();
-        assert_eq!(r[0], BackendReport::Ready { key: "a".into(), duration_ms: Some(5000) });
-        assert_eq!(r[1], BackendReport::Playing { key: "a".into(), position_ms: 500 });
+        assert_eq!(
+            r[0],
+            BackendReport::Ready {
+                key: "a".into(),
+                duration_ms: Some(5000)
+            }
+        );
+        assert_eq!(
+            r[1],
+            BackendReport::Playing {
+                key: "a".into(),
+                position_ms: 500
+            }
+        );
         clock.advance(999);
         assert!(b.poll().is_empty());
         clock.advance(1);
-        assert_eq!(b.poll(), vec![BackendReport::Position { key: "a".into(), position_ms: 1500 }]);
+        assert_eq!(
+            b.poll(),
+            vec![BackendReport::Position {
+                key: "a".into(),
+                position_ms: 1500
+            }]
+        );
         assert_eq!(b.current(), Some(("a".into(), 1500)));
     }
 
     #[test]
     fn ends_and_transitions_to_next_at_the_exact_boundary() {
         let (clock, b, _) = harness();
-        b.load(source("a", 3000), Some(source("b", 2000)), 0, true).unwrap();
+        b.load(source("a", 3000), Some(source("b", 2000)), 0, true)
+            .unwrap();
         b.poll();
         clock.advance(2999);
         b.poll();
@@ -465,7 +583,13 @@ mod tests {
         let r = b.poll();
         assert_eq!(r[0], BackendReport::Ended { key: "a".into() });
         assert_eq!(r[1], BackendReport::TransitionedToNext { key: "b".into() });
-        assert_eq!(r[2], BackendReport::Position { key: "b".into(), position_ms: 0 });
+        assert_eq!(
+            r[2],
+            BackendReport::Position {
+                key: "b".into(),
+                position_ms: 0
+            }
+        );
         // b started at the boundary, not at poll time: 1 ms in.
         assert_eq!(b.current(), Some(("b".into(), 0)));
         clock.advance(2000);
@@ -478,7 +602,8 @@ mod tests {
     #[test]
     fn a_long_gap_crosses_several_items() {
         let (clock, b, _) = harness();
-        b.load(source("a", 1000), Some(source("b", 1000)), 0, true).unwrap();
+        b.load(source("a", 1000), Some(source("b", 1000)), 0, true)
+            .unwrap();
         b.poll();
         clock.advance(5000);
         let r = b.poll();
@@ -495,14 +620,32 @@ mod tests {
         b.poll();
         clock.advance(1500);
         b.pause().unwrap();
-        assert_eq!(reps.lock().last(), Some(&BackendReport::Paused { key: "a".into(), position_ms: 1500 }));
+        assert_eq!(
+            reps.lock().last(),
+            Some(&BackendReport::Paused {
+                key: "a".into(),
+                position_ms: 1500
+            })
+        );
         clock.advance(5000);
         assert!(b.poll().is_empty());
         assert_eq!(b.current(), Some(("a".into(), 1500)));
         b.play().unwrap();
-        assert_eq!(reps.lock().last(), Some(&BackendReport::Playing { key: "a".into(), position_ms: 1500 }));
+        assert_eq!(
+            reps.lock().last(),
+            Some(&BackendReport::Playing {
+                key: "a".into(),
+                position_ms: 1500
+            })
+        );
         clock.advance(1000);
-        assert_eq!(b.poll(), vec![BackendReport::Position { key: "a".into(), position_ms: 2500 }]);
+        assert_eq!(
+            b.poll(),
+            vec![BackendReport::Position {
+                key: "a".into(),
+                position_ms: 2500
+            }]
+        );
     }
 
     #[test]
@@ -511,7 +654,13 @@ mod tests {
         b.load(source("a", 10_000), None, 0, false).unwrap();
         b.poll();
         b.seek(4000).unwrap();
-        assert_eq!(reps.lock().last(), Some(&BackendReport::Position { key: "a".into(), position_ms: 4000 }));
+        assert_eq!(
+            reps.lock().last(),
+            Some(&BackendReport::Position {
+                key: "a".into(),
+                position_ms: 4000
+            })
+        );
         b.seek(40_000).unwrap();
         assert_eq!(b.current(), Some(("a".into(), 10_000)));
     }
@@ -522,7 +671,14 @@ mod tests {
         b.fail_key("bad");
         b.load(source("bad", 1000), None, 0, true).unwrap();
         let r = b.poll();
-        assert_eq!(r, vec![BackendReport::Error { key: "bad".into(), message: "scripted failure".into(), fatal: true }]);
+        assert_eq!(
+            r,
+            vec![BackendReport::Error {
+                key: "bad".into(),
+                message: "scripted failure".into(),
+                fatal: true
+            }]
+        );
         assert!(!b.is_playing());
         assert_eq!(b.current(), None);
     }
@@ -545,7 +701,10 @@ mod tests {
     fn prebuffer_ready_and_discard() {
         let (_, b, _) = harness();
         b.pre_buffer(source("p", 1000), 100).unwrap();
-        assert_eq!(b.poll(), vec![BackendReport::PreBufferReady { key: "p".into() }]);
+        assert_eq!(
+            b.poll(),
+            vec![BackendReport::PreBufferReady { key: "p".into() }]
+        );
         b.pre_buffer(source("q", 1000), 100).unwrap();
         b.discard_pre_buffer().unwrap();
         assert!(b.poll().is_empty());
@@ -555,8 +714,14 @@ mod tests {
     #[test]
     fn devices_and_stop() {
         let (_, b, reps) = harness();
-        b.set_devices(vec![OutputDevice { id: "d1".into(), name: "Speakers".into(), is_default: true }]);
-        assert!(matches!(reps.lock().last(), Some(BackendReport::OutputDevicesChanged { devices }) if devices.len() == 1));
+        b.set_devices(vec![OutputDevice {
+            id: "d1".into(),
+            name: "Speakers".into(),
+            is_default: true,
+        }]);
+        assert!(
+            matches!(reps.lock().last(), Some(BackendReport::OutputDevicesChanged { devices }) if devices.len() == 1)
+        );
         assert!(b.set_output_device(Some("nope".into())).is_err());
         assert!(b.set_output_device(Some("d1".into())).is_ok());
         b.load(source("a", 1000), None, 0, true).unwrap();

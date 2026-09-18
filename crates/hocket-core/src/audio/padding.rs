@@ -53,7 +53,10 @@ impl EncoderPadding {
     /// iTunSMPB values already include the codec's priming, so they map
     /// straight to trims.
     pub fn trim_for_aac(self) -> Trim {
-        Trim { skip_start: self.delay, skip_end: self.padding }
+        Trim {
+            skip_start: self.delay,
+            skip_end: self.padding,
+        }
     }
 }
 
@@ -95,7 +98,11 @@ fn parse_frame_header(b: &[u8]) -> Option<FrameHeader> {
     }
     let crc = (b[1] & 0x01) == 0;
     let channel_mode = (b[3] >> 6) & 0x03;
-    Some(FrameHeader { mpeg1: version == 3, mono: channel_mode == 3, crc })
+    Some(FrameHeader {
+        mpeg1: version == 3,
+        mono: channel_mode == 3,
+        crc,
+    })
 }
 
 /// Offset of the Xing/Info tag from the start of the frame.
@@ -142,11 +149,21 @@ pub fn parse_lame_header(frame: &[u8]) -> Option<LameInfo> {
     if flags & 0x8 != 0 {
         pos += 4; // quality
     }
-    let mut info = LameInfo { frames, is_cbr, ..Default::default() };
+    let mut info = LameInfo {
+        frames,
+        is_cbr,
+        ..Default::default()
+    };
     // LAME extension: 9-byte version string starting "LAME" (or "Lavc"/"Lavf"
     // for ffmpeg, which writes the same layout).
-    let Some(ext) = frame.get(pos..pos + 36) else { return Some(info) };
-    if !(ext.starts_with(b"LAME") || ext.starts_with(b"Lavc") || ext.starts_with(b"Lavf") || ext.starts_with(b"L3.9")) {
+    let Some(ext) = frame.get(pos..pos + 36) else {
+        return Some(info);
+    };
+    if !(ext.starts_with(b"LAME")
+        || ext.starts_with(b"Lavc")
+        || ext.starts_with(b"Lavf")
+        || ext.starts_with(b"L3.9"))
+    {
         return Some(info);
     }
     // Layout relative to the version string start:
@@ -201,7 +218,11 @@ pub fn parse_itunsmpb(value: &str) -> Option<EncoderPadding> {
     let delay = u32::from_str_radix(fields.next()?, 16).ok()?;
     let padding = u32::from_str_radix(fields.next()?, 16).ok()?;
     let valid = fields.next().and_then(|f| u64::from_str_radix(f, 16).ok());
-    Some(EncoderPadding { delay, padding, valid_samples: valid })
+    Some(EncoderPadding {
+        delay,
+        padding,
+        valid_samples: valid,
+    })
 }
 
 /// Skip an ID3v2 tag at the start of an MP3 buffer, returning the offset of
@@ -211,7 +232,9 @@ pub fn skip_id3v2(bytes: &[u8]) -> usize {
         return 0;
     }
     let flags = bytes[5];
-    let size = bytes[6..10].iter().fold(0usize, |acc, b| (acc << 7) | usize::from(b & 0x7F));
+    let size = bytes[6..10]
+        .iter()
+        .fold(0usize, |acc, b| (acc << 7) | usize::from(b & 0x7F));
     let footer = if flags & 0x10 != 0 { 10 } else { 0 };
     (10 + size + footer).min(bytes.len())
 }
@@ -241,7 +264,13 @@ pub(crate) mod tests {
     /// Build a synthetic first frame: MPEG-1 Layer III stereo, optional CRC,
     /// with a Xing tag (frames + bytes + TOC + quality) and a LAME extension
     /// carrying `delay`/`padding` and a radio gain.
-    pub(crate) fn synthetic_lame_frame(delay: u32, padding: u32, mono: bool, crc: bool, cbr: bool) -> Vec<u8> {
+    pub(crate) fn synthetic_lame_frame(
+        delay: u32,
+        padding: u32,
+        mono: bool,
+        crc: bool,
+        cbr: bool,
+    ) -> Vec<u8> {
         let mut f = vec![0u8; 1024];
         f[0] = 0xFF;
         // version 11 (MPEG1), layer 01 (III), protection bit 0 = CRC present
@@ -280,13 +309,26 @@ pub(crate) mod tests {
     fn parses_delay_and_padding_from_synthetic_lame_tag() {
         let frame = synthetic_lame_frame(576, 1728, false, false, false);
         let info = parse_lame_header(&frame).expect("lame header");
-        assert_eq!(info.padding, EncoderPadding { delay: 576, padding: 1728, valid_samples: None });
+        assert_eq!(
+            info.padding,
+            EncoderPadding {
+                delay: 576,
+                padding: 1728,
+                valid_samples: None
+            }
+        );
         assert_eq!(info.frames, Some(1234));
         assert!(!info.is_cbr);
         assert_eq!(info.gain.track_gain_db, Some(-6.5));
         assert_eq!(info.gain.album_gain_db, Some(1.2));
         assert!((info.gain.peak.unwrap() - 0.987).abs() < 1e-6);
-        assert_eq!(info.padding.trim_for_mp3(), Trim { skip_start: 576 + 529, skip_end: 1728 - 529 });
+        assert_eq!(
+            info.padding.trim_for_mp3(),
+            Trim {
+                skip_start: 576 + 529,
+                skip_end: 1728 - 529
+            }
+        );
     }
 
     #[test]
@@ -306,8 +348,16 @@ pub(crate) mod tests {
         let info = parse_lame_header(&frame).unwrap();
         assert_eq!(info.padding.delay, 4095);
         assert_eq!(info.padding.padding, 4095);
-        let small = EncoderPadding { delay: 0, padding: 100, valid_samples: None };
-        assert_eq!(small.trim_for_mp3().skip_end, 0, "padding below decoder delay saturates");
+        let small = EncoderPadding {
+            delay: 0,
+            padding: 100,
+            valid_samples: None,
+        };
+        assert_eq!(
+            small.trim_for_mp3().skip_end,
+            0,
+            "padding below decoder delay saturates"
+        );
     }
 
     #[test]
@@ -361,19 +411,48 @@ pub(crate) mod tests {
     fn parses_itunsmpb() {
         let s = " 00000000 00000840 000001C4 00000000000B3F9C 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000";
         let p = parse_itunsmpb(s).unwrap();
-        assert_eq!(p, EncoderPadding { delay: 2112, padding: 452, valid_samples: Some(0xB3F9C) });
-        assert_eq!(p.trim_for_aac(), Trim { skip_start: 2112, skip_end: 452 });
+        assert_eq!(
+            p,
+            EncoderPadding {
+                delay: 2112,
+                padding: 452,
+                valid_samples: Some(0xB3F9C)
+            }
+        );
+        assert_eq!(
+            p.trim_for_aac(),
+            Trim {
+                skip_start: 2112,
+                skip_end: 452
+            }
+        );
         assert!(parse_itunsmpb("garbage").is_none());
         assert!(parse_itunsmpb(" 00000000 zzzz 0001").is_none());
         // Short form without valid-sample count still parses.
-        assert_eq!(parse_itunsmpb("00000000 00000840 00000100").unwrap().valid_samples, None);
+        assert_eq!(
+            parse_itunsmpb("00000000 00000840 00000100")
+                .unwrap()
+                .valid_samples,
+            None
+        );
     }
 
     #[test]
     fn lame_gain_field_edge_cases() {
         assert_eq!(parse_lame_gain_field(0, 1), None);
-        assert_eq!(parse_lame_gain_field((2 << 13) | (1 << 10) | 5, 1), None, "wrong name code");
-        assert_eq!(parse_lame_gain_field((1 << 13) | 5, 1), None, "no originator = unset");
-        assert_eq!(parse_lame_gain_field((1 << 13) | (1 << 10) | 5, 1), Some(0.5));
+        assert_eq!(
+            parse_lame_gain_field((2 << 13) | (1 << 10) | 5, 1),
+            None,
+            "wrong name code"
+        );
+        assert_eq!(
+            parse_lame_gain_field((1 << 13) | 5, 1),
+            None,
+            "no originator = unset"
+        );
+        assert_eq!(
+            parse_lame_gain_field((1 << 13) | (1 << 10) | 5, 1),
+            Some(0.5)
+        );
     }
 }

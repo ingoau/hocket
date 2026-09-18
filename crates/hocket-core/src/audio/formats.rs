@@ -29,20 +29,27 @@ use crate::api::Platform;
 
 /// Suffixes desktop (Symphonia) cannot decode natively.
 pub const DESKTOP_CANNOT_DECODE: &[&str] = &[
-    "ape", "dsf", "dff", "wv", "opus", "mpc", "wma", "ac3", "eac3", "dts", "thd", "tak", "ofr", "shn", "tta",
+    "ape", "dsf", "dff", "wv", "opus", "mpc", "wma", "ac3", "eac3", "dts", "thd", "tak", "ofr",
+    "shn", "tta",
 ];
 
 /// Suffixes Android (ExoPlayer with platform decoders) cannot decode natively.
 pub const ANDROID_CANNOT_DECODE: &[&str] = &[
-    "ape", "dsf", "dff", "wv", "alac", "mpc", "wma", "ac3", "eac3", "dts", "thd", "tak", "ofr", "shn", "tta",
+    "ape", "dsf", "dff", "wv", "alac", "mpc", "wma", "ac3", "eac3", "dts", "thd", "tak", "ofr",
+    "shn", "tta",
 ];
 
 /// Suffixes desktop decodes natively (informational; used by the UI to label
 /// "plays without transcoding").
-pub const DESKTOP_NATIVE: &[&str] = &["mp3", "mp2", "mp1", "aac", "m4a", "mp4", "flac", "ogg", "oga", "wav", "aif", "aiff", "aifc", "caf", "alac", "mka", "webm"];
+pub const DESKTOP_NATIVE: &[&str] = &[
+    "mp3", "mp2", "mp1", "aac", "m4a", "mp4", "flac", "ogg", "oga", "wav", "aif", "aiff", "aifc",
+    "caf", "alac", "mka", "webm",
+];
 
 /// Suffixes Android decodes natively.
-pub const ANDROID_NATIVE: &[&str] = &["mp3", "aac", "m4a", "mp4", "flac", "ogg", "oga", "opus", "wav", "mka", "webm", "amr", "3gp"];
+pub const ANDROID_NATIVE: &[&str] = &[
+    "mp3", "aac", "m4a", "mp4", "flac", "ogg", "oga", "opus", "wav", "mka", "webm", "amr", "3gp",
+];
 
 /// The default `cannot_decode` list used to seed a
 /// [`crate::api::TranscodingProfile`] for `platform`. The coordinator never

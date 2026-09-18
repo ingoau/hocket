@@ -45,7 +45,10 @@ pub enum SleepAction {
 enum Phase {
     Idle,
     /// Counting down to `ends_at`.
-    Timed { ends_at: f64, then_end_of_track: bool },
+    Timed {
+        ends_at: f64,
+        then_end_of_track: bool,
+    },
     /// Waiting for the current item to finish.
     EndOfTrack,
 }
@@ -62,7 +65,13 @@ pub struct SleepTimerMachine {
 
 impl SleepTimerMachine {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
-        Self { clock, phase: Phase::Idle, fade: true, fading: false, stop_at_end_of_track: false }
+        Self {
+            clock,
+            phase: Phase::Idle,
+            fade: true,
+            fading: false,
+            stop_at_end_of_track: false,
+        }
     }
 
     /// Whether timed stops fade the volume over the last [`FADE_MS`].
@@ -90,20 +99,32 @@ impl SleepTimerMachine {
                 self.stop_at_end_of_track = false;
                 restore
             }
-            Some(SleepTimer { ends_at: None, stop_at_end_of_track: false }) => {
+            Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: false,
+            }) => {
                 // A timer with nothing to wait for is a cleared timer.
                 self.phase = Phase::Idle;
                 self.stop_at_end_of_track = false;
                 restore
             }
-            Some(SleepTimer { ends_at: None, stop_at_end_of_track: true }) => {
+            Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: true,
+            }) => {
                 self.phase = Phase::EndOfTrack;
                 self.stop_at_end_of_track = true;
                 restore
             }
-            Some(SleepTimer { ends_at: Some(ends_at), stop_at_end_of_track }) => {
+            Some(SleepTimer {
+                ends_at: Some(ends_at),
+                stop_at_end_of_track,
+            }) => {
                 self.stop_at_end_of_track = stop_at_end_of_track;
-                self.phase = Phase::Timed { ends_at, then_end_of_track: stop_at_end_of_track };
+                self.phase = Phase::Timed {
+                    ends_at,
+                    then_end_of_track: stop_at_end_of_track,
+                };
                 match self.tick() {
                     SleepAction::None => restore,
                     due => due,
@@ -116,10 +137,17 @@ impl SleepTimerMachine {
     pub fn state(&self) -> Option<SleepTimer> {
         match &self.phase {
             Phase::Idle => None,
-            Phase::Timed { ends_at, then_end_of_track } => {
-                Some(SleepTimer { ends_at: Some(*ends_at), stop_at_end_of_track: *then_end_of_track })
-            }
-            Phase::EndOfTrack => Some(SleepTimer { ends_at: None, stop_at_end_of_track: true }),
+            Phase::Timed {
+                ends_at,
+                then_end_of_track,
+            } => Some(SleepTimer {
+                ends_at: Some(*ends_at),
+                stop_at_end_of_track: *then_end_of_track,
+            }),
+            Phase::EndOfTrack => Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: true,
+            }),
         }
     }
 
@@ -141,7 +169,10 @@ impl SleepTimerMachine {
         let now = self.clock.now_ms();
         match self.phase.clone() {
             Phase::Idle | Phase::EndOfTrack => SleepAction::None,
-            Phase::Timed { ends_at, then_end_of_track } => {
+            Phase::Timed {
+                ends_at,
+                then_end_of_track,
+            } => {
                 if now >= ends_at {
                     if then_end_of_track {
                         self.phase = Phase::EndOfTrack;
@@ -159,7 +190,9 @@ impl SleepTimerMachine {
                 let remaining = ends_at - now;
                 if self.fade && !then_end_of_track && remaining <= FADE_MS {
                     self.fading = true;
-                    return SleepAction::Fade { gain: (remaining / FADE_MS).clamp(0.0, 1.0) };
+                    return SleepAction::Fade {
+                        gain: (remaining / FADE_MS).clamp(0.0, 1.0),
+                    };
                 }
                 SleepAction::None
             }
@@ -207,7 +240,13 @@ mod tests {
     fn timed_stop_fires_once_and_clears() {
         let (clock, mut m) = machine();
         m.set_fade(false);
-        assert_eq!(m.set(Some(SleepTimer { ends_at: Some(130_000.0), stop_at_end_of_track: false })), SleepAction::None);
+        assert_eq!(
+            m.set(Some(SleepTimer {
+                ends_at: Some(130_000.0),
+                stop_at_end_of_track: false
+            })),
+            SleepAction::None
+        );
         assert!(m.is_active());
         assert_eq!(m.remaining_ms(), Some(30_000.0));
         clock.advance(29_999);
@@ -221,7 +260,10 @@ mod tests {
     #[test]
     fn fade_ramps_over_the_last_ten_seconds() {
         let (clock, mut m) = machine();
-        m.set(Some(SleepTimer { ends_at: Some(120_000.0), stop_at_end_of_track: false }));
+        m.set(Some(SleepTimer {
+            ends_at: Some(120_000.0),
+            stop_at_end_of_track: false,
+        }));
         clock.advance(9_000);
         assert_eq!(m.tick(), SleepAction::None);
         clock.advance(1_000); // 10 s left
@@ -240,7 +282,10 @@ mod tests {
     #[test]
     fn cancelling_mid_fade_restores_volume() {
         let (clock, mut m) = machine();
-        m.set(Some(SleepTimer { ends_at: Some(105_000.0), stop_at_end_of_track: false }));
+        m.set(Some(SleepTimer {
+            ends_at: Some(105_000.0),
+            stop_at_end_of_track: false,
+        }));
         clock.advance(2_000);
         assert!(matches!(m.tick(), SleepAction::Fade { .. }));
         assert_eq!(m.set(None), SleepAction::Fade { gain: 1.0 });
@@ -251,10 +296,22 @@ mod tests {
     #[test]
     fn end_of_track_waits_for_the_boundary() {
         let (clock, mut m) = machine();
-        assert_eq!(m.set(Some(SleepTimer { ends_at: None, stop_at_end_of_track: true })), SleepAction::None);
+        assert_eq!(
+            m.set(Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: true
+            })),
+            SleepAction::None
+        );
         clock.advance(600_000);
         assert_eq!(m.tick(), SleepAction::None);
-        assert_eq!(m.state(), Some(SleepTimer { ends_at: None, stop_at_end_of_track: true }));
+        assert_eq!(
+            m.state(),
+            Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: true
+            })
+        );
         assert_eq!(m.track_ended(), SleepAction::Stop);
         assert_eq!(m.track_ended(), SleepAction::None);
         assert!(!m.is_active());
@@ -263,27 +320,49 @@ mod tests {
     #[test]
     fn timed_then_end_of_track_never_fades_and_arms_on_expiry() {
         let (clock, mut m) = machine();
-        m.set(Some(SleepTimer { ends_at: Some(110_000.0), stop_at_end_of_track: true }));
+        m.set(Some(SleepTimer {
+            ends_at: Some(110_000.0),
+            stop_at_end_of_track: true,
+        }));
         clock.advance(5_000);
         assert_eq!(m.tick(), SleepAction::None);
-        assert_eq!(m.track_ended(), SleepAction::None, "tracks ending before expiry don't stop");
+        assert_eq!(
+            m.track_ended(),
+            SleepAction::None,
+            "tracks ending before expiry don't stop"
+        );
         clock.advance(5_000);
         assert_eq!(m.tick(), SleepAction::None);
-        assert_eq!(m.state(), Some(SleepTimer { ends_at: None, stop_at_end_of_track: true }));
+        assert_eq!(
+            m.state(),
+            Some(SleepTimer {
+                ends_at: None,
+                stop_at_end_of_track: true
+            })
+        );
         assert_eq!(m.track_ended(), SleepAction::Stop);
     }
 
     #[test]
     fn already_elapsed_timer_stops_immediately() {
         let (_, mut m) = machine();
-        assert_eq!(m.set(Some(SleepTimer { ends_at: Some(1.0), stop_at_end_of_track: false })), SleepAction::Stop);
+        assert_eq!(
+            m.set(Some(SleepTimer {
+                ends_at: Some(1.0),
+                stop_at_end_of_track: false
+            })),
+            SleepAction::Stop
+        );
         assert!(!m.is_active());
     }
 
     #[test]
     fn empty_timer_is_cleared() {
         let (_, mut m) = machine();
-        m.set(Some(SleepTimer { ends_at: None, stop_at_end_of_track: false }));
+        m.set(Some(SleepTimer {
+            ends_at: None,
+            stop_at_end_of_track: false,
+        }));
         assert!(!m.is_active());
         assert_eq!(m.state(), None);
     }

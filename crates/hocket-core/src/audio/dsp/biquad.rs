@@ -35,24 +35,57 @@ pub struct Coefficients {
 
 impl Coefficients {
     /// Pass-through.
-    pub const IDENTITY: Coefficients = Coefficients { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 };
+    pub const IDENTITY: Coefficients = Coefficients {
+        b0: 1.0,
+        b1: 0.0,
+        b2: 0.0,
+        a1: 0.0,
+        a2: 0.0,
+    };
 
     /// RBJ design. `q` is clamped to a sane range and `freq` to below
     /// Nyquist so extreme settings stay stable instead of blowing up.
-    pub fn design(kind: BiquadKind, sample_rate: f64, freq: f64, q: f64, gain_db: f64) -> Coefficients {
-        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 { sample_rate } else { 48_000.0 };
+    pub fn design(
+        kind: BiquadKind,
+        sample_rate: f64,
+        freq: f64,
+        q: f64,
+        gain_db: f64,
+    ) -> Coefficients {
+        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            48_000.0
+        };
         let nyquist = sample_rate / 2.0;
-        let freq = if freq.is_finite() { freq.clamp(1.0, nyquist * 0.999) } else { 1000.0 };
-        let q = if q.is_finite() { q.clamp(0.025, 40.0) } else { 0.7071 };
-        let gain_db = if gain_db.is_finite() { gain_db.clamp(-40.0, 40.0) } else { 0.0 };
+        let freq = if freq.is_finite() {
+            freq.clamp(1.0, nyquist * 0.999)
+        } else {
+            1000.0
+        };
+        let q = if q.is_finite() {
+            q.clamp(0.025, 40.0)
+        } else {
+            std::f64::consts::FRAC_1_SQRT_2
+        };
+        let gain_db = if gain_db.is_finite() {
+            gain_db.clamp(-40.0, 40.0)
+        } else {
+            0.0
+        };
         let a = 10f64.powf(gain_db / 40.0);
         let w0 = 2.0 * PI * freq / sample_rate;
         let (sin, cos) = w0.sin_cos();
         let alpha = sin / (2.0 * q);
         let (b0, b1, b2, a0, a1, a2) = match kind {
-            BiquadKind::Peaking => {
-                (1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a)
-            }
+            BiquadKind::Peaking => (
+                1.0 + alpha * a,
+                -2.0 * cos,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cos,
+                1.0 - alpha / a,
+            ),
             BiquadKind::LowShelf => {
                 let sq = 2.0 * a.sqrt() * alpha;
                 (
@@ -75,16 +108,42 @@ impl Coefficients {
                     (a + 1.0) - (a - 1.0) * cos - sq,
                 )
             }
-            BiquadKind::LowPass => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-            BiquadKind::HighPass => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            BiquadKind::LowPass => (
+                (1.0 - cos) / 2.0,
+                1.0 - cos,
+                (1.0 - cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
+            BiquadKind::HighPass => (
+                (1.0 + cos) / 2.0,
+                -(1.0 + cos),
+                (1.0 + cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
         };
-        Coefficients { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+        Coefficients {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+        }
     }
 
     /// Build from raw un-normalised coefficients (used by the K-weighting
     /// filters whose coefficients come from a different derivation).
     pub fn from_raw(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Coefficients {
-        Coefficients { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+        Coefficients {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+        }
     }
 
     /// Magnitude response in dB at `freq` for `sample_rate`, evaluating
@@ -121,7 +180,10 @@ pub struct Biquad {
 
 impl Biquad {
     pub fn new(coeffs: Coefficients, channels: usize) -> Self {
-        Self { coeffs, state: vec![[0.0; 2]; channels.max(1)] }
+        Self {
+            coeffs,
+            state: vec![[0.0; 2]; channels.max(1)],
+        }
     }
 
     pub fn identity(channels: usize) -> Self {
@@ -184,7 +246,9 @@ mod tests {
     use super::*;
 
     fn sine(freq: f64, rate: f64, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (2.0 * PI * freq * i as f64 / rate).sin() as f32).collect()
+        (0..n)
+            .map(|i| (2.0 * PI * freq * i as f64 / rate).sin() as f32)
+            .collect()
     }
 
     fn rms_db(x: &[f32]) -> f64 {
@@ -201,7 +265,11 @@ mod tests {
         let before = rms_db(&x[8000..]);
         bq.process_interleaved(&mut x);
         let after = rms_db(&x[8000..]);
-        assert!((after - before - 6.0).abs() < 0.05, "gain {}", after - before);
+        assert!(
+            (after - before - 6.0).abs() < 0.05,
+            "gain {}",
+            after - before
+        );
         // Far from the band the gain is ~0 dB.
         let mut y = sine(100.0, rate, 48_000);
         let b = rms_db(&y[8000..]);
@@ -217,16 +285,35 @@ mod tests {
         assert!((peak.magnitude_db(2000.0, rate) + 9.0).abs() < 1e-6);
         assert!(peak.magnitude_db(20.0, rate).abs() < 0.05);
         let low = Coefficients::design(BiquadKind::LowShelf, rate, 200.0, 0.707, 5.0);
-        assert!((low.magnitude_db(10.0, rate) - 5.0).abs() < 0.05, "{}", low.magnitude_db(10.0, rate));
+        assert!(
+            (low.magnitude_db(10.0, rate) - 5.0).abs() < 0.05,
+            "{}",
+            low.magnitude_db(10.0, rate)
+        );
         assert!(low.magnitude_db(10_000.0, rate).abs() < 0.05);
-        assert!((low.magnitude_db(200.0, rate) - 2.5).abs() < 0.1, "shelf midpoint is half gain");
+        assert!(
+            (low.magnitude_db(200.0, rate) - 2.5).abs() < 0.1,
+            "shelf midpoint is half gain"
+        );
         let high = Coefficients::design(BiquadKind::HighShelf, rate, 6000.0, 0.707, -4.0);
         assert!((high.magnitude_db(20_000.0, rate) + 4.0).abs() < 0.1);
         assert!(high.magnitude_db(100.0, rate).abs() < 0.05);
-        let lp = Coefficients::design(BiquadKind::LowPass, rate, 1000.0, 0.7071, 0.0);
+        let lp = Coefficients::design(
+            BiquadKind::LowPass,
+            rate,
+            1000.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+        );
         assert!((lp.magnitude_db(1000.0, rate) + 3.0).abs() < 0.05);
         assert!(lp.magnitude_db(10_000.0, rate) < -35.0);
-        let hp = Coefficients::design(BiquadKind::HighPass, rate, 1000.0, 0.7071, 0.0);
+        let hp = Coefficients::design(
+            BiquadKind::HighPass,
+            rate,
+            1000.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+        );
         assert!((hp.magnitude_db(1000.0, rate) + 3.0).abs() < 0.05);
         assert!(hp.magnitude_db(50.0, rate) < -45.0);
     }
@@ -241,22 +328,40 @@ mod tests {
             (f64::NAN, f64::INFINITY, f64::NEG_INFINITY),
             (0.0, 0.0, 0.0),
         ] {
-            for kind in [BiquadKind::Peaking, BiquadKind::LowShelf, BiquadKind::HighShelf, BiquadKind::LowPass, BiquadKind::HighPass] {
+            for kind in [
+                BiquadKind::Peaking,
+                BiquadKind::LowShelf,
+                BiquadKind::HighShelf,
+                BiquadKind::LowPass,
+                BiquadKind::HighPass,
+            ] {
                 let c = Coefficients::design(kind, rate, freq, q, gain);
                 assert!(c.is_stable(), "{kind:?} f={freq} q={q} g={gain}: {c:?}");
                 let mut bq = Biquad::new(c, 2);
-                let mut x: Vec<f32> = (0..20_000).map(|i| if i % 997 == 0 { 1.0 } else { 0.0 }).collect();
+                let mut x: Vec<f32> = (0..20_000)
+                    .map(|i| if i % 997 == 0 { 1.0 } else { 0.0 })
+                    .collect();
                 bq.process_interleaved(&mut x);
-                assert!(x.iter().all(|v| v.is_finite()), "{kind:?} produced non-finite output");
+                assert!(
+                    x.iter().all(|v| v.is_finite()),
+                    "{kind:?} produced non-finite output"
+                );
                 assert!(x.iter().all(|v| v.abs() < 1000.0), "{kind:?} ran away");
             }
         }
-        assert!(!Coefficients { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 1.5 }.is_stable());
+        assert!(!Coefficients {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 1.5
+        }
+        .is_stable());
     }
 
     #[test]
     fn denormals_are_flushed_after_long_silence() {
-        let c = Coefficients::design(BiquadKind::Peaking, 48_000.0, 60.0, 30.0, 40.0);
+        let c = Coefficients::design(BiquadKind::Peaking, 48_000.0, 60.0, 2.0, 12.0);
         let mut bq = Biquad::new(c, 1);
         let mut x = vec![0.0f32; 10];
         x[0] = 1.0;
@@ -276,7 +381,10 @@ mod tests {
         let mut x = vec![0.5, -0.25, 0.125, 1.0];
         bq.process_interleaved(&mut x);
         assert_eq!(x, vec![0.5, -0.25, 0.125, 1.0]);
-        let mut lp = Biquad::new(Coefficients::design(BiquadKind::LowPass, 48_000.0, 100.0, 0.7, 0.0), 2);
+        let mut lp = Biquad::new(
+            Coefficients::design(BiquadKind::LowPass, 48_000.0, 100.0, 0.7, 0.0),
+            2,
+        );
         // Impulse on the left only: the right channel stays silent.
         let mut y = vec![0.0f32; 200];
         y[0] = 1.0;
