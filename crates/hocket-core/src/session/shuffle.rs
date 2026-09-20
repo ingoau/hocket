@@ -33,7 +33,10 @@ impl Permutation {
     /// Identity permutation (shuffle off).
     pub fn identity(n: usize) -> Permutation {
         let order: Vec<u32> = (0..n as u32).collect();
-        Permutation { inverse: order.clone(), order }
+        Permutation {
+            inverse: order.clone(),
+            order,
+        }
     }
 
     /// Deterministic seeded permutation with an optional anchor moved to the front.
@@ -194,7 +197,12 @@ mod tests {
         assert_eq!(anchored.to_context(0), Some(9));
         assert_eq!(anchored.to_position(9), Some(0));
         // Only two positions differ: the swap.
-        let diffs = plain.order().iter().zip(anchored.order()).filter(|(a, b)| a != b).count();
+        let diffs = plain
+            .order()
+            .iter()
+            .zip(anchored.order())
+            .filter(|(a, b)| a != b)
+            .count();
         assert_eq!(diffs, 2);
         // Out-of-range anchor is ignored.
         assert_eq!(Permutation::seeded(7, 10, Some(99)), plain);
@@ -222,13 +230,27 @@ mod tests {
 
     #[test]
     fn explicit_order_wins_when_valid() {
-        let s = ShuffleState { seed: 1, anchor: None, order: Some(vec![2, 0, 1]) };
+        let s = ShuffleState {
+            seed: 1,
+            anchor: None,
+            order: Some(vec![2, 0, 1]),
+        };
         assert_eq!(Permutation::from_state(Some(&s), 3).order(), &[2, 0, 1]);
         // Wrong length → seed.
-        assert_eq!(Permutation::from_state(Some(&s), 4), Permutation::seeded(1, 4, None));
+        assert_eq!(
+            Permutation::from_state(Some(&s), 4),
+            Permutation::seeded(1, 4, None)
+        );
         // Not a bijection → seed.
-        let bad = ShuffleState { seed: 1, anchor: None, order: Some(vec![1, 1, 0]) };
-        assert_eq!(Permutation::from_state(Some(&bad), 3), Permutation::seeded(1, 3, None));
+        let bad = ShuffleState {
+            seed: 1,
+            anchor: None,
+            order: Some(vec![1, 1, 0]),
+        };
+        assert_eq!(
+            Permutation::from_state(Some(&bad), 3),
+            Permutation::seeded(1, 3, None)
+        );
     }
 
     #[test]

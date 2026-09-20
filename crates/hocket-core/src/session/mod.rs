@@ -40,8 +40,8 @@ use crate::util::Clock;
 
 pub use document::{load, new_document, save, validate, DocumentError, SESSION_SCHEMA_VERSION};
 pub use reducer::{
-    derive, previous_should_restart, reduce, AutoplayItem, DerivedQueue, Effect, QueueOp, ReduceCtx, ReduceError,
-    DEFAULT_HISTORY_CAP,
+    derive, previous_should_restart, reduce, AutoplayItem, DerivedQueue, Effect, QueueOp,
+    ReduceCtx, ReduceError, DEFAULT_HISTORY_CAP,
 };
 pub use saved::{merge_saved_queues, SavedQueuePolicy};
 
@@ -75,7 +75,10 @@ pub struct DeterministicEntropy {
 
 impl DeterministicEntropy {
     pub fn new(seed: u64) -> Self {
-        DeterministicEntropy { counter: Mutex::new(0), rng: Mutex::new(ChaCha8Rng::seed_from_u64(seed)) }
+        DeterministicEntropy {
+            counter: Mutex::new(0),
+            rng: Mutex::new(ChaCha8Rng::seed_from_u64(seed)),
+        }
     }
 }
 
@@ -99,7 +102,10 @@ pub struct SessionConfig {
 
 impl Default for SessionConfig {
     fn default() -> Self {
-        SessionConfig { history_cap: DEFAULT_HISTORY_CAP, saved: SavedQueuePolicy::default() }
+        SessionConfig {
+            history_cap: DEFAULT_HISTORY_CAP,
+            saved: SavedQueuePolicy::default(),
+        }
     }
 }
 
@@ -112,12 +118,28 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(doc: SessionDocument, config: SessionConfig, clock: Arc<dyn Clock>, entropy: Arc<dyn Entropy>) -> Session {
-        Session { doc, config, clock, entropy }
+    pub fn new(
+        doc: SessionDocument,
+        config: SessionConfig,
+        clock: Arc<dyn Clock>,
+        entropy: Arc<dyn Entropy>,
+    ) -> Session {
+        Session {
+            doc,
+            config,
+            clock,
+            entropy,
+        }
     }
 
     /// A fresh empty session for a scope (`serverId:username`).
-    pub fn empty(scope: &str, session_id: SessionId, config: SessionConfig, clock: Arc<dyn Clock>, entropy: Arc<dyn Entropy>) -> Session {
+    pub fn empty(
+        scope: &str,
+        session_id: SessionId,
+        config: SessionConfig,
+        clock: Arc<dyn Clock>,
+        entropy: Arc<dyn Entropy>,
+    ) -> Session {
         let doc = new_document(scope, session_id, clock.now_ms());
         Session::new(doc, config, clock, entropy)
     }
@@ -195,16 +217,32 @@ mod tests {
         assert_eq!(s.doc().updated_at, 1000.0);
         let context = QueueContext {
             server_id: "srv".into(),
-            kind: ContextKind::AdHoc { label: "sel".into() },
+            kind: ContextKind::AdHoc {
+                label: "sel".into(),
+            },
             label: "sel".into(),
             sort: SortOrder::Default,
             tracks: vec!["a".into(), "b".into()],
         };
-        let fx = s.apply(QueueOp::PlayContext { args: PlayContextArgs { context, start_index: Some(0), shuffle: false, save_outgoing: true } }, 0).unwrap();
+        let fx = s
+            .apply(
+                QueueOp::PlayContext {
+                    args: PlayContextArgs {
+                        context,
+                        start_index: Some(0),
+                        shuffle: false,
+                        save_outgoing: true,
+                    },
+                },
+                0,
+            )
+            .unwrap();
         assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
         assert_eq!(s.derive().upcoming.len(), 1);
         assert_eq!(s.doc().revision, 1);
-        let err = s.apply(QueueOp::JumpToQueueItem { key: "nope".into() }, 0).unwrap_err();
+        let err = s
+            .apply(QueueOp::JumpToQueueItem { key: "nope".into() }, 0)
+            .unwrap_err();
         assert_eq!(err, ReduceError::UnknownKey("nope".into()));
         assert_eq!(s.doc().revision, 1, "errors leave the document untouched");
         let snap = s.snapshot();

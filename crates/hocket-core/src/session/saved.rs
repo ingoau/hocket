@@ -34,7 +34,11 @@ pub struct SavedQueuePolicy {
 
 impl Default for SavedQueuePolicy {
     fn default() -> Self {
-        SavedQueuePolicy { cap: DEFAULT_CAP, byte_cap: DEFAULT_BYTE_CAP, expiry_ms: DEFAULT_EXPIRY_MS }
+        SavedQueuePolicy {
+            cap: DEFAULT_CAP,
+            byte_cap: DEFAULT_BYTE_CAP,
+            expiry_ms: DEFAULT_EXPIRY_MS,
+        }
     }
 }
 
@@ -99,7 +103,12 @@ pub fn needs_resolution(saved: &SavedQueue) -> bool {
 
 /// Snapshot the live queue. `None` when trivial. `id` is the new entry's id
 /// (a dedupe against an existing entry keeps the old id instead).
-pub fn snapshot(doc: &SessionDocument, position_ms: Ms, now: EpochMs, id: String) -> Option<SavedQueue> {
+pub fn snapshot(
+    doc: &SessionDocument,
+    position_ms: Ms,
+    now: EpochMs,
+    id: String,
+) -> Option<SavedQueue> {
     if is_trivial(doc) {
         return None;
     }
@@ -142,7 +151,12 @@ pub fn total_bytes(list: &[SavedQueue]) -> usize {
 /// Insert or refresh (dedupe on identity) and enforce the policy. Returns
 /// whether the list changed. With `cap == 0` only an existing pinned entry
 /// of the same identity is refreshed.
-pub fn upsert(list: &mut Vec<SavedQueue>, mut entry: SavedQueue, policy: &SavedQueuePolicy, now: EpochMs) -> bool {
+pub fn upsert(
+    list: &mut Vec<SavedQueue>,
+    mut entry: SavedQueue,
+    policy: &SavedQueuePolicy,
+    now: EpochMs,
+) -> bool {
     let identity = identity_of(&entry);
     if let Some(existing) = list.iter_mut().find(|q| identity_of(q) == identity) {
         entry.id = existing.id.clone();
@@ -188,14 +202,20 @@ pub fn enforce(list: &mut Vec<SavedQueue>, policy: &SavedQueuePolicy, now: Epoch
     });
     // Byte cap: evict LRU unpinned until under budget (or none left to evict).
     while total_bytes(list) > policy.byte_cap {
-        let Some(pos) = list.iter().rposition(|q| !q.pinned) else { break };
+        let Some(pos) = list.iter().rposition(|q| !q.pinned) else {
+            break;
+        };
         list.remove(pos);
     }
     *list != before
 }
 
 fn sort_recent_first(list: &mut [SavedQueue]) {
-    list.sort_by(|a, b| b.last_interacted_at.partial_cmp(&a.last_interacted_at).unwrap_or(std::cmp::Ordering::Equal));
+    list.sort_by(|a, b| {
+        b.last_interacted_at
+            .partial_cmp(&a.last_interacted_at)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 /// Last-write-wins merge keyed on context identity. `updated_at` decides;
@@ -223,7 +243,10 @@ pub fn merge_saved_queues(local: &[SavedQueue], remote: &[SavedQueue]) -> Vec<Sa
             }
         }
     }
-    let mut out: Vec<SavedQueue> = order.into_iter().filter_map(|id| by_identity.remove(&id)).collect();
+    let mut out: Vec<SavedQueue> = order
+        .into_iter()
+        .filter_map(|id| by_identity.remove(&id))
+        .collect();
     sort_recent_first(&mut out);
     out
 }
@@ -279,7 +302,12 @@ mod tests {
         assert_ne!(context_identity(&a), context_identity(&sorted));
 
         let adhoc = ctx(ContextKind::AdHoc { label: "s".into() }, &["t1", "t2"]);
-        let adhoc2 = ctx(ContextKind::AdHoc { label: "other label".into() }, &["t1", "t2"]);
+        let adhoc2 = ctx(
+            ContextKind::AdHoc {
+                label: "other label".into(),
+            },
+            &["t1", "t2"],
+        );
         let adhoc3 = ctx(ContextKind::AdHoc { label: "s".into() }, &["t2", "t1"]);
         assert_eq!(context_identity(&adhoc), context_identity(&adhoc2));
         assert_ne!(context_identity(&adhoc), context_identity(&adhoc3));
@@ -289,14 +317,24 @@ mod tests {
     fn snapshot_omits_tracks_for_id_referenced_only() {
         let mut doc = crate::session::document::new_document("s", "id".into(), 0.0);
         doc.context = Some(ctx(album("a"), &["t1", "t2", "t3"]));
-        doc.current = Some(QueueItem { key: "k".into(), track_id: "t1".into(), source: QueueSource::Context { index: 0 }, unavailable: false });
+        doc.current = Some(QueueItem {
+            key: "k".into(),
+            track_id: "t1".into(),
+            source: QueueSource::Context { index: 0 },
+            unavailable: false,
+        });
         let s = snapshot(&doc, 1234, 10.0, "sq1".into()).unwrap();
         assert!(s.context.tracks.is_empty());
         assert!(needs_resolution(&s));
         assert_eq!(s.track_count, 3);
         assert_eq!(s.position_ms, 1234);
 
-        doc.context = Some(ctx(ContextKind::AdHoc { label: "sel".into() }, &["t1", "t2", "t3"]));
+        doc.context = Some(ctx(
+            ContextKind::AdHoc {
+                label: "sel".into(),
+            },
+            &["t1", "t2", "t3"],
+        ));
         let s = snapshot(&doc, 0, 10.0, "sq2".into()).unwrap();
         assert_eq!(s.context.tracks.len(), 3);
         assert!(!needs_resolution(&s));
@@ -309,7 +347,12 @@ mod tests {
         doc.context = Some(ctx(album("a"), &["t1", "t2"]));
         // Never played from.
         assert!(snapshot(&doc, 0, 0.0, "x".into()).is_none());
-        doc.current = Some(QueueItem { key: "k".into(), track_id: "t1".into(), source: QueueSource::Context { index: 0 }, unavailable: false });
+        doc.current = Some(QueueItem {
+            key: "k".into(),
+            track_id: "t1".into(),
+            source: QueueSource::Context { index: 0 },
+            unavailable: false,
+        });
         assert!(snapshot(&doc, 0, 0.0, "x".into()).is_some());
         // Single track.
         doc.context.as_mut().unwrap().tracks.truncate(1);
@@ -346,8 +389,16 @@ mod tests {
         let ids: Vec<&str> = list.iter().map(|q| q.id.as_str()).collect();
         assert_eq!(ids, vec!["u3", "u2", "p"]);
         // Touching u2 makes u3 the LRU when a new one arrives.
-        list.iter_mut().find(|q| q.id == "u2").unwrap().last_interacted_at = 40.0;
-        upsert(&mut list, entry("u4", album("a4"), &[], 50.0), &policy, 50.0);
+        list.iter_mut()
+            .find(|q| q.id == "u2")
+            .unwrap()
+            .last_interacted_at = 40.0;
+        upsert(
+            &mut list,
+            entry("u4", album("a4"), &[], 50.0),
+            &policy,
+            50.0,
+        );
         let ids: Vec<&str> = list.iter().map(|q| q.id.as_str()).collect();
         assert_eq!(ids, vec!["u4", "u2", "p"]);
     }
@@ -356,12 +407,22 @@ mod tests {
     fn cap_zero_disables_autosave_but_refreshes_pinned() {
         let policy = SavedQueuePolicy::default().with_cap(0);
         let mut list = vec![];
-        assert!(!upsert(&mut list, entry("u1", album("a"), &[], 1.0), &policy, 1.0));
+        assert!(!upsert(
+            &mut list,
+            entry("u1", album("a"), &[], 1.0),
+            &policy,
+            1.0
+        ));
         assert!(list.is_empty());
         let mut p = entry("p", album("b"), &[], 1.0);
         p.pinned = true;
         list.push(p);
-        assert!(upsert(&mut list, entry("x", album("b"), &[], 2.0), &policy, 2.0));
+        assert!(upsert(
+            &mut list,
+            entry("x", album("b"), &[], 2.0),
+            &policy,
+            2.0
+        ));
         assert_eq!(list.len(), 1);
         assert!(list[0].pinned);
         assert_eq!(list[0].last_interacted_at, 2.0);
@@ -386,13 +447,35 @@ mod tests {
     fn byte_cap_evicts_lru_unpinned() {
         let big_tracks: Vec<String> = (0..500).map(|i| format!("track-{i:06}")).collect();
         let big: Vec<&str> = big_tracks.iter().map(|s| s.as_str()).collect();
-        let one = estimate_bytes(&entry("x", ContextKind::AdHoc { label: "s".into() }, &big, 0.0));
-        let policy = SavedQueuePolicy { cap: 10, byte_cap: one * 2 + one / 2, expiry_ms: DEFAULT_EXPIRY_MS };
+        let one = estimate_bytes(&entry(
+            "x",
+            ContextKind::AdHoc { label: "s".into() },
+            &big,
+            0.0,
+        ));
+        let policy = SavedQueuePolicy {
+            cap: 10,
+            byte_cap: one * 2 + one / 2,
+            expiry_ms: DEFAULT_EXPIRY_MS,
+        };
         let mut list = vec![];
         for i in 0..4 {
             let mut tracks = big.clone();
-            tracks[0] = if i == 0 { "a" } else if i == 1 { "b" } else if i == 2 { "c" } else { "d" };
-            let mut e = entry(&format!("e{i}"), ContextKind::AdHoc { label: "s".into() }, &tracks, i as f64);
+            tracks[0] = if i == 0 {
+                "a"
+            } else if i == 1 {
+                "b"
+            } else if i == 2 {
+                "c"
+            } else {
+                "d"
+            };
+            let mut e = entry(
+                &format!("e{i}"),
+                ContextKind::AdHoc { label: "s".into() },
+                &tracks,
+                i as f64,
+            );
             e.pinned = i == 0;
             upsert(&mut list, e, &policy, i as f64);
         }
@@ -412,15 +495,24 @@ mod tests {
         let r3 = entry("r3", album("c"), &[], 10.0);
         let merged = merge_saved_queues(&[l1, l2], &[r1, r2, r3]);
         assert_eq!(merged.len(), 3);
-        let a = merged.iter().find(|q| matches!(q.context.kind, ContextKind::Album { ref id } if id == "a")).unwrap();
+        let a = merged
+            .iter()
+            .find(|q| matches!(q.context.kind, ContextKind::Album { ref id } if id == "a"))
+            .unwrap();
         assert_eq!(a.id, "r1");
         assert!(a.pinned, "pin state rides with the winner");
-        let b = merged.iter().find(|q| matches!(q.context.kind, ContextKind::Album { ref id } if id == "b")).unwrap();
+        let b = merged
+            .iter()
+            .find(|q| matches!(q.context.kind, ContextKind::Album { ref id } if id == "b"))
+            .unwrap();
         assert_eq!(b.id, "l2");
         assert!(b.pinned);
         assert!(merged.iter().any(|q| q.id == "r3"));
         // Ties keep local.
-        let tie = merge_saved_queues(&[entry("l", album("z"), &[], 5.0)], &[entry("r", album("z"), &[], 5.0)]);
+        let tie = merge_saved_queues(
+            &[entry("l", album("z"), &[], 5.0)],
+            &[entry("r", album("z"), &[], 5.0)],
+        );
         assert_eq!(tie[0].id, "l");
     }
 }

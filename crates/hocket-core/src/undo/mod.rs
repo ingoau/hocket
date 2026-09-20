@@ -33,7 +33,9 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-use crate::api::{ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, UndoEntry, UndoState};
+use crate::api::{
+    ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, UndoEntry, UndoState,
+};
 
 /// Default byte budget for the whole stack (undo + redo).
 pub const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -54,7 +56,7 @@ pub enum UndoTier {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UndoAction {
     /// Adopt this document (`Session::replace`).
-    RestoreDocument(SessionDocument),
+    RestoreDocument(Box<SessionDocument>),
     /// Run these compare-and-swap mutations through the outbox.
     Cas(Vec<CasMutation>),
     Nothing,
@@ -71,12 +73,23 @@ pub struct CasMutation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteTarget {
-    Track { id: String },
-    Album { id: String },
-    Artist { id: String },
-    Playlist { id: String },
+    Track {
+        id: String,
+    },
+    Album {
+        id: String,
+    },
+    Artist {
+        id: String,
+    },
+    Playlist {
+        id: String,
+    },
     /// A track's membership or position within a playlist.
-    PlaylistTrack { playlist_id: String, track_id: String },
+    PlaylistTrack {
+        playlist_id: String,
+        track_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,9 +97,16 @@ pub enum RemoteValue {
     Rating(u32),
     Loved(bool),
     /// Present at `index` (or anywhere when `None`).
-    Member { present: bool, index: Option<u32> },
+    Member {
+        present: bool,
+        index: Option<u32>,
+    },
     Position(u32),
-    Meta { name: String, comment: Option<String>, public: Option<bool> },
+    Meta {
+        name: String,
+        comment: Option<String>,
+        public: Option<bool>,
+    },
 }
 
 /// One item of a remote mutation: what it was, what the command set.
@@ -103,43 +123,94 @@ impl RemoteItem {
         use RemoteTarget as T;
         use RemoteValue as V;
         Some(match (&self.target, to) {
-            (T::Track { id }, V::Rating(r)) => Command::SetRating { targets: vec![RatingTarget::Track { id: id.clone() }], rating: *r },
-            (T::Album { id }, V::Rating(r)) => Command::SetRating { targets: vec![RatingTarget::Album { id: id.clone() }], rating: *r },
-            (T::Track { id }, V::Loved(l)) => Command::SetLoved { targets: vec![RatingTarget::Track { id: id.clone() }], loved: *l },
-            (T::Album { id }, V::Loved(l)) => Command::SetLoved { targets: vec![RatingTarget::Album { id: id.clone() }], loved: *l },
-            (T::Artist { id }, V::Loved(l)) => Command::SetArtistLoved { artist_id: id.clone(), loved: *l },
-            (T::PlaylistTrack { playlist_id, track_id }, V::Member { present: true, index }) => {
-                Command::PlaylistAdd { playlist_id: playlist_id.clone(), track_ids: vec![track_id.clone()], at_index: *index }
-            }
+            (T::Track { id }, V::Rating(r)) => Command::SetRating {
+                targets: vec![RatingTarget::Track { id: id.clone() }],
+                rating: *r,
+            },
+            (T::Album { id }, V::Rating(r)) => Command::SetRating {
+                targets: vec![RatingTarget::Album { id: id.clone() }],
+                rating: *r,
+            },
+            (T::Track { id }, V::Loved(l)) => Command::SetLoved {
+                targets: vec![RatingTarget::Track { id: id.clone() }],
+                loved: *l,
+            },
+            (T::Album { id }, V::Loved(l)) => Command::SetLoved {
+                targets: vec![RatingTarget::Album { id: id.clone() }],
+                loved: *l,
+            },
+            (T::Artist { id }, V::Loved(l)) => Command::SetArtistLoved {
+                artist_id: id.clone(),
+                loved: *l,
+            },
+            (
+                T::PlaylistTrack {
+                    playlist_id,
+                    track_id,
+                },
+                V::Member {
+                    present: true,
+                    index,
+                },
+            ) => Command::PlaylistAdd {
+                playlist_id: playlist_id.clone(),
+                track_ids: vec![track_id.clone()],
+                at_index: *index,
+            },
             (T::PlaylistTrack { playlist_id, .. }, V::Member { present: false, .. }) => {
                 let index = match from {
                     V::Member { index: Some(i), .. } => *i,
                     _ => return None,
                 };
-                Command::PlaylistRemove { playlist_id: playlist_id.clone(), indices: vec![index] }
+                Command::PlaylistRemove {
+                    playlist_id: playlist_id.clone(),
+                    indices: vec![index],
+                }
             }
             (T::PlaylistTrack { playlist_id, .. }, V::Position(to)) => {
                 let from_index = match from {
                     V::Position(f) => *f,
                     _ => return None,
                 };
-                Command::PlaylistMove { playlist_id: playlist_id.clone(), from_index, to_index: *to }
+                Command::PlaylistMove {
+                    playlist_id: playlist_id.clone(),
+                    from_index,
+                    to_index: *to,
+                }
             }
-            (T::Playlist { id }, V::Meta { name, comment, public }) => {
-                Command::RenamePlaylist { playlist_id: id.clone(), name: name.clone(), comment: comment.clone(), public: *public }
-            }
+            (
+                T::Playlist { id },
+                V::Meta {
+                    name,
+                    comment,
+                    public,
+                },
+            ) => Command::RenamePlaylist {
+                playlist_id: id.clone(),
+                name: name.clone(),
+                comment: comment.clone(),
+                public: *public,
+            },
             _ => return None,
         })
     }
 
     /// CAS that restores `prior` if the item still holds `set`.
     pub fn inverse(&self) -> Option<CasMutation> {
-        Some(CasMutation { target: self.target.clone(), expect: self.set.clone(), command: self.command(&self.set, &self.prior)? })
+        Some(CasMutation {
+            target: self.target.clone(),
+            expect: self.set.clone(),
+            command: self.command(&self.set, &self.prior)?,
+        })
     }
 
     /// CAS that re-applies `set` if the item still holds `prior`.
     pub fn redo(&self) -> Option<CasMutation> {
-        Some(CasMutation { target: self.target.clone(), expect: self.prior.clone(), command: self.command(&self.prior, &self.set)? })
+        Some(CasMutation {
+            target: self.target.clone(),
+            expect: self.prior.clone(),
+            command: self.command(&self.prior, &self.set)?,
+        })
     }
 }
 
@@ -164,7 +235,10 @@ pub struct CasOutcome {
 
 impl CasOutcome {
     pub fn new(total: usize) -> CasOutcome {
-        CasOutcome { total, ..Default::default() }
+        CasOutcome {
+            total,
+            ..Default::default()
+        }
     }
 
     pub fn record(&mut self, result: CasResult) {
@@ -222,8 +296,18 @@ pub struct SessionUndo {
 }
 
 impl SessionUndo {
-    pub fn new(kind: impl Into<String>, label: impl Into<String>, before: SessionDocument, after: SessionDocument) -> SessionUndo {
-        SessionUndo { kind: kind.into(), label: label.into(), before, after }
+    pub fn new(
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        before: SessionDocument,
+        after: SessionDocument,
+    ) -> SessionUndo {
+        SessionUndo {
+            kind: kind.into(),
+            label: label.into(),
+            before,
+            after,
+        }
     }
 }
 
@@ -242,10 +326,10 @@ impl UndoableCommand for SessionUndo {
         UndoTier::SessionState
     }
     fn apply(&self) -> UndoAction {
-        UndoAction::RestoreDocument(self.after.clone())
+        UndoAction::RestoreDocument(Box::new(self.after.clone()))
     }
     fn inverse(&self) -> UndoAction {
-        UndoAction::RestoreDocument(self.before.clone())
+        UndoAction::RestoreDocument(Box::new(self.before.clone()))
     }
     fn size_bytes(&self) -> usize {
         json_size(&self.before) + json_size(&self.after)
@@ -274,8 +358,16 @@ pub struct RemoteUndo {
 }
 
 impl RemoteUndo {
-    pub fn new(kind: impl Into<String>, label: impl Into<String>, items: Vec<RemoteItem>) -> RemoteUndo {
-        RemoteUndo { kind: kind.into(), label: label.into(), items }
+    pub fn new(
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        items: Vec<RemoteItem>,
+    ) -> RemoteUndo {
+        RemoteUndo {
+            kind: kind.into(),
+            label: label.into(),
+            items,
+        }
     }
 }
 
@@ -300,7 +392,9 @@ impl UndoableCommand for RemoteUndo {
         self.items.len() * 96 + self.label.len() + self.kind.len()
     }
     fn coalesce(&mut self, next: &dyn UndoableCommand) -> bool {
-        let Some(n) = next.as_any().downcast_ref::<RemoteUndo>() else { return false };
+        let Some(n) = next.as_any().downcast_ref::<RemoteUndo>() else {
+            return false;
+        };
         // Same target: keep the first prior, take the latest set. New targets append.
         for item in &n.items {
             match self.items.iter_mut().find(|i| i.target == item.target) {
@@ -329,7 +423,13 @@ struct Entry {
 
 impl Entry {
     fn wire(&self) -> UndoEntry {
-        UndoEntry { id: self.id.clone(), label: self.command.label(), device_id: self.device_id.clone(), at: self.at, note: self.note.clone() }
+        UndoEntry {
+            id: self.id.clone(),
+            label: self.command.label(),
+            device_id: self.device_id.clone(),
+            at: self.at,
+            note: self.note.clone(),
+        }
     }
 }
 
@@ -396,7 +496,11 @@ impl UndoStack {
 
     /// Estimated bytes held by both stacks.
     pub fn bytes(&self) -> usize {
-        self.undo.iter().chain(self.redo.iter()).map(|e| e.bytes).sum()
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .map(|e| e.bytes)
+            .sum()
     }
 
     pub fn clear(&mut self) {
@@ -406,17 +510,33 @@ impl UndoStack {
 
     /// Record an action this device performed. Returns the entry id (an
     /// existing one when the action coalesced into it).
-    pub fn push(&mut self, command: Box<dyn UndoableCommand>, target: ActionTarget, now: EpochMs) -> String {
+    pub fn push(
+        &mut self,
+        command: Box<dyn UndoableCommand>,
+        target: ActionTarget,
+        now: EpochMs,
+    ) -> String {
         let device = self.device_id.clone();
         self.push_from(command, target, now, device)
     }
 
     /// Record an action originating from `device_id` (a peer's session-tier entry).
-    pub fn push_from(&mut self, command: Box<dyn UndoableCommand>, target: ActionTarget, now: EpochMs, device_id: DeviceId) -> String {
+    pub fn push_from(
+        &mut self,
+        command: Box<dyn UndoableCommand>,
+        target: ActionTarget,
+        now: EpochMs,
+        device_id: DeviceId,
+    ) -> String {
         self.redo.clear();
         if let Some(top) = self.undo.last_mut() {
             let within = now - top.at <= self.coalesce_window_ms && now >= top.at;
-            if within && top.kind == command.kind() && top.target == target && top.device_id == device_id && top.command.coalesce(command.as_ref()) {
+            if within
+                && top.kind == command.kind()
+                && top.target == target
+                && top.device_id == device_id
+                && top.command.coalesce(command.as_ref())
+            {
                 top.at = now;
                 top.bytes = top.command.size_bytes();
                 let id = top.id.clone();
@@ -427,7 +547,16 @@ impl UndoStack {
         self.seq += 1;
         let id = format!("u{}", self.seq);
         let bytes = command.size_bytes();
-        self.undo.push(Entry { id: id.clone(), kind: command.kind().to_string(), device_id, at: now, target, command, note: None, bytes });
+        self.undo.push(Entry {
+            id: id.clone(),
+            kind: command.kind().to_string(),
+            device_id,
+            at: now,
+            target,
+            command,
+            note: None,
+            bytes,
+        });
         self.enforce_bytes();
         id
     }
@@ -446,11 +575,17 @@ impl UndoStack {
 
     /// Whether this device may undo the top entry.
     pub fn can_undo(&self) -> bool {
-        self.undo.last().map(|e| e.device_id == self.device_id).unwrap_or(false)
+        self.undo
+            .last()
+            .map(|e| e.device_id == self.device_id)
+            .unwrap_or(false)
     }
 
     pub fn can_redo(&self) -> bool {
-        self.redo.last().map(|e| e.device_id == self.device_id).unwrap_or(false)
+        self.redo
+            .last()
+            .map(|e| e.device_id == self.device_id)
+            .unwrap_or(false)
     }
 
     pub fn undo(&mut self) -> Option<UndoResult> {
@@ -491,7 +626,9 @@ impl UndoStack {
     /// Stops early at an entry another device owns. Results are in the order
     /// to perform them.
     pub fn undo_to(&mut self, id: &str) -> Vec<UndoResult> {
-        let Some(pos) = self.undo.iter().position(|e| e.id == id) else { return vec![] };
+        let Some(pos) = self.undo.iter().position(|e| e.id == id) else {
+            return vec![];
+        };
         let mut out = vec![];
         while self.undo.len() > pos {
             match self.undo() {
@@ -505,7 +642,12 @@ impl UndoStack {
     /// Attach a note ("undid 487 of 500, 13 changed elsewhere") to an entry
     /// on either stack.
     pub fn set_note(&mut self, id: &str, note: Option<String>) -> bool {
-        match self.undo.iter_mut().chain(self.redo.iter_mut()).find(|e| e.id == id) {
+        match self
+            .undo
+            .iter_mut()
+            .chain(self.redo.iter_mut())
+            .find(|e| e.id == id)
+        {
             Some(e) => {
                 e.note = note;
                 true
@@ -534,10 +676,24 @@ impl UndoStack {
     pub fn state(&self) -> UndoState {
         UndoState {
             can_undo: self.can_undo(),
-            undo_label: self.undo.last().filter(|e| e.device_id == self.device_id).map(|e| e.command.label()),
+            undo_label: self
+                .undo
+                .last()
+                .filter(|e| e.device_id == self.device_id)
+                .map(|e| e.command.label()),
             can_redo: self.can_redo(),
-            redo_label: self.redo.last().filter(|e| e.device_id == self.device_id).map(|e| e.command.label()),
-            history: self.undo.iter().rev().take(HISTORY_SHEET_LIMIT).map(Entry::wire).collect(),
+            redo_label: self
+                .redo
+                .last()
+                .filter(|e| e.device_id == self.device_id)
+                .map(|e| e.command.label()),
+            history: self
+                .undo
+                .iter()
+                .rev()
+                .take(HISTORY_SHEET_LIMIT)
+                .map(Entry::wire)
+                .collect(),
         }
     }
 
@@ -559,15 +715,26 @@ mod tests {
     }
 
     fn session_cmd(kind: &str, before: u32, after: u32) -> Box<dyn UndoableCommand> {
-        Box::new(SessionUndo::new(kind, format!("{kind} {before}->{after}"), doc(before), doc(after)))
+        Box::new(SessionUndo::new(
+            kind,
+            format!("{kind} {before}->{after}"),
+            doc(before),
+            doc(after),
+        ))
     }
 
     fn rating_item(id: &str, prior: u32, set: u32) -> RemoteItem {
-        RemoteItem { target: RemoteTarget::Track { id: id.into() }, prior: RemoteValue::Rating(prior), set: RemoteValue::Rating(set) }
+        RemoteItem {
+            target: RemoteTarget::Track { id: id.into() },
+            prior: RemoteValue::Rating(prior),
+            set: RemoteValue::Rating(set),
+        }
     }
 
     fn tracks(ids: &[&str]) -> ActionTarget {
-        ActionTarget::Tracks { ids: ids.iter().map(|s| s.to_string()).collect() }
+        ActionTarget::Tracks {
+            ids: ids.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
@@ -584,7 +751,7 @@ mod tests {
         assert_eq!(st.history[0].device_id, "dev");
 
         let r = s.undo().unwrap();
-        assert_eq!(r.action, UndoAction::RestoreDocument(doc(1)));
+        assert_eq!(r.action, UndoAction::RestoreDocument(Box::new(doc(1))));
         assert_eq!(r.target, tracks(&["a", "b"]));
         assert_eq!(r.tier, UndoTier::SessionState);
         assert!(s.state().can_redo);
@@ -592,7 +759,7 @@ mod tests {
         assert!(s.undo().is_none());
 
         let r = s.redo().unwrap();
-        assert_eq!(r.action, UndoAction::RestoreDocument(doc(2)));
+        assert_eq!(r.action, UndoAction::RestoreDocument(Box::new(doc(2))));
         assert!(s.redo().is_none());
         assert_eq!(s.len(), 1);
     }
@@ -616,7 +783,11 @@ mod tests {
         assert_eq!(a, b, "same kind + target inside the window coalesces");
         assert_eq!(s.len(), 1);
         let r = s.undo().unwrap();
-        assert_eq!(r.action, UndoAction::RestoreDocument(doc(1)), "undo goes back to the first before");
+        assert_eq!(
+            r.action,
+            UndoAction::RestoreDocument(Box::new(doc(1))),
+            "undo goes back to the first before"
+        );
         assert_eq!(r.label, "nudge 2->3");
         s.redo();
         // Different target: no coalescing.
@@ -626,7 +797,11 @@ mod tests {
         let d = s.push(session_cmd("shuffle", 4, 5), tracks(&["b"]), 1700.0);
         assert_ne!(d, c);
         // Outside the window: no coalescing.
-        let e = s.push(session_cmd("shuffle", 5, 6), tracks(&["b"]), 1700.0 + DEFAULT_COALESCE_WINDOW_MS + 1.0);
+        let e = s.push(
+            session_cmd("shuffle", 5, 6),
+            tracks(&["b"]),
+            1700.0 + DEFAULT_COALESCE_WINDOW_MS + 1.0,
+        );
         assert_ne!(e, d);
         assert_eq!(s.len(), 4);
     }
@@ -634,8 +809,24 @@ mod tests {
     #[test]
     fn remote_coalescing_keeps_first_prior_and_last_set() {
         let mut s = UndoStack::new("dev", DEFAULT_MAX_BYTES).with_coalesce_window(500.0);
-        s.push(Box::new(RemoteUndo::new("rate", "Rate 3", vec![rating_item("t", 0, 3)])), tracks(&["t"]), 100.0);
-        s.push(Box::new(RemoteUndo::new("rate", "Rate 4", vec![rating_item("t", 3, 4), rating_item("u", 1, 4)])), tracks(&["t"]), 300.0);
+        s.push(
+            Box::new(RemoteUndo::new(
+                "rate",
+                "Rate 3",
+                vec![rating_item("t", 0, 3)],
+            )),
+            tracks(&["t"]),
+            100.0,
+        );
+        s.push(
+            Box::new(RemoteUndo::new(
+                "rate",
+                "Rate 4",
+                vec![rating_item("t", 3, 4), rating_item("u", 1, 4)],
+            )),
+            tracks(&["t"]),
+            300.0,
+        );
         assert_eq!(s.len(), 1);
         let r = s.undo().unwrap();
         assert_eq!(r.tier, UndoTier::RemoteMutation);
@@ -643,8 +834,20 @@ mod tests {
             UndoAction::Cas(m) => {
                 assert_eq!(m.len(), 2);
                 assert_eq!(m[0].expect, RemoteValue::Rating(4));
-                assert_eq!(m[0].command, Command::SetRating { targets: vec![RatingTarget::Track { id: "t".into() }], rating: 0 });
-                assert_eq!(m[1].command, Command::SetRating { targets: vec![RatingTarget::Track { id: "u".into() }], rating: 1 });
+                assert_eq!(
+                    m[0].command,
+                    Command::SetRating {
+                        targets: vec![RatingTarget::Track { id: "t".into() }],
+                        rating: 0
+                    }
+                );
+                assert_eq!(
+                    m[1].command,
+                    Command::SetRating {
+                        targets: vec![RatingTarget::Track { id: "u".into() }],
+                        rating: 1
+                    }
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -652,7 +855,13 @@ mod tests {
         match r.action {
             UndoAction::Cas(m) => {
                 assert_eq!(m[0].expect, RemoteValue::Rating(0));
-                assert_eq!(m[0].command, Command::SetRating { targets: vec![RatingTarget::Track { id: "t".into() }], rating: 4 });
+                assert_eq!(
+                    m[0].command,
+                    Command::SetRating {
+                        targets: vec![RatingTarget::Track { id: "t".into() }],
+                        rating: 4
+                    }
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -660,40 +869,125 @@ mod tests {
 
     #[test]
     fn remote_item_commands() {
-        let love = RemoteItem { target: RemoteTarget::Album { id: "al".into() }, prior: RemoteValue::Loved(false), set: RemoteValue::Loved(true) };
-        assert_eq!(love.inverse().unwrap().command, Command::SetLoved { targets: vec![RatingTarget::Album { id: "al".into() }], loved: false });
-        let artist = RemoteItem { target: RemoteTarget::Artist { id: "ar".into() }, prior: RemoteValue::Loved(true), set: RemoteValue::Loved(false) };
-        assert_eq!(artist.inverse().unwrap().command, Command::SetArtistLoved { artist_id: "ar".into(), loved: true });
+        let love = RemoteItem {
+            target: RemoteTarget::Album { id: "al".into() },
+            prior: RemoteValue::Loved(false),
+            set: RemoteValue::Loved(true),
+        };
+        assert_eq!(
+            love.inverse().unwrap().command,
+            Command::SetLoved {
+                targets: vec![RatingTarget::Album { id: "al".into() }],
+                loved: false
+            }
+        );
+        let artist = RemoteItem {
+            target: RemoteTarget::Artist { id: "ar".into() },
+            prior: RemoteValue::Loved(true),
+            set: RemoteValue::Loved(false),
+        };
+        assert_eq!(
+            artist.inverse().unwrap().command,
+            Command::SetArtistLoved {
+                artist_id: "ar".into(),
+                loved: true
+            }
+        );
         let added = RemoteItem {
-            target: RemoteTarget::PlaylistTrack { playlist_id: "p".into(), track_id: "t".into() },
-            prior: RemoteValue::Member { present: false, index: None },
-            set: RemoteValue::Member { present: true, index: Some(4) },
+            target: RemoteTarget::PlaylistTrack {
+                playlist_id: "p".into(),
+                track_id: "t".into(),
+            },
+            prior: RemoteValue::Member {
+                present: false,
+                index: None,
+            },
+            set: RemoteValue::Member {
+                present: true,
+                index: Some(4),
+            },
         };
-        assert_eq!(added.inverse().unwrap().command, Command::PlaylistRemove { playlist_id: "p".into(), indices: vec![4] });
-        assert_eq!(added.redo().unwrap().command, Command::PlaylistAdd { playlist_id: "p".into(), track_ids: vec!["t".into()], at_index: Some(4) });
+        assert_eq!(
+            added.inverse().unwrap().command,
+            Command::PlaylistRemove {
+                playlist_id: "p".into(),
+                indices: vec![4]
+            }
+        );
+        assert_eq!(
+            added.redo().unwrap().command,
+            Command::PlaylistAdd {
+                playlist_id: "p".into(),
+                track_ids: vec!["t".into()],
+                at_index: Some(4)
+            }
+        );
         let removed = RemoteItem {
-            target: RemoteTarget::PlaylistTrack { playlist_id: "p".into(), track_id: "t".into() },
-            prior: RemoteValue::Member { present: true, index: Some(2) },
-            set: RemoteValue::Member { present: false, index: None },
+            target: RemoteTarget::PlaylistTrack {
+                playlist_id: "p".into(),
+                track_id: "t".into(),
+            },
+            prior: RemoteValue::Member {
+                present: true,
+                index: Some(2),
+            },
+            set: RemoteValue::Member {
+                present: false,
+                index: None,
+            },
         };
-        assert_eq!(removed.inverse().unwrap().command, Command::PlaylistAdd { playlist_id: "p".into(), track_ids: vec!["t".into()], at_index: Some(2) });
+        assert_eq!(
+            removed.inverse().unwrap().command,
+            Command::PlaylistAdd {
+                playlist_id: "p".into(),
+                track_ids: vec!["t".into()],
+                at_index: Some(2)
+            }
+        );
         let moved = RemoteItem {
-            target: RemoteTarget::PlaylistTrack { playlist_id: "p".into(), track_id: "t".into() },
+            target: RemoteTarget::PlaylistTrack {
+                playlist_id: "p".into(),
+                track_id: "t".into(),
+            },
             prior: RemoteValue::Position(1),
             set: RemoteValue::Position(5),
         };
-        assert_eq!(moved.inverse().unwrap().command, Command::PlaylistMove { playlist_id: "p".into(), from_index: 5, to_index: 1 });
+        assert_eq!(
+            moved.inverse().unwrap().command,
+            Command::PlaylistMove {
+                playlist_id: "p".into(),
+                from_index: 5,
+                to_index: 1
+            }
+        );
         let meta = RemoteItem {
             target: RemoteTarget::Playlist { id: "p".into() },
-            prior: RemoteValue::Meta { name: "old".into(), comment: None, public: Some(false) },
-            set: RemoteValue::Meta { name: "new".into(), comment: Some("c".into()), public: Some(true) },
+            prior: RemoteValue::Meta {
+                name: "old".into(),
+                comment: None,
+                public: Some(false),
+            },
+            set: RemoteValue::Meta {
+                name: "new".into(),
+                comment: Some("c".into()),
+                public: Some(true),
+            },
         };
         assert_eq!(
             meta.inverse().unwrap().command,
-            Command::RenamePlaylist { playlist_id: "p".into(), name: "old".into(), comment: None, public: Some(false) }
+            Command::RenamePlaylist {
+                playlist_id: "p".into(),
+                name: "old".into(),
+                comment: None,
+                public: Some(false)
+            }
         );
         // Nonsense combinations are simply not expressible.
-        let bad = RemoteItem { target: RemoteTarget::Artist { id: "x".into() }, prior: RemoteValue::Rating(1), set: RemoteValue::Rating(2) };
+        let bad = RemoteItem {
+            target: RemoteTarget::Artist { id: "x".into() },
+            prior: RemoteValue::Rating(1),
+            set: RemoteValue::Rating(2),
+        };
         assert!(bad.inverse().is_none());
     }
 
@@ -707,7 +1001,10 @@ mod tests {
             o.record(CasResult::Skipped);
         }
         assert!(o.is_complete());
-        assert_eq!(o.note().as_deref(), Some("undid 487 of 500, 13 changed elsewhere"));
+        assert_eq!(
+            o.note().as_deref(),
+            Some("undid 487 of 500, 13 changed elsewhere")
+        );
         let mut clean = CasOutcome::new(3);
         for _ in 0..3 {
             clean.record(CasResult::Applied);
@@ -719,19 +1016,35 @@ mod tests {
         assert_eq!(failed.note().as_deref(), Some("undid 1 of 2, 1 failed"));
         // Notes attach to entries on either stack.
         let mut s = UndoStack::new("dev", DEFAULT_MAX_BYTES);
-        let id = s.push(Box::new(RemoteUndo::new("rate", "Rate", vec![rating_item("t", 0, 3)])), ActionTarget::None, 1.0);
+        let id = s.push(
+            Box::new(RemoteUndo::new(
+                "rate",
+                "Rate",
+                vec![rating_item("t", 0, 3)],
+            )),
+            ActionTarget::None,
+            1.0,
+        );
         s.undo();
         assert!(s.set_note(&id, o.note()));
         assert!(!s.set_note("nope", None));
         s.redo();
-        assert_eq!(s.state().history[0].note.as_deref(), Some("undid 487 of 500, 13 changed elsewhere"));
+        assert_eq!(
+            s.state().history[0].note.as_deref(),
+            Some("undid 487 of 500, 13 changed elsewhere")
+        );
     }
 
     #[test]
     fn other_devices_entries_are_not_undoable_here() {
         let mut s = UndoStack::new("phone", DEFAULT_MAX_BYTES);
         s.push(session_cmd("a", 1, 2), ActionTarget::None, 1.0);
-        s.push_from(session_cmd("b", 2, 3), ActionTarget::None, 2.0, "laptop".into());
+        s.push_from(
+            session_cmd("b", 2, 3),
+            ActionTarget::None,
+            2.0,
+            "laptop".into(),
+        );
         assert!(!s.can_undo(), "top entry belongs to the laptop");
         assert!(s.undo().is_none());
         let st = s.state();
@@ -741,7 +1054,12 @@ mod tests {
         assert!(can_undo_entry(&st.history[1], "phone"));
         assert!(!can_undo_entry(&st.history[0], "phone"));
         // A same-kind action from another device never coalesces with ours.
-        s.push_from(session_cmd("b", 3, 4), ActionTarget::None, 2.5, "laptop".into());
+        s.push_from(
+            session_cmd("b", 3, 4),
+            ActionTarget::None,
+            2.5,
+            "laptop".into(),
+        );
         s.push(session_cmd("b", 4, 5), ActionTarget::None, 2.6);
         assert_eq!(s.len(), 3, "laptop's two coalesced, ours did not join them");
         assert!(s.can_undo());
@@ -759,7 +1077,10 @@ mod tests {
         s.push(session_cmd("c", 3, 4), ActionTarget::None, 9000.0);
         let results = s.undo_to(&first);
         assert_eq!(results.len(), 3);
-        assert_eq!(results.last().unwrap().action, UndoAction::RestoreDocument(doc(1)));
+        assert_eq!(
+            results.last().unwrap().action,
+            UndoAction::RestoreDocument(Box::new(doc(1)))
+        );
         assert_eq!(s.len(), 0);
         assert_eq!(s.redo_len(), 3);
         assert!(s.undo_to("missing").is_empty());
@@ -770,7 +1091,11 @@ mod tests {
         let one = session_cmd("a", 1, 2).size_bytes();
         let mut s = UndoStack::new("dev", one * 3 + one / 2);
         for i in 0..10u32 {
-            s.push(session_cmd("a", i, i + 1), ActionTarget::None, (i as f64) * 10_000.0);
+            s.push(
+                session_cmd("a", i, i + 1),
+                ActionTarget::None,
+                (i as f64) * 10_000.0,
+            );
         }
         assert_eq!(s.len(), 3);
         assert!(s.bytes() <= one * 3 + one / 2);
@@ -805,11 +1130,18 @@ mod tests {
     fn history_sheet_is_newest_first_and_capped() {
         let mut s = UndoStack::new("dev", DEFAULT_MAX_BYTES);
         for i in 0..(HISTORY_SHEET_LIMIT as u32 + 5) {
-            s.push(session_cmd("a", i, i + 1), ActionTarget::None, (i as f64) * 10_000.0);
+            s.push(
+                session_cmd("a", i, i + 1),
+                ActionTarget::None,
+                (i as f64) * 10_000.0,
+            );
         }
         let st = s.state();
         assert_eq!(st.history.len(), HISTORY_SHEET_LIMIT);
-        assert_eq!(st.history[0].label, format!("a {}->{}", HISTORY_SHEET_LIMIT + 4, HISTORY_SHEET_LIMIT + 5));
+        assert_eq!(
+            st.history[0].label,
+            format!("a {}->{}", HISTORY_SHEET_LIMIT + 4, HISTORY_SHEET_LIMIT + 5)
+        );
         assert!(st.history[0].at > st.history[1].at);
         assert_eq!(s.entries().len(), HISTORY_SHEET_LIMIT + 5);
         s.clear();

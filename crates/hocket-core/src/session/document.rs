@@ -33,7 +33,11 @@ pub enum DocumentError {
 pub const SESSION_SCHEMA_MIN: u32 = 1;
 
 /// A fresh, empty document for a scope (`serverId:username`).
-pub fn new_document(scope: impl Into<String>, session_id: SessionId, now: EpochMs) -> SessionDocument {
+pub fn new_document(
+    scope: impl Into<String>,
+    session_id: SessionId,
+    now: EpochMs,
+) -> SessionDocument {
     SessionDocument {
         schema_version: SESSION_SCHEMA_VERSION,
         session_id,
@@ -71,7 +75,8 @@ fn known_keys() -> HashSet<String> {
 
 /// Parse a document, preserving unknown top-level fields in `extra`.
 pub fn load(json: &str) -> Result<SessionDocument, DocumentError> {
-    let value: Value = serde_json::from_str(json).map_err(|e| DocumentError::Json(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(json).map_err(|e| DocumentError::Json(e.to_string()))?;
     load_value(value)
 }
 
@@ -80,10 +85,13 @@ pub fn load_value(value: Value) -> Result<SessionDocument, DocumentError> {
     let Value::Object(map) = value else {
         return Err(DocumentError::NotAnObject);
     };
-    let mut doc: SessionDocument =
-        serde_json::from_value(Value::Object(map.clone())).map_err(|e| DocumentError::Json(e.to_string()))?;
+    let mut doc: SessionDocument = serde_json::from_value(Value::Object(map.clone()))
+        .map_err(|e| DocumentError::Json(e.to_string()))?;
     if doc.schema_version < SESSION_SCHEMA_MIN {
-        return Err(DocumentError::TooOld(doc.schema_version, SESSION_SCHEMA_MIN));
+        return Err(DocumentError::TooOld(
+            doc.schema_version,
+            SESSION_SCHEMA_MIN,
+        ));
     }
     let known = known_keys();
     // Anything the wire carried under `extra` (written by a peer that already
@@ -146,7 +154,11 @@ pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
     let n = doc.context.as_ref().map(|c| c.tracks.len()).unwrap_or(0);
     // An ID-referenced context restored from a snapshot has no tracks until
     // the actor resolves them; its cursor and indices are checked afterwards.
-    let unresolved = doc.context.as_ref().map(|c| c.tracks.is_empty() && is_id_referenced(&c.kind)).unwrap_or(false);
+    let unresolved = doc
+        .context
+        .as_ref()
+        .map(|c| c.tracks.is_empty() && is_id_referenced(&c.kind))
+        .unwrap_or(false);
     if unresolved {
         return validate_rest(doc);
     }
@@ -154,25 +166,42 @@ pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
         if doc.cursor != 0 {
             return Err(DocumentError::Invalid("cursor without context".into()));
         }
-        if matches!(doc.current.as_ref().map(|c| &c.source), Some(QueueSource::Context { .. })) {
-            return Err(DocumentError::Invalid("context-sourced current without context".into()));
+        if matches!(
+            doc.current.as_ref().map(|c| &c.source),
+            Some(QueueSource::Context { .. })
+        ) {
+            return Err(DocumentError::Invalid(
+                "context-sourced current without context".into(),
+            ));
         }
     } else if doc.cursor as usize > n {
         // The cursor is the boundary before the next context item, so it may
         // sit just past the last one.
-        return Err(DocumentError::Invalid(format!("cursor {} out of range for {} tracks", doc.cursor, n)));
+        return Err(DocumentError::Invalid(format!(
+            "cursor {} out of range for {} tracks",
+            doc.cursor, n
+        )));
     }
-    for item in doc.history.iter().chain(doc.current.iter()).chain(doc.insertions.iter()) {
+    for item in doc
+        .history
+        .iter()
+        .chain(doc.current.iter())
+        .chain(doc.insertions.iter())
+    {
         if let QueueSource::Context { index } = item.source {
             if index as usize >= n {
-                return Err(DocumentError::Invalid(format!("context index {index} out of range for {n} tracks")));
+                return Err(DocumentError::Invalid(format!(
+                    "context index {index} out of range for {n} tracks"
+                )));
             }
         }
     }
     if let Some(s) = &doc.shuffle {
         if let Some(order) = &s.order {
             if order.len() != n || !is_bijection(order) {
-                return Err(DocumentError::Invalid("shuffle order is not a bijection over the context".into()));
+                return Err(DocumentError::Invalid(
+                    "shuffle order is not a bijection over the context".into(),
+                ));
             }
         }
         if let Some(a) = s.anchor {
@@ -188,15 +217,26 @@ pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
 /// saved-queue ids.
 fn validate_rest(doc: &SessionDocument) -> Result<(), DocumentError> {
     let mut keys = HashSet::new();
-    for item in doc.history.iter().chain(doc.current.iter()).chain(doc.insertions.iter()) {
+    for item in doc
+        .history
+        .iter()
+        .chain(doc.current.iter())
+        .chain(doc.insertions.iter())
+    {
         if !keys.insert(item.key.as_str()) {
-            return Err(DocumentError::Invalid(format!("duplicate queue key {}", item.key)));
+            return Err(DocumentError::Invalid(format!(
+                "duplicate queue key {}",
+                item.key
+            )));
         }
     }
     let mut ids = HashSet::new();
     for q in &doc.saved_queues {
         if !ids.insert(q.id.as_str()) {
-            return Err(DocumentError::Invalid(format!("duplicate saved queue id {}", q.id)));
+            return Err(DocumentError::Invalid(format!(
+                "duplicate saved queue id {}",
+                q.id
+            )));
         }
     }
     Ok(())
@@ -233,7 +273,10 @@ mod tests {
         let obj = v.as_object_mut().unwrap();
         obj.insert("schemaVersion".into(), Value::from(7));
         obj.insert("crossfadeMs".into(), Value::from(1500));
-        obj.insert("futureBlock".into(), serde_json::json!({"a": [1, 2, {"b": null}], "c": "d"}));
+        obj.insert(
+            "futureBlock".into(),
+            serde_json::json!({"a": [1, 2, {"b": null}], "c": "d"}),
+        );
         let json = serde_json::to_string(&v).unwrap();
 
         let mut doc = load(&json).expect("loads");
@@ -249,7 +292,10 @@ mod tests {
         assert_eq!(back["cursor"], 2);
         assert_eq!(back["revision"], 1);
         assert_eq!(back["crossfadeMs"], 1500);
-        assert_eq!(back["futureBlock"], serde_json::json!({"a": [1, 2, {"b": null}], "c": "d"}));
+        assert_eq!(
+            back["futureBlock"],
+            serde_json::json!({"a": [1, 2, {"b": null}], "c": "d"})
+        );
         // `extra` itself is not written as a nested blob.
         assert!(back.get("extra").is_none());
 
@@ -296,9 +342,17 @@ mod tests {
         d.history.push(d.current.clone().unwrap());
         assert!(validate(&d).unwrap_err().to_string().contains("duplicate"));
         let mut d = doc_with_context(3);
-        d.shuffle = Some(ShuffleState { seed: 1, anchor: Some(5), order: None });
+        d.shuffle = Some(ShuffleState {
+            seed: 1,
+            anchor: Some(5),
+            order: None,
+        });
         assert!(validate(&d).is_err());
-        d.shuffle = Some(ShuffleState { seed: 1, anchor: None, order: Some(vec![0, 0, 1]) });
+        d.shuffle = Some(ShuffleState {
+            seed: 1,
+            anchor: None,
+            order: Some(vec![0, 0, 1]),
+        });
         assert!(validate(&d).is_err());
         let mut d = new_document("a", "b".into(), 0.0);
         d.cursor = 1;

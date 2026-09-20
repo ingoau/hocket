@@ -73,7 +73,10 @@ pub fn normalise(input: &str, platform: Platform) -> Result<String, ChordError> 
                     ctrl = true
                 }
             }
-            other => set_key(key_name(other).ok_or_else(|| ChordError::UnknownKey(t.clone()))?, &mut key)?,
+            other => set_key(
+                key_name(other).ok_or_else(|| ChordError::UnknownKey(t.clone()))?,
+                &mut key,
+            )?,
         }
     }
     if plus_key {
@@ -100,7 +103,11 @@ pub fn normalise(input: &str, platform: Platform) -> Result<String, ChordError> 
 /// Replace the primary modifier with `Mod` for persistence.
 pub fn to_portable(chord: &str, platform: Platform) -> String {
     let primary = primary_modifier(platform);
-    chord.split('+').map(|t| if t == primary { "Mod" } else { t }).collect::<Vec<_>>().join("+")
+    chord
+        .split('+')
+        .map(|t| if t == primary { "Mod" } else { t })
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 fn key_name(lower: &str) -> Option<String> {
@@ -165,14 +172,27 @@ mod tests {
 
     #[test]
     fn normalises_spelling_and_order() {
-        assert_eq!(normalise("shift+ctrl+z", Platform::Linux).unwrap(), "Ctrl+Shift+Z");
-        assert_eq!(normalise(" Ctrl + Shift + z ", Platform::Windows).unwrap(), "Ctrl+Shift+Z");
+        assert_eq!(
+            normalise("shift+ctrl+z", Platform::Linux).unwrap(),
+            "Ctrl+Shift+Z"
+        );
+        assert_eq!(
+            normalise(" Ctrl + Shift + z ", Platform::Windows).unwrap(),
+            "Ctrl+Shift+Z"
+        );
         assert_eq!(normalise("Mod+K", Platform::Linux).unwrap(), "Ctrl+K");
         assert_eq!(normalise("Mod+K", Platform::MacOs).unwrap(), "Cmd+K");
         assert_eq!(normalise("cmd+k", Platform::MacOs).unwrap(), "Cmd+K");
         assert_eq!(normalise("cmd+k", Platform::Linux).unwrap(), "Meta+K");
-        assert_eq!(normalise("ctrl+k", Platform::MacOs).unwrap(), "Ctrl+K", "a real Control key stays Control on macOS");
-        assert_eq!(normalise("alt+shift+ctrl+meta+left", Platform::Linux).unwrap(), "Ctrl+Alt+Shift+Meta+ArrowLeft");
+        assert_eq!(
+            normalise("ctrl+k", Platform::MacOs).unwrap(),
+            "Ctrl+K",
+            "a real Control key stays Control on macOS"
+        );
+        assert_eq!(
+            normalise("alt+shift+ctrl+meta+left", Platform::Linux).unwrap(),
+            "Ctrl+Alt+Shift+Meta+ArrowLeft"
+        );
         assert_eq!(normalise("option+f5", Platform::MacOs).unwrap(), "Alt+F5");
         assert_eq!(normalise("space", Platform::Linux).unwrap(), "Space");
         assert_eq!(normalise("Ctrl++", Platform::Linux).unwrap(), "Ctrl+Plus");
@@ -183,16 +203,28 @@ mod tests {
     #[test]
     fn rejects_bad_chords() {
         assert_eq!(normalise("", Platform::Linux), Err(ChordError::Empty));
-        assert_eq!(normalise("ctrl+shift", Platform::Linux), Err(ChordError::KeyCount));
+        assert_eq!(
+            normalise("ctrl+shift", Platform::Linux),
+            Err(ChordError::KeyCount)
+        );
         assert_eq!(normalise("a+b", Platform::Linux), Err(ChordError::KeyCount));
-        assert_eq!(normalise("ctrl+banana", Platform::Linux), Err(ChordError::UnknownKey("banana".into())));
-        assert_eq!(normalise("f99", Platform::Linux), Err(ChordError::UnknownKey("f99".into())));
+        assert_eq!(
+            normalise("ctrl+banana", Platform::Linux),
+            Err(ChordError::UnknownKey("banana".into()))
+        );
+        assert_eq!(
+            normalise("f99", Platform::Linux),
+            Err(ChordError::UnknownKey("f99".into()))
+        );
     }
 
     #[test]
     fn portable_round_trip() {
         let mac = normalise("Mod+Shift+Z", Platform::MacOs).unwrap();
-        assert_eq!(mac, "Shift+Cmd+Z", "canonical order is Ctrl, Alt, Shift, Cmd");
+        assert_eq!(
+            mac, "Shift+Cmd+Z",
+            "canonical order is Ctrl, Alt, Shift, Cmd"
+        );
         assert_eq!(to_portable(&mac, Platform::MacOs), "Shift+Mod+Z");
         let linux = normalise("Mod+Shift+Z", Platform::Linux).unwrap();
         assert_eq!(linux, "Ctrl+Shift+Z");
@@ -200,7 +232,10 @@ mod tests {
         // A macOS Control chord is not the primary modifier and stays literal.
         assert_eq!(to_portable("Ctrl+K", Platform::MacOs), "Ctrl+K");
         // And back on the other platform.
-        assert_eq!(normalise(&to_portable(&mac, Platform::MacOs), Platform::Windows).unwrap(), "Ctrl+Shift+Z");
+        assert_eq!(
+            normalise(&to_portable(&mac, Platform::MacOs), Platform::Windows).unwrap(),
+            "Ctrl+Shift+Z"
+        );
         assert_eq!(normalise("Shift+Mod+Z", Platform::MacOs).unwrap(), mac);
     }
 }
