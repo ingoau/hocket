@@ -97,6 +97,7 @@ fn design_keyboard_table() {
     let mac = ActionRegistry::new(Platform::MacOs);
     assert_eq!(mac.action_for_chord("Cmd+K"), Some("openCommandPalette"));
     assert_eq!(mac.action_for_chord("cmd+shift+z"), Some("redo"));
+    assert_eq!(mac.shortcut_for("redo").as_deref(), Some("Shift+Cmd+Z"));
     assert_eq!(mac.action_for_chord("Ctrl+K"), None, "Control is not Command on macOS");
     assert_eq!(mac.shortcut_for("undo").as_deref(), Some("Cmd+Z"));
 }

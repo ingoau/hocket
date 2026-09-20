@@ -34,6 +34,7 @@ use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEst
 use crate::connect::discovery::{scope_hash, PeerAdvert};
 use crate::connect::election::{elect_id, Candidate};
 use crate::connect::lease::HeldLease;
+use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{

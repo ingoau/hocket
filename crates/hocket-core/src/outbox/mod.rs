@@ -122,7 +122,7 @@ pub enum EntryStatus {
 }
 
 impl EntryStatus {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             EntryStatus::Pending => "pending",
             EntryStatus::Inflight => "inflight",

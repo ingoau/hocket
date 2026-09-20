@@ -282,8 +282,9 @@ impl Room {
     // -- handshake ----------------------------------------------------------
 
     fn on_message(&mut self, peer: PeerId, msg: WireMessage) {
+        let now = self.clock.now_ms();
         if let Some(m) = self.member_mut_by_peer(&peer) {
-            m.last_seen = self.clock.now_ms();
+            m.last_seen = now;
         }
         match msg.msg {
             Msg::Hello { device, protocol_min, protocol_max, scope, credential, .. } => {

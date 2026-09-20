@@ -124,13 +124,6 @@ fn can_redo(_: &ActionTarget, s: &StateView) -> bool {
     s.can_redo && !s.text_field_focused
 }
 
-fn single(t: &ActionTarget, s: &StateView) -> bool {
-    match t {
-        ActionTarget::None => s.has_current,
-        _ => single_id(t).is_some(),
-    }
-}
-
 fn go_to_album(t: &ActionTarget, s: &StateView) -> bool {
     match t {
         ActionTarget::None => s.current_album_id.is_some(),

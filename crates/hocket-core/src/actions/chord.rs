@@ -53,7 +53,7 @@ pub fn normalise(input: &str, platform: Platform) -> Result<String, ChordError> 
     }
     let (mut ctrl, mut alt, mut shift, mut meta) = (false, false, false, false);
     let mut key: Option<String> = None;
-    let mut set_key = |k: String, key: &mut Option<String>| -> Result<(), ChordError> {
+    let set_key = |k: String, key: &mut Option<String>| -> Result<(), ChordError> {
         if key.is_some() {
             return Err(ChordError::KeyCount);
         }
@@ -192,8 +192,8 @@ mod tests {
     #[test]
     fn portable_round_trip() {
         let mac = normalise("Mod+Shift+Z", Platform::MacOs).unwrap();
-        assert_eq!(mac, "Cmd+Shift+Z");
-        assert_eq!(to_portable(&mac, Platform::MacOs), "Mod+Shift+Z");
+        assert_eq!(mac, "Shift+Cmd+Z", "canonical order is Ctrl, Alt, Shift, Cmd");
+        assert_eq!(to_portable(&mac, Platform::MacOs), "Shift+Mod+Z");
         let linux = normalise("Mod+Shift+Z", Platform::Linux).unwrap();
         assert_eq!(linux, "Ctrl+Shift+Z");
         assert_eq!(to_portable(&linux, Platform::Linux), "Mod+Shift+Z");
@@ -201,5 +201,6 @@ mod tests {
         assert_eq!(to_portable("Ctrl+K", Platform::MacOs), "Ctrl+K");
         // And back on the other platform.
         assert_eq!(normalise(&to_portable(&mac, Platform::MacOs), Platform::Windows).unwrap(), "Ctrl+Shift+Z");
+        assert_eq!(normalise("Shift+Mod+Z", Platform::MacOs).unwrap(), mac);
     }
 }
