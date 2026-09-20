@@ -377,23 +377,36 @@ const PINNABLE: &[TargetKind] = &[TargetKind::Global, TargetKind::Tracks, Target
 const TRACKISH: &[TargetKind] = &[TargetKind::Global, TargetKind::Tracks, TargetKind::QueueItems];
 const SAVED: &[TargetKind] = &[TargetKind::SavedQueue];
 
-macro_rules! action {
-    ($id:literal, $label:literal, $icon:literal, $cat:ident, $targets:expr, $enabled:expr, $commands:expr $(, $field:ident = $value:expr)* $(,)?) => {
+impl ActionDef {
+    const fn base(
+        id: &'static str,
+        label: &'static str,
+        icon: &'static str,
+        category: Category,
+        targets: &'static [TargetKind],
+        enabled: EnabledFn,
+        commands: CommandsFn,
+    ) -> ActionDef {
         ActionDef {
-            id: $id,
-            label: $label,
-            icon: $icon,
-            category: Category::$cat,
-            targets: $targets,
+            id,
+            label,
+            icon,
+            category,
+            targets,
             undoable: false,
             destructive: false,
             default_shortcut: None,
             media_session: None,
             ui_handled: false,
-            enabled: $enabled,
-            commands: $commands,
-            $($field: $value,)*
+            enabled,
+            commands,
         }
+    }
+}
+
+macro_rules! action {
+    ($id:literal, $label:literal, $icon:literal, $cat:ident, $targets:expr, $enabled:expr, $commands:expr $(, $field:ident = $value:expr)* $(,)?) => {
+        ActionDef { $($field: $value,)* ..ActionDef::base($id, $label, $icon, Category::$cat, $targets, $enabled, $commands) }
     };
 }
 

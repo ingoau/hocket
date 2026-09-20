@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, AudioSettings, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
@@ -36,7 +36,7 @@ interface SessionState {
   shuffle?: { seed: number; anchor?: number };
   repeat: RepeatMode;
   autoplay: boolean;
-  mode: "apple" | "youtube";
+  mode: QueueMode;
   revision: number;
 }
 
@@ -870,7 +870,7 @@ export class FakeCore implements CoreHandle {
         s.insertions = [];
         s.cursor = s.cursor + 1 + uIdx;
         const ci = s.order[s.cursor]!;
-        s.current = { key: newKey(), trackId: s.context!.tracks![ci]!, source: { type: "context", data: { index: ci } }, unavailable: false };
+        s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
       }
       this.trimHistory();
       this.loadCurrent(0, true);
@@ -977,11 +977,11 @@ export class FakeCore implements CoreHandle {
     } else if (s.cursor + 1 < s.order.length) {
       s.cursor += 1;
       const ci = s.order[s.cursor]!;
-      s.current = { key: newKey(), trackId: s.context!.tracks![ci]!, source: { type: "context", data: { index: ci } }, unavailable: false };
+      s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
     } else if (s.repeat === "all" && s.order.length) {
       s.cursor = 0;
       const ci = s.order[0]!;
-      s.current = { key: newKey(), trackId: s.context!.tracks![ci]!, source: { type: "context", data: { index: ci } }, unavailable: false };
+      s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
     } else if (s.autoplay && this.lib) {
       const seedTrack = this.lib.tracksById.get(s.current.trackId);
       const pick = this.related(seedTrack?.id ?? "", 5).find((r) => !s.history.some((h) => h.trackId === r.track.id));
@@ -1292,7 +1292,7 @@ export class FakeCore implements CoreHandle {
     if (rec.selection) this.selection = rec.selection;
     this.redoStack.push(rec);
     this.emitUndo();
-    this.emit({ type: "toast", data: { id: newId("toast"), message: note ? `Undone: ${rec.label} (${note})` : `Undone: ${rec.label}`, actionLabel: "Redo", actionCommand: JSON.stringify({ type: "redo" } satisfies Command), durationMs: 5000 } });
+    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: note ? `Undone: ${rec.label} (${note})` : `Undone: ${rec.label}`, actionLabel: "Redo", actionCommand: JSON.stringify({ type: "redo" } satisfies Command), durationMs: 5000 } } });
   }
 
   private redo(): void {
@@ -1301,7 +1301,7 @@ export class FakeCore implements CoreHandle {
     rec.redo();
     this.undoStack.push(rec);
     this.emitUndo();
-    this.emit({ type: "toast", data: { id: newId("toast"), message: `Redone: ${rec.label}`, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" } satisfies Command), durationMs: 5000 } });
+    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: `Redone: ${rec.label}`, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" } satisfies Command), durationMs: 5000 } } });
   }
 
   private undoState(): UndoState {
@@ -1317,7 +1317,7 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Library mutations ----------------------------------------------
-  private ratingTargets(targets: { type: "track" | "album"; data: { id: string } }[]): { tracks: Track[]; albums: NonNullable<FakeLibrary["albums"]> } {
+  private ratingTargets(targets: RatingTarget[]): { tracks: Track[]; albums: NonNullable<FakeLibrary["albums"]> } {
     const tracks: Track[] = [];
     const albums: FakeLibrary["albums"] = [];
     for (const t of targets) {
@@ -1332,7 +1332,7 @@ export class FakeCore implements CoreHandle {
     return { tracks, albums };
   }
 
-  private setRating(targets: Command extends { type: "setRating"; data: infer D } ? (D extends { targets: infer T } ? T : never) : never, rating: number): void {
+  private setRating(targets: RatingTarget[], rating: number): void {
     const { tracks, albums } = this.ratingTargets(targets);
     const prev = new Map<string, number>([...tracks.map((t) => [t.id, t.rating] as const), ...albums.map((a) => [a.id, a.rating] as const)]);
     const apply = (r: (id: string) => number) => {
@@ -1354,7 +1354,7 @@ export class FakeCore implements CoreHandle {
     }, () => apply(() => rating), clone(this.selection));
   }
 
-  private setLoved(targets: Command extends { type: "setLoved"; data: infer D } ? (D extends { targets: infer T } ? T : never) : never, loved: boolean): void {
+  private setLoved(targets: RatingTarget[], loved: boolean): void {
     const { tracks, albums } = this.ratingTargets(targets);
     const prev = new Map<string, boolean>([...tracks.map((t) => [t.id, t.loved] as const), ...albums.map((a) => [a.id, a.loved] as const)]);
     const apply = (f: (id: string) => boolean) => {

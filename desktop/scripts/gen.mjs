@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { postprocessApi } from "./postprocess-api.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repo = resolve(root, "..");
@@ -20,6 +21,7 @@ const run = (cmd, args, extraEnv = {}) => {
 
 mkdirSync(resolve(root, "src/core"), { recursive: true });
 run("typeshare", [resolve(repo, "crates/hocket-core/src/api.rs"), "--lang=typescript", `--output-file=${resolve(root, "src/core/api.ts")}`]);
+postprocessApi(resolve(root, "src/core/api.ts"));
 console.log("[gen] src/core/api.ts written");
 
 if (!typesOnly) {

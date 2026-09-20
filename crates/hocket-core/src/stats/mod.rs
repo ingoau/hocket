@@ -270,7 +270,8 @@ mod tests {
         let s = listening_stats(&rows(), &nz, NOW);
         assert_eq!(s.plays_by_hour[1], 5);
         assert_eq!(s.plays_by_hour[2], 1);
-        assert_eq!(s.plays_by_weekday, vec![2, 0, 1, 0, 1, 1, 1]);
+        // Every play moves one weekday forward: Mon=2, Wed=1, Thu=1, Sat=1, Sun=1.
+        assert_eq!(s.plays_by_weekday, vec![2, 0, 1, 1, 0, 1, 1]);
     }
 
     #[test]
