@@ -5,9 +5,6 @@ import app.hocket.core.api.*
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -24,9 +21,9 @@ class CoreClientTest {
     fun snapshotPopulatesStateFlows() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
-        runCurrent() // let the client's collector subscribe before the fake emits
+        runCurrent() // background tasks only run on runCurrent(); advanceUntilIdle stops when no foreground task is pending
         client.requestSnapshot()
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(client.started.value)
         assertNotNull(client.server.value)
         assertNotNull(client.nowPlaying.value)
@@ -41,16 +38,16 @@ class CoreClientTest {
     fun eventsUpdateDerivedState() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
-        runCurrent() // let the client's collector subscribe before the fake emits
+        runCurrent() // background tasks only run on runCurrent(); advanceUntilIdle stops when no foreground task is pending
         client.requestSnapshot()
-        advanceUntilIdle()
+        runCurrent()
         val before = client.nowPlaying.value!!.track.id
         client.dispatch(Command.Next)
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(client.nowPlaying.value!!.track.id != before)
         assertTrue(client.undo.value.canUndo || client.queue.value.history.isNotEmpty())
         client.dispatch(Command.Pause)
-        advanceUntilIdle()
+        runCurrent()
         assertFalse(client.isPlaying.value)
     }
 
@@ -58,11 +55,11 @@ class CoreClientTest {
     fun positionExtrapolatesFromStamp() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
-        runCurrent() // let the client's collector subscribe before the fake emits
+        runCurrent() // background tasks only run on runCurrent(); advanceUntilIdle stops when no foreground task is pending
         client.requestSnapshot()
-        advanceUntilIdle()
+        runCurrent()
         client.dispatch(Commands.seekTo(10_000))
-        advanceUntilIdle()
+        runCurrent()
         assertEquals(10_000L, client.positionNow())
         clock += 2_500
         assertEquals(12_500L, client.positionNow())
@@ -72,12 +69,12 @@ class CoreClientTest {
     fun libraryChangedInvalidatesPageCaches() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
-        runCurrent() // let the client's collector subscribe before the fake emits
+        runCurrent() // background tasks only run on runCurrent(); advanceUntilIdle stops when no foreground task is pending
         client.requestSnapshot()
-        advanceUntilIdle()
+        runCurrent()
         val key = TrackListKey(core.library.serverId, SortOrder.Title, false)
         client.trackPages.ensure(key, 0)
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(client.trackPages.state(key).value.known)
         client.onEvent(Event.LibraryChanged(EventLibraryChangedInner(core.library.serverId, listOf("tracks"), emptyList())))
         assertEquals(0, client.trackPages.state(key).value.pages.size)
@@ -88,7 +85,7 @@ class CoreClientTest {
     fun selectionPublishesToCore() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
-        runCurrent() // let the client's collector subscribe before the fake emits
+        runCurrent() // background tasks only run on runCurrent(); advanceUntilIdle stops when no foreground task is pending
         client.toggleSelected(SelectionKind.Tracks, "t1")
         client.toggleSelected(SelectionKind.Tracks, "t2")
         assertEquals(2, client.selection.value.count)
