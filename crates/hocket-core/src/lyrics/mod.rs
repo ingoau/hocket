@@ -27,7 +27,10 @@ mod tests;
 
 pub use adapt::{adapt_entry, adapt_list, from_plain_text, pick_main};
 pub use cursor::{locate, CursorState, LyricsCursor};
-pub use external::{ExternalLyricsProvider, LrclibProvider, LyricsError, LyricsHttp, LyricsRequest, ReqwestLyricsHttp};
+pub use external::{
+    ExternalLyricsProvider, LrclibProvider, LyricsError, LyricsHttp, LyricsRequest,
+    ReqwestLyricsHttp,
+};
 pub use lrc::{lrc_to_lyrics, parse_lrc, LrcDocument, LrcLine};
 pub use raw::{LyricsList, LyricsListResponse, StructuredLyrics};
 
@@ -63,8 +66,16 @@ pub fn apply_offset(lyrics: &Lyrics) -> Lyrics {
 }
 
 /// `lyrics_cache` primary key parts: `(server_id, track_id, source)`.
-pub fn cache_key(server_id: &str, track_id: &str, source: LyricsSource) -> (String, String, &'static str) {
-    (server_id.to_string(), track_id.to_string(), source_name(source))
+pub fn cache_key(
+    server_id: &str,
+    track_id: &str,
+    source: LyricsSource,
+) -> (String, String, &'static str) {
+    (
+        server_id.to_string(),
+        track_id.to_string(),
+        source_name(source),
+    )
 }
 
 /// Column value for `lyrics_cache.source`.
@@ -83,7 +94,9 @@ pub fn offset_state_key(track_id: &str) -> String {
 
 /// Serialises for `lyrics_cache.json`. Empty string is the negative cache.
 pub fn to_cache_json(lyrics: Option<&Lyrics>) -> String {
-    lyrics.and_then(|l| serde_json::to_string(l).ok()).unwrap_or_default()
+    lyrics
+        .and_then(|l| serde_json::to_string(l).ok())
+        .unwrap_or_default()
 }
 
 /// Reads back what [`to_cache_json`] wrote. `Ok(None)` for the negative cache.

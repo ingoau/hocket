@@ -54,7 +54,11 @@ pub const TEXTS: &[SettingText] = &[
 ];
 
 const fn t(key: &'static str, label: &'static str, description: &'static str) -> SettingText {
-    SettingText { key, label, description }
+    SettingText {
+        key,
+        label,
+        description,
+    }
 }
 
 /// Text for a key, if it has any.

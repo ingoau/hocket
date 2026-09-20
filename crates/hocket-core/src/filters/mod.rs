@@ -31,16 +31,23 @@ pub mod sql;
 #[cfg(test)]
 mod tests;
 
-pub use eval::{field_value, kind_of, matches, matches_with, order_tracks, rule_matches, FieldValue, LocalFacts};
+pub use eval::{
+    field_value, kind_of, matches, matches_with, order_tracks, rule_matches, FieldValue, LocalFacts,
+};
 pub use model::{
-    capability, field_by_nsp_name, field_info, fields_used, is_server_expressible, node_capability, ops_for_field,
-    ops_for_kind, validate_filter, validate_node, validate_rule, Expressibility, FieldInfo, FieldKind, FilterError,
-    ServerCaps, FIELDS, MAX_DEPTH, MAX_NODES,
+    capability, field_by_nsp_name, field_info, fields_used, is_server_expressible, node_capability,
+    ops_for_field, ops_for_kind, validate_filter, validate_node, validate_rule, Expressibility,
+    FieldInfo, FieldKind, FilterError, ServerCaps, FIELDS, MAX_DEPTH, MAX_NODES,
 };
 pub use nsp::{from_nsp, sort_name, to_nsp};
-pub use sql::{count_for_node, limit_clause, order_by, select_for_filter, select_for_node, where_clause, SelectQuery, WhereClause};
+pub use sql::{
+    count_for_node, limit_clause, order_by, select_for_filter, select_for_node, where_clause,
+    SelectQuery, WhereClause,
+};
 
-use crate::api::{Filter, FilterField, FilterNode, FilterOp, FilterRule, FilterValue, SortOrder, Track, TrackId};
+use crate::api::{
+    Filter, FilterField, FilterNode, FilterOp, FilterRule, FilterValue, SortOrder, Track, TrackId,
+};
 
 /// Ids of the built-in filters, so the UI can recognise (and not delete) them.
 pub const BUILTIN_PREFIX: &str = "builtin:";
@@ -58,8 +65,11 @@ pub fn static_playlist_ids<'a>(
     now_ms: f64,
     seed: u64,
 ) -> Vec<TrackId> {
-    let matching: Vec<&Track> =
-        rows.into_iter().filter(|(t, f)| matches_with(&filter.root, t, f, now_ms)).map(|(t, _)| t).collect();
+    let matching: Vec<&Track> = rows
+        .into_iter()
+        .filter(|(t, f)| matches_with(&filter.root, t, f, now_ms))
+        .map(|(t, _)| t)
+        .collect();
     order_tracks(matching, filter.sort, filter.descending, filter.limit, seed)
 }
 
@@ -67,8 +77,22 @@ fn rule(field: FilterField, op: FilterOp, value: FilterValue) -> FilterNode {
     FilterNode::Rule(FilterRule { field, op, value })
 }
 
-fn builtin(id: &str, name: &str, root: FilterNode, sort: SortOrder, descending: bool, limit: Option<u32>) -> Filter {
-    Filter { id: format!("{BUILTIN_PREFIX}{id}"), name: name.to_string(), root, sort, descending, limit }
+fn builtin(
+    id: &str,
+    name: &str,
+    root: FilterNode,
+    sort: SortOrder,
+    descending: bool,
+    limit: Option<u32>,
+) -> Filter {
+    Filter {
+        id: format!("{BUILTIN_PREFIX}{id}"),
+        name: name.to_string(),
+        root,
+        sort,
+        descending,
+        limit,
+    }
 }
 
 /// A useful starting set. Names are ids for the strings table on the
@@ -78,7 +102,11 @@ pub fn default_filters() -> Vec<Filter> {
         builtin(
             "recently-added",
             "Recently added",
-            FilterNode::All(vec![rule(FilterField::DateAdded, FilterOp::InTheLast, FilterValue::Days(30))]),
+            FilterNode::All(vec![rule(
+                FilterField::DateAdded,
+                FilterOp::InTheLast,
+                FilterValue::Days(30),
+            )]),
             SortOrder::DateAdded,
             true,
             Some(500),
@@ -87,8 +115,16 @@ pub fn default_filters() -> Vec<Filter> {
             "never-played",
             "Never played",
             FilterNode::All(vec![
-                rule(FilterField::PlayCount, FilterOp::Is, FilterValue::Number(0.0)),
-                rule(FilterField::LocalPlayCount, FilterOp::Is, FilterValue::Number(0.0)),
+                rule(
+                    FilterField::PlayCount,
+                    FilterOp::Is,
+                    FilterValue::Number(0.0),
+                ),
+                rule(
+                    FilterField::LocalPlayCount,
+                    FilterOp::Is,
+                    FilterValue::Number(0.0),
+                ),
             ]),
             SortOrder::Random,
             false,
@@ -97,7 +133,11 @@ pub fn default_filters() -> Vec<Filter> {
         builtin(
             "top-rated",
             "Top rated",
-            FilterNode::All(vec![rule(FilterField::Rating, FilterOp::Gt, FilterValue::Number(3.0))]),
+            FilterNode::All(vec![rule(
+                FilterField::Rating,
+                FilterOp::Gt,
+                FilterValue::Number(3.0),
+            )]),
             SortOrder::Rating,
             true,
             None,
@@ -105,7 +145,11 @@ pub fn default_filters() -> Vec<Filter> {
         builtin(
             "loved",
             "Loved",
-            FilterNode::All(vec![rule(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true))]),
+            FilterNode::All(vec![rule(
+                FilterField::Loved,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            )]),
             SortOrder::DateAdded,
             true,
             None,
@@ -113,7 +157,11 @@ pub fn default_filters() -> Vec<Filter> {
         builtin(
             "downloaded",
             "Downloaded",
-            FilterNode::All(vec![rule(FilterField::Downloaded, FilterOp::IsTrue, FilterValue::Bool(true))]),
+            FilterNode::All(vec![rule(
+                FilterField::Downloaded,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            )]),
             SortOrder::Artist,
             false,
             None,
@@ -122,8 +170,16 @@ pub fn default_filters() -> Vec<Filter> {
             "recently-played",
             "Recently played",
             FilterNode::Any(vec![
-                rule(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Days(14)),
-                rule(FilterField::LocalLastPlayed, FilterOp::InTheLast, FilterValue::Days(14)),
+                rule(
+                    FilterField::LastPlayed,
+                    FilterOp::InTheLast,
+                    FilterValue::Days(14),
+                ),
+                rule(
+                    FilterField::LocalLastPlayed,
+                    FilterOp::InTheLast,
+                    FilterValue::Days(14),
+                ),
             ]),
             SortOrder::PlayCount,
             true,

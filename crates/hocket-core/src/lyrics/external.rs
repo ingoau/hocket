@@ -46,7 +46,10 @@ pub trait LyricsHttp: Send + Sync {
 pub trait ExternalLyricsProvider: Send + Sync {
     /// Stable id for cache keys and the settings UI (`lrclib`).
     fn id(&self) -> &'static str;
-    fn fetch<'a>(&'a self, req: &'a LyricsRequest) -> BoxFuture<'a, Result<Option<Lyrics>, LyricsError>>;
+    fn fetch<'a>(
+        &'a self,
+        req: &'a LyricsRequest,
+    ) -> BoxFuture<'a, Result<Option<Lyrics>, LyricsError>>;
 }
 
 /// LRCLIB (<https://lrclib.net/docs>). Synced LRC → line tier, otherwise
@@ -64,12 +67,16 @@ impl<H: LyricsHttp> LrclibProvider<H> {
     }
 
     pub fn with_base_url(http: H, base_url: &str) -> Self {
-        Self { http, base_url: base_url.trim_end_matches('/').to_string() }
+        Self {
+            http,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
     }
 
     /// The exact URL a request maps to (exposed for tests).
     pub fn url_for(&self, req: &LyricsRequest) -> String {
-        let mut url = url::Url::parse(&format!("{}/api/get", self.base_url)).expect("static base url");
+        let mut url =
+            url::Url::parse(&format!("{}/api/get", self.base_url)).expect("static base url");
         {
             let mut q = url.query_pairs_mut();
             q.append_pair("track_name", &req.title);
@@ -101,7 +108,10 @@ impl<H: LyricsHttp> ExternalLyricsProvider for LrclibProvider<H> {
         "lrclib"
     }
 
-    fn fetch<'a>(&'a self, req: &'a LyricsRequest) -> BoxFuture<'a, Result<Option<Lyrics>, LyricsError>> {
+    fn fetch<'a>(
+        &'a self,
+        req: &'a LyricsRequest,
+    ) -> BoxFuture<'a, Result<Option<Lyrics>, LyricsError>> {
         Box::pin(async move {
             if req.title.trim().is_empty() {
                 return Ok(None);
@@ -112,17 +122,25 @@ impl<H: LyricsHttp> ExternalLyricsProvider for LrclibProvider<H> {
                 Err(LyricsError::Http { status: 404, .. }) => return Ok(None),
                 Err(e) => return Err(e),
             };
-            let record: LrclibRecord = serde_json::from_str(&body).map_err(|e| LyricsError::Decode(e.to_string()))?;
+            let record: LrclibRecord =
+                serde_json::from_str(&body).map_err(|e| LyricsError::Decode(e.to_string()))?;
             if record.instrumental {
                 return Ok(None);
             }
-            if let Some(synced) = record.synced_lyrics.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(synced) = record
+                .synced_lyrics
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 let doc = parse_lrc(synced);
                 if let Some(l) = lrc_to_lyrics(&req.track_id, &doc, LyricsSource::External) {
                     return Ok(Some(l));
                 }
             }
-            Ok(record.plain_lyrics.as_deref().and_then(|p| from_plain_text(&req.track_id, p, LyricsSource::External)))
+            Ok(record
+                .plain_lyrics
+                .as_deref()
+                .and_then(|p| from_plain_text(&req.track_id, p, LyricsSource::External)))
         })
     }
 }
@@ -136,7 +154,9 @@ pub struct ReqwestLyricsHttp {
 impl ReqwestLyricsHttp {
     pub fn new(app_version: &str) -> Result<Self, LyricsError> {
         let client = reqwest::Client::builder()
-            .user_agent(format!("Hocket/{app_version} (https://github.com/ingoau/hocket)"))
+            .user_agent(format!(
+                "Hocket/{app_version} (https://github.com/ingoau/hocket)"
+            ))
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| LyricsError::Network(e.to_string()))?;
@@ -148,9 +168,17 @@ impl LyricsHttp for ReqwestLyricsHttp {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>> {
         let url = url.to_string();
         Box::pin(async move {
-            let resp = self.client.get(&url).send().await.map_err(|e| LyricsError::Network(e.to_string()))?;
+            let resp = self
+                .client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| LyricsError::Network(e.to_string()))?;
             let status = resp.status().as_u16();
-            let body = resp.text().await.map_err(|e| LyricsError::Network(e.to_string()))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| LyricsError::Network(e.to_string()))?;
             if (200..300).contains(&status) {
                 Ok(body)
             } else {

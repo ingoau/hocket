@@ -17,7 +17,9 @@
 //! - `InPlaylist` takes `Is`/`IsNot` with a playlist id (`Text`) or ids (`List`).
 //! - `Lyrics` is a boolean locally ("has lyrics"): the mirror only knows presence.
 
-use crate::api::{Filter, FilterCapability, FilterField, FilterNode, FilterOp, FilterRule, FilterValue};
+use crate::api::{
+    Filter, FilterCapability, FilterField, FilterNode, FilterOp, FilterRule, FilterValue,
+};
 
 use super::dates::CivilDate;
 
@@ -67,37 +69,223 @@ pub struct FieldInfo {
 
 /// Every field, in a stable order (the builder's picker order).
 pub const FIELDS: &[FieldInfo] = &[
-    f(FilterField::Title, FieldKind::Text, Expressibility::Server, "title", "tracks.title"),
-    f(FilterField::Album, FieldKind::Text, Expressibility::Server, "album", "tracks.album"),
-    f(FilterField::Artist, FieldKind::Text, Expressibility::Server, "artist", "tracks.artist"),
-    f(FilterField::AlbumArtist, FieldKind::Text, Expressibility::Server, "albumartist", "tracks.album_artist"),
-    f(FilterField::Genre, FieldKind::Text, Expressibility::Server, "genre", "tracks.genre"),
-    f(FilterField::Year, FieldKind::Number, Expressibility::Server, "year", "tracks.year"),
-    f(FilterField::DateAdded, FieldKind::Date, Expressibility::Server, "dateadded", "tracks.created"),
-    f(FilterField::DateModified, FieldKind::Date, Expressibility::Server, "datemodified", "tracks.changed"),
-    f(FilterField::LastPlayed, FieldKind::Date, Expressibility::Server, "lastplayed", "tracks.last_played"),
-    f(FilterField::PlayCount, FieldKind::Number, Expressibility::Server, "playcount", "tracks.play_count"),
-    f(FilterField::Rating, FieldKind::Number, Expressibility::Server, "rating", "tracks.rating"),
-    f(FilterField::Loved, FieldKind::Bool, Expressibility::Server, "loved", "tracks.loved"),
-    f(FilterField::Duration, FieldKind::Number, Expressibility::Server, "duration", "(tracks.duration_ms / 1000.0)"),
-    f(FilterField::BitRate, FieldKind::Number, Expressibility::Server, "bitrate", "tracks.bit_rate"),
-    f(FilterField::FilePath, FieldKind::Text, Expressibility::Server, "filepath", "tracks.path"),
-    f(FilterField::FileType, FieldKind::Text, Expressibility::Server, "filetype", "tracks.suffix"),
-    f(FilterField::Comment, FieldKind::Text, Expressibility::Server, "comment", "tracks.comment"),
-    f(FilterField::Lyrics, FieldKind::Bool, Expressibility::Server, "lyrics", "tracks.has_lyrics"),
-    f(FilterField::HasCoverArt, FieldKind::Bool, Expressibility::Server, "hascoverart", "(tracks.cover_art IS NOT NULL)"),
-    f(FilterField::Compilation, FieldKind::Bool, Expressibility::Server, "compilation", "tracks.is_compilation"),
-    f(FilterField::DiscNumber, FieldKind::Number, Expressibility::Server, "discnumber", "tracks.disc_number"),
-    f(FilterField::TrackNumber, FieldKind::Number, Expressibility::Server, "tracknumber", "tracks.track_number"),
-    f(FilterField::Bpm, FieldKind::Number, Expressibility::Sonic, "bpm", "tracks.bpm"),
-    f(FilterField::Key, FieldKind::Text, Expressibility::Sonic, "key", "tracks.key"),
-    f(FilterField::Energy, FieldKind::Number, Expressibility::Sonic, "energy", "tracks.energy"),
-    f(FilterField::Mood, FieldKind::Text, Expressibility::Sonic, "mood", "tracks.mood"),
-    f(FilterField::Downloaded, FieldKind::Bool, Expressibility::Local, "downloaded", "(tracks.offline = 2)"),
-    f(FilterField::Cached, FieldKind::Bool, Expressibility::Local, "cached", "(tracks.offline = 1)"),
-    f(FilterField::LocalPlayCount, FieldKind::Number, Expressibility::Local, "localplaycount", "tracks.local_play_count"),
-    f(FilterField::LocalLastPlayed, FieldKind::Date, Expressibility::Local, "locallastplayed", "tracks.local_last_played"),
-    f(FilterField::InPlaylist, FieldKind::Playlist, Expressibility::Local, "inplaylist", ""),
+    f(
+        FilterField::Title,
+        FieldKind::Text,
+        Expressibility::Server,
+        "title",
+        "tracks.title",
+    ),
+    f(
+        FilterField::Album,
+        FieldKind::Text,
+        Expressibility::Server,
+        "album",
+        "tracks.album",
+    ),
+    f(
+        FilterField::Artist,
+        FieldKind::Text,
+        Expressibility::Server,
+        "artist",
+        "tracks.artist",
+    ),
+    f(
+        FilterField::AlbumArtist,
+        FieldKind::Text,
+        Expressibility::Server,
+        "albumartist",
+        "tracks.album_artist",
+    ),
+    f(
+        FilterField::Genre,
+        FieldKind::Text,
+        Expressibility::Server,
+        "genre",
+        "tracks.genre",
+    ),
+    f(
+        FilterField::Year,
+        FieldKind::Number,
+        Expressibility::Server,
+        "year",
+        "tracks.year",
+    ),
+    f(
+        FilterField::DateAdded,
+        FieldKind::Date,
+        Expressibility::Server,
+        "dateadded",
+        "tracks.created",
+    ),
+    f(
+        FilterField::DateModified,
+        FieldKind::Date,
+        Expressibility::Server,
+        "datemodified",
+        "tracks.changed",
+    ),
+    f(
+        FilterField::LastPlayed,
+        FieldKind::Date,
+        Expressibility::Server,
+        "lastplayed",
+        "tracks.last_played",
+    ),
+    f(
+        FilterField::PlayCount,
+        FieldKind::Number,
+        Expressibility::Server,
+        "playcount",
+        "tracks.play_count",
+    ),
+    f(
+        FilterField::Rating,
+        FieldKind::Number,
+        Expressibility::Server,
+        "rating",
+        "tracks.rating",
+    ),
+    f(
+        FilterField::Loved,
+        FieldKind::Bool,
+        Expressibility::Server,
+        "loved",
+        "tracks.loved",
+    ),
+    f(
+        FilterField::Duration,
+        FieldKind::Number,
+        Expressibility::Server,
+        "duration",
+        "(tracks.duration_ms / 1000.0)",
+    ),
+    f(
+        FilterField::BitRate,
+        FieldKind::Number,
+        Expressibility::Server,
+        "bitrate",
+        "tracks.bit_rate",
+    ),
+    f(
+        FilterField::FilePath,
+        FieldKind::Text,
+        Expressibility::Server,
+        "filepath",
+        "tracks.path",
+    ),
+    f(
+        FilterField::FileType,
+        FieldKind::Text,
+        Expressibility::Server,
+        "filetype",
+        "tracks.suffix",
+    ),
+    f(
+        FilterField::Comment,
+        FieldKind::Text,
+        Expressibility::Server,
+        "comment",
+        "tracks.comment",
+    ),
+    f(
+        FilterField::Lyrics,
+        FieldKind::Bool,
+        Expressibility::Server,
+        "lyrics",
+        "tracks.has_lyrics",
+    ),
+    f(
+        FilterField::HasCoverArt,
+        FieldKind::Bool,
+        Expressibility::Server,
+        "hascoverart",
+        "(tracks.cover_art IS NOT NULL)",
+    ),
+    f(
+        FilterField::Compilation,
+        FieldKind::Bool,
+        Expressibility::Server,
+        "compilation",
+        "tracks.is_compilation",
+    ),
+    f(
+        FilterField::DiscNumber,
+        FieldKind::Number,
+        Expressibility::Server,
+        "discnumber",
+        "tracks.disc_number",
+    ),
+    f(
+        FilterField::TrackNumber,
+        FieldKind::Number,
+        Expressibility::Server,
+        "tracknumber",
+        "tracks.track_number",
+    ),
+    f(
+        FilterField::Bpm,
+        FieldKind::Number,
+        Expressibility::Sonic,
+        "bpm",
+        "tracks.bpm",
+    ),
+    f(
+        FilterField::Key,
+        FieldKind::Text,
+        Expressibility::Sonic,
+        "key",
+        "tracks.key",
+    ),
+    f(
+        FilterField::Energy,
+        FieldKind::Number,
+        Expressibility::Sonic,
+        "energy",
+        "tracks.energy",
+    ),
+    f(
+        FilterField::Mood,
+        FieldKind::Text,
+        Expressibility::Sonic,
+        "mood",
+        "tracks.mood",
+    ),
+    f(
+        FilterField::Downloaded,
+        FieldKind::Bool,
+        Expressibility::Local,
+        "downloaded",
+        "(tracks.offline = 2)",
+    ),
+    f(
+        FilterField::Cached,
+        FieldKind::Bool,
+        Expressibility::Local,
+        "cached",
+        "(tracks.offline = 1)",
+    ),
+    f(
+        FilterField::LocalPlayCount,
+        FieldKind::Number,
+        Expressibility::Local,
+        "localplaycount",
+        "tracks.local_play_count",
+    ),
+    f(
+        FilterField::LocalLastPlayed,
+        FieldKind::Date,
+        Expressibility::Local,
+        "locallastplayed",
+        "tracks.local_last_played",
+    ),
+    f(
+        FilterField::InPlaylist,
+        FieldKind::Playlist,
+        Expressibility::Local,
+        "inplaylist",
+        "",
+    ),
 ];
 
 const fn f(
@@ -107,12 +295,21 @@ const fn f(
     nsp_name: &'static str,
     column: &'static str,
 ) -> FieldInfo {
-    FieldInfo { field, kind, expressibility, nsp_name, column }
+    FieldInfo {
+        field,
+        kind,
+        expressibility,
+        nsp_name,
+        column,
+    }
 }
 
 /// Metadata for a field. Every variant is in [`FIELDS`].
 pub fn field_info(field: FilterField) -> &'static FieldInfo {
-    FIELDS.iter().find(|i| i.field == field).expect("every FilterField has metadata")
+    FIELDS
+        .iter()
+        .find(|i| i.field == field)
+        .expect("every FilterField has metadata")
 }
 
 /// Looks a field up by its NSP name (case-insensitive).
@@ -157,7 +354,12 @@ pub enum FilterError {
     #[error("operator {op:?} is not valid for field {field:?}")]
     InvalidOp { field: FilterField, op: FilterOp },
     #[error("value {value} is not valid for {field:?} {op:?}: {reason}")]
-    InvalidValue { field: FilterField, op: FilterOp, value: String, reason: String },
+    InvalidValue {
+        field: FilterField,
+        op: FilterOp,
+        value: String,
+        reason: String,
+    },
     #[error("filter nests deeper than {MAX_DEPTH} levels")]
     TooDeep,
     #[error("filter has more than {MAX_NODES} rules")]
@@ -207,7 +409,10 @@ fn walk(node: &FilterNode, depth: usize, count: &mut usize) -> Result<(), Filter
 pub fn validate_rule(rule: &FilterRule) -> Result<(), FilterError> {
     let info = field_info(rule.field);
     if !ops_for_kind(info.kind).contains(&rule.op) {
-        return Err(FilterError::InvalidOp { field: rule.field, op: rule.op });
+        return Err(FilterError::InvalidOp {
+            field: rule.field,
+            op: rule.op,
+        });
     }
     let bad = |reason: &str| FilterError::InvalidValue {
         field: rule.field,
@@ -240,14 +445,18 @@ pub fn validate_rule(rule: &FilterRule) -> Result<(), FilterError> {
                 } else if low > high {
                     Err(bad("range low must not exceed high"))
                 } else {
-                    check_number_bounds(rule.field, *low).and_then(|_| check_number_bounds(rule.field, *high)).map_err(bad)
+                    check_number_bounds(rule.field, *low)
+                        .and_then(|_| check_number_bounds(rule.field, *high))
+                        .map_err(bad)
                 }
             }
             (FilterOp::InTheRange, _) => Err(bad("expected a range")),
             (op, FilterValue::Number(n)) => {
                 if !n.is_finite() {
                     Err(bad("number must be finite"))
-                } else if matches!(op, FilterOp::Gt | FilterOp::Lt) && !matches!(rule.field, FilterField::Rating | FilterField::Energy) {
+                } else if matches!(op, FilterOp::Gt | FilterOp::Lt)
+                    && !matches!(rule.field, FilterField::Rating | FilterField::Energy)
+                {
                     Ok(())
                 } else {
                     check_number_bounds(rule.field, *n).map_err(bad)
@@ -256,9 +465,9 @@ pub fn validate_rule(rule: &FilterRule) -> Result<(), FilterError> {
             _ => Err(bad("expected a number")),
         },
         FieldKind::Date => match (&rule.op, &rule.value) {
-            (FilterOp::Before | FilterOp::After, FilterValue::Date(d)) => {
-                CivilDate::parse(d).map(|_| ()).ok_or_else(|| bad("expected YYYY-MM-DD"))
-            }
+            (FilterOp::Before | FilterOp::After, FilterValue::Date(d)) => CivilDate::parse(d)
+                .map(|_| ())
+                .ok_or_else(|| bad("expected YYYY-MM-DD")),
             (FilterOp::InTheLast | FilterOp::NotInTheLast, FilterValue::Days(n)) => {
                 if *n == 0 {
                     Err(bad("days must be at least 1"))
@@ -278,7 +487,9 @@ pub fn validate_rule(rule: &FilterRule) -> Result<(), FilterError> {
                     Ok(())
                 }
             }
-            _ => Err(bad("date operators take a date, a day count or a two-date list")),
+            _ => Err(bad(
+                "date operators take a date, a day count or a two-date list",
+            )),
         },
         FieldKind::Bool => Ok(()),
     }
@@ -322,9 +533,14 @@ pub fn capability(filter: &Filter, caps: ServerCaps) -> FilterCapability {
 
 /// Same as [`capability`] for a bare node tree.
 pub fn node_capability(node: &FilterNode, caps: ServerCaps) -> FilterCapability {
-    let local_only_fields: Vec<FilterField> =
-        fields_used(node).into_iter().filter(|f| !is_server_expressible(*f, caps)).collect();
-    FilterCapability { server_expressible: local_only_fields.is_empty(), local_only_fields }
+    let local_only_fields: Vec<FilterField> = fields_used(node)
+        .into_iter()
+        .filter(|f| !is_server_expressible(*f, caps))
+        .collect();
+    FilterCapability {
+        server_expressible: local_only_fields.is_empty(),
+        local_only_fields,
+    }
 }
 
 #[cfg(test)]
@@ -340,40 +556,149 @@ mod tests {
         for info in FIELDS {
             assert_eq!(field_info(info.field).field, info.field);
             assert!(!ops_for_field(info.field).is_empty());
-            assert_eq!(field_by_nsp_name(info.nsp_name).map(|i| i.field), Some(info.field));
+            assert_eq!(
+                field_by_nsp_name(info.nsp_name).map(|i| i.field),
+                Some(info.field)
+            );
         }
-        assert_eq!(field_by_nsp_name("AlbumArtist").map(|i| i.field), Some(FilterField::AlbumArtist));
+        assert_eq!(
+            field_by_nsp_name("AlbumArtist").map(|i| i.field),
+            Some(FilterField::AlbumArtist)
+        );
         assert!(field_by_nsp_name("nope").is_none());
     }
 
     #[test]
     fn op_validity() {
-        assert!(validate_rule(&rule(FilterField::Title, FilterOp::Contains, FilterValue::Text("x".into()))).is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Title,
+            FilterOp::Contains,
+            FilterValue::Text("x".into())
+        ))
+        .is_ok());
         assert_eq!(
-            validate_rule(&rule(FilterField::Title, FilterOp::Gt, FilterValue::Number(1.0))),
-            Err(FilterError::InvalidOp { field: FilterField::Title, op: FilterOp::Gt })
+            validate_rule(&rule(
+                FilterField::Title,
+                FilterOp::Gt,
+                FilterValue::Number(1.0)
+            )),
+            Err(FilterError::InvalidOp {
+                field: FilterField::Title,
+                op: FilterOp::Gt
+            })
         );
-        assert!(validate_rule(&rule(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true))).is_ok());
-        assert!(validate_rule(&rule(FilterField::Loved, FilterOp::Is, FilterValue::Bool(true))).is_err());
-        assert!(validate_rule(&rule(FilterField::Year, FilterOp::InTheRange, FilterValue::Range { low: 1980.0, high: 1989.0 })).is_ok());
-        assert!(validate_rule(&rule(FilterField::Year, FilterOp::InTheRange, FilterValue::Range { low: 1990.0, high: 1989.0 })).is_err());
-        assert!(validate_rule(&rule(FilterField::Rating, FilterOp::Gt, FilterValue::Number(6.0))).is_err());
-        assert!(validate_rule(&rule(FilterField::Rating, FilterOp::Gt, FilterValue::Number(3.0))).is_ok());
-        assert!(validate_rule(&rule(FilterField::Energy, FilterOp::Lt, FilterValue::Number(1.5))).is_err());
-        assert!(validate_rule(&rule(FilterField::PlayCount, FilterOp::Gt, FilterValue::Number(-1.0))).is_ok());
-        assert!(validate_rule(&rule(FilterField::Year, FilterOp::Is, FilterValue::Number(-1.0))).is_err());
-        assert!(validate_rule(&rule(FilterField::Title, FilterOp::Is, FilterValue::Text(String::new()))).is_err());
-        assert!(validate_rule(&rule(FilterField::Title, FilterOp::Is, FilterValue::List(vec!["a".into(), "b".into()]))).is_ok());
-        assert!(validate_rule(&rule(FilterField::Title, FilterOp::Contains, FilterValue::List(vec!["a".into()]))).is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Loved,
+            FilterOp::IsTrue,
+            FilterValue::Bool(true)
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Loved,
+            FilterOp::Is,
+            FilterValue::Bool(true)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Year,
+            FilterOp::InTheRange,
+            FilterValue::Range {
+                low: 1980.0,
+                high: 1989.0
+            }
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Year,
+            FilterOp::InTheRange,
+            FilterValue::Range {
+                low: 1990.0,
+                high: 1989.0
+            }
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Rating,
+            FilterOp::Gt,
+            FilterValue::Number(6.0)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Rating,
+            FilterOp::Gt,
+            FilterValue::Number(3.0)
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Energy,
+            FilterOp::Lt,
+            FilterValue::Number(1.5)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::PlayCount,
+            FilterOp::Gt,
+            FilterValue::Number(-1.0)
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Year,
+            FilterOp::Is,
+            FilterValue::Number(-1.0)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Title,
+            FilterOp::Is,
+            FilterValue::Text(String::new())
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::Title,
+            FilterOp::Is,
+            FilterValue::List(vec!["a".into(), "b".into()])
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::Title,
+            FilterOp::Contains,
+            FilterValue::List(vec!["a".into()])
+        ))
+        .is_err());
     }
 
     #[test]
     fn date_validity() {
-        assert!(validate_rule(&rule(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Days(30))).is_ok());
-        assert!(validate_rule(&rule(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Days(0))).is_err());
-        assert!(validate_rule(&rule(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Number(30.0))).is_err());
-        assert!(validate_rule(&rule(FilterField::DateAdded, FilterOp::Before, FilterValue::Date("2024-01-01".into()))).is_ok());
-        assert!(validate_rule(&rule(FilterField::DateAdded, FilterOp::Before, FilterValue::Date("2024-1-1x".into()))).is_err());
+        assert!(validate_rule(&rule(
+            FilterField::LastPlayed,
+            FilterOp::InTheLast,
+            FilterValue::Days(30)
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::LastPlayed,
+            FilterOp::InTheLast,
+            FilterValue::Days(0)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::LastPlayed,
+            FilterOp::InTheLast,
+            FilterValue::Number(30.0)
+        ))
+        .is_err());
+        assert!(validate_rule(&rule(
+            FilterField::DateAdded,
+            FilterOp::Before,
+            FilterValue::Date("2024-01-01".into())
+        ))
+        .is_ok());
+        assert!(validate_rule(&rule(
+            FilterField::DateAdded,
+            FilterOp::Before,
+            FilterValue::Date("2024-1-1x".into())
+        ))
+        .is_err());
         assert!(validate_rule(&rule(
             FilterField::DateAdded,
             FilterOp::InTheRange,
@@ -386,12 +711,21 @@ mod tests {
             FilterValue::List(vec!["2024-03-01".into(), "2024-02-01".into()])
         ))
         .is_err());
-        assert!(validate_rule(&rule(FilterField::DateAdded, FilterOp::Gt, FilterValue::Number(1.0))).is_err());
+        assert!(validate_rule(&rule(
+            FilterField::DateAdded,
+            FilterOp::Gt,
+            FilterValue::Number(1.0)
+        ))
+        .is_err());
     }
 
     #[test]
     fn depth_and_size_limits() {
-        let mut node = FilterNode::Rule(rule(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true)));
+        let mut node = FilterNode::Rule(rule(
+            FilterField::Loved,
+            FilterOp::IsTrue,
+            FilterValue::Bool(true),
+        ));
         for _ in 0..MAX_DEPTH {
             node = FilterNode::All(vec![node]);
         }
@@ -400,23 +734,60 @@ mod tests {
         assert_eq!(validate_node(&node), Err(FilterError::TooDeep));
 
         let many: Vec<FilterNode> = (0..MAX_NODES)
-            .map(|_| FilterNode::Rule(rule(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true))))
+            .map(|_| {
+                FilterNode::Rule(rule(
+                    FilterField::Loved,
+                    FilterOp::IsTrue,
+                    FilterValue::Bool(true),
+                ))
+            })
             .collect();
-        assert_eq!(validate_node(&FilterNode::All(many)), Err(FilterError::TooLarge));
+        assert_eq!(
+            validate_node(&FilterNode::All(many)),
+            Err(FilterError::TooLarge)
+        );
     }
 
     #[test]
     fn capability_reflects_caps() {
         let root = FilterNode::All(vec![
-            FilterNode::Rule(rule(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true))),
-            FilterNode::Rule(rule(FilterField::Bpm, FilterOp::Gt, FilterValue::Number(120.0))),
-            FilterNode::Any(vec![FilterNode::Rule(rule(FilterField::Downloaded, FilterOp::IsTrue, FilterValue::Bool(true)))]),
+            FilterNode::Rule(rule(
+                FilterField::Loved,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            )),
+            FilterNode::Rule(rule(
+                FilterField::Bpm,
+                FilterOp::Gt,
+                FilterValue::Number(120.0),
+            )),
+            FilterNode::Any(vec![FilterNode::Rule(rule(
+                FilterField::Downloaded,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            ))]),
         ]);
-        let filter = Filter { id: "f".into(), name: "n".into(), root, sort: Default::default(), descending: false, limit: None };
+        let filter = Filter {
+            id: "f".into(),
+            name: "n".into(),
+            root,
+            sort: Default::default(),
+            descending: false,
+            limit: None,
+        };
         let c = capability(&filter, ServerCaps::default());
         assert!(!c.server_expressible);
-        assert_eq!(c.local_only_fields, vec![FilterField::Bpm, FilterField::Downloaded]);
-        let c = capability(&filter, ServerCaps { sonic_attributes: true, native_api: true });
+        assert_eq!(
+            c.local_only_fields,
+            vec![FilterField::Bpm, FilterField::Downloaded]
+        );
+        let c = capability(
+            &filter,
+            ServerCaps {
+                sonic_attributes: true,
+                native_api: true,
+            },
+        );
         assert_eq!(c.local_only_fields, vec![FilterField::Downloaded]);
     }
 }

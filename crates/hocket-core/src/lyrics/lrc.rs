@@ -82,7 +82,10 @@ pub fn parse_lrc(body: &str) -> LrcDocument {
         }
         let text = strip_inline_timestamps(rest).trim().to_string();
         for s in stamps {
-            doc.lines.push(LrcLine { start_ms: s, text: text.clone() });
+            doc.lines.push(LrcLine {
+                start_ms: s,
+                text: text.clone(),
+            });
         }
     }
     doc.lines.sort_by_key(|l| l.start_ms);

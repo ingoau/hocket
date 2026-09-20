@@ -36,7 +36,10 @@ impl LyricsListResponse {
     }
 
     pub fn entries(&self) -> &[StructuredLyrics] {
-        self.lyrics_list.as_ref().map(|l| l.structured_lyrics.as_slice()).unwrap_or(&[])
+        self.lyrics_list
+            .as_ref()
+            .map(|l| l.structured_lyrics.as_slice())
+            .unwrap_or(&[])
     }
 }
 

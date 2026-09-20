@@ -59,18 +59,29 @@ impl LyricsCursor {
         // Positive user offset = lyrics should appear later, so the audio
         // position is compared as if it were earlier.
         let effective = position_ms - f64::from(lyrics.offset_ms);
-        let mut state = CursorState { effective_ms: effective, ..Default::default() };
+        let mut state = CursorState {
+            effective_ms: effective,
+            ..Default::default()
+        };
         if lyrics.tier == LyricsTier::Unsynced || lyrics.lines.is_empty() {
             self.last_line = None;
             return state;
         }
-        let starts: Vec<Option<f64>> = lyrics.lines.iter().map(|l| l.start_ms.map(f64::from)).collect();
+        let starts: Vec<Option<f64>> = lyrics
+            .lines
+            .iter()
+            .map(|l| l.start_ms.map(f64::from))
+            .collect();
 
         // Primary line: latest start ≤ effective. Try the cached line and its
         // successor first, then fall back to a scan.
         let mut line = None;
         if let Some(last) = self.last_line {
-            let ok_here = starts.get(last).copied().flatten().is_some_and(|s| s <= effective);
+            let ok_here = starts
+                .get(last)
+                .copied()
+                .flatten()
+                .is_some_and(|s| s <= effective);
             let next = (last + 1..starts.len()).find(|&i| starts[i].is_some());
             let next_started = next.is_some_and(|n| starts[n].is_some_and(|s| s <= effective));
             if ok_here && !next_started {
@@ -93,11 +104,16 @@ impl LyricsCursor {
 
         // All lines containing the position (duets, background).
         for (i, l) in lyrics.lines.iter().enumerate() {
-            let Some(s) = l.start_ms.map(f64::from) else { continue };
+            let Some(s) = l.start_ms.map(f64::from) else {
+                continue;
+            };
             if s > effective {
                 continue;
             }
-            let end = l.end_ms.map(f64::from).or_else(|| starts[i + 1..].iter().find_map(|x| *x));
+            let end = l
+                .end_ms
+                .map(f64::from)
+                .or_else(|| starts[i + 1..].iter().find_map(|x| *x));
             let inside = match end {
                 Some(e) => effective < e || (Some(i) == line && e <= s),
                 None => Some(i) == line,
@@ -134,7 +150,11 @@ impl LyricsCursor {
             if let Some(i) = idx {
                 let syl = &l.syllables[i];
                 let (s, e) = (f64::from(syl.start_ms), f64::from(syl.end_ms));
-                state.syllable_progress = if e > s { ((effective - s) / (e - s)).clamp(0.0, 1.0) as f32 } else { 1.0 };
+                state.syllable_progress = if e > s {
+                    ((effective - s) / (e - s)).clamp(0.0, 1.0) as f32
+                } else {
+                    1.0
+                };
             }
         }
         state

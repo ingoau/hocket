@@ -19,7 +19,11 @@ pub struct CivilDate {
 impl CivilDate {
     /// Days since 1970-01-01 (negative before the epoch).
     pub fn to_days(self) -> i64 {
-        let y = if self.month <= 2 { self.year as i64 - 1 } else { self.year as i64 };
+        let y = if self.month <= 2 {
+            self.year as i64 - 1
+        } else {
+            self.year as i64
+        };
         let era = if y >= 0 { y } else { y - 399 } / 400;
         let yoe = y - era * 400;
         let m = self.month as i64;
@@ -39,7 +43,11 @@ impl CivilDate {
         let mp = (5 * doy + 2) / 153;
         let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
         let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        CivilDate { year: (if m <= 2 { y + 1 } else { y }) as i32, month: m, day: d }
+        CivilDate {
+            year: (if m <= 2 { y + 1 } else { y }) as i32,
+            month: m,
+            day: d,
+        }
     }
 
     /// Midnight at the start of this date, epoch milliseconds.
@@ -133,15 +141,60 @@ mod tests {
 
     #[test]
     fn known_dates() {
-        assert_eq!(CivilDate { year: 1970, month: 1, day: 1 }.to_days(), 0);
-        assert_eq!(CivilDate { year: 2000, month: 3, day: 1 }.to_days(), 11_017);
-        assert_eq!(CivilDate::from_days(19_723), CivilDate { year: 2024, month: 1, day: 1 });
-        assert_eq!(CivilDate::parse("2024-02-29"), Some(CivilDate { year: 2024, month: 2, day: 29 }));
+        assert_eq!(
+            CivilDate {
+                year: 1970,
+                month: 1,
+                day: 1
+            }
+            .to_days(),
+            0
+        );
+        assert_eq!(
+            CivilDate {
+                year: 2000,
+                month: 3,
+                day: 1
+            }
+            .to_days(),
+            11_017
+        );
+        assert_eq!(
+            CivilDate::from_days(19_723),
+            CivilDate {
+                year: 2024,
+                month: 1,
+                day: 1
+            }
+        );
+        assert_eq!(
+            CivilDate::parse("2024-02-29"),
+            Some(CivilDate {
+                year: 2024,
+                month: 2,
+                day: 29
+            })
+        );
         assert_eq!(CivilDate::parse("2023-02-29"), None);
         assert_eq!(CivilDate::parse("2023-13-01"), None);
-        assert_eq!(CivilDate::parse("2023-01-01T10:00:00Z"), Some(CivilDate { year: 2023, month: 1, day: 1 }));
+        assert_eq!(
+            CivilDate::parse("2023-01-01T10:00:00Z"),
+            Some(CivilDate {
+                year: 2023,
+                month: 1,
+                day: 1
+            })
+        );
         assert_eq!(CivilDate::parse("garbage"), None);
-        assert_eq!(CivilDate { year: 2024, month: 1, day: 1 }.format(), "2024-01-01");
+        assert_eq!(
+            CivilDate {
+                year: 2024,
+                month: 1,
+                day: 1
+            }
+            .format(),
+            "2024-01-01"
+        );
     }
 
     #[test]
@@ -159,7 +212,14 @@ mod tests {
         assert_eq!(hour_of_day(ms, 0), 0);
         assert_eq!(hour_of_day(ms, 600), 10); // AEST
         assert_eq!(hour_of_day(ms, -300), 19); // EST, previous day
-        assert_eq!(local_date(ms, -300), CivilDate { year: 2023, month: 12, day: 31 });
+        assert_eq!(
+            local_date(ms, -300),
+            CivilDate {
+                year: 2023,
+                month: 12,
+                day: 31
+            }
+        );
         assert_eq!(local_date(ms, 600).format(), "2024-01-01");
     }
 }

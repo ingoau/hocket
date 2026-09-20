@@ -11,7 +11,16 @@ const NOW: f64 = 1_750_000_000_000.0; // 2025-06-15T14:13:20Z
 const DAY: f64 = dates::MS_PER_DAY;
 
 fn t(id: &str) -> (Track, LocalFacts) {
-    (Track { id: id.into(), server_id: "s1".into(), title: format!("Track {id}"), duration_ms: 200_000, ..Default::default() }, LocalFacts::default())
+    (
+        Track {
+            id: id.into(),
+            server_id: "s1".into(),
+            title: format!("Track {id}"),
+            duration_ms: 200_000,
+            ..Default::default()
+        },
+        LocalFacts::default(),
+    )
 }
 
 /// A small corpus with variety on every field.
@@ -34,7 +43,13 @@ fn corpus() -> Vec<(Track, LocalFacts)> {
     a.path = Some("U2/Best Of/01 Love Song.flac".into());
     a.cover_art = Some("al-1".into());
     a.comment = Some("this one".into());
-    a.sonic = Some(SonicAttributes { bpm: Some(128.0), key: Some("Am".into()), energy: Some(0.8), mood: Some("happy".into()), ..Default::default() });
+    a.sonic = Some(SonicAttributes {
+        bpm: Some(128.0),
+        key: Some("Am".into()),
+        energy: Some(0.8),
+        mood: Some("happy".into()),
+        ..Default::default()
+    });
     a.offline = OfflineState::Downloaded;
     fa.has_lyrics = true;
     fa.local_play_count = 3;
@@ -70,7 +85,11 @@ fn corpus() -> Vec<(Track, LocalFacts)> {
     c.last_played = Some(NOW - 40.0 * DAY);
     c.created = Some(NOW - 0.5 * DAY);
     c.duration_ms = 600_000;
-    c.sonic = Some(SonicAttributes { bpm: Some(90.0), energy: Some(0.2), ..Default::default() });
+    c.sonic = Some(SonicAttributes {
+        bpm: Some(90.0),
+        energy: Some(0.2),
+        ..Default::default()
+    });
     rows.push((c, fc));
 
     let (mut d, mut fd) = t("d");
@@ -168,15 +187,48 @@ fn mirror(rows: &[(Track, LocalFacts)]) -> Connection {
     conn
 }
 
-fn sql_ids(conn: &Connection, node: &FilterNode, sort: SortOrder, descending: bool, limit: Option<u32>) -> Vec<String> {
-    let q = select_for_node(Some(node), sort, descending, limit, None, "s1", "tracks.id", NOW).expect("query");
-    let mut stmt = conn.prepare(&q.sql).unwrap_or_else(|e| panic!("prepare {}: {e}", q.sql));
-    let rows = stmt.query_map(params_from_iter(q.params.iter()), |r| r.get::<_, String>(0)).expect("query");
+fn sql_ids(
+    conn: &Connection,
+    node: &FilterNode,
+    sort: SortOrder,
+    descending: bool,
+    limit: Option<u32>,
+) -> Vec<String> {
+    let q = select_for_node(
+        Some(node),
+        sort,
+        descending,
+        limit,
+        None,
+        "s1",
+        "tracks.id",
+        NOW,
+    )
+    .expect("query");
+    let mut stmt = conn
+        .prepare(&q.sql)
+        .unwrap_or_else(|e| panic!("prepare {}: {e}", q.sql));
+    let rows = stmt
+        .query_map(params_from_iter(q.params.iter()), |r| r.get::<_, String>(0))
+        .expect("query");
     rows.map(|r| r.expect("row")).collect()
 }
 
-fn mem_ids(rows: &[(Track, LocalFacts)], node: &FilterNode, sort: SortOrder, descending: bool, limit: Option<u32>) -> Vec<String> {
-    let f = Filter { id: "x".into(), name: "x".into(), root: node.clone(), sort, descending, limit };
+fn mem_ids(
+    rows: &[(Track, LocalFacts)],
+    node: &FilterNode,
+    sort: SortOrder,
+    descending: bool,
+    limit: Option<u32>,
+) -> Vec<String> {
+    let f = Filter {
+        id: "x".into(),
+        name: "x".into(),
+        root: node.clone(),
+        sort,
+        descending,
+        limit,
+    };
     static_playlist_ids(&f, rows.iter().map(|(t, f)| (t, f)), NOW, 1)
 }
 
@@ -197,26 +249,58 @@ fn cases() -> Vec<(FilterNode, Vec<&'static str>)> {
         (r(F::Title, O::Contains, text("love")), vec!["a"]),
         (r(F::Title, O::Contains, text("_")), vec!["b"]),
         (r(F::Title, O::Contains, text("%")), vec!["b"]),
-        (r(F::Title, O::NotContains, text("song")), vec!["c", "d", "e"]),
+        (
+            r(F::Title, O::NotContains, text("song")),
+            vec!["c", "d", "e"],
+        ),
         (r(F::Title, O::StartsWith, text("un")), vec!["c"]),
         (r(F::Title, O::EndsWith, text("SONG")), vec!["a"]),
         (r(F::Title, O::Is, text("love song")), vec!["a"]),
-        (r(F::Title, O::IsNot, text("Love Song")), vec!["b", "c", "d", "e"]),
-        (r(F::Artist, O::Is, FilterValue::List(vec!["u2".into(), "Muse".into()])), vec!["a", "b"]),
-        (r(F::Artist, O::IsNot, FilterValue::List(vec!["u2".into()])), vec!["b", "d"]),
+        (
+            r(F::Title, O::IsNot, text("Love Song")),
+            vec!["b", "c", "d", "e"],
+        ),
+        (
+            r(
+                F::Artist,
+                O::Is,
+                FilterValue::List(vec!["u2".into(), "Muse".into()]),
+            ),
+            vec!["a", "b"],
+        ),
+        (
+            r(F::Artist, O::IsNot, FilterValue::List(vec!["u2".into()])),
+            vec!["b", "d"],
+        ),
         (r(F::Artist, O::IsNot, text("U2")), vec!["b", "d"]),
         (r(F::Album, O::Is, text("best of")), vec!["a", "d"]),
         (r(F::AlbumArtist, O::Contains, text("u")), vec!["a"]),
         (r(F::Genre, O::Is, text("rock")), vec!["a"]),
-        (r(F::Year, O::InTheRange, FilterValue::Range { low: 1980.0, high: 1990.0 }), vec!["a", "c"]),
+        (
+            r(
+                F::Year,
+                O::InTheRange,
+                FilterValue::Range {
+                    low: 1980.0,
+                    high: 1990.0,
+                },
+            ),
+            vec!["a", "c"],
+        ),
         (r(F::Year, O::Gt, n(2000.0)), vec!["b", "d"]),
         (r(F::Year, O::Lt, n(1990.0)), vec!["a"]),
         (r(F::Year, O::Is, n(2003.0)), vec!["b"]),
         (r(F::Year, O::IsNot, n(2003.0)), vec!["a", "c", "d"]),
         (r(F::Rating, O::Gt, n(3.0)), vec!["a", "d"]),
         (r(F::PlayCount, O::Is, n(0.0)), vec!["b", "e"]),
-        (r(F::Loved, O::IsTrue, FilterValue::Bool(true)), vec!["a", "d"]),
-        (r(F::Loved, O::IsFalse, FilterValue::Bool(true)), vec!["b", "c", "e"]),
+        (
+            r(F::Loved, O::IsTrue, FilterValue::Bool(true)),
+            vec!["a", "d"],
+        ),
+        (
+            r(F::Loved, O::IsFalse, FilterValue::Bool(true)),
+            vec!["b", "c", "e"],
+        ),
         (r(F::Duration, O::Gt, n(300.0)), vec!["c"]),
         (r(F::Duration, O::Lt, n(100.0)), vec!["b"]),
         (r(F::BitRate, O::Gt, n(200.0)), vec!["a"]),
@@ -224,33 +308,91 @@ fn cases() -> Vec<(FilterNode, Vec<&'static str>)> {
         (r(F::FileType, O::Is, text("mp3")), vec!["b"]),
         (r(F::Comment, O::StartsWith, text("this")), vec!["a", "d"]),
         (r(F::Lyrics, O::IsTrue, FilterValue::Bool(true)), vec!["a"]),
-        (r(F::HasCoverArt, O::IsFalse, FilterValue::Bool(true)), vec!["b", "c", "e"]),
-        (r(F::Compilation, O::IsTrue, FilterValue::Bool(true)), vec!["b"]),
+        (
+            r(F::HasCoverArt, O::IsFalse, FilterValue::Bool(true)),
+            vec!["b", "c", "e"],
+        ),
+        (
+            r(F::Compilation, O::IsTrue, FilterValue::Bool(true)),
+            vec!["b"],
+        ),
         (r(F::DiscNumber, O::Is, n(2.0)), vec!["b"]),
         (r(F::TrackNumber, O::Gt, n(5.0)), vec!["b"]),
         (r(F::Bpm, O::Gt, n(100.0)), vec!["a"]),
         (r(F::Key, O::Is, text("am")), vec!["a"]),
         (r(F::Energy, O::Lt, n(0.5)), vec!["c"]),
         (r(F::Mood, O::Contains, text("hap")), vec!["a"]),
-        (r(F::Downloaded, O::IsTrue, FilterValue::Bool(true)), vec!["a"]),
+        (
+            r(F::Downloaded, O::IsTrue, FilterValue::Bool(true)),
+            vec!["a"],
+        ),
         (r(F::Cached, O::IsTrue, FilterValue::Bool(true)), vec!["b"]),
-        (r(F::Downloaded, O::IsFalse, FilterValue::Bool(true)), vec!["b", "c", "d", "e"]),
+        (
+            r(F::Downloaded, O::IsFalse, FilterValue::Bool(true)),
+            vec!["b", "c", "d", "e"],
+        ),
         (r(F::LocalPlayCount, O::Gt, n(5.0)), vec!["d"]),
-        (r(F::LastPlayed, O::InTheLast, FilterValue::Days(7)), vec!["a"]),
-        (r(F::LastPlayed, O::NotInTheLast, FilterValue::Days(7)), vec!["b", "c", "d", "e"]),
-        (r(F::LastPlayed, O::NotInTheLast, FilterValue::Days(365)), vec!["b", "e"]),
-        (r(F::LocalLastPlayed, O::InTheLast, FilterValue::Days(30)), vec!["a", "d"]),
-        (r(F::DateAdded, O::Before, FilterValue::Date("2025-01-01".into())), vec!["d"]),
-        (r(F::DateAdded, O::After, FilterValue::Date("2025-06-01".into())), vec!["a", "c"]),
-        (r(F::DateAdded, O::InTheRange, FilterValue::List(vec!["2025-04-01".into(), "2025-06-10".into()])), vec!["a", "b"]),
-        (r(F::DateModified, O::InTheLast, FilterValue::Days(7)), vec!["a"]),
+        (
+            r(F::LastPlayed, O::InTheLast, FilterValue::Days(7)),
+            vec!["a"],
+        ),
+        (
+            r(F::LastPlayed, O::NotInTheLast, FilterValue::Days(7)),
+            vec!["b", "c", "d", "e"],
+        ),
+        (
+            r(F::LastPlayed, O::NotInTheLast, FilterValue::Days(365)),
+            vec!["b", "e"],
+        ),
+        (
+            r(F::LocalLastPlayed, O::InTheLast, FilterValue::Days(30)),
+            vec!["a", "d"],
+        ),
+        (
+            r(
+                F::DateAdded,
+                O::Before,
+                FilterValue::Date("2025-01-01".into()),
+            ),
+            vec!["d"],
+        ),
+        (
+            r(
+                F::DateAdded,
+                O::After,
+                FilterValue::Date("2025-06-01".into()),
+            ),
+            vec!["a", "c"],
+        ),
+        (
+            r(
+                F::DateAdded,
+                O::InTheRange,
+                FilterValue::List(vec!["2025-04-01".into(), "2025-06-10".into()]),
+            ),
+            vec!["a", "b"],
+        ),
+        (
+            r(F::DateModified, O::InTheLast, FilterValue::Days(7)),
+            vec!["a"],
+        ),
         (r(F::InPlaylist, O::Is, text("pl1")), vec!["a", "d"]),
         (r(F::InPlaylist, O::IsNot, text("pl1")), vec!["b", "c", "e"]),
-        (r(F::InPlaylist, O::Is, FilterValue::List(vec!["pl1".into(), "pl2".into()])), vec!["a", "b", "d"]),
+        (
+            r(
+                F::InPlaylist,
+                O::Is,
+                FilterValue::List(vec!["pl1".into(), "pl2".into()]),
+            ),
+            vec!["a", "b", "d"],
+        ),
         (
             FilterNode::All(vec![
                 r(F::Loved, O::IsTrue, FilterValue::Bool(true)),
-                FilterNode::Any(vec![r(F::Year, O::Lt, n(1990.0)), r(F::Rating, O::Is, n(4.0))]),
+                FilterNode::Any(vec![
+                    r(F::Year, O::Lt, n(1990.0)),
+                    r(F::Rating, O::Is, n(4.0)),
+                ]),
             ]),
             vec!["a", "d"],
         ),
@@ -296,7 +438,10 @@ fn ordering_matches_between_sql_and_memory() {
             for limit in [None, Some(2)] {
                 let s = sql_ids(&conn, &all, sort, desc, limit);
                 let m = mem_ids(&rows, &all, sort, desc, limit);
-                assert_eq!(s, m, "order mismatch sort={sort:?} desc={desc} limit={limit:?}");
+                assert_eq!(
+                    s, m,
+                    "order mismatch sort={sort:?} desc={desc} limit={limit:?}"
+                );
             }
         }
     }
@@ -308,21 +453,30 @@ fn ordering_matches_between_sql_and_memory() {
 
 #[test]
 fn like_special_characters_are_bound_not_spliced() {
-    let node = r(FilterField::Title, FilterOp::Contains, text("'; DROP TABLE tracks; --"));
+    let node = r(
+        FilterField::Title,
+        FilterOp::Contains,
+        text("'; DROP TABLE tracks; --"),
+    );
     let clause = where_clause(&node, NOW).unwrap();
     assert!(!clause.sql.contains("DROP"));
     assert_eq!(clause.params.len(), 1);
     let rows = corpus();
     let conn = mirror(&rows);
     assert!(sql_ids(&conn, &node, SortOrder::Title, false, None).is_empty());
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(count, 5);
 }
 
 #[test]
 fn invalid_rules_are_refused_by_sql() {
     let node = r(FilterField::Title, FilterOp::Gt, n(1.0));
-    assert!(matches!(where_clause(&node, NOW), Err(FilterError::InvalidOp { .. })));
+    assert!(matches!(
+        where_clause(&node, NOW),
+        Err(FilterError::InvalidOp { .. })
+    ));
     assert!(!matches(&node, &t("x").0, NOW));
 }
 
@@ -330,16 +484,41 @@ fn invalid_rules_are_refused_by_sql() {
 fn count_and_limit_clauses() {
     let rows = corpus();
     let conn = mirror(&rows);
-    let q = count_for_node(Some(&r(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true))), "s1", NOW).unwrap();
-    let c: i64 = conn.query_row(&q.sql, params_from_iter(q.params.iter()), |r| r.get(0)).unwrap();
+    let q = count_for_node(
+        Some(&r(
+            FilterField::Loved,
+            FilterOp::IsTrue,
+            FilterValue::Bool(true),
+        )),
+        "s1",
+        NOW,
+    )
+    .unwrap();
+    let c: i64 = conn
+        .query_row(&q.sql, params_from_iter(q.params.iter()), |r| r.get(0))
+        .unwrap();
     assert_eq!(c, 2);
     assert_eq!(limit_clause(None, None), "");
     assert_eq!(limit_clause(Some(10), None), "LIMIT 10");
     assert_eq!(limit_clause(Some(10), Some(5)), "LIMIT 10 OFFSET 5");
     assert_eq!(limit_clause(None, Some(5)), "LIMIT -1 OFFSET 5");
-    let q = select_for_node(None, SortOrder::Title, false, Some(2), Some(1), "s1", "tracks.id", NOW).unwrap();
+    let q = select_for_node(
+        None,
+        SortOrder::Title,
+        false,
+        Some(2),
+        Some(1),
+        "s1",
+        "tracks.id",
+        NOW,
+    )
+    .unwrap();
     let mut stmt = conn.prepare(&q.sql).unwrap();
-    let ids: Vec<String> = stmt.query_map(params_from_iter(q.params.iter()), |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+    let ids: Vec<String> = stmt
+        .query_map(params_from_iter(q.params.iter()), |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
     // NOCASE is ASCII-only, so "Émilie" sorts last: hate_song, Love Song, Track e, Untitled, Émilie
     // -> offset 1, limit 2.
     assert_eq!(ids, vec!["a".to_string(), "e".to_string()]);
@@ -352,14 +531,37 @@ fn nsp_export_matches_navidrome_shape() {
         name: "80s Top".into(),
         root: FilterNode::All(vec![
             FilterNode::Any(vec![
-                r(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true)),
+                r(
+                    FilterField::Loved,
+                    FilterOp::IsTrue,
+                    FilterValue::Bool(true),
+                ),
                 r(FilterField::Rating, FilterOp::Gt, n(3.0)),
             ]),
-            r(FilterField::Year, FilterOp::InTheRange, FilterValue::Range { low: 1981.0, high: 1990.0 }),
-            r(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Days(30)),
-            r(FilterField::DateAdded, FilterOp::Before, FilterValue::Date("2024-01-01".into())),
+            r(
+                FilterField::Year,
+                FilterOp::InTheRange,
+                FilterValue::Range {
+                    low: 1981.0,
+                    high: 1990.0,
+                },
+            ),
+            r(
+                FilterField::LastPlayed,
+                FilterOp::InTheLast,
+                FilterValue::Days(30),
+            ),
+            r(
+                FilterField::DateAdded,
+                FilterOp::Before,
+                FilterValue::Date("2024-01-01".into()),
+            ),
             r(FilterField::Title, FilterOp::Contains, text("love")),
-            r(FilterField::Lyrics, FilterOp::IsTrue, FilterValue::Bool(true)),
+            r(
+                FilterField::Lyrics,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            ),
             r(FilterField::Duration, FilterOp::Gt, n(90.5)),
         ]),
         sort: SortOrder::Year,
@@ -373,13 +575,34 @@ fn nsp_export_matches_navidrome_shape() {
     assert_eq!(v["order"], "desc");
     assert_eq!(v["limit"], 25);
     let all = v["all"].as_array().unwrap();
-    assert_eq!(all[0]["any"][0], serde_json::json!({ "is": { "loved": true } }));
-    assert_eq!(all[0]["any"][1], serde_json::json!({ "gt": { "rating": 3 } }));
-    assert_eq!(all[1], serde_json::json!({ "inTheRange": { "year": [1981, 1990] } }));
-    assert_eq!(all[2], serde_json::json!({ "inTheLast": { "lastplayed": 30 } }));
-    assert_eq!(all[3], serde_json::json!({ "before": { "dateadded": "2024-01-01" } }));
-    assert_eq!(all[4], serde_json::json!({ "contains": { "title": "love" } }));
-    assert_eq!(all[5], serde_json::json!({ "isPresent": { "lyrics": true } }));
+    assert_eq!(
+        all[0]["any"][0],
+        serde_json::json!({ "is": { "loved": true } })
+    );
+    assert_eq!(
+        all[0]["any"][1],
+        serde_json::json!({ "gt": { "rating": 3 } })
+    );
+    assert_eq!(
+        all[1],
+        serde_json::json!({ "inTheRange": { "year": [1981, 1990] } })
+    );
+    assert_eq!(
+        all[2],
+        serde_json::json!({ "inTheLast": { "lastplayed": 30 } })
+    );
+    assert_eq!(
+        all[3],
+        serde_json::json!({ "before": { "dateadded": "2024-01-01" } })
+    );
+    assert_eq!(
+        all[4],
+        serde_json::json!({ "contains": { "title": "love" } })
+    );
+    assert_eq!(
+        all[5],
+        serde_json::json!({ "isPresent": { "lyrics": true } })
+    );
     assert_eq!(all[6], serde_json::json!({ "gt": { "duration": 90.5 } }));
 }
 
@@ -395,14 +618,23 @@ fn nsp_export_refuses_local_only_and_gates_sonic() {
     };
     assert_eq!(
         to_nsp(&mk(FilterField::Downloaded), ServerCaps::default()),
-        Err(FilterError::NotServerExpressible(vec![FilterField::Downloaded]))
+        Err(FilterError::NotServerExpressible(vec![
+            FilterField::Downloaded
+        ]))
     );
     let sonic = Filter {
         root: FilterNode::All(vec![r(FilterField::Bpm, FilterOp::Gt, n(120.0))]),
         ..mk(FilterField::Loved)
     };
     assert!(to_nsp(&sonic, ServerCaps::default()).is_err());
-    let doc = to_nsp(&sonic, ServerCaps { sonic_attributes: true, native_api: false }).unwrap();
+    let doc = to_nsp(
+        &sonic,
+        ServerCaps {
+            sonic_attributes: true,
+            native_api: false,
+        },
+    )
+    .unwrap();
     assert!(doc.contains("\"bpm\": 120"));
     let cap: FilterCapability = capability(&sonic, ServerCaps::default());
     assert!(!cap.server_expressible);
@@ -416,7 +648,14 @@ fn nsp_import_of_navidrome_examples() {
     )
     .unwrap();
     assert_eq!(f.name, "Recently Played");
-    assert_eq!(f.root, FilterNode::All(vec![r(FilterField::LastPlayed, FilterOp::InTheLast, FilterValue::Days(30))]));
+    assert_eq!(
+        f.root,
+        FilterNode::All(vec![r(
+            FilterField::LastPlayed,
+            FilterOp::InTheLast,
+            FilterValue::Days(30)
+        )])
+    );
     assert_eq!(f.limit, Some(100));
     // "lastplayed" is not a SortOrder we have; falls back to default.
     assert_eq!(f.sort, SortOrder::Default);
@@ -433,14 +672,29 @@ fn nsp_import_of_navidrome_examples() {
         f.root,
         FilterNode::All(vec![
             FilterNode::Any(vec![
-                r(FilterField::Loved, FilterOp::IsTrue, FilterValue::Bool(true)),
+                r(
+                    FilterField::Loved,
+                    FilterOp::IsTrue,
+                    FilterValue::Bool(true)
+                ),
                 r(FilterField::Rating, FilterOp::Gt, n(3.0)),
             ]),
-            r(FilterField::Year, FilterOp::InTheRange, FilterValue::Range { low: 1981.0, high: 1990.0 }),
+            r(
+                FilterField::Year,
+                FilterOp::InTheRange,
+                FilterValue::Range {
+                    low: 1981.0,
+                    high: 1990.0
+                }
+            ),
         ])
     );
 
-    let f = from_nsp(r#"{ "all": [{ "gt": { "playCount": -1 } }], "sort": "random" }"#, "r").unwrap();
+    let f = from_nsp(
+        r#"{ "all": [{ "gt": { "playCount": -1 } }], "sort": "random" }"#,
+        "r",
+    )
+    .unwrap();
     assert_eq!(f.sort, SortOrder::Random);
     assert_eq!(f.limit, None);
 
@@ -454,42 +708,159 @@ fn nsp_import_of_navidrome_examples() {
         FilterNode::Any(vec![
             r(FilterField::InPlaylist, FilterOp::Is, text("abc")),
             r(FilterField::InPlaylist, FilterOp::IsNot, text("def")),
-            r(FilterField::Compilation, FilterOp::IsFalse, FilterValue::Bool(false)),
-            r(FilterField::Lyrics, FilterOp::IsFalse, FilterValue::Bool(false)),
+            r(
+                FilterField::Compilation,
+                FilterOp::IsFalse,
+                FilterValue::Bool(false)
+            ),
+            r(
+                FilterField::Lyrics,
+                FilterOp::IsFalse,
+                FilterValue::Bool(false)
+            ),
         ])
     );
 }
 
 #[test]
 fn nsp_import_rejects_what_we_cannot_represent() {
-    assert!(matches!(from_nsp("not json", "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "sort": "title" }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [], "any": [] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "is": { "albumrating": 3 } }] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "inPlaylist": { "path": "a.nsp" } }] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "frobnicate": { "title": "a" } }] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "gt": { "title": "a" } }] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "is": { "downloaded": true } }] }"#, "x"), Err(FilterError::Nsp(_))));
-    assert!(matches!(from_nsp(r#"{ "all": [{ "before": { "lastplayed": "yesterday" } }] }"#, "x"), Err(FilterError::InvalidValue { .. })));
+    assert!(matches!(
+        from_nsp("not json", "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "sort": "title" }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [], "any": [] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [{ "is": { "albumrating": 3 } }] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [{ "inPlaylist": { "path": "a.nsp" } }] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [{ "frobnicate": { "title": "a" } }] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [{ "gt": { "title": "a" } }] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(r#"{ "all": [{ "is": { "downloaded": true } }] }"#, "x"),
+        Err(FilterError::Nsp(_))
+    ));
+    assert!(matches!(
+        from_nsp(
+            r#"{ "all": [{ "before": { "lastplayed": "yesterday" } }] }"#,
+            "x"
+        ),
+        Err(FilterError::InvalidValue { .. })
+    ));
 }
 
 fn expressible_rule_strategy() -> impl Strategy<Value = FilterNode> {
     use FilterField as F;
     let word = "[a-z]{1,6}";
     prop_oneof![
-        (prop_oneof![Just(F::Title), Just(F::Album), Just(F::Artist), Just(F::Genre), Just(F::Comment), Just(F::FilePath)], 0..6usize, word)
+        (
+            prop_oneof![
+                Just(F::Title),
+                Just(F::Album),
+                Just(F::Artist),
+                Just(F::Genre),
+                Just(F::Comment),
+                Just(F::FilePath)
+            ],
+            0..6usize,
+            word
+        )
             .prop_map(|(f, i, w)| r(f, ops_for_field(f)[i], text(&w))),
-        (prop_oneof![Just(F::Year), Just(F::PlayCount), Just(F::Duration), Just(F::BitRate), Just(F::TrackNumber)], 0..4usize, 0..3000u32)
+        (
+            prop_oneof![
+                Just(F::Year),
+                Just(F::PlayCount),
+                Just(F::Duration),
+                Just(F::BitRate),
+                Just(F::TrackNumber)
+            ],
+            0..4usize,
+            0..3000u32
+        )
             .prop_map(|(f, i, x)| r(f, ops_for_field(f)[i], n(f64::from(x)))),
-        (0..1000u32, 0..1000u32).prop_map(|(a, b)| r(F::Year, FilterOp::InTheRange, FilterValue::Range { low: f64::from(a.min(b)), high: f64::from(a.max(b)) })),
-        (0..=5u32, 0..4usize).prop_map(|(x, i)| r(F::Rating, ops_for_field(F::Rating)[i], n(f64::from(x)))),
-        (prop_oneof![Just(F::Loved), Just(F::HasCoverArt), Just(F::Compilation), Just(F::Lyrics)], any::<bool>())
-            .prop_map(|(f, b)| r(f, if b { FilterOp::IsTrue } else { FilterOp::IsFalse }, FilterValue::Bool(b))),
-        (prop_oneof![Just(F::LastPlayed), Just(F::DateAdded), Just(F::DateModified)], 1..400u32, any::<bool>())
-            .prop_map(|(f, d, last)| r(f, if last { FilterOp::InTheLast } else { FilterOp::NotInTheLast }, FilterValue::Days(d))),
-        (prop_oneof![Just(F::LastPlayed), Just(F::DateAdded)], 2000..2030i32, 1..=12u32, 1..=28u32, any::<bool>()).prop_map(|(f, y, m, d, before)| {
-            r(f, if before { FilterOp::Before } else { FilterOp::After }, FilterValue::Date(format!("{y:04}-{m:02}-{d:02}")))
-        }),
+        (0..1000u32, 0..1000u32).prop_map(|(a, b)| r(
+            F::Year,
+            FilterOp::InTheRange,
+            FilterValue::Range {
+                low: f64::from(a.min(b)),
+                high: f64::from(a.max(b))
+            }
+        )),
+        (0..=5u32, 0..4usize).prop_map(|(x, i)| r(
+            F::Rating,
+            ops_for_field(F::Rating)[i],
+            n(f64::from(x))
+        )),
+        (
+            prop_oneof![
+                Just(F::Loved),
+                Just(F::HasCoverArt),
+                Just(F::Compilation),
+                Just(F::Lyrics)
+            ],
+            any::<bool>()
+        )
+            .prop_map(|(f, b)| r(
+                f,
+                if b {
+                    FilterOp::IsTrue
+                } else {
+                    FilterOp::IsFalse
+                },
+                FilterValue::Bool(b)
+            )),
+        (
+            prop_oneof![
+                Just(F::LastPlayed),
+                Just(F::DateAdded),
+                Just(F::DateModified)
+            ],
+            1..400u32,
+            any::<bool>()
+        )
+            .prop_map(|(f, d, last)| r(
+                f,
+                if last {
+                    FilterOp::InTheLast
+                } else {
+                    FilterOp::NotInTheLast
+                },
+                FilterValue::Days(d)
+            )),
+        (
+            prop_oneof![Just(F::LastPlayed), Just(F::DateAdded)],
+            2000..2030i32,
+            1..=12u32,
+            1..=28u32,
+            any::<bool>()
+        )
+            .prop_map(|(f, y, m, d, before)| {
+                r(
+                    f,
+                    if before {
+                        FilterOp::Before
+                    } else {
+                        FilterOp::After
+                    },
+                    FilterValue::Date(format!("{y:04}-{m:02}-{d:02}")),
+                )
+            }),
     ]
 }
 
@@ -505,27 +876,81 @@ fn expressible_tree_strategy() -> impl Strategy<Value = FilterNode> {
 fn local_rule_strategy() -> impl Strategy<Value = FilterNode> {
     use FilterField as F;
     prop_oneof![
-        (prop_oneof![Just(F::Downloaded), Just(F::Cached)], any::<bool>())
-            .prop_map(|(f, b)| r(f, if b { FilterOp::IsTrue } else { FilterOp::IsFalse }, FilterValue::Bool(b))),
-        (0..12u32, 0..4usize).prop_map(|(x, i)| r(F::LocalPlayCount, ops_for_field(F::LocalPlayCount)[i], n(f64::from(x)))),
-        (1..60u32, any::<bool>()).prop_map(|(d, last)| r(F::LocalLastPlayed, if last { FilterOp::InTheLast } else { FilterOp::NotInTheLast }, FilterValue::Days(d))),
-        (prop_oneof![Just("pl1"), Just("pl2"), Just("pl3")], any::<bool>())
-            .prop_map(|(p, is)| r(F::InPlaylist, if is { FilterOp::Is } else { FilterOp::IsNot }, text(p))),
-        (prop_oneof![Just(F::Bpm), Just(F::Energy)], 0..3usize, any::<bool>()).prop_map(|(f, i, hi)| {
-            let v = if f == F::Energy { if hi { 0.5 } else { 0.1 } } else if hi { 120.0 } else { 60.0 };
-            r(f, ops_for_field(f)[i], n(v))
-        }),
-        (prop_oneof![Just(F::Key), Just(F::Mood)], prop_oneof![Just("am"), Just("happy"), Just("x")]).prop_map(|(f, w)| r(f, FilterOp::Contains, text(w))),
+        (
+            prop_oneof![Just(F::Downloaded), Just(F::Cached)],
+            any::<bool>()
+        )
+            .prop_map(|(f, b)| r(
+                f,
+                if b {
+                    FilterOp::IsTrue
+                } else {
+                    FilterOp::IsFalse
+                },
+                FilterValue::Bool(b)
+            )),
+        (0..12u32, 0..4usize).prop_map(|(x, i)| r(
+            F::LocalPlayCount,
+            ops_for_field(F::LocalPlayCount)[i],
+            n(f64::from(x))
+        )),
+        (1..60u32, any::<bool>()).prop_map(|(d, last)| r(
+            F::LocalLastPlayed,
+            if last {
+                FilterOp::InTheLast
+            } else {
+                FilterOp::NotInTheLast
+            },
+            FilterValue::Days(d)
+        )),
+        (
+            prop_oneof![Just("pl1"), Just("pl2"), Just("pl3")],
+            any::<bool>()
+        )
+            .prop_map(|(p, is)| r(
+                F::InPlaylist,
+                if is { FilterOp::Is } else { FilterOp::IsNot },
+                text(p)
+            )),
+        (
+            prop_oneof![Just(F::Bpm), Just(F::Energy)],
+            0..3usize,
+            any::<bool>()
+        )
+            .prop_map(|(f, i, hi)| {
+                let v = if f == F::Energy {
+                    if hi {
+                        0.5
+                    } else {
+                        0.1
+                    }
+                } else if hi {
+                    120.0
+                } else {
+                    60.0
+                };
+                r(f, ops_for_field(f)[i], n(v))
+            }),
+        (
+            prop_oneof![Just(F::Key), Just(F::Mood)],
+            prop_oneof![Just("am"), Just("happy"), Just("x")]
+        )
+            .prop_map(|(f, w)| r(f, FilterOp::Contains, text(w))),
     ]
 }
 
 fn any_tree_strategy() -> impl Strategy<Value = FilterNode> {
-    prop_oneof![expressible_rule_strategy(), local_rule_strategy()].prop_recursive(3, 24, 4, |inner| {
-        prop_oneof![
-            prop::collection::vec(inner.clone(), 0..4).prop_map(FilterNode::All),
-            prop::collection::vec(inner, 0..4).prop_map(FilterNode::Any),
-        ]
-    })
+    prop_oneof![expressible_rule_strategy(), local_rule_strategy()].prop_recursive(
+        3,
+        24,
+        4,
+        |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4).prop_map(FilterNode::All),
+                prop::collection::vec(inner, 0..4).prop_map(FilterNode::Any),
+            ]
+        },
+    )
 }
 
 proptest! {
@@ -585,7 +1010,13 @@ fn defaults_are_valid_and_evaluate() {
             assert_eq!(s, m, "{}", f.name);
         }
     }
-    let downloaded = default_filters().into_iter().find(|f| f.id.ends_with("downloaded")).unwrap();
-    assert_eq!(mem_ids(&rows, &downloaded.root, downloaded.sort, false, None), vec!["a"]);
+    let downloaded = default_filters()
+        .into_iter()
+        .find(|f| f.id.ends_with("downloaded"))
+        .unwrap();
+    assert_eq!(
+        mem_ids(&rows, &downloaded.root, downloaded.sort, false, None),
+        vec!["a"]
+    );
     assert!(!capability(&downloaded, ServerCaps::default()).server_expressible);
 }

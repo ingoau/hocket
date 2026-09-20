@@ -30,7 +30,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use config::{build_document, parse_document, secret_key, secret_reference, to_json, ConfigError, ConfigInputs, CONFIG_VERSION};
+pub use config::{
+    build_document, parse_document, secret_key, secret_reference, to_json, ConfigError,
+    ConfigInputs, CONFIG_VERSION,
+};
 pub use registry::{keys, lookup, validate, SettingDef, SettingKind, REGISTRY};
 
 use crate::api::{Setting, SettingScope};
@@ -105,7 +108,9 @@ impl Settings {
     /// Loads from the store; a missing or unreadable document starts empty
     /// (defaults), logging the problem rather than failing start-up.
     pub fn load(store: &dyn SettingsStore) -> Result<Settings, SettingsError> {
-        let Some(json) = store.load()? else { return Ok(Settings::new()) };
+        let Some(json) = store.load()? else {
+            return Ok(Settings::new());
+        };
         Ok(Settings::from_json(&json).unwrap_or_else(|e| {
             tracing::error!(error = %e, "settings document unreadable; starting from defaults");
             Settings::new()
@@ -117,15 +122,25 @@ impl Settings {
     }
 
     pub fn to_json(&self) -> Result<String, SettingsError> {
-        serde_json::to_string(&Document { version: SETTINGS_DOC_VERSION, entries: self.entries.clone() }).map_err(|e| SettingsError::Json(e.to_string()))
+        serde_json::to_string(&Document {
+            version: SETTINGS_DOC_VERSION,
+            entries: self.entries.clone(),
+        })
+        .map_err(|e| SettingsError::Json(e.to_string()))
     }
 
     pub fn from_json(json: &str) -> Result<Settings, SettingsError> {
-        let doc: Document = serde_json::from_str(json).map_err(|e| SettingsError::Json(e.to_string()))?;
+        let doc: Document =
+            serde_json::from_str(json).map_err(|e| SettingsError::Json(e.to_string()))?;
         if doc.version > SETTINGS_DOC_VERSION {
-            tracing::warn!(version = doc.version, "settings document from a newer app; unknown keys preserved");
+            tracing::warn!(
+                version = doc.version,
+                "settings document from a newer app; unknown keys preserved"
+            );
         }
-        let mut s = Settings { entries: doc.entries };
+        let mut s = Settings {
+            entries: doc.entries,
+        };
         // Drop stored values that no longer validate (older bounds, etc.).
         s.entries.retain(|k, e| match lookup(k) {
             Some(def) => validate(def, &e.value).is_ok(),
@@ -136,7 +151,9 @@ impl Settings {
 
     /// Scope of a key: registry first, then whatever the stored entry says.
     pub fn scope_of(&self, key: &str) -> Option<SettingScope> {
-        lookup(key).map(|d| d.scope).or_else(|| self.entries.get(key).and_then(|e| e.scope))
+        lookup(key)
+            .map(|d| d.scope)
+            .or_else(|| self.entries.get(key).and_then(|e| e.scope))
     }
 
     /// The effective value: set value or registry default. `Null` for keys
@@ -158,7 +175,9 @@ impl Settings {
 
     pub fn get_i64(&self, key: &str) -> i64 {
         let v = self.get(key);
-        v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).unwrap_or(0)
+        v.as_i64()
+            .or_else(|| v.as_f64().map(|f| f as i64))
+            .unwrap_or(0)
     }
 
     pub fn get_f64(&self, key: &str) -> f64 {
@@ -166,32 +185,63 @@ impl Settings {
     }
 
     pub fn get_string(&self, key: &str) -> Option<String> {
-        self.get(key).as_str().filter(|s| !s.is_empty()).map(str::to_string)
+        self.get(key)
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     }
 
     /// Deserialises a JSON-kind setting; falls back to the registry default
     /// when the stored value doesn't parse.
     pub fn get_typed<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        serde_json::from_value(self.get(key)).ok().or_else(|| lookup(key).and_then(|d| serde_json::from_value((d.default)()).ok()))
+        serde_json::from_value(self.get(key))
+            .ok()
+            .or_else(|| lookup(key).and_then(|d| serde_json::from_value((d.default)()).ok()))
     }
 
     /// Sets a value from its JSON encoding (what `Command::SetSetting`
     /// carries). Validates against the registry; unknown keys are refused.
-    pub fn set_json(&mut self, key: &str, value_json: &str, now_ms: f64) -> Result<Setting, SettingsError> {
-        let value: Value = serde_json::from_str(value_json).map_err(|e| SettingsError::Json(e.to_string()))?;
+    pub fn set_json(
+        &mut self,
+        key: &str,
+        value_json: &str,
+        now_ms: f64,
+    ) -> Result<Setting, SettingsError> {
+        let value: Value =
+            serde_json::from_str(value_json).map_err(|e| SettingsError::Json(e.to_string()))?;
         self.set_value(key, value, now_ms)
     }
 
     /// Sets a value. Returns the `api::Setting` to emit.
-    pub fn set_value(&mut self, key: &str, value: Value, now_ms: f64) -> Result<Setting, SettingsError> {
+    pub fn set_value(
+        &mut self,
+        key: &str,
+        value: Value,
+        now_ms: f64,
+    ) -> Result<Setting, SettingsError> {
         let def = lookup(key).ok_or_else(|| SettingsError::UnknownKey(key.to_string()))?;
-        validate(def, &value).map_err(|reason| SettingsError::Invalid { key: key.to_string(), reason })?;
-        self.entries.insert(key.to_string(), Entry { value, updated_at: now_ms, scope: Some(def.scope) });
+        validate(def, &value).map_err(|reason| SettingsError::Invalid {
+            key: key.to_string(),
+            reason,
+        })?;
+        self.entries.insert(
+            key.to_string(),
+            Entry {
+                value,
+                updated_at: now_ms,
+                scope: Some(def.scope),
+            },
+        );
         Ok(self.setting(key).expect("just inserted"))
     }
 
     /// Typed convenience over [`Settings::set_value`].
-    pub fn set_typed<T: Serialize>(&mut self, key: &str, value: &T, now_ms: f64) -> Result<Setting, SettingsError> {
+    pub fn set_typed<T: Serialize>(
+        &mut self,
+        key: &str,
+        value: &T,
+        now_ms: f64,
+    ) -> Result<Setting, SettingsError> {
         let v = serde_json::to_value(value).map_err(|e| SettingsError::Json(e.to_string()))?;
         self.set_value(key, v, now_ms)
     }
@@ -199,7 +249,14 @@ impl Settings {
     /// Back to the default. Records the reset time so it syncs like a write.
     pub fn reset(&mut self, key: &str, now_ms: f64) -> Result<Setting, SettingsError> {
         let def = lookup(key).ok_or_else(|| SettingsError::UnknownKey(key.to_string()))?;
-        self.entries.insert(key.to_string(), Entry { value: (def.default)(), updated_at: now_ms, scope: Some(def.scope) });
+        self.entries.insert(
+            key.to_string(),
+            Entry {
+                value: (def.default)(),
+                updated_at: now_ms,
+                scope: Some(def.scope),
+            },
+        );
         Ok(self.setting(key).expect("just inserted"))
     }
 
@@ -207,12 +264,20 @@ impl Settings {
     pub fn setting(&self, key: &str) -> Option<Setting> {
         let scope = self.scope_of(key)?;
         let updated_at = self.entries.get(key).map(|e| e.updated_at).unwrap_or(0.0);
-        Some(Setting { key: key.to_string(), value: self.get(key).to_string(), scope, updated_at })
+        Some(Setting {
+            key: key.to_string(),
+            value: self.get(key).to_string(),
+            scope,
+            updated_at,
+        })
     }
 
     /// Every registry key (in registry order) plus any stored unknown keys.
     pub fn to_api(&self) -> Vec<Setting> {
-        let mut out: Vec<Setting> = REGISTRY.iter().filter_map(|d| self.setting(d.key)).collect();
+        let mut out: Vec<Setting> = REGISTRY
+            .iter()
+            .filter_map(|d| self.setting(d.key))
+            .collect();
         for k in self.entries.keys() {
             if lookup(k).is_none() {
                 if let Some(s) = self.setting(k) {
@@ -252,7 +317,14 @@ impl Settings {
         for s in merged {
             if changed.contains(&s.key) {
                 if let Ok(value) = serde_json::from_str::<Value>(&s.value) {
-                    self.entries.insert(s.key.clone(), Entry { value, updated_at: s.updated_at, scope: Some(SettingScope::AccountSynced) });
+                    self.entries.insert(
+                        s.key.clone(),
+                        Entry {
+                            value,
+                            updated_at: s.updated_at,
+                            scope: Some(SettingScope::AccountSynced),
+                        },
+                    );
                 }
             }
         }
@@ -260,13 +332,21 @@ impl Settings {
     }
 
     fn synced_settings_including_defaults(&self) -> Vec<Setting> {
-        REGISTRY.iter().filter(|d| d.scope == SettingScope::AccountSynced).filter_map(|d| self.setting(d.key)).collect()
+        REGISTRY
+            .iter()
+            .filter(|d| d.scope == SettingScope::AccountSynced)
+            .filter_map(|d| self.setting(d.key))
+            .collect()
     }
 
     /// Applies settings from a config document (import). Every valid entry
     /// is set with its own timestamp; invalid or unknown ones are skipped and
     /// reported. Returns `(applied keys, skipped keys)`.
-    pub fn apply_settings(&mut self, settings: &[Setting], now_ms: f64) -> (Vec<String>, Vec<String>) {
+    pub fn apply_settings(
+        &mut self,
+        settings: &[Setting],
+        now_ms: f64,
+    ) -> (Vec<String>, Vec<String>) {
         let mut applied = Vec::new();
         let mut skipped = Vec::new();
         for s in settings {
@@ -274,7 +354,15 @@ impl Settings {
                 skipped.push(s.key.clone());
                 continue;
             };
-            match self.set_value(&s.key, value, if s.updated_at > 0.0 { s.updated_at } else { now_ms }) {
+            match self.set_value(
+                &s.key,
+                value,
+                if s.updated_at > 0.0 {
+                    s.updated_at
+                } else {
+                    now_ms
+                },
+            ) {
                 Ok(_) => applied.push(s.key.clone()),
                 Err(_) => skipped.push(s.key.clone()),
             }
@@ -295,7 +383,9 @@ pub fn merge(local: &[Setting], remote: &[Setting]) -> (Vec<Setting>, Vec<String
         if def.scope != SettingScope::AccountSynced || r.scope != SettingScope::AccountSynced {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&r.value) else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(&r.value) else {
+            continue;
+        };
         if validate(def, &value).is_err() {
             continue;
         }

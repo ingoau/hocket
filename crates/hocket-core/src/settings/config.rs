@@ -9,7 +9,9 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::api::{AudioSettings, AutoplaySettings, ConfigDocument, Filter, ServerInfo, Setting, Shortcut};
+use crate::api::{
+    AudioSettings, AutoplaySettings, ConfigDocument, Filter, ServerInfo, Setting, Shortcut,
+};
 
 /// Current document version.
 pub const CONFIG_VERSION: u32 = 1;
@@ -46,7 +48,13 @@ pub fn secret_key(server_id: &str) -> String {
 /// Builds a document. With `include_secrets`, the `secrets` map holds one
 /// keystore reference per server; without, it is absent.
 pub fn build_document(inputs: ConfigInputs, include_secrets: bool, now_ms: f64) -> ConfigDocument {
-    let secrets = include_secrets.then(|| inputs.servers.iter().map(|s| (secret_key(&s.id), secret_reference(&s.id))).collect::<HashMap<_, _>>());
+    let secrets = include_secrets.then(|| {
+        inputs
+            .servers
+            .iter()
+            .map(|s| (secret_key(&s.id), secret_reference(&s.id)))
+            .collect::<HashMap<_, _>>()
+    });
     ConfigDocument {
         version: CONFIG_VERSION,
         exported_at: now_ms,
@@ -55,8 +63,12 @@ pub fn build_document(inputs: ConfigInputs, include_secrets: bool, now_ms: f64) 
         shortcuts: inputs.shortcuts,
         servers: inputs.servers,
         secrets,
-        audio: inputs.audio.unwrap_or_else(crate::core::default_audio_settings),
-        autoplay: inputs.autoplay.unwrap_or_else(crate::autoplay::default_settings),
+        audio: inputs
+            .audio
+            .unwrap_or_else(crate::core::default_audio_settings),
+        autoplay: inputs
+            .autoplay
+            .unwrap_or_else(crate::autoplay::default_settings),
         extra: HashMap::new(),
     }
 }
@@ -69,7 +81,8 @@ pub fn to_json(doc: &ConfigDocument) -> Result<String, ConfigError> {
 /// Parses and migrates a document of any supported version to
 /// [`CONFIG_VERSION`]. Unknown top-level fields are kept in `extra`.
 pub fn parse_document(json: &str) -> Result<ConfigDocument, ConfigError> {
-    let value: Value = serde_json::from_str(json).map_err(|e| ConfigError::Invalid(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(json).map_err(|e| ConfigError::Invalid(e.to_string()))?;
     let mut obj = match value {
         Value::Object(o) => o,
         _ => return Err(ConfigError::Invalid("top level must be an object".into())),
@@ -82,18 +95,48 @@ pub fn parse_document(json: &str) -> Result<ConfigDocument, ConfigError> {
     while v < CONFIG_VERSION {
         obj = match v {
             0 => migrate_v0_to_v1(obj)?,
-            _ => return Err(ConfigError::Invalid(format!("no migration from version {v}"))),
+            _ => {
+                return Err(ConfigError::Invalid(format!(
+                    "no migration from version {v}"
+                )))
+            }
         };
         v += 1;
     }
     // Preserve unknown top-level fields verbatim.
-    let known = ["version", "exportedAt", "settings", "filters", "shortcuts", "servers", "secrets", "audio", "autoplay", "extra"];
+    let known = [
+        "version",
+        "exportedAt",
+        "settings",
+        "filters",
+        "shortcuts",
+        "servers",
+        "secrets",
+        "audio",
+        "autoplay",
+        "extra",
+    ];
     let mut extra: HashMap<String, String> = obj
         .get("extra")
         .and_then(Value::as_object)
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))).collect())
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| v.to_string()),
+                    )
+                })
+                .collect()
+        })
         .unwrap_or_default();
-    let unknown: Vec<String> = obj.keys().filter(|k| !known.contains(&k.as_str())).cloned().collect();
+    let unknown: Vec<String> = obj
+        .keys()
+        .filter(|k| !known.contains(&k.as_str()))
+        .cloned()
+        .collect();
     for k in unknown {
         if let Some(v) = obj.remove(&k) {
             extra.insert(k, v.to_string());
@@ -109,11 +152,23 @@ fn fill_defaults(obj: &mut Map<String, Value>) {
     for k in ["settings", "filters", "shortcuts", "servers"] {
         obj.entry(k).or_insert(json!([]));
     }
-    if !obj.get("audio").is_some_and(|a| serde_json::from_value::<AudioSettings>(a.clone()).is_ok()) {
-        obj.insert("audio".into(), serde_json::to_value(crate::core::default_audio_settings()).unwrap_or(Value::Null));
+    if obj
+        .get("audio")
+        .is_none_or(|a| serde_json::from_value::<AudioSettings>(a.clone()).is_err())
+    {
+        obj.insert(
+            "audio".into(),
+            serde_json::to_value(crate::core::default_audio_settings()).unwrap_or(Value::Null),
+        );
     }
-    if !obj.get("autoplay").is_some_and(|a| serde_json::from_value::<AutoplaySettings>(a.clone()).is_ok()) {
-        obj.insert("autoplay".into(), serde_json::to_value(crate::autoplay::default_settings()).unwrap_or(Value::Null));
+    if obj
+        .get("autoplay")
+        .is_none_or(|a| serde_json::from_value::<AutoplaySettings>(a.clone()).is_err())
+    {
+        obj.insert(
+            "autoplay".into(),
+            serde_json::to_value(crate::autoplay::default_settings()).unwrap_or(Value::Null),
+        );
     }
 }
 
@@ -125,7 +180,9 @@ fn migrate_v0_to_v1(mut obj: Map<String, Value>) -> Result<Map<String, Value>, C
         let settings: Vec<Value> = map
             .into_iter()
             .map(|(key, value)| {
-                let scope = super::registry::lookup(&key).map(|d| d.scope).unwrap_or(crate::api::SettingScope::DeviceLocal);
+                let scope = super::registry::lookup(&key)
+                    .map(|d| d.scope)
+                    .unwrap_or(crate::api::SettingScope::DeviceLocal);
                 json!({ "key": key, "value": value.to_string(), "scope": scope, "updatedAt": 0.0 })
             })
             .collect();

@@ -11,16 +11,28 @@ use crate::api::{AutoplaySettings, SettingScope};
 pub enum SettingKind {
     Bool,
     /// Integer in `[min, max]`.
-    Int { min: i64, max: i64 },
+    Int {
+        min: i64,
+        max: i64,
+    },
     /// Float in `[min, max]`.
-    Float { min: f64, max: f64 },
+    Float {
+        min: f64,
+        max: f64,
+    },
     /// Free text; `None` allowed when `nullable`.
-    Text { nullable: bool, max_len: usize },
+    Text {
+        nullable: bool,
+        max_len: usize,
+    },
     /// One of a fixed set.
     Enum(&'static [&'static str]),
     /// Opaque JSON validated by `validate`.
     Json,
 }
+
+/// Extra validation hook for a setting value.
+pub type Validator = fn(&Value) -> Result<(), String>;
 
 /// Registry row.
 pub struct SettingDef {
@@ -31,7 +43,7 @@ pub struct SettingDef {
     pub default: fn() -> Value,
     /// Extra validation for `Json` kinds (and any kind that needs more than
     /// the shape check). Returns a reason on failure.
-    pub validate: Option<fn(&Value) -> Result<(), String>>,
+    pub validate: Option<Validator>,
 }
 
 /// Well-known keys. Keep in step with [`REGISTRY`] and [`super::strings`].
@@ -89,12 +101,34 @@ use SettingScope::{AccountSynced as Synced, DeviceLocal as Local};
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-const fn def(key: &'static str, scope: SettingScope, kind: SettingKind, default: fn() -> Value) -> SettingDef {
-    SettingDef { key, scope, kind, default, validate: None }
+const fn def(
+    key: &'static str,
+    scope: SettingScope,
+    kind: SettingKind,
+    default: fn() -> Value,
+) -> SettingDef {
+    SettingDef {
+        key,
+        scope,
+        kind,
+        default,
+        validate: None,
+    }
 }
 
-const fn json_def(key: &'static str, scope: SettingScope, default: fn() -> Value, validate: fn(&Value) -> Result<(), String>) -> SettingDef {
-    SettingDef { key, scope, kind: SettingKind::Json, default, validate: Some(validate) }
+const fn json_def(
+    key: &'static str,
+    scope: SettingScope,
+    default: fn() -> Value,
+    validate: Validator,
+) -> SettingDef {
+    SettingDef {
+        key,
+        scope,
+        kind: SettingKind::Json,
+        default,
+        validate: Some(validate),
+    }
 }
 
 fn autoplay_default() -> Value {
@@ -102,7 +136,9 @@ fn autoplay_default() -> Value {
 }
 
 fn autoplay_valid(v: &Value) -> Result<(), String> {
-    serde_json::from_value::<AutoplaySettings>(v.clone()).map(|_| ()).map_err(|e| e.to_string())
+    serde_json::from_value::<AutoplaySettings>(v.clone())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn audio_default() -> Value {
@@ -110,17 +146,23 @@ fn audio_default() -> Value {
 }
 
 fn audio_valid(v: &Value) -> Result<(), String> {
-    serde_json::from_value::<crate::api::AudioSettings>(v.clone()).map(|_| ()).map_err(|e| e.to_string())
+    serde_json::from_value::<crate::api::AudioSettings>(v.clone())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn overrides_valid(v: &Value) -> Result<(), String> {
     // {"album": ["similarSongs", ...], "artist": [...]}
     let obj = v.as_object().ok_or("expected an object")?;
     for (k, chain) in obj {
-        if !matches!(k.as_str(), "album" | "artist" | "playlist" | "genre" | "filter" | "adHoc" | "autoplay") {
+        if !matches!(
+            k.as_str(),
+            "album" | "artist" | "playlist" | "genre" | "filter" | "adHoc" | "autoplay"
+        ) {
             return Err(format!("unknown context '{k}'"));
         }
-        serde_json::from_value::<Vec<crate::api::AutoplayProvider>>(chain.clone()).map_err(|e| e.to_string())?;
+        serde_json::from_value::<Vec<crate::api::AutoplayProvider>>(chain.clone())
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -132,7 +174,8 @@ fn profiles_valid(v: &Value) -> Result<(), String> {
         if k.is_empty() {
             return Err("empty network id".into());
         }
-        serde_json::from_value::<crate::api::TranscodingProfile>(p.clone()).map_err(|e| format!("{k}: {e}"))?;
+        serde_json::from_value::<crate::api::TranscodingProfile>(p.clone())
+            .map_err(|e| format!("{k}: {e}"))?;
     }
     Ok(())
 }
@@ -194,47 +237,193 @@ fn url_valid(v: &Value) -> Result<(), String> {
 
 /// Every setting. Order is the settings screen's order.
 pub static REGISTRY: &[SettingDef] = &[
-    def(QUEUE_MODE, Synced, SettingKind::Enum(&["apple", "youTube"]), || json!("apple")),
-    def(QUEUE_SAVED_CAP, Synced, SettingKind::Int { min: 0, max: 50 }, || json!(10)),
-    def(QUEUE_HISTORY_CAP, Synced, SettingKind::Int { min: 10, max: 1000 }, || json!(200)),
+    def(
+        QUEUE_MODE,
+        Synced,
+        SettingKind::Enum(&["apple", "youTube"]),
+        || json!("apple"),
+    ),
+    def(
+        QUEUE_SAVED_CAP,
+        Synced,
+        SettingKind::Int { min: 0, max: 50 },
+        || json!(10),
+    ),
+    def(
+        QUEUE_HISTORY_CAP,
+        Synced,
+        SettingKind::Int { min: 10, max: 1000 },
+        || json!(200),
+    ),
     json_def(AUTOPLAY_SETTINGS, Synced, autoplay_default, autoplay_valid),
-    json_def(AUTOPLAY_CONTEXT_OVERRIDES, Synced, || json!({ "album": ["similarSongs", "sonicSimilarity", "topSongs", "random", "savedFilter"], "artist": ["topSongs", "similarSongs", "sonicSimilarity", "random", "savedFilter"] }), overrides_valid),
+    json_def(
+        AUTOPLAY_CONTEXT_OVERRIDES,
+        Synced,
+        || json!({ "album": ["similarSongs", "sonicSimilarity", "topSongs", "random", "savedFilter"], "artist": ["topSongs", "similarSongs", "sonicSimilarity", "random", "savedFilter"] }),
+        overrides_valid,
+    ),
     json_def(AUDIO_SETTINGS, Local, audio_default, audio_valid),
-    json_def(TRANSCODING_PROFILES, Local, || json!({ "default": { "format": null, "maxBitRate": null, "cannotDecode": [] }, "cellular": { "format": "opus", "maxBitRate": 128, "cannotDecode": [] } }), profiles_valid),
-    def(LYRICS_EXTERNAL_ENABLED, Synced, SettingKind::Bool, || json!(false)),
-    def(LYRICS_EXTERNAL_PROVIDER, Synced, SettingKind::Enum(&["lrclib"]), || json!("lrclib")),
-    def(LYRICS_DEFAULT_OFFSET_MS, Local, SettingKind::Int { min: -10_000, max: 10_000 }, || json!(0)),
-    def(LYRICS_SHOW_TRANSLATIONS, Synced, SettingKind::Bool, || json!(true)),
-    def(RATINGS_LOVE_BRIDGE_ENABLED, Synced, SettingKind::Bool, || json!(false)),
-    def(RATINGS_LOVE_BRIDGE_THRESHOLD, Synced, SettingKind::Int { min: 1, max: 5 }, || json!(4)),
-    def(BATTERY_AUTO_ENGAGE, Local, SettingKind::Bool, || json!(true)),
-    def(BATTERY_LYRICS_FPS, Local, SettingKind::Int { min: 10, max: 60 }, || json!(30)),
-    def(BATTERY_SMALL_ARTWORK, Local, SettingKind::Bool, || json!(true)),
-    def(BATTERY_PAUSE_PREFETCH, Local, SettingKind::Bool, || json!(true)),
-    def(DISPLAY_ANIMATED_BACKGROUND, Local, SettingKind::Bool, || json!(true)),
-    def(DISPLAY_LYRICS_FPS, Local, SettingKind::Int { min: 24, max: 144 }, || json!(60)),
-    def(DISPLAY_THEME, Local, SettingKind::Enum(&["system", "light", "dark"]), || json!("system")),
+    json_def(
+        TRANSCODING_PROFILES,
+        Local,
+        || json!({ "default": { "format": null, "maxBitRate": null, "cannotDecode": [] }, "cellular": { "format": "opus", "maxBitRate": 128, "cannotDecode": [] } }),
+        profiles_valid,
+    ),
+    def(LYRICS_EXTERNAL_ENABLED, Synced, SettingKind::Bool, || {
+        json!(false)
+    }),
+    def(
+        LYRICS_EXTERNAL_PROVIDER,
+        Synced,
+        SettingKind::Enum(&["lrclib"]),
+        || json!("lrclib"),
+    ),
+    def(
+        LYRICS_DEFAULT_OFFSET_MS,
+        Local,
+        SettingKind::Int {
+            min: -10_000,
+            max: 10_000,
+        },
+        || json!(0),
+    ),
+    def(LYRICS_SHOW_TRANSLATIONS, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        RATINGS_LOVE_BRIDGE_ENABLED,
+        Synced,
+        SettingKind::Bool,
+        || json!(false),
+    ),
+    def(
+        RATINGS_LOVE_BRIDGE_THRESHOLD,
+        Synced,
+        SettingKind::Int { min: 1, max: 5 },
+        || json!(4),
+    ),
+    def(BATTERY_AUTO_ENGAGE, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        BATTERY_LYRICS_FPS,
+        Local,
+        SettingKind::Int { min: 10, max: 60 },
+        || json!(30),
+    ),
+    def(BATTERY_SMALL_ARTWORK, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(BATTERY_PAUSE_PREFETCH, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        DISPLAY_ANIMATED_BACKGROUND,
+        Local,
+        SettingKind::Bool,
+        || json!(true),
+    ),
+    def(
+        DISPLAY_LYRICS_FPS,
+        Local,
+        SettingKind::Int { min: 24, max: 144 },
+        || json!(60),
+    ),
+    def(
+        DISPLAY_THEME,
+        Local,
+        SettingKind::Enum(&["system", "light", "dark"]),
+        || json!("system"),
+    ),
     json_def(DISPLAY_ACCENT, Local, || Value::Null, accent_valid),
-    def(DISPLAY_DYNAMIC_COLOUR, Local, SettingKind::Bool, || json!(true)),
-    def(DISPLAY_QUEUE_PANEL_SPLIT, Local, SettingKind::Float { min: 0.0, max: 1.0 }, || json!(0.5)),
-    json_def(ACTIONS_ORDER_CONTEXT_MENU, Synced, || json!([]), string_list_valid),
-    json_def(ACTIONS_ORDER_SIDEBAR, Synced, || json!([]), string_list_valid),
-    json_def(ACTIONS_ORDER_MEDIA_SESSION, Synced, || json!([]), string_list_valid),
+    def(DISPLAY_DYNAMIC_COLOUR, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        DISPLAY_QUEUE_PANEL_SPLIT,
+        Local,
+        SettingKind::Float { min: 0.0, max: 1.0 },
+        || json!(0.5),
+    ),
+    json_def(
+        ACTIONS_ORDER_CONTEXT_MENU,
+        Synced,
+        || json!([]),
+        string_list_valid,
+    ),
+    json_def(
+        ACTIONS_ORDER_SIDEBAR,
+        Synced,
+        || json!([]),
+        string_list_valid,
+    ),
+    json_def(
+        ACTIONS_ORDER_MEDIA_SESSION,
+        Synced,
+        || json!([]),
+        string_list_valid,
+    ),
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
     json_def(CONNECT_COORDINATOR_URL, Local, || Value::Null, url_valid),
-    def(CONNECT_LAN_DISCOVERY, Local, SettingKind::Bool, || json!(true)),
-    def(STORAGE_WARN_THRESHOLD_BYTES, Local, SettingKind::Float { min: 0.0, max: 1.0e15 }, || json!(4.0 * GIB)),
-    def(STORAGE_CACHE_MAX_BYTES, Local, SettingKind::Float { min: 64.0 * 1024.0 * 1024.0, max: 1.0e15 }, || json!(2.0 * GIB)),
-    def(DOWNLOADS_TRANSCODE, Local, SettingKind::Bool, || json!(false)),
-    def(DOWNLOADS_WIFI_ONLY, Local, SettingKind::Bool, || json!(true)),
-    def(SLEEP_DEFAULT_MINUTES, Synced, SettingKind::Int { min: 1, max: 720 }, || json!(30)),
-    def(SLEEP_STOP_AT_END_OF_TRACK, Synced, SettingKind::Bool, || json!(true)),
+    def(CONNECT_LAN_DISCOVERY, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        STORAGE_WARN_THRESHOLD_BYTES,
+        Local,
+        SettingKind::Float {
+            min: 0.0,
+            max: 1.0e15,
+        },
+        || json!(4.0 * GIB),
+    ),
+    def(
+        STORAGE_CACHE_MAX_BYTES,
+        Local,
+        SettingKind::Float {
+            min: 64.0 * 1024.0 * 1024.0,
+            max: 1.0e15,
+        },
+        || json!(2.0 * GIB),
+    ),
+    def(DOWNLOADS_TRANSCODE, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
+    def(DOWNLOADS_WIFI_ONLY, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        SLEEP_DEFAULT_MINUTES,
+        Synced,
+        SettingKind::Int { min: 1, max: 720 },
+        || json!(30),
+    ),
+    def(
+        SLEEP_STOP_AT_END_OF_TRACK,
+        Synced,
+        SettingKind::Bool,
+        || json!(true),
+    ),
     def(SCROBBLE_ENABLED, Synced, SettingKind::Bool, || json!(true)),
-    def(SCROBBLE_NOW_PLAYING, Synced, SettingKind::Bool, || json!(true)),
-    def(LIBRARY_SYNC_INTERVAL_MINUTES, Local, SettingKind::Int { min: 5, max: 1440 }, || json!(60)),
-    def(LIBRARY_FULL_RECONCILE_DAYS, Local, SettingKind::Int { min: 1, max: 90 }, || json!(7)),
-    def(SEARCH_INCLUDE_SERVER, Synced, SettingKind::Bool, || json!(true)),
+    def(SCROBBLE_NOW_PLAYING, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(
+        LIBRARY_SYNC_INTERVAL_MINUTES,
+        Local,
+        SettingKind::Int { min: 5, max: 1440 },
+        || json!(60),
+    ),
+    def(
+        LIBRARY_FULL_RECONCILE_DAYS,
+        Local,
+        SettingKind::Int { min: 1, max: 90 },
+        || json!(7),
+    ),
+    def(SEARCH_INCLUDE_SERVER, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
 ];
 
 /// Registry row for a key.
@@ -251,7 +440,15 @@ pub fn validate(def: &SettingDef, value: &Value) -> Result<(), String> {
             }
         }
         SettingKind::Int { min, max } => {
-            let n = value.as_i64().or_else(|| value.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).ok_or("expected an integer")?;
+            let n = value
+                .as_i64()
+                .or_else(|| {
+                    value
+                        .as_f64()
+                        .filter(|f| f.fract() == 0.0)
+                        .map(|f| f as i64)
+                })
+                .ok_or("expected an integer")?;
             if n < *min || n > *max {
                 return Err(format!("must be between {min} and {max}"));
             }

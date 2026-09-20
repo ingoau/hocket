@@ -64,7 +64,9 @@ fn parses_raw_shapes_and_picks_main() {
     assert_eq!(pick_main(r.entries()).unwrap().lang, "ko");
     let bare = LyricsListResponse::parse(AGENTS).unwrap();
     assert_eq!(bare.entries()[0].agents.len(), 4);
-    let empty = LyricsListResponse::parse(r#"{"subsonic-response":{"status":"ok","lyricsList":{}}}"#).unwrap();
+    let empty =
+        LyricsListResponse::parse(r#"{"subsonic-response":{"status":"ok","lyricsList":{}}}"#)
+            .unwrap();
     assert!(empty.entries().is_empty());
     assert!(adapt_response("t", &empty).is_none());
     let nothing = LyricsListResponse::parse(r#"{"subsonic-response":{"status":"ok"}}"#).unwrap();
@@ -87,7 +89,10 @@ fn syllable_tier_with_joins_and_translation() {
     // 눈+을 joined, space, 뜬 alone, space, 순+간 joined, last never joined.
     assert_eq!(joined, vec![true, false, false, true, false]);
     assert_eq!(first.syllables[1].end_ms, 3179);
-    assert_eq!(first.translation.as_deref(), Some("The moment I opened my eyes"));
+    assert_eq!(
+        first.translation.as_deref(),
+        Some("The moment I opened my eyes")
+    );
     assert_eq!(l.lines[1].syllables.last().unwrap().text, "달라졌어");
     assert_eq!(l.lines[1].end_ms, Some(9000));
 }
@@ -98,7 +103,10 @@ fn agents_sides_and_background() {
     let l = adapt_response("t2", &r).unwrap();
     assert_eq!(l.tier, LyricsTier::Syllable);
     let sides: Vec<(&str, u32)> = l.agents.iter().map(|a| (a.id.as_str(), a.side)).collect();
-    assert_eq!(sides, vec![("lead", 0), ("guest", 1), ("choir", 0), ("bgv", 0)]);
+    assert_eq!(
+        sides,
+        vec![("lead", 0), ("guest", 1), ("choir", 0), ("bgv", 0)]
+    );
     assert_eq!(l.agents[0].name.as_deref(), Some("Chris Martin"));
     assert_eq!(l.lines[0].agent.as_deref(), Some("lead"));
     assert!(!l.lines[0].background);
@@ -135,7 +143,13 @@ fn line_tier_with_server_offset_and_unsynced() {
     let u = adapt_response("t4", &unsynced).unwrap();
     assert_eq!(u.tier, LyricsTier::Unsynced);
     assert!(u.lines.iter().all(|x| x.start_ms.is_none()));
-    assert_eq!(locate(&u, 5000.0), CursorState { effective_ms: 5000.0, ..Default::default() });
+    assert_eq!(
+        locate(&u, 5000.0),
+        CursorState {
+            effective_ms: 5000.0,
+            ..Default::default()
+        }
+    );
 }
 
 #[test]
@@ -209,10 +223,20 @@ fn cursor_reports_overlapping_lines_and_offsets() {
 fn lrc_parsing() {
     let doc = parse_lrc("[ar:Muse]\n[offset:+200]\n[00:41.16] It's bugging me\n[00:43.62][01:32.03] Grating me\n\n[00:45.9]And <00:46.00>twisting <00:46.50>me around\nno timestamp here\n[01:07.040]Give me your heart\n");
     assert_eq!(doc.offset_ms, 200);
-    let got: Vec<(u32, &str)> = doc.lines.iter().map(|l| (l.start_ms, l.text.as_str())).collect();
+    let got: Vec<(u32, &str)> = doc
+        .lines
+        .iter()
+        .map(|l| (l.start_ms, l.text.as_str()))
+        .collect();
     assert_eq!(
         got,
-        vec![(41_160, "It's bugging me"), (43_620, "Grating me"), (45_900, "And twisting me around"), (67_040, "Give me your heart"), (92_030, "Grating me")]
+        vec![
+            (41_160, "It's bugging me"),
+            (43_620, "Grating me"),
+            (45_900, "And twisting me around"),
+            (67_040, "Give me your heart"),
+            (92_030, "Grating me")
+        ]
     );
     let l = lrc_to_lyrics("t", &doc, crate::api::LyricsSource::External).unwrap();
     assert_eq!(l.tier, LyricsTier::Line);
@@ -234,7 +258,10 @@ impl LyricsHttp for FakeHttp {
             self.seen.lock().push(url.clone());
             match self.responses.get(&url) {
                 Some(Ok(body)) => Ok(body.clone()),
-                Some(Err(status)) => Err(LyricsError::Http { status: *status, body: String::new() }),
+                Some(Err(status)) => Err(LyricsError::Http {
+                    status: *status,
+                    body: String::new(),
+                }),
                 None => Err(LyricsError::Network(format!("unexpected {url}"))),
             }
         })
@@ -243,13 +270,26 @@ impl LyricsHttp for FakeHttp {
 
 #[tokio::test]
 async fn lrclib_provider_maps_responses() {
-    let req = LyricsRequest { track_id: "t".into(), title: "Hysteria".into(), artist: Some("Muse".into()), album: Some("Absolution".into()), duration_ms: Some(227_400) };
+    let req = LyricsRequest {
+        track_id: "t".into(),
+        title: "Hysteria".into(),
+        artist: Some("Muse".into()),
+        album: Some("Absolution".into()),
+        duration_ms: Some(227_400),
+    };
     let mk = |http: FakeHttp| LrclibProvider::with_base_url(http, "https://lrclib.test/");
-    let url = mk(FakeHttp { responses: Default::default(), seen: Default::default() }).url_for(&req);
+    let url = mk(FakeHttp {
+        responses: Default::default(),
+        seen: Default::default(),
+    })
+    .url_for(&req);
     assert_eq!(url, "https://lrclib.test/api/get?track_name=Hysteria&artist_name=Muse&album_name=Absolution&duration=227");
 
     let synced = r#"{"id":1,"trackName":"Hysteria","artistName":"Muse","albumName":"Absolution","duration":227.0,"instrumental":false,"plainLyrics":"It's bugging me\nGrating me","syncedLyrics":"[00:41.16] It's bugging me\n[00:43.62] Grating me"}"#;
-    let p = mk(FakeHttp { responses: [(url.clone(), Ok(synced.to_string()))].into(), seen: Default::default() });
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Ok(synced.to_string()))].into(),
+        seen: Default::default(),
+    });
     let l = p.fetch(&req).await.unwrap().unwrap();
     assert_eq!(l.tier, LyricsTier::Line);
     assert_eq!(l.source, crate::api::LyricsSource::External);
@@ -257,25 +297,49 @@ async fn lrclib_provider_maps_responses() {
     assert_eq!(p.id(), "lrclib");
 
     let plain = r#"{"instrumental":false,"plainLyrics":"la la\nla","syncedLyrics":null}"#;
-    let p = mk(FakeHttp { responses: [(url.clone(), Ok(plain.to_string()))].into(), seen: Default::default() });
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Ok(plain.to_string()))].into(),
+        seen: Default::default(),
+    });
     let l = p.fetch(&req).await.unwrap().unwrap();
     assert_eq!(l.tier, LyricsTier::Unsynced);
     assert_eq!(l.lines.len(), 2);
 
-    let p = mk(FakeHttp { responses: [(url.clone(), Ok(r#"{"instrumental":true}"#.to_string()))].into(), seen: Default::default() });
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Ok(r#"{"instrumental":true}"#.to_string()))].into(),
+        seen: Default::default(),
+    });
     assert!(p.fetch(&req).await.unwrap().is_none());
 
-    let p = mk(FakeHttp { responses: [(url.clone(), Err(404))].into(), seen: Default::default() });
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Err(404))].into(),
+        seen: Default::default(),
+    });
     assert!(p.fetch(&req).await.unwrap().is_none());
 
-    let p = mk(FakeHttp { responses: [(url.clone(), Err(500))].into(), seen: Default::default() });
-    assert!(matches!(p.fetch(&req).await, Err(LyricsError::Http { status: 500, .. })));
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Err(500))].into(),
+        seen: Default::default(),
+    });
+    assert!(matches!(
+        p.fetch(&req).await,
+        Err(LyricsError::Http { status: 500, .. })
+    ));
 
-    let p = mk(FakeHttp { responses: [(url.clone(), Ok("not json".into()))].into(), seen: Default::default() });
+    let p = mk(FakeHttp {
+        responses: [(url.clone(), Ok("not json".into()))].into(),
+        seen: Default::default(),
+    });
     assert!(matches!(p.fetch(&req).await, Err(LyricsError::Decode(_))));
 
-    let p = mk(FakeHttp { responses: Default::default(), seen: Default::default() });
-    let blank = LyricsRequest { title: "  ".into(), ..req.clone() };
+    let p = mk(FakeHttp {
+        responses: Default::default(),
+        seen: Default::default(),
+    });
+    let blank = LyricsRequest {
+        title: "  ".into(),
+        ..req.clone()
+    };
     assert!(p.fetch(&blank).await.unwrap().is_none());
 }
 
@@ -287,7 +351,10 @@ fn cache_helpers_round_trip() {
     assert_eq!(from_cache_json(&json).unwrap().unwrap(), l);
     assert_eq!(to_cache_json(None), "");
     assert!(from_cache_json("").unwrap().is_none());
-    assert_eq!(cache_key("s", "t", crate::api::LyricsSource::External), ("s".into(), "t".into(), "external"));
+    assert_eq!(
+        cache_key("s", "t", crate::api::LyricsSource::External),
+        ("s".into(), "t".into(), "external")
+    );
     assert_eq!(offset_state_key("abc"), "lyricsOffset:abc");
     let _ = Track::default();
 }

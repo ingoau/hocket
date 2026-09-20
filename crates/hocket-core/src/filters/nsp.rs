@@ -14,7 +14,10 @@ use serde_json::{json, Map, Value};
 
 use crate::api::{Filter, FilterField, FilterNode, FilterOp, FilterRule, FilterValue, SortOrder};
 
-use super::model::{field_by_nsp_name, field_info, is_server_expressible, validate_filter, FieldKind, FilterError, ServerCaps};
+use super::model::{
+    field_by_nsp_name, field_info, is_server_expressible, validate_filter, FieldKind, FilterError,
+    ServerCaps,
+};
 use super::model::{fields_used, Expressibility};
 
 const EXPORT_COMMENT: &str = "Exported from Hocket";
@@ -24,8 +27,10 @@ const EXPORT_COMMENT: &str = "Exported from Hocket";
 /// when `caps.sonic_attributes` is set.
 pub fn to_nsp(filter: &Filter, caps: ServerCaps) -> Result<String, FilterError> {
     validate_filter(filter)?;
-    let blocked: Vec<FilterField> =
-        fields_used(&filter.root).into_iter().filter(|f| !is_server_expressible(*f, caps)).collect();
+    let blocked: Vec<FilterField> = fields_used(&filter.root)
+        .into_iter()
+        .filter(|f| !is_server_expressible(*f, caps))
+        .collect();
     if !blocked.is_empty() {
         return Err(FilterError::NotServerExpressible(blocked));
     }
@@ -34,10 +39,16 @@ pub fn to_nsp(filter: &Filter, caps: ServerCaps) -> Result<String, FilterError> 
     doc.insert("comment".into(), Value::String(EXPORT_COMMENT.into()));
     match &filter.root {
         FilterNode::Any(children) => {
-            doc.insert("any".into(), Value::Array(children.iter().map(node_to_json).collect()));
+            doc.insert(
+                "any".into(),
+                Value::Array(children.iter().map(node_to_json).collect()),
+            );
         }
         FilterNode::All(children) => {
-            doc.insert("all".into(), Value::Array(children.iter().map(node_to_json).collect()));
+            doc.insert(
+                "all".into(),
+                Value::Array(children.iter().map(node_to_json).collect()),
+            );
         }
         rule @ FilterNode::Rule(_) => {
             doc.insert("all".into(), Value::Array(vec![node_to_json(rule)]));
@@ -48,8 +59,12 @@ pub fn to_nsp(filter: &Filter, caps: ServerCaps) -> Result<String, FilterError> 
     }
     // Random has no direction; the default order still records one so a
     // document round-trips (Navidrome ignores `order` without `sort`).
-    if filter.sort != SortOrder::Random && (filter.sort != SortOrder::Default || filter.descending) {
-        doc.insert("order".into(), Value::String(if filter.descending { "desc" } else { "asc" }.into()));
+    if filter.sort != SortOrder::Random && (filter.sort != SortOrder::Default || filter.descending)
+    {
+        doc.insert(
+            "order".into(),
+            Value::String(if filter.descending { "desc" } else { "asc" }.into()),
+        );
     }
     if let Some(limit) = filter.limit {
         doc.insert("limit".into(), json!(limit));
@@ -94,8 +109,12 @@ fn sort_from_name(name: &str) -> Option<SortOrder> {
 
 fn node_to_json(node: &FilterNode) -> Value {
     match node {
-        FilterNode::All(children) => json!({ "all": children.iter().map(node_to_json).collect::<Vec<_>>() }),
-        FilterNode::Any(children) => json!({ "any": children.iter().map(node_to_json).collect::<Vec<_>>() }),
+        FilterNode::All(children) => {
+            json!({ "all": children.iter().map(node_to_json).collect::<Vec<_>>() })
+        }
+        FilterNode::Any(children) => {
+            json!({ "any": children.iter().map(node_to_json).collect::<Vec<_>>() })
+        }
         FilterNode::Rule(rule) => rule_to_json(rule),
     }
 }
@@ -119,17 +138,26 @@ fn rule_to_json(rule: &FilterRule) -> Value {
         FieldKind::Bool => {
             let truthy = rule.op == FilterOp::IsTrue;
             if rule.field == FilterField::Lyrics {
-                op_json(if truthy { "isPresent" } else { "isMissing" }, name, json!(true))
+                op_json(
+                    if truthy { "isPresent" } else { "isMissing" },
+                    name,
+                    json!(true),
+                )
             } else {
                 op_json("is", name, json!(truthy))
             }
         }
         FieldKind::Playlist => {
-            let op = if rule.op == FilterOp::IsNot { "notInPlaylist" } else { "inPlaylist" };
+            let op = if rule.op == FilterOp::IsNot {
+                "notInPlaylist"
+            } else {
+                "inPlaylist"
+            };
             match &rule.value {
                 FilterValue::Text(id) => json!({ op: { "id": id } }),
                 FilterValue::List(ids) => {
-                    let items: Vec<Value> = ids.iter().map(|id| json!({ op: { "id": id } })).collect();
+                    let items: Vec<Value> =
+                        ids.iter().map(|id| json!({ op: { "id": id } })).collect();
                     json!({ if rule.op == FilterOp::IsNot { "all" } else { "any" }: items })
                 }
                 _ => Value::Null,
@@ -154,10 +182,14 @@ fn rule_to_json(rule: &FilterRule) -> Value {
         },
         FieldKind::Date => match (&rule.op, &rule.value) {
             (FilterOp::InTheLast, FilterValue::Days(n)) => op_json("inTheLast", name, json!(n)),
-            (FilterOp::NotInTheLast, FilterValue::Days(n)) => op_json("notInTheLast", name, json!(n)),
+            (FilterOp::NotInTheLast, FilterValue::Days(n)) => {
+                op_json("notInTheLast", name, json!(n))
+            }
             (FilterOp::Before, FilterValue::Date(d)) => op_json("before", name, json!(d)),
             (FilterOp::After, FilterValue::Date(d)) => op_json("after", name, json!(d)),
-            (FilterOp::InTheRange, FilterValue::List(items)) => op_json("inTheRange", name, json!(items)),
+            (FilterOp::InTheRange, FilterValue::List(items)) => {
+                op_json("inTheRange", name, json!(items))
+            }
             _ => Value::Null,
         },
     }
@@ -189,18 +221,32 @@ fn text_op_name(op: FilterOp) -> &'static str {
 /// `isMissing` on text fields, playlist references by path) are rejected
 /// with [`FilterError::Nsp`] naming the offending key.
 pub fn from_nsp(document: &str, fallback_name: &str) -> Result<Filter, FilterError> {
-    let value: Value = serde_json::from_str(document).map_err(|e| FilterError::Nsp(format!("invalid JSON: {e}")))?;
-    let obj = value.as_object().ok_or_else(|| FilterError::Nsp("top level must be an object".into()))?;
-    let lower: Map<String, Value> = obj.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect();
+    let value: Value = serde_json::from_str(document)
+        .map_err(|e| FilterError::Nsp(format!("invalid JSON: {e}")))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| FilterError::Nsp("top level must be an object".into()))?;
+    let lower: Map<String, Value> = obj
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+        .collect();
 
     let root = match (lower.get("all"), lower.get("any")) {
-        (Some(_), Some(_)) => return Err(FilterError::Nsp("both 'all' and 'any' at top level".into())),
+        (Some(_), Some(_)) => {
+            return Err(FilterError::Nsp("both 'all' and 'any' at top level".into()))
+        }
         (Some(all), None) => FilterNode::All(parse_children(all)?),
         (None, Some(any)) => FilterNode::Any(parse_children(any)?),
         (None, None) => return Err(FilterError::Nsp("missing 'all' or 'any'".into())),
     };
 
-    let name = lower.get("name").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(fallback_name).to_string();
+    let name = lower
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback_name)
+        .to_string();
 
     let (mut sort, mut descending) = (SortOrder::Default, false);
     if let Some(s) = lower.get("sort").and_then(Value::as_str) {
@@ -221,18 +267,33 @@ pub fn from_nsp(document: &str, fallback_name: &str) -> Result<Filter, FilterErr
             descending = !descending;
         }
     }
-    let limit = lower.get("limit").and_then(Value::as_u64).filter(|l| *l > 0).map(|l| l.min(u32::MAX as u64) as u32);
+    let limit = lower
+        .get("limit")
+        .and_then(Value::as_u64)
+        .filter(|l| *l > 0)
+        .map(|l| l.min(u32::MAX as u64) as u32);
 
-    let filter = Filter { id: crate::util::new_id(), name, root, sort, descending, limit };
+    let filter = Filter {
+        id: crate::util::new_id(),
+        name,
+        root,
+        sort,
+        descending,
+        limit,
+    };
     validate_filter(&filter)?;
     Ok(filter)
 }
 
 fn parse_children(value: &Value) -> Result<Vec<FilterNode>, FilterError> {
-    let items = value.as_array().ok_or_else(|| FilterError::Nsp("'all'/'any' must be an array".into()))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| FilterError::Nsp("'all'/'any' must be an array".into()))?;
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let obj = item.as_object().ok_or_else(|| FilterError::Nsp("rule must be an object".into()))?;
+        let obj = item
+            .as_object()
+            .ok_or_else(|| FilterError::Nsp("rule must be an object".into()))?;
         for (k, v) in obj {
             out.push(parse_expression(&k.to_ascii_lowercase(), v)?);
         }
@@ -245,32 +306,48 @@ fn parse_expression(op: &str, value: &Value) -> Result<FilterNode, FilterError> 
         "all" => return Ok(FilterNode::All(parse_children(value)?)),
         "any" => return Ok(FilterNode::Any(parse_children(value)?)),
         "inplaylist" | "notinplaylist" => {
-            let id = value
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| FilterError::Nsp(format!("'{op}' needs an 'id' (playlist paths are not supported)")))?;
+            let id = value.get("id").and_then(Value::as_str).ok_or_else(|| {
+                FilterError::Nsp(format!(
+                    "'{op}' needs an 'id' (playlist paths are not supported)"
+                ))
+            })?;
             return Ok(FilterNode::Rule(FilterRule {
                 field: FilterField::InPlaylist,
-                op: if op == "inplaylist" { FilterOp::Is } else { FilterOp::IsNot },
+                op: if op == "inplaylist" {
+                    FilterOp::Is
+                } else {
+                    FilterOp::IsNot
+                },
                 value: FilterValue::Text(id.to_string()),
             }));
         }
         _ => {}
     }
-    let obj = value.as_object().ok_or_else(|| FilterError::Nsp(format!("'{op}' must map a field to a value")))?;
-    let (field_name, raw) = obj.iter().next().ok_or_else(|| FilterError::Nsp(format!("'{op}' has no field")))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| FilterError::Nsp(format!("'{op}' must map a field to a value")))?;
+    let (field_name, raw) = obj
+        .iter()
+        .next()
+        .ok_or_else(|| FilterError::Nsp(format!("'{op}' has no field")))?;
     if obj.len() != 1 {
-        return Err(FilterError::Nsp(format!("'{op}' must name exactly one field")));
+        return Err(FilterError::Nsp(format!(
+            "'{op}' must name exactly one field"
+        )));
     }
-    let info = field_by_nsp_name(field_name).ok_or_else(|| FilterError::Nsp(format!("unsupported field '{field_name}'")))?;
+    let info = field_by_nsp_name(field_name)
+        .ok_or_else(|| FilterError::Nsp(format!("unsupported field '{field_name}'")))?;
     if info.expressibility == Expressibility::Local && info.field != FilterField::InPlaylist {
-        return Err(FilterError::Nsp(format!("unsupported field '{field_name}'")));
+        return Err(FilterError::Nsp(format!(
+            "unsupported field '{field_name}'"
+        )));
     }
     let field = info.field;
     let unsupported = || FilterError::Nsp(format!("'{op}' is not supported for '{field_name}'"));
     let rule = match info.kind {
         FieldKind::Bool => {
-            let truthy = coerce_bool(raw).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a boolean")))?;
+            let truthy = coerce_bool(raw)
+                .ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a boolean")))?;
             let is_true = match op {
                 "is" => truthy,
                 "isnot" => !truthy,
@@ -278,11 +355,23 @@ fn parse_expression(op: &str, value: &Value) -> Result<FilterNode, FilterError> 
                 "ismissing" if field == FilterField::Lyrics => !truthy,
                 _ => return Err(unsupported()),
             };
-            FilterRule { field, op: if is_true { FilterOp::IsTrue } else { FilterOp::IsFalse }, value: FilterValue::Bool(is_true) }
+            FilterRule {
+                field,
+                op: if is_true {
+                    FilterOp::IsTrue
+                } else {
+                    FilterOp::IsFalse
+                },
+                value: FilterValue::Bool(is_true),
+            }
         }
         FieldKind::Text => {
-            let text = raw.as_str().map(str::to_string).or_else(|| raw.as_f64().map(|n| num(n).to_string()));
-            let text = text.ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a string")))?;
+            let text = raw
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| raw.as_f64().map(|n| num(n).to_string()));
+            let text =
+                text.ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a string")))?;
             let fop = match op {
                 "is" => FilterOp::Is,
                 "isnot" => FilterOp::IsNot,
@@ -292,16 +381,31 @@ fn parse_expression(op: &str, value: &Value) -> Result<FilterNode, FilterError> 
                 "endswith" => FilterOp::EndsWith,
                 _ => return Err(unsupported()),
             };
-            FilterRule { field, op: fop, value: FilterValue::Text(text) }
+            FilterRule {
+                field,
+                op: fop,
+                value: FilterValue::Text(text),
+            }
         }
         FieldKind::Number => {
             if op == "intherange" {
-                let arr = raw.as_array().filter(|a| a.len() == 2).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' range needs two numbers")))?;
-                let low = coerce_number(&arr[0]).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' range needs two numbers")))?;
-                let high = coerce_number(&arr[1]).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' range needs two numbers")))?;
-                FilterRule { field, op: FilterOp::InTheRange, value: FilterValue::Range { low, high } }
+                let arr = raw.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' range needs two numbers"))
+                })?;
+                let low = coerce_number(&arr[0]).ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' range needs two numbers"))
+                })?;
+                let high = coerce_number(&arr[1]).ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' range needs two numbers"))
+                })?;
+                FilterRule {
+                    field,
+                    op: FilterOp::InTheRange,
+                    value: FilterValue::Range { low, high },
+                }
             } else {
-                let n = coerce_number(raw).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a number")))?;
+                let n = coerce_number(raw)
+                    .ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a number")))?;
                 let fop = match op {
                     "is" => FilterOp::Is,
                     "isnot" => FilterOp::IsNot,
@@ -309,31 +413,56 @@ fn parse_expression(op: &str, value: &Value) -> Result<FilterNode, FilterError> 
                     "lt" => FilterOp::Lt,
                     _ => return Err(unsupported()),
                 };
-                FilterRule { field, op: fop, value: FilterValue::Number(n) }
+                FilterRule {
+                    field,
+                    op: fop,
+                    value: FilterValue::Number(n),
+                }
             }
         }
         FieldKind::Date => match op {
             "inthelast" | "notinthelast" => {
-                let days = coerce_number(raw).filter(|d| *d >= 1.0).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a day count")))?;
+                let days = coerce_number(raw)
+                    .filter(|d| *d >= 1.0)
+                    .ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a day count")))?;
                 FilterRule {
                     field,
-                    op: if op == "inthelast" { FilterOp::InTheLast } else { FilterOp::NotInTheLast },
+                    op: if op == "inthelast" {
+                        FilterOp::InTheLast
+                    } else {
+                        FilterOp::NotInTheLast
+                    },
                     value: FilterValue::Days(days.min(f64::from(u32::MAX)) as u32),
                 }
             }
             "before" | "after" => {
-                let d = raw.as_str().ok_or_else(|| FilterError::Nsp(format!("'{field_name}' needs a YYYY-MM-DD date")))?;
+                let d = raw.as_str().ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' needs a YYYY-MM-DD date"))
+                })?;
                 FilterRule {
                     field,
-                    op: if op == "before" { FilterOp::Before } else { FilterOp::After },
+                    op: if op == "before" {
+                        FilterOp::Before
+                    } else {
+                        FilterOp::After
+                    },
                     value: FilterValue::Date(d.to_string()),
                 }
             }
             "intherange" => {
-                let arr = raw.as_array().filter(|a| a.len() == 2).ok_or_else(|| FilterError::Nsp(format!("'{field_name}' range needs two dates")))?;
-                let dates: Option<Vec<String>> = arr.iter().map(|v| v.as_str().map(str::to_string)).collect();
-                let dates = dates.ok_or_else(|| FilterError::Nsp(format!("'{field_name}' range needs two dates")))?;
-                FilterRule { field, op: FilterOp::InTheRange, value: FilterValue::List(dates) }
+                let arr = raw.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' range needs two dates"))
+                })?;
+                let dates: Option<Vec<String>> =
+                    arr.iter().map(|v| v.as_str().map(str::to_string)).collect();
+                let dates = dates.ok_or_else(|| {
+                    FilterError::Nsp(format!("'{field_name}' range needs two dates"))
+                })?;
+                FilterRule {
+                    field,
+                    op: FilterOp::InTheRange,
+                    value: FilterValue::List(dates),
+                }
             }
             _ => return Err(unsupported()),
         },
@@ -351,8 +480,8 @@ fn coerce_bool(v: &Value) -> Option<bool> {
             _ => None,
         },
         Value::Number(n) => match n.as_f64() {
-            Some(x) if x == 1.0 => Some(true),
-            Some(x) if x == 0.0 => Some(false),
+            Some(1.0) => Some(true),
+            Some(0.0) => Some(false),
             _ => None,
         },
         _ => None,

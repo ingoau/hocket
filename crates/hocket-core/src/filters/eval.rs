@@ -5,7 +5,10 @@
 //! [`super::sql`] exactly; the two are cross-checked in tests. Case folding
 //! is ASCII-only on purpose: that is what SQLite's `NOCASE` and `LIKE` do.
 
-use crate::api::{FilterField, FilterNode, FilterOp, FilterRule, FilterValue, OfflineState, SortOrder, Track, TrackId};
+use crate::api::{
+    FilterField, FilterNode, FilterOp, FilterRule, FilterValue, OfflineState, SortOrder, Track,
+    TrackId,
+};
 
 use super::dates::{CivilDate, MS_PER_DAY};
 use super::model::{field_info, FieldKind};
@@ -39,8 +42,12 @@ pub fn matches_with(node: &FilterNode, track: &Track, facts: &LocalFacts, now_ms
     match node {
         FilterNode::Rule(rule) => rule_matches(rule, track, facts, now_ms),
         // An empty `all` is vacuously true, an empty `any` is false — same as SQL.
-        FilterNode::All(children) => children.iter().all(|c| matches_with(c, track, facts, now_ms)),
-        FilterNode::Any(children) => children.iter().any(|c| matches_with(c, track, facts, now_ms)),
+        FilterNode::All(children) => children
+            .iter()
+            .all(|c| matches_with(c, track, facts, now_ms)),
+        FilterNode::Any(children) => children
+            .iter()
+            .any(|c| matches_with(c, track, facts, now_ms)),
     }
 }
 
@@ -120,15 +127,31 @@ fn text_matches(rule: &FilterRule, actual: Option<&str>) -> bool {
     let actual_lower = actual.map(|s| s.to_ascii_lowercase());
     let actual_lower = actual_lower.as_deref();
     match (&rule.op, &rule.value) {
-        (FilterOp::Is, FilterValue::Text(t)) => actual_lower == Some(t.to_ascii_lowercase().as_str()),
+        (FilterOp::Is, FilterValue::Text(t)) => {
+            actual_lower == Some(t.to_ascii_lowercase().as_str())
+        }
         // NULL <> 'x' is NULL in SQL (no match); we mirror that.
-        (FilterOp::IsNot, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a != t.to_ascii_lowercase()),
-        (FilterOp::Is, FilterValue::List(items)) => actual_lower.is_some_and(|a| items.iter().any(|i| i.to_ascii_lowercase() == a)),
-        (FilterOp::IsNot, FilterValue::List(items)) => actual_lower.is_some_and(|a| !items.iter().any(|i| i.to_ascii_lowercase() == a)),
-        (FilterOp::Contains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.contains(&t.to_ascii_lowercase())),
-        (FilterOp::NotContains, FilterValue::Text(t)) => actual_lower.is_some_and(|a| !a.contains(&t.to_ascii_lowercase())),
-        (FilterOp::StartsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.starts_with(&t.to_ascii_lowercase())),
-        (FilterOp::EndsWith, FilterValue::Text(t)) => actual_lower.is_some_and(|a| a.ends_with(&t.to_ascii_lowercase())),
+        (FilterOp::IsNot, FilterValue::Text(t)) => {
+            actual_lower.is_some_and(|a| a != t.to_ascii_lowercase())
+        }
+        (FilterOp::Is, FilterValue::List(items)) => {
+            actual_lower.is_some_and(|a| items.iter().any(|i| i.to_ascii_lowercase() == a))
+        }
+        (FilterOp::IsNot, FilterValue::List(items)) => {
+            actual_lower.is_some_and(|a| !items.iter().any(|i| i.to_ascii_lowercase() == a))
+        }
+        (FilterOp::Contains, FilterValue::Text(t)) => {
+            actual_lower.is_some_and(|a| a.contains(&t.to_ascii_lowercase()))
+        }
+        (FilterOp::NotContains, FilterValue::Text(t)) => {
+            actual_lower.is_some_and(|a| !a.contains(&t.to_ascii_lowercase()))
+        }
+        (FilterOp::StartsWith, FilterValue::Text(t)) => {
+            actual_lower.is_some_and(|a| a.starts_with(&t.to_ascii_lowercase()))
+        }
+        (FilterOp::EndsWith, FilterValue::Text(t)) => {
+            actual_lower.is_some_and(|a| a.ends_with(&t.to_ascii_lowercase()))
+        }
         _ => false,
     }
 }
@@ -153,8 +176,12 @@ fn number_matches(rule: &FilterRule, actual: Option<f64>) -> bool {
 /// - `InTheRange [a, b]`: start of `a` ≤ value < day after `b`.
 fn date_matches(rule: &FilterRule, actual: Option<f64>, now_ms: f64) -> bool {
     match (&rule.op, &rule.value) {
-        (FilterOp::InTheLast, FilterValue::Days(n)) => actual.is_some_and(|a| a >= now_ms - f64::from(*n) * MS_PER_DAY),
-        (FilterOp::NotInTheLast, FilterValue::Days(n)) => actual.is_none_or(|a| a < now_ms - f64::from(*n) * MS_PER_DAY),
+        (FilterOp::InTheLast, FilterValue::Days(n)) => {
+            actual.is_some_and(|a| a >= now_ms - f64::from(*n) * MS_PER_DAY)
+        }
+        (FilterOp::NotInTheLast, FilterValue::Days(n)) => {
+            actual.is_none_or(|a| a < now_ms - f64::from(*n) * MS_PER_DAY)
+        }
         (FilterOp::Before, FilterValue::Date(d)) => match (actual, CivilDate::parse(d)) {
             (Some(a), Some(d)) => a < d.start_ms(),
             _ => false,
@@ -164,8 +191,14 @@ fn date_matches(rule: &FilterRule, actual: Option<f64>, now_ms: f64) -> bool {
             _ => false,
         },
         (FilterOp::InTheRange, FilterValue::List(items)) if items.len() == 2 => {
-            match (actual, CivilDate::parse(&items[0]), CivilDate::parse(&items[1])) {
-                (Some(a), Some(from), Some(to)) => a >= from.start_ms() && a < to.end_ms_exclusive(),
+            match (
+                actual,
+                CivilDate::parse(&items[0]),
+                CivilDate::parse(&items[1]),
+            ) {
+                (Some(a), Some(from), Some(to)) => {
+                    a >= from.start_ms() && a < to.end_ms_exclusive()
+                }
                 _ => false,
             }
         }
@@ -191,7 +224,11 @@ pub fn order_tracks<'a>(
     } else {
         items.sort_by(|a, b| {
             let primary = sort_key_cmp(sort, a, b);
-            let primary = if descending { primary.reverse() } else { primary };
+            let primary = if descending {
+                primary.reverse()
+            } else {
+                primary
+            };
             primary.then_with(|| tie_break(a, b))
         });
     }
@@ -233,16 +270,28 @@ fn sort_key_cmp(sort: SortOrder, a: &Track, b: &Track) -> std::cmp::Ordering {
         SortOrder::DateAdded => num(a.created, b.created),
         SortOrder::Rating => num(Some(f64::from(a.rating)), Some(f64::from(b.rating))),
         SortOrder::PlayCount => num(Some(f64::from(a.play_count)), Some(f64::from(b.play_count))),
-        SortOrder::Duration => num(Some(f64::from(a.duration_ms)), Some(f64::from(b.duration_ms))),
-        SortOrder::Bpm => num(a.sonic.as_ref().and_then(|s| s.bpm), b.sonic.as_ref().and_then(|s| s.bpm)),
-        SortOrder::Energy => num(a.sonic.as_ref().and_then(|s| s.energy), b.sonic.as_ref().and_then(|s| s.energy)),
+        SortOrder::Duration => num(
+            Some(f64::from(a.duration_ms)),
+            Some(f64::from(b.duration_ms)),
+        ),
+        SortOrder::Bpm => num(
+            a.sonic.as_ref().and_then(|s| s.bpm),
+            b.sonic.as_ref().and_then(|s| s.bpm),
+        ),
+        SortOrder::Energy => num(
+            a.sonic.as_ref().and_then(|s| s.energy),
+            b.sonic.as_ref().and_then(|s| s.energy),
+        ),
         SortOrder::Random => Ordering::Equal,
     }
 }
 
 /// Deterministic final tie-break, identical to the SQL: title, then id.
 fn tie_break(a: &Track, b: &Track) -> std::cmp::Ordering {
-    a.title.to_ascii_lowercase().cmp(&b.title.to_ascii_lowercase()).then_with(|| a.id.cmp(&b.id))
+    a.title
+        .to_ascii_lowercase()
+        .cmp(&b.title.to_ascii_lowercase())
+        .then_with(|| a.id.cmp(&b.id))
 }
 
 /// The value-kind a field's rule compares; exposed for builders that want to

@@ -53,7 +53,12 @@ pub struct StatsOptions {
 
 impl Default for StatsOptions {
     fn default() -> Self {
-        Self { period_days: 30, tz_offset_minutes: 0, min_played_ms: 30_000, top_n: 10 }
+        Self {
+            period_days: 30,
+            tz_offset_minutes: 0,
+            min_played_ms: 30_000,
+            top_n: 10,
+        }
     }
 }
 
@@ -89,11 +94,25 @@ pub fn listening_stats(rows: &[PlayRow], options: &StatsOptions, now_ms: f64) ->
 }
 
 /// Same as [`listening_stats`] plus [`StatsExtras`].
-pub fn listening_stats_with_extras(rows: &[PlayRow], options: &StatsOptions, now_ms: f64) -> (ListeningStats, StatsExtras) {
+pub fn listening_stats_with_extras(
+    rows: &[PlayRow],
+    options: &StatsOptions,
+    now_ms: f64,
+) -> (ListeningStats, StatsExtras) {
     let since = now_ms - f64::from(options.period_days) * MS_PER_DAY;
-    let in_period: Vec<&PlayRow> = rows.iter().filter(|r| r.played_at >= since && r.played_at <= now_ms && r.played_ms >= options.min_played_ms).collect();
+    let in_period: Vec<&PlayRow> = rows
+        .iter()
+        .filter(|r| {
+            r.played_at >= since && r.played_at <= now_ms && r.played_ms >= options.min_played_ms
+        })
+        .collect();
 
-    let mut stats = ListeningStats { period_days: options.period_days, plays_by_hour: vec![0; 24], plays_by_weekday: vec![0; 7], ..Default::default() };
+    let mut stats = ListeningStats {
+        period_days: options.period_days,
+        plays_by_hour: vec![0; 24],
+        plays_by_weekday: vec![0; 7],
+        ..Default::default()
+    };
     let mut extras = StatsExtras::default();
 
     // (count, total_ms, first-seen order) per key, so ties break by first play.
@@ -108,9 +127,12 @@ pub fn listening_stats_with_extras(rows: &[PlayRow], options: &StatsOptions, now
             extras.scrobbled_plays += 1;
         }
         stats.plays_by_hour[hour_of_day(r.played_at, options.tz_offset_minutes) as usize] += 1;
-        stats.plays_by_weekday[local_date(r.played_at, options.tz_offset_minutes).weekday_monday0() as usize] += 1;
+        stats.plays_by_weekday
+            [local_date(r.played_at, options.tz_offset_minutes).weekday_monday0() as usize] += 1;
 
-        let t = tracks.entry(r.track.id.as_str()).or_insert((0, 0.0, i, &r.track));
+        let t = tracks
+            .entry(r.track.id.as_str())
+            .or_insert((0, 0.0, i, &r.track));
         t.0 += 1;
         t.1 += f64::from(r.played_ms);
         if let Some(a) = &r.album {
@@ -128,11 +150,23 @@ pub fn listening_stats_with_extras(rows: &[PlayRow], options: &StatsOptions, now
     extras.distinct_tracks = tracks.len() as u32;
     extras.distinct_albums = albums.len() as u32;
     extras.distinct_artists = artists.len() as u32;
-    extras.track_play_counts = tracks.iter().map(|(k, v)| ((*k).to_string(), v.0)).collect();
+    extras.track_play_counts = tracks
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), v.0))
+        .collect();
 
-    stats.top_tracks = top_n(tracks.into_values(), options.top_n).into_iter().cloned().collect();
-    stats.top_albums = top_n(albums.into_values(), options.top_n).into_iter().cloned().collect();
-    stats.top_artists = top_n(artists.into_values(), options.top_n).into_iter().cloned().collect();
+    stats.top_tracks = top_n(tracks.into_values(), options.top_n)
+        .into_iter()
+        .cloned()
+        .collect();
+    stats.top_albums = top_n(albums.into_values(), options.top_n)
+        .into_iter()
+        .cloned()
+        .collect();
+    stats.top_artists = top_n(artists.into_values(), options.top_n)
+        .into_iter()
+        .cloned()
+        .collect();
     extras.streaks = streaks(rows, options, now_ms);
     (stats, extras)
 }
@@ -140,18 +174,32 @@ pub fn listening_stats_with_extras(rows: &[PlayRow], options: &StatsOptions, now
 /// Most plays first, then most time, then first played.
 fn top_n<T>(entries: impl Iterator<Item = (u32, f64, usize, T)>, n: usize) -> Vec<T> {
     let mut v: Vec<(u32, f64, usize, T)> = entries.collect();
-    v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)).then_with(|| a.2.cmp(&b.2)));
+    v.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.2.cmp(&b.2))
+    });
     v.into_iter().take(n).map(|e| e.3).collect()
 }
 
 /// Newest first, at most `limit`. Every row counts here, including skips.
 pub fn recently_played(rows: &[PlayRow], limit: u32) -> Vec<PlayHistoryEntry> {
     let mut sorted: Vec<&PlayRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| b.played_at.partial_cmp(&a.played_at).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.played_at
+            .partial_cmp(&a.played_at)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     sorted
         .into_iter()
         .take(limit as usize)
-        .map(|r| PlayHistoryEntry { track: r.track.clone(), played_at: r.played_at, played_ms: r.played_ms, scrobbled: r.scrobbled, device_id: r.device_id.clone() })
+        .map(|r| PlayHistoryEntry {
+            track: r.track.clone(),
+            played_at: r.played_at,
+            played_ms: r.played_ms,
+            scrobbled: r.scrobbled,
+            device_id: r.device_id.clone(),
+        })
         .collect()
 }
 
@@ -181,7 +229,11 @@ pub fn streaks(rows: &[PlayRow], options: &StatsOptions, now_ms: f64) -> Streaks
         Some(&last) if last == today || last == today - 1 => run,
         _ => 0,
     };
-    Streaks { current_days, longest_days: longest, active_days }
+    Streaks {
+        current_days,
+        longest_days: longest,
+        active_days,
+    }
 }
 
 /// The one-way rating→love bridge. Returns `Some(true)` when the new rating
@@ -211,13 +263,28 @@ mod tests {
 
     fn row(track: &str, artist: &str, album: &str, at: f64, played_ms: u32) -> PlayRow {
         PlayRow {
-            track: TrackSummary { id: track.into(), title: track.to_uppercase(), artist: Some(artist.into()), album: Some(album.into()), duration_ms: 240_000, ..Default::default() },
+            track: TrackSummary {
+                id: track.into(),
+                title: track.to_uppercase(),
+                artist: Some(artist.into()),
+                album: Some(album.into()),
+                duration_ms: 240_000,
+                ..Default::default()
+            },
             played_at: at,
             played_ms,
             scrobbled: played_ms >= 120_000,
             device_id: "dev".into(),
-            album: Some(Album { id: format!("al-{album}"), name: album.into(), ..Default::default() }),
-            artist: Some(Artist { id: format!("ar-{artist}"), name: artist.into(), ..Default::default() }),
+            album: Some(Album {
+                id: format!("al-{album}"),
+                name: album.into(),
+                ..Default::default()
+            }),
+            artist: Some(Artist {
+                id: format!("ar-{artist}"),
+                name: artist.into(),
+                ..Default::default()
+            }),
         }
     }
 
@@ -231,7 +298,7 @@ mod tests {
             row("t3", "B", "Z", NOW - 6.0 * DAY, 100_000),
             row("t4", "C", "W", NOW - 6.0 * DAY, 5_000), // skip: below floor
             row("t5", "D", "V", NOW - 40.0 * DAY, 240_000), // outside a 30-day period
-            row("t6", "E", "U", NOW + DAY, 240_000),         // future clock skew: ignored
+            row("t6", "E", "U", NOW + DAY, 240_000),     // future clock skew: ignored
         ]
     }
 
@@ -241,9 +308,27 @@ mod tests {
         assert_eq!(s.period_days, 30);
         assert_eq!(s.total_plays, 6);
         assert_eq!(s.total_ms, 3.0 * 240_000.0 + 2.0 * 200_000.0 + 100_000.0);
-        assert_eq!(s.top_tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t1", "t2", "t3"]);
-        assert_eq!(s.top_albums.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["X", "Y", "Z"]);
-        assert_eq!(s.top_artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            s.top_tracks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["t1", "t2", "t3"]
+        );
+        assert_eq!(
+            s.top_albums
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["X", "Y", "Z"]
+        );
+        assert_eq!(
+            s.top_artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
         assert_eq!(extras.distinct_tracks, 3);
         assert_eq!(extras.distinct_albums, 3);
         assert_eq!(extras.distinct_artists, 2);
@@ -262,11 +347,14 @@ mod tests {
         let s = listening_stats(&rows(), &utc, NOW);
         assert_eq!(s.plays_by_hour[12], 5);
         assert_eq!(s.plays_by_hour[13], 1); // t2 at 13:00Z
-        // Monday-first weekdays: Sun(6)=t1+t2, Sat(5)=t1, Fri(4)=t1, Wed(2)=t2, Tue(1)=t3.
+                                            // Monday-first weekdays: Sun(6)=t1+t2, Sat(5)=t1, Fri(4)=t1, Wed(2)=t2, Tue(1)=t3.
         assert_eq!(s.plays_by_weekday, vec![0, 1, 1, 0, 1, 1, 2]);
 
         // UTC+13 pushes 12:00Z to 01:00 the next local day.
-        let nz = StatsOptions { tz_offset_minutes: 13 * 60, ..Default::default() };
+        let nz = StatsOptions {
+            tz_offset_minutes: 13 * 60,
+            ..Default::default()
+        };
         let s = listening_stats(&rows(), &nz, NOW);
         assert_eq!(s.plays_by_hour[1], 5);
         assert_eq!(s.plays_by_hour[2], 1);
@@ -276,9 +364,24 @@ mod tests {
 
     #[test]
     fn period_and_floor_are_honoured() {
-        let s = listening_stats(&rows(), &StatsOptions { period_days: 2, ..Default::default() }, NOW);
+        let s = listening_stats(
+            &rows(),
+            &StatsOptions {
+                period_days: 2,
+                ..Default::default()
+            },
+            NOW,
+        );
         assert_eq!(s.total_plays, 3); // t1 ×2 (1d, 2d) + t2 (1d)
-        let s = listening_stats(&rows(), &StatsOptions { period_days: 365, min_played_ms: 0, ..Default::default() }, NOW);
+        let s = listening_stats(
+            &rows(),
+            &StatsOptions {
+                period_days: 365,
+                min_played_ms: 0,
+                ..Default::default()
+            },
+            NOW,
+        );
         assert_eq!(s.total_plays, 8);
         let s = listening_stats(&[], &StatsOptions::default(), NOW);
         assert_eq!(s.total_plays, 0);
@@ -290,37 +393,71 @@ mod tests {
     fn top_lists_are_capped_and_tie_broken() {
         let mut r = Vec::new();
         for i in 0..15 {
-            r.push(row(&format!("t{i}"), "A", "X", NOW - DAY, 100_000 + i * 1000));
+            r.push(row(
+                &format!("t{i}"),
+                "A",
+                "X",
+                NOW - DAY,
+                100_000 + i * 1000,
+            ));
         }
         r.push(row("t0", "A", "X", NOW - DAY, 100_000));
-        let s = listening_stats(&r, &StatsOptions { top_n: 3, ..Default::default() }, NOW);
+        let s = listening_stats(
+            &r,
+            &StatsOptions {
+                top_n: 3,
+                ..Default::default()
+            },
+            NOW,
+        );
         // t0 has two plays; among single plays the longest listened wins.
-        assert_eq!(s.top_tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t0", "t14", "t13"]);
+        assert_eq!(
+            s.top_tracks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["t0", "t14", "t13"]
+        );
         assert_eq!(s.top_albums.len(), 1);
     }
 
     #[test]
     fn recently_played_is_newest_first_and_includes_skips() {
         let h = recently_played(&rows(), 4);
-        assert_eq!(h.iter().map(|e| e.track.id.as_str()).collect::<Vec<_>>(), vec!["t6", "t2", "t1", "t1"]);
+        assert_eq!(
+            h.iter().map(|e| e.track.id.as_str()).collect::<Vec<_>>(),
+            vec!["t6", "t2", "t1", "t1"]
+        );
         assert_eq!(h[1].played_ms, 200_000);
         assert!(h[1].scrobbled);
         assert_eq!(h[1].device_id, "dev");
         assert!(recently_played(&rows(), 0).is_empty());
-        assert!(recently_played(&rows(), 100).iter().any(|e| e.track.id == "t4"));
+        assert!(recently_played(&rows(), 100)
+            .iter()
+            .any(|e| e.track.id == "t4"));
     }
 
     #[test]
     fn streak_maths() {
         let opts = StatsOptions::default();
         // Days with plays: -1, -2, -3, -5, -6, -40 → current 3 (ends yesterday), longest 3, active 6.
-        assert_eq!(streaks(&rows(), &opts, NOW), Streaks { current_days: 3, longest_days: 3, active_days: 6 });
+        assert_eq!(
+            streaks(&rows(), &opts, NOW),
+            Streaks {
+                current_days: 3,
+                longest_days: 3,
+                active_days: 6
+            }
+        );
         // A play today extends the current streak to 4.
         let mut r = rows();
         r.push(row("t9", "A", "X", NOW - 1000.0, 200_000));
         assert_eq!(streaks(&r, &opts, NOW).current_days, 4);
         // Last play two days ago: streak broken.
-        let r: Vec<PlayRow> = rows().into_iter().filter(|x| x.played_at < NOW - 1.5 * DAY).collect();
+        let r: Vec<PlayRow> = rows()
+            .into_iter()
+            .filter(|x| x.played_at < NOW - 1.5 * DAY)
+            .collect();
         let s = streaks(&r, &opts, NOW);
         assert_eq!(s.current_days, 0);
         assert_eq!(s.longest_days, 2); // -2,-3 and -5,-6
@@ -328,9 +465,26 @@ mod tests {
         // Time zone changes which day a play lands on.
         let edge = vec![row("e", "A", "X", NOW - 12.5 * 3_600_000.0, 200_000)]; // 23:30Z the previous day
         assert_eq!(streaks(&edge, &opts, NOW).current_days, 1);
-        assert_eq!(streaks(&edge, &StatsOptions { tz_offset_minutes: 60, ..Default::default() }, NOW).current_days, 1);
-        assert_eq!(play_date(&edge[0], 60).to_days(), local_date(NOW, 60).to_days());
-        assert_eq!(play_date(&edge[0], 0).to_days(), local_date(NOW, 0).to_days() - 1);
+        assert_eq!(
+            streaks(
+                &edge,
+                &StatsOptions {
+                    tz_offset_minutes: 60,
+                    ..Default::default()
+                },
+                NOW
+            )
+            .current_days,
+            1
+        );
+        assert_eq!(
+            play_date(&edge[0], 60).to_days(),
+            local_date(NOW, 60).to_days()
+        );
+        assert_eq!(
+            play_date(&edge[0], 0).to_days(),
+            local_date(NOW, 0).to_days() - 1
+        );
     }
 
     #[test]

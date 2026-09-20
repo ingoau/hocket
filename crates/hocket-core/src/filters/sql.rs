@@ -27,7 +27,10 @@ pub struct WhereClause {
 impl WhereClause {
     /// A predicate that matches everything.
     pub fn always() -> WhereClause {
-        WhereClause { sql: "1=1".into(), params: vec![] }
+        WhereClause {
+            sql: "1=1".into(),
+            params: vec![],
+        }
     }
 }
 
@@ -47,7 +50,10 @@ fn node_sql(node: &FilterNode, now_ms: f64, params: &mut Vec<Value>) -> String {
             if children.is_empty() {
                 "1=1".into()
             } else {
-                let parts: Vec<String> = children.iter().map(|c| node_sql(c, now_ms, params)).collect();
+                let parts: Vec<String> = children
+                    .iter()
+                    .map(|c| node_sql(c, now_ms, params))
+                    .collect();
                 format!("({})", parts.join(" AND "))
             }
         }
@@ -55,7 +61,10 @@ fn node_sql(node: &FilterNode, now_ms: f64, params: &mut Vec<Value>) -> String {
             if children.is_empty() {
                 "1=0".into()
             } else {
-                let parts: Vec<String> = children.iter().map(|c| node_sql(c, now_ms, params)).collect();
+                let parts: Vec<String> = children
+                    .iter()
+                    .map(|c| node_sql(c, now_ms, params))
+                    .collect();
                 format!("({})", parts.join(" OR "))
             }
         }
@@ -203,7 +212,8 @@ fn playlist_sql(rule: &FilterRule, params: &mut Vec<Value>) -> String {
         _ => return "1=0".into(),
     };
     let marks = vec!["?"; ids.len()].join(", ");
-    ids.iter().for_each(|i| params.push(Value::Text((*i).to_string())));
+    ids.iter()
+        .for_each(|i| params.push(Value::Text((*i).to_string())));
     let exists = format!(
         "EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.server_id = tracks.server_id \
          AND pt.track_id = tracks.id AND pt.playlist_id IN ({marks}))"
@@ -276,7 +286,16 @@ pub fn select_for_filter(
     columns: &str,
     now_ms: f64,
 ) -> Result<SelectQuery, FilterError> {
-    select_for_node(Some(&filter.root), filter.sort, filter.descending, filter.limit, None, server_id, columns, now_ms)
+    select_for_node(
+        Some(&filter.root),
+        filter.sort,
+        filter.descending,
+        filter.limit,
+        None,
+        server_id,
+        columns,
+        now_ms,
+    )
 }
 
 /// Builds a query for an optional node tree (a bare list query when `None`).
@@ -297,7 +316,11 @@ pub fn select_for_node(
     };
     let mut params = vec![Value::Text(server_id.to_string())];
     params.extend(clause.params);
-    let mut sql = format!("SELECT {columns} FROM tracks WHERE tracks.server_id = ? AND ({}) {}", clause.sql, order_by(sort, descending));
+    let mut sql = format!(
+        "SELECT {columns} FROM tracks WHERE tracks.server_id = ? AND ({}) {}",
+        clause.sql,
+        order_by(sort, descending)
+    );
     let lim = limit_clause(limit, offset);
     if !lim.is_empty() {
         sql.push(' ');
@@ -307,12 +330,22 @@ pub fn select_for_node(
 }
 
 /// `SELECT COUNT(*)` for the same predicate (previews).
-pub fn count_for_node(node: Option<&FilterNode>, server_id: &str, now_ms: f64) -> Result<SelectQuery, FilterError> {
+pub fn count_for_node(
+    node: Option<&FilterNode>,
+    server_id: &str,
+    now_ms: f64,
+) -> Result<SelectQuery, FilterError> {
     let clause = match node {
         Some(n) => where_clause(n, now_ms)?,
         None => WhereClause::always(),
     };
     let mut params = vec![Value::Text(server_id.to_string())];
     params.extend(clause.params);
-    Ok(SelectQuery { sql: format!("SELECT COUNT(*) FROM tracks WHERE tracks.server_id = ? AND ({})", clause.sql), params })
+    Ok(SelectQuery {
+        sql: format!(
+            "SELECT COUNT(*) FROM tracks WHERE tracks.server_id = ? AND ({})",
+            clause.sql
+        ),
+        params,
+    })
 }
