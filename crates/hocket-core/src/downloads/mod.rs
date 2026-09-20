@@ -31,7 +31,10 @@ use parking_lot::RwLock;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::api::{self, MediaSource, NetworkKind, OfflineState, Pin, PinTarget, Platform, StorageSummary, TranscodingProfile};
+use crate::api::{
+    self, MediaSource, NetworkKind, OfflineState, Pin, PinTarget, Platform, StorageSummary,
+    TranscodingProfile,
+};
 use crate::db::{Db, DbError, DbResult};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner, JobSpec, RetryAction};
 use crate::subsonic::client::StreamOptions;
@@ -52,12 +55,30 @@ impl StorageProbe for UnknownStorage {
     }
 }
 
-/// Fixed free space (tests).
+/// Simulated volume (tests): `capacity` minus the bytes of files under the
+/// queried directory; `None` capacity means unknown.
 pub struct FixedStorage(pub parking_lot::Mutex<Option<f64>>);
 impl StorageProbe for FixedStorage {
-    fn free_bytes(&self, _: &Path) -> Option<f64> {
-        *self.0.lock()
+    fn free_bytes(&self, path: &Path) -> Option<f64> {
+        let capacity = (*self.0.lock())?;
+        Some((capacity - dir_bytes(path)).max(0.0))
     }
+}
+
+fn dir_bytes(path: &Path) -> f64 {
+    let Ok(rd) = std::fs::read_dir(path) else {
+        return 0.0;
+    };
+    rd.flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                dir_bytes(&p)
+            } else {
+                e.metadata().map(|m| m.len() as f64).unwrap_or(0.0)
+            }
+        })
+        .sum()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -147,8 +168,21 @@ fn target_from(kind: &str, id: &str) -> PinTarget {
 /// Android ExoPlayer has its own constraints).
 pub fn platform_cannot_decode(platform: Platform) -> Vec<String> {
     match platform {
-        Platform::Android => vec!["ape".into(), "dsf".into(), "dff".into(), "wv".into(), "tak".into(), "shn".into()],
-        Platform::Linux | Platform::MacOs | Platform::Windows => vec!["ape".into(), "dsf".into(), "dff".into(), "tak".into(), "shn".into()],
+        Platform::Android => vec![
+            "ape".into(),
+            "dsf".into(),
+            "dff".into(),
+            "wv".into(),
+            "tak".into(),
+            "shn".into(),
+        ],
+        Platform::Linux | Platform::MacOs | Platform::Windows => vec![
+            "ape".into(),
+            "dsf".into(),
+            "dff".into(),
+            "tak".into(),
+            "shn".into(),
+        ],
         Platform::Coordinator => vec![],
     }
 }
@@ -243,9 +277,19 @@ impl Downloads {
 
     /// Create (or re-affirm) a pin and materialise its wanted tracks. Returns
     /// the `JobSpec` to submit for fetching, or `None` when nothing is missing.
-    pub fn pin(&self, server_id: &str, target: &PinTarget, transcode: bool) -> Result<Option<JobSpec>, DownloadError> {
+    pub fn pin(
+        &self,
+        server_id: &str,
+        target: &PinTarget,
+        transcode: bool,
+    ) -> Result<Option<JobSpec>, DownloadError> {
         let (label, cover) = self.describe(target)?;
-        let profile = if transcode { self.profile_for_downloads().map(|p| serde_json::to_string(&p).unwrap_or_default()) } else { None };
+        let profile = if transcode {
+            self.profile_for_downloads()
+                .map(|p| serde_json::to_string(&p).unwrap_or_default())
+        } else {
+            None
+        };
         let now = self.now();
         self.inner.db.with_tx(|tx| {
             tx.execute(
@@ -327,7 +371,11 @@ impl Downloads {
     fn describe(&self, target: &PinTarget) -> Result<(String, Option<String>), DownloadError> {
         Ok(match target {
             PinTarget::Track { id } => {
-                let t = self.inner.db.track(id)?.ok_or_else(|| DownloadError::UnknownTrack(id.clone()))?;
+                let t = self
+                    .inner
+                    .db
+                    .track(id)?
+                    .ok_or_else(|| DownloadError::UnknownTrack(id.clone()))?;
                 (t.title, t.cover_art)
             }
             PinTarget::Album { id } => match self.inner.db.album(id)? {
@@ -345,7 +393,13 @@ impl Downloads {
     fn member_ids(&self, target: &PinTarget) -> DbResult<Vec<String>> {
         Ok(match target {
             PinTarget::Track { id } => vec![id.clone()],
-            PinTarget::Album { id } => self.inner.db.album_tracks(id)?.into_iter().map(|t| t.id).collect(),
+            PinTarget::Album { id } => self
+                .inner
+                .db
+                .album_tracks(id)?
+                .into_iter()
+                .map(|t| t.id)
+                .collect(),
             PinTarget::Playlist { id } => self.inner.db.playlist_track_ids(id)?,
         })
     }
@@ -378,7 +432,12 @@ impl Downloads {
     }
 
     /// Job spec fetching whatever the pin still needs.
-    pub fn plan(&self, server_id: &str, target: &PinTarget, transcode: bool) -> Result<Option<JobSpec>, DownloadError> {
+    pub fn plan(
+        &self,
+        server_id: &str,
+        target: &PinTarget,
+        transcode: bool,
+    ) -> Result<Option<JobSpec>, DownloadError> {
         let missing: Vec<String> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached(
                 "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed') ORDER BY rowid",
@@ -390,18 +449,34 @@ impl Downloads {
             return Ok(None);
         }
         for m in &missing {
-            self.inner.db.set_track_offline(m, OfflineState::Downloading)?;
+            self.inner
+                .db
+                .set_track_offline(m, OfflineState::Downloading)?;
         }
         let (label, _) = self.describe(target)?;
-        let payload = serde_json::to_string(&DownloadJobPayload { server_id: server_id.into(), target: target.clone(), transcode: transcode })
-            .map_err(DbError::from)?;
-        Ok(Some(JobSpec::new(api::JobKind::Download, format!("Download {label}")).payload(payload).items(missing)))
+        let payload = serde_json::to_string(&DownloadJobPayload {
+            server_id: server_id.into(),
+            target: target.clone(),
+            transcode,
+        })
+        .map_err(DbError::from)?;
+        Ok(Some(
+            JobSpec::new(api::JobKind::Download, format!("Download {label}"))
+                .payload(payload)
+                .items(missing),
+        ))
     }
 
     /// A pinned playlist changed: add new members, drop removed ones (deleting
     /// files no other pin needs). Returns a fetch job for additions, if any.
-    pub fn reconcile_playlist(&self, server_id: &str, playlist_id: &str) -> Result<Option<JobSpec>, DownloadError> {
-        let target = PinTarget::Playlist { id: playlist_id.into() };
+    pub fn reconcile_playlist(
+        &self,
+        server_id: &str,
+        playlist_id: &str,
+    ) -> Result<Option<JobSpec>, DownloadError> {
+        let target = PinTarget::Playlist {
+            id: playlist_id.into(),
+        };
         if !self.is_pinned(server_id, &target)? {
             return Ok(None);
         }
@@ -431,7 +506,11 @@ impl Downloads {
                 Ok(n > 0)
             })?;
             if !still_needed {
-                if let Some(p) = tracked.iter().find(|(t, _)| t == track_id).and_then(|(_, p)| p.clone()) {
+                if let Some(p) = tracked
+                    .iter()
+                    .find(|(t, _)| t == track_id)
+                    .and_then(|(_, p)| p.clone())
+                {
                     if Path::new(&p).exists() {
                         std::fs::remove_file(&p)?;
                     }
@@ -445,7 +524,13 @@ impl Downloads {
 
     /// Gain computed at download time (from the audio module's tag reader),
     /// stored on every pin row for the track.
-    pub fn set_gain(&self, server_id: &str, track_id: &str, gain_db: Option<f64>, peak: Option<f64>) -> DbResult<bool> {
+    pub fn set_gain(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        gain_db: Option<f64>,
+        peak: Option<f64>,
+    ) -> DbResult<bool> {
         self.inner.db.with_conn(|c| {
             Ok(c.execute(
                 "UPDATE pin_tracks SET gain_db = ?3, peak = ?4 WHERE server_id = ?1 AND track_id = ?2",
@@ -501,7 +586,8 @@ impl Downloads {
     /// Where a download for this track goes.
     pub fn download_path(&self, server_id: &str, track_id: &str, suffix: Option<&str>) -> PathBuf {
         let ext = suffix.filter(|s| !s.is_empty()).unwrap_or("bin");
-        self.downloads_dir(server_id).join(format!("{}.{}", safe_name(track_id), ext))
+        self.downloads_dir(server_id)
+            .join(format!("{}.{}", safe_name(track_id), ext))
     }
 
     fn profile_for_downloads(&self) -> Option<TranscodingProfile> {
@@ -510,9 +596,24 @@ impl Downloads {
 
     /// Fetch one track for a pin. Checks free space first; records the
     /// result on every pin row for the track.
-    pub async fn fetch_track(&self, api: &dyn SubsonicApi, server_id: &str, track_id: &str, transcode: bool) -> Result<u64, DownloadError> {
-        let track = self.inner.db.track(track_id)?.ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
-        let profile = if transcode { self.profile_for_downloads().filter(|p| p.format.is_some() || p.max_bit_rate.is_some()) } else { None };
+    pub async fn fetch_track(
+        &self,
+        api: &dyn SubsonicApi,
+        server_id: &str,
+        track_id: &str,
+        transcode: bool,
+    ) -> Result<u64, DownloadError> {
+        let track = self
+            .inner
+            .db
+            .track(track_id)?
+            .ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
+        let profile = if transcode {
+            self.profile_for_downloads()
+                .filter(|p| p.format.is_some() || p.max_bit_rate.is_some())
+        } else {
+            None
+        };
         let needed = track.size_bytes.unwrap_or(0.0);
         let dir = self.downloads_dir(server_id);
         std::fs::create_dir_all(&dir)?;
@@ -523,7 +624,14 @@ impl Downloads {
         }
         let (url, suffix) = match &profile {
             Some(p) => (
-                api.stream_url(track_id, &StreamOptions { format: p.format.clone(), max_bit_rate: p.max_bit_rate, ..Default::default() }),
+                api.stream_url(
+                    track_id,
+                    &StreamOptions {
+                        format: p.format.clone(),
+                        max_bit_rate: p.max_bit_rate,
+                        ..Default::default()
+                    },
+                ),
                 p.format.clone().or(track.suffix.clone()),
             ),
             None => (api.download_url(track_id), track.suffix.clone()),
@@ -556,14 +664,29 @@ impl Downloads {
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&dest);
-                self.mark_state(server_id, track_id, "failed", Some(&e.to_string()), 0.0, None)?;
+                self.mark_state(
+                    server_id,
+                    track_id,
+                    "failed",
+                    Some(&e.to_string()),
+                    0.0,
+                    None,
+                )?;
                 self.refresh_offline(server_id, track_id)?;
                 Err(e.into())
             }
         }
     }
 
-    fn mark_state(&self, server_id: &str, track_id: &str, state: &str, error: Option<&str>, bytes: f64, path: Option<&str>) -> DbResult<()> {
+    fn mark_state(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        state: &str,
+        error: Option<&str>,
+        bytes: f64,
+        path: Option<&str>,
+    ) -> DbResult<()> {
         self.inner.db.with_conn(|c| {
             c.execute(
                 "UPDATE pin_tracks SET state = ?3, error = ?4, bytes = CASE WHEN ?5 > 0 THEN ?5 ELSE bytes END, path = COALESCE(?6, path) WHERE server_id = ?1 AND track_id = ?2",
@@ -576,15 +699,33 @@ impl Downloads {
     // -- stream cache -------------------------------------------------------
 
     /// Path a cached stream for (track, profile) lives at.
-    pub fn cache_path(&self, server_id: &str, track_id: &str, profile: Option<&TranscodingProfile>, suffix: Option<&str>) -> PathBuf {
+    pub fn cache_path(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        profile: Option<&TranscodingProfile>,
+        suffix: Option<&str>,
+    ) -> PathBuf {
         let ext = suffix.filter(|s| !s.is_empty()).unwrap_or("bin");
         let key = profile_key(profile);
-        let name = if key.is_empty() { format!("{}.{}", safe_name(track_id), ext) } else { format!("{}.{}.{}", safe_name(track_id), key, ext) };
+        let name = if key.is_empty() {
+            format!("{}.{}", safe_name(track_id), ext)
+        } else {
+            format!("{}.{}.{}", safe_name(track_id), key, ext)
+        };
         self.stream_cache_dir(server_id).join(name)
     }
 
     /// Register a fully written cache file and enforce the budget.
-    pub fn cache_put(&self, server_id: &str, track_id: &str, profile: Option<&TranscodingProfile>, path: &Path, bytes: f64, content_type: Option<&str>) -> DbResult<()> {
+    pub fn cache_put(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        profile: Option<&TranscodingProfile>,
+        path: &Path,
+        bytes: f64,
+        content_type: Option<&str>,
+    ) -> DbResult<()> {
         let now = self.now();
         self.inner.db.with_conn(|c| {
             c.execute(
@@ -601,7 +742,12 @@ impl Downloads {
 
     /// Cached file for the track (any profile, preferring the requested one);
     /// touches its LRU stamp.
-    pub fn cache_get(&self, server_id: &str, track_id: &str, profile: Option<&TranscodingProfile>) -> DbResult<Option<(PathBuf, Option<String>)>> {
+    pub fn cache_get(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        profile: Option<&TranscodingProfile>,
+    ) -> DbResult<Option<(PathBuf, Option<String>)>> {
         let key = profile_key(profile);
         let now = self.now();
         let found: Option<(String, Option<String>, String)> = self.inner.db.with_conn(|c| {
@@ -612,7 +758,9 @@ impl Downloads {
             )
             .optional()?)
         })?;
-        let Some((path, ct, prof)) = found else { return Ok(None) };
+        let Some((path, ct, prof)) = found else {
+            return Ok(None);
+        };
         let p = PathBuf::from(&path);
         if !p.exists() {
             self.inner.db.with_conn(|c| {
@@ -630,7 +778,13 @@ impl Downloads {
     }
 
     pub fn cache_bytes(&self) -> DbResult<f64> {
-        self.inner.db.with_conn(|c| Ok(c.query_row("SELECT COALESCE(SUM(bytes), 0) FROM cache_entries", [], |r| r.get(0))?))
+        self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(bytes), 0) FROM cache_entries",
+                [],
+                |r| r.get(0),
+            )?)
+        })
     }
 
     /// Evict least-recently-used cache entries until under budget. Never
@@ -682,7 +836,10 @@ impl Downloads {
                 n += 1;
             }
             self.inner.db.with_conn(|c| {
-                c.execute("DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2", params![sid, tid])?;
+                c.execute(
+                    "DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2",
+                    params![sid, tid],
+                )?;
                 Ok(())
             })?;
             self.refresh_offline(sid, tid)?;
@@ -697,13 +854,31 @@ impl Downloads {
     /// to a transcode when the track's container can't be decoded.
     pub fn effective_profile(&self, suffix: Option<&str>) -> Option<TranscodingProfile> {
         let network = self.inner.network.read().clone();
-        let mut profile = self.inner.policy.read().profile_for(network.as_ref()).unwrap_or(TranscodingProfile { format: None, max_bit_rate: None, cannot_decode: vec![] });
+        let mut profile = self
+            .inner
+            .policy
+            .read()
+            .profile_for(network.as_ref())
+            .unwrap_or(TranscodingProfile {
+                format: None,
+                max_bit_rate: None,
+                cannot_decode: vec![],
+            });
         for c in platform_cannot_decode(self.inner.platform) {
-            if !profile.cannot_decode.iter().any(|x| x.eq_ignore_ascii_case(&c)) {
+            if !profile
+                .cannot_decode
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(&c))
+            {
                 profile.cannot_decode.push(c);
             }
         }
-        let undecodable = suffix.is_some_and(|s| profile.cannot_decode.iter().any(|c| c.eq_ignore_ascii_case(s)));
+        let undecodable = suffix.is_some_and(|s| {
+            profile
+                .cannot_decode
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(s))
+        });
         if undecodable && profile.format.is_none() {
             profile.format = Some(default_transcode_format(self.inner.platform).into());
         }
@@ -714,7 +889,12 @@ impl Downloads {
     }
 
     /// Resolve how to play a track: downloaded file → cached file → stream URL.
-    pub fn resolve(&self, api: &dyn SubsonicApi, key: &str, track: &api::Track) -> DbResult<MediaSource> {
+    pub fn resolve(
+        &self,
+        api: &dyn SubsonicApi,
+        key: &str,
+        track: &api::Track,
+    ) -> DbResult<MediaSource> {
         let sid = &track.server_id;
         let summary = crate::subsonic::convert::summary_of(track);
         let gain_db = self.gain(sid, &track.id)?.unwrap_or(0.0);
@@ -745,11 +925,25 @@ impl Downloads {
             });
         }
         let opts = match &profile {
-            Some(p) => StreamOptions { format: p.format.clone(), max_bit_rate: p.max_bit_rate, estimate_content_length: true, ..Default::default() },
+            Some(p) => StreamOptions {
+                format: p.format.clone(),
+                max_bit_rate: p.max_bit_rate,
+                estimate_content_length: true,
+                ..Default::default()
+            },
             None => StreamOptions::default(),
         };
-        let transcoded = profile.as_ref().is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
-        let mime = if transcoded { profile.as_ref().and_then(|p| p.format.as_deref()).map(mime_for) } else { track.content_type.clone() };
+        let transcoded = profile
+            .as_ref()
+            .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
+        let mime = if transcoded {
+            profile
+                .as_ref()
+                .and_then(|p| p.format.as_deref())
+                .map(mime_for)
+        } else {
+            track.content_type.clone()
+        };
         Ok(MediaSource {
             key: key.into(),
             track: summary,
@@ -786,7 +980,9 @@ impl Downloads {
 
     /// True when downloads exceed the configured warn threshold.
     pub fn over_warn_threshold(&self) -> DbResult<bool> {
-        let Some(t) = *self.inner.warn_threshold.read() else { return Ok(false) };
+        let Some(t) = *self.inner.warn_threshold.read() else {
+            return Ok(false);
+        };
         Ok(self.downloads_bytes()? > t)
     }
 }
@@ -813,14 +1009,26 @@ fn mime_for(format: &str) -> String {
 fn profile_key(p: Option<&TranscodingProfile>) -> String {
     match p {
         Some(p) if p.format.is_some() || p.max_bit_rate.is_some() => {
-            format!("{}-{}", p.format.as_deref().unwrap_or("raw"), p.max_bit_rate.unwrap_or(0))
+            format!(
+                "{}-{}",
+                p.format.as_deref().unwrap_or("raw"),
+                p.max_bit_rate.unwrap_or(0)
+            )
         }
         _ => String::new(),
     }
 }
 
 fn safe_name(id: &str) -> String {
-    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// `file://` URL for a local path.
@@ -850,7 +1058,8 @@ impl JobRunner for DownloadRunner {
         let dl = self.downloads.clone();
         let api = self.api.clone();
         Box::pin(async move {
-            let payload: DownloadJobPayload = serde_json::from_str(&ctx.payload).map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
+            let payload: DownloadJobPayload = serde_json::from_str(&ctx.payload)
+                .map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
             let items = ctx.pending_items()?;
             let total = items.len() as u32;
             let mut done = 0u32;
@@ -861,7 +1070,15 @@ impl JobRunner for DownloadRunner {
                 if !dl.is_pinned(&payload.server_id, &payload.target)? {
                     return Err(JobError::Cancelled);
                 }
-                match dl.fetch_track(api.as_ref(), &payload.server_id, &it.item, payload.transcode).await {
+                match dl
+                    .fetch_track(
+                        api.as_ref(),
+                        &payload.server_id,
+                        &it.item,
+                        payload.transcode,
+                    )
+                    .await
+                {
                     Ok(_) => {
                         done += 1;
                         ctx.item_done(it.seq)?;
@@ -871,8 +1088,14 @@ impl JobRunner for DownloadRunner {
                         ctx.queue().add_problem(
                             Some(&ctx.job_id),
                             "Not enough space to finish downloading",
-                            Some(&format!("Needed about {:.0} MB, {:.0} MB free. Free up space and retry.", needed / 1e6, free / 1e6)),
-                            Some(RetryAction::RetryJob { job_id: ctx.job_id.clone() }),
+                            Some(&format!(
+                                "Needed about {:.0} MB, {:.0} MB free. Free up space and retry.",
+                                needed / 1e6,
+                                free / 1e6
+                            )),
+                            Some(RetryAction::RetryJob {
+                                job_id: ctx.job_id.clone(),
+                            }),
                         )?;
                         return Err(JobError::Failed("out of space".into()));
                     }
@@ -908,9 +1131,19 @@ mod tests {
         let server = FakeServer::new("srv", "alice");
         let mut tracks = vec![];
         for i in 0..6 {
-            let mut c = FakeServer::song(&format!("t{i}"), &format!("Track {i}"), &format!("al{}", i / 3), "ar", 100.0);
+            let mut c = FakeServer::song(
+                &format!("t{i}"),
+                &format!("Track {i}"),
+                &format!("al{}", i / 3),
+                "ar",
+                100.0,
+            );
             c.size = Some(1000.0);
-            c.replay_gain = Some(crate::subsonic::types::ReplayGainBody { track_gain: Some(-3.5), track_peak: Some(0.9), ..Default::default() });
+            c.replay_gain = Some(crate::subsonic::types::ReplayGainBody {
+                track_gain: Some(-3.5),
+                track_peak: Some(0.9),
+                ..Default::default()
+            });
             server.add_song(c.clone());
             server.set_media(&format!("t{i}"), vec![b'x'; 1000]);
             tracks.push(crate::subsonic::convert::track_from_child("srv", &c));
@@ -919,23 +1152,64 @@ mod tests {
         db.upsert_tracks(&tracks, &[], 1).unwrap();
         db.upsert_albums(
             &[
-                api::Album { id: "al0".into(), server_id: "srv".into(), name: "Album 0".into(), cover_art: Some("c0".into()), ..Default::default() },
-                api::Album { id: "al1".into(), server_id: "srv".into(), name: "Album 1".into(), ..Default::default() },
+                api::Album {
+                    id: "al0".into(),
+                    server_id: "srv".into(),
+                    name: "Album 0".into(),
+                    cover_art: Some("c0".into()),
+                    ..Default::default()
+                },
+                api::Album {
+                    id: "al1".into(),
+                    server_id: "srv".into(),
+                    name: "Album 1".into(),
+                    ..Default::default()
+                },
             ],
             &[],
             1,
         )
         .unwrap();
-        db.upsert_playlists(&[api::Playlist { id: "pl".into(), server_id: "srv".into(), name: "Mix".into(), ..Default::default() }], 1).unwrap();
-        db.set_playlist_tracks("srv", "pl", &["t0".into(), "t4".into()]).unwrap();
+        db.upsert_playlists(
+            &[api::Playlist {
+                id: "pl".into(),
+                server_id: "srv".into(),
+                name: "Mix".into(),
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+        db.set_playlist_tracks("srv", "pl", &["t0".into(), "t4".into()])
+            .unwrap();
         let storage = Arc::new(FixedStorage(parking_lot::Mutex::new(None)));
-        let dl = Downloads::new(db.clone(), Arc::new(WallClock), storage.clone(), &dir.path().join("data"), &dir.path().join("cache"), Platform::Linux);
-        Fixture { dir, db, server, dl, storage }
+        let dl = Downloads::new(
+            db.clone(),
+            Arc::new(WallClock),
+            storage.clone(),
+            &dir.path().join("data"),
+            &dir.path().join("cache"),
+            Platform::Linux,
+        );
+        Fixture {
+            dir,
+            db,
+            server,
+            dl,
+            storage,
+        }
     }
 
     async fn run_job(f: &Fixture, spec: JobSpec) -> api::Job {
         let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
-        q.register(api::JobKind::Download, 2, Arc::new(DownloadRunner::new(f.dl.clone(), Arc::new(f.server.clone()))));
+        q.register(
+            api::JobKind::Download,
+            2,
+            Arc::new(DownloadRunner::new(
+                f.dl.clone(),
+                Arc::new(f.server.clone()),
+            )),
+        );
         let id = q.submit(spec).unwrap();
         q.run_until_idle().await.unwrap();
         q.job(&id).unwrap().unwrap()
@@ -947,7 +1221,10 @@ mod tests {
         let target = PinTarget::Album { id: "al0".into() };
         let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
         assert_eq!(spec.items, vec!["t0", "t1", "t2"]);
-        assert_eq!(f.db.track("t1").unwrap().unwrap().offline, OfflineState::Downloading);
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::Downloading
+        );
         let job = run_job(&f, spec).await;
         assert_eq!(job.state, api::JobState::Done);
         let pins = f.dl.pins("srv").unwrap();
@@ -961,11 +1238,21 @@ mod tests {
         assert!(p.starts_with(f.dir.path().join("data").join("downloads").join("srv")));
         assert_eq!(p.extension().unwrap(), "flac");
         assert_eq!(std::fs::read(&p).unwrap().len(), 1000);
-        assert_eq!(f.db.track("t1").unwrap().unwrap().offline, OfflineState::Downloaded);
-        assert_eq!(f.dl.gain("srv", "t1").unwrap(), Some(-3.5), "server-reported gain stored at download time");
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::Downloaded
+        );
+        assert_eq!(
+            f.dl.gain("srv", "t1").unwrap(),
+            Some(-3.5),
+            "server-reported gain stored at download time"
+        );
         assert!(f.dl.set_gain("srv", "t1", Some(-4.0), Some(0.8)).unwrap());
         assert_eq!(f.dl.gain("srv", "t1").unwrap(), Some(-4.0));
-        assert!(f.dl.plan("srv", &target, false).unwrap().is_none(), "nothing left to fetch");
+        assert!(
+            f.dl.plan("srv", &target, false).unwrap().is_none(),
+            "nothing left to fetch"
+        );
         assert_eq!(f.dl.downloads_bytes().unwrap(), 3000.0);
         // download URL, never a stream/transcode
         assert!(f.server.calls().iter().all(|c| c != "stream"));
@@ -977,15 +1264,28 @@ mod tests {
         let album = PinTarget::Album { id: "al0".into() };
         let song = PinTarget::Track { id: "t0".into() };
         run_job(&f, f.dl.pin("srv", &album, false).unwrap().unwrap()).await;
-        assert!(f.dl.pin("srv", &song, false).unwrap().is_none(), "already downloaded by the album pin");
+        assert!(
+            f.dl.pin("srv", &song, false).unwrap().is_none(),
+            "already downloaded by the album pin"
+        );
         assert_eq!(f.dl.pins("srv").unwrap().len(), 2);
-        assert_eq!(f.dl.downloads_bytes().unwrap(), 3000.0, "shared files counted once");
+        assert_eq!(
+            f.dl.downloads_bytes().unwrap(),
+            3000.0,
+            "shared files counted once"
+        );
         let removed = f.dl.unpin("srv", &album).unwrap();
         assert_eq!(removed, 2, "t1 and t2 deleted, t0 kept for the song pin");
         assert!(f.dl.downloaded_path("srv", "t0").unwrap().is_some());
         assert!(f.dl.downloaded_path("srv", "t1").unwrap().is_none());
-        assert_eq!(f.db.track("t1").unwrap().unwrap().offline, OfflineState::None);
-        assert_eq!(f.db.track("t0").unwrap().unwrap().offline, OfflineState::Downloaded);
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::None
+        );
+        assert_eq!(
+            f.db.track("t0").unwrap().unwrap().offline,
+            OfflineState::Downloaded
+        );
         f.dl.unpin("srv", &song).unwrap();
         assert!(f.dl.pins("srv").unwrap().is_empty());
         assert_eq!(f.dl.downloads_bytes().unwrap(), 0.0);
@@ -998,15 +1298,26 @@ mod tests {
         run_job(&f, f.dl.pin("srv", &pl, false).unwrap().unwrap()).await;
         assert!(f.dl.downloaded_path("srv", "t4").unwrap().is_some());
         // playlist changes: t4 out, t5 in
-        f.db.set_playlist_tracks("srv", "pl", &["t0".into(), "t5".into()]).unwrap();
+        f.db.set_playlist_tracks("srv", "pl", &["t0".into(), "t5".into()])
+            .unwrap();
         let spec = f.dl.reconcile_playlist("srv", "pl").unwrap().unwrap();
         assert_eq!(spec.items, vec!["t5"]);
-        assert!(f.dl.downloaded_path("srv", "t4").unwrap().is_none(), "removal deleted the file");
-        assert_eq!(f.db.track("t4").unwrap().unwrap().offline, OfflineState::None);
+        assert!(
+            f.dl.downloaded_path("srv", "t4").unwrap().is_none(),
+            "removal deleted the file"
+        );
+        assert_eq!(
+            f.db.track("t4").unwrap().unwrap().offline,
+            OfflineState::None
+        );
         run_job(&f, spec).await;
         assert!(f.dl.downloaded_path("srv", "t5").unwrap().is_some());
         assert!(f.dl.reconcile_playlist("srv", "pl").unwrap().is_none());
-        assert!(f.dl.reconcile_playlist("srv", "unpinned").unwrap().is_none());
+        assert!(f
+            .dl
+            .reconcile_playlist("srv", "unpinned")
+            .unwrap()
+            .is_none());
         // album pins are fixed: changing album contents doesn't matter (no reconcile API for them)
     }
 
@@ -1017,14 +1328,23 @@ mod tests {
         let target = PinTarget::Album { id: "al0".into() };
         let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
         let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
-        q.register(api::JobKind::Download, 1, Arc::new(DownloadRunner::new(f.dl.clone(), Arc::new(f.server.clone()))));
+        q.register(
+            api::JobKind::Download,
+            1,
+            Arc::new(DownloadRunner::new(
+                f.dl.clone(),
+                Arc::new(f.server.clone()),
+            )),
+        );
         let id = q.submit(spec).unwrap();
         q.run_until_idle().await.unwrap();
         let job = q.job(&id).unwrap().unwrap();
         assert_eq!(job.state, api::JobState::Failed);
         assert_eq!(job.done, 1, "first fit, second didn't");
         let problems = q.problems().unwrap();
-        assert!(problems.iter().any(|p| p.summary.contains("Not enough space") && p.retryable));
+        assert!(problems
+            .iter()
+            .any(|p| p.summary.contains("Not enough space") && p.retryable));
         assert!(f.dl.is_pinned("srv", &target).unwrap(), "pin kept");
         assert_eq!(f.dl.pins("srv").unwrap()[0].downloaded_count, 1);
         // space frees up → retry finishes the pin
@@ -1038,11 +1358,20 @@ mod tests {
     #[tokio::test]
     async fn server_failure_marks_item_failed_and_is_retryable() {
         let f = fixture();
-        f.server.fail_next(SubsonicError::Server { code: 500, message: "x".into() }, 1);
+        f.server.fail_next(
+            SubsonicError::Server {
+                code: 500,
+                message: "x".into(),
+            },
+            1,
+        );
         let target = PinTarget::Track { id: "t3".into() };
         let job = run_job(&f, f.dl.pin("srv", &target, false).unwrap().unwrap()).await;
         assert_eq!(job.state, api::JobState::Failed);
-        assert_eq!(f.db.track("t3").unwrap().unwrap().offline, OfflineState::None);
+        assert_eq!(
+            f.db.track("t3").unwrap().unwrap().offline,
+            OfflineState::None
+        );
         let spec = f.dl.plan("srv", &target, false).unwrap().unwrap();
         assert_eq!(spec.items, vec!["t3"]);
         let job = run_job(&f, spec).await;
@@ -1063,7 +1392,14 @@ mod tests {
     #[tokio::test]
     async fn transcoded_pin_uses_stream_with_profile() {
         let f = fixture();
-        f.dl.set_transcoding_profile(None, TranscodingProfile { format: Some("opus".into()), max_bit_rate: Some(128), cannot_decode: vec![] });
+        f.dl.set_transcoding_profile(
+            None,
+            TranscodingProfile {
+                format: Some("opus".into()),
+                max_bit_rate: Some(128),
+                cannot_decode: vec![],
+            },
+        );
         let target = PinTarget::Track { id: "t2".into() };
         run_job(&f, f.dl.pin("srv", &target, true).unwrap().unwrap()).await;
         let p = f.dl.downloaded_path("srv", "t2").unwrap().unwrap();
@@ -1082,14 +1418,32 @@ mod tests {
         for i in 0..3 {
             let p = f.dl.cache_path("srv", &format!("t{i}"), None, Some("flac"));
             std::fs::write(&p, vec![0u8; 1000]).unwrap();
-            f.dl.cache_put("srv", &format!("t{i}"), None, &p, 1000.0, Some("audio/flac")).unwrap();
+            f.dl.cache_put(
+                "srv",
+                &format!("t{i}"),
+                None,
+                &p,
+                1000.0,
+                Some("audio/flac"),
+            )
+            .unwrap();
             paths.push(p);
         }
         assert!(paths[0].starts_with(f.dir.path().join("cache").join("stream")));
-        assert_eq!(f.dl.cache_bytes().unwrap(), 2000.0, "oldest evicted to stay under 2500");
+        assert_eq!(
+            f.dl.cache_bytes().unwrap(),
+            2000.0,
+            "oldest evicted to stay under 2500"
+        );
         assert!(!paths[0].exists() && paths[1].exists() && paths[2].exists());
-        assert_eq!(f.db.track("t0").unwrap().unwrap().offline, OfflineState::None);
-        assert_eq!(f.db.track("t1").unwrap().unwrap().offline, OfflineState::Cached);
+        assert_eq!(
+            f.db.track("t0").unwrap().unwrap().offline,
+            OfflineState::None
+        );
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::Cached
+        );
         // touching t1 makes t2 the next victim
         assert!(f.dl.cache_get("srv", "t1", None).unwrap().is_some());
         let p = f.dl.cache_path("srv", "t5", None, Some("flac"));
@@ -1099,14 +1453,25 @@ mod tests {
         // a file deleted behind our back is dropped from the index
         std::fs::remove_file(&paths[1]).unwrap();
         assert!(f.dl.cache_get("srv", "t1", None).unwrap().is_none());
-        assert_eq!(f.db.track("t1").unwrap().unwrap().offline, OfflineState::None);
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::None
+        );
         // profile-specific entries have their own key
-        let prof = TranscodingProfile { format: Some("opus".into()), max_bit_rate: Some(96), cannot_decode: vec![] };
+        let prof = TranscodingProfile {
+            format: Some("opus".into()),
+            max_bit_rate: Some(96),
+            cannot_decode: vec![],
+        };
         let pp = f.dl.cache_path("srv", "t5", Some(&prof), Some("opus"));
         assert!(pp.to_string_lossy().contains("opus-96"));
         std::fs::write(&pp, vec![0u8; 500]).unwrap();
-        f.dl.cache_put("srv", "t5", Some(&prof), &pp, 500.0, Some("audio/ogg")).unwrap();
-        assert_eq!(f.dl.cache_get("srv", "t5", Some(&prof)).unwrap().unwrap().0, pp);
+        f.dl.cache_put("srv", "t5", Some(&prof), &pp, 500.0, Some("audio/ogg"))
+            .unwrap();
+        assert_eq!(
+            f.dl.cache_get("srv", "t5", Some(&prof)).unwrap().unwrap().0,
+            pp
+        );
         assert_eq!(f.dl.cache_get("srv", "t5", None).unwrap().unwrap().0, p);
         assert_eq!(f.dl.clear_stream_cache().unwrap(), 2);
         assert_eq!(f.dl.cache_bytes().unwrap(), 0.0);
@@ -1120,27 +1485,72 @@ mod tests {
         let f = fixture();
         let track = f.db.track("t0").unwrap().unwrap();
         let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
-        assert!(s.url.starts_with("https://srv.fake/rest/stream?id=t0"), "{}", s.url);
+        assert!(
+            s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
+            "{}",
+            s.url
+        );
         assert!(!s.transcoded);
         assert_eq!(s.mime_type.as_deref(), Some("audio/flac"));
         assert_eq!(s.key, "k1");
         assert_eq!(s.track.id, "t0");
         // cellular profile → transcode
-        f.dl.set_transcoding_profile(None, TranscodingProfile { format: None, max_bit_rate: None, cannot_decode: vec![] });
+        f.dl.set_transcoding_profile(
+            None,
+            TranscodingProfile {
+                format: None,
+                max_bit_rate: None,
+                cannot_decode: vec![],
+            },
+        );
         let mut policy = TranscodingPolicy::default();
-        policy.by_kind.insert(NetworkKind::Cellular, TranscodingProfile { format: Some("opus".into()), max_bit_rate: Some(96), cannot_decode: vec![] });
+        policy.by_kind.insert(
+            NetworkKind::Cellular,
+            TranscodingProfile {
+                format: Some("opus".into()),
+                max_bit_rate: Some(96),
+                cannot_decode: vec![],
+            },
+        );
         f.dl.set_transcoding_policy(policy);
-        f.dl.set_network(Some(api::NetworkState { kind: NetworkKind::Cellular, metered: true, network_id: None }));
+        f.dl.set_network(Some(api::NetworkState {
+            kind: NetworkKind::Cellular,
+            metered: true,
+            network_id: None,
+        }));
         let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
         assert!(s.transcoded && s.url.contains("format=opus") && s.url.contains("maxBitRate=96"));
         assert_eq!(s.mime_type.as_deref(), Some("audio/ogg"));
         // wifi with no profile → original
-        f.dl.set_network(Some(api::NetworkState { kind: NetworkKind::Wifi, metered: false, network_id: Some("home".into()) }));
+        f.dl.set_network(Some(api::NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: false,
+            network_id: Some("home".into()),
+        }));
         assert!(!f.dl.resolve(&f.server, "k1", &track).unwrap().transcoded);
         // per-network-id override wins
-        f.dl.set_transcoding_profile(Some("home".into()), TranscodingProfile { format: Some("mp3".into()), max_bit_rate: Some(320), cannot_decode: vec![] });
-        assert!(f.dl.resolve(&f.server, "k1", &track).unwrap().url.contains("format=mp3"));
-        f.dl.set_transcoding_profile(Some("home".into()), TranscodingProfile { format: None, max_bit_rate: None, cannot_decode: vec![] });
+        f.dl.set_transcoding_profile(
+            Some("home".into()),
+            TranscodingProfile {
+                format: Some("mp3".into()),
+                max_bit_rate: Some(320),
+                cannot_decode: vec![],
+            },
+        );
+        assert!(f
+            .dl
+            .resolve(&f.server, "k1", &track)
+            .unwrap()
+            .url
+            .contains("format=mp3"));
+        f.dl.set_transcoding_profile(
+            Some("home".into()),
+            TranscodingProfile {
+                format: None,
+                max_bit_rate: None,
+                cannot_decode: vec![],
+            },
+        );
         // platform can't decode APE → forced transcode even on wifi
         let mut ape = track.clone();
         ape.suffix = Some("ape".into());
@@ -1150,11 +1560,22 @@ mod tests {
         let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"abc").unwrap();
-        f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac")).unwrap();
+        f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac"))
+            .unwrap();
         let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
-        assert!(s.url.starts_with("file://") && s.url.ends_with("t0.flac"), "{}", s.url);
+        assert!(
+            s.url.starts_with("file://") && s.url.ends_with("t0.flac"),
+            "{}",
+            s.url
+        );
         // a download wins over everything and carries the stored gain
-        run_job(&f, f.dl.pin("srv", &PinTarget::Track { id: "t0".into() }, false).unwrap().unwrap()).await;
+        run_job(
+            &f,
+            f.dl.pin("srv", &PinTarget::Track { id: "t0".into() }, false)
+                .unwrap()
+                .unwrap(),
+        )
+        .await;
         f.dl.set_gain("srv", "t0", Some(-6.0), None).unwrap();
         let track = f.db.track("t0").unwrap().unwrap();
         let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
@@ -1181,7 +1602,10 @@ mod tests {
         assert!(f.dl.over_warn_threshold().unwrap());
         assert_eq!(platform_cannot_decode(Platform::Coordinator).len(), 0);
         assert!(platform_cannot_decode(Platform::Android).contains(&"wv".to_string()));
-        assert!(!platform_cannot_decode(Platform::Linux).contains(&"wv".to_string()), "Symphonia decodes WavPack on desktop");
+        assert!(
+            !platform_cannot_decode(Platform::Linux).contains(&"wv".to_string()),
+            "Symphonia decodes WavPack on desktop"
+        );
         assert!(file_url(Path::new("/a/b c.flac")).starts_with("file:///a/b%20c.flac"));
     }
 }

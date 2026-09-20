@@ -16,7 +16,10 @@ use super::client::{AlbumListType, Search3Page, StreamOptions};
 use super::native::NativePlaylistUpdate;
 use super::transport::DownloadOutcome;
 use super::types::*;
-use super::{ApiFuture, PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError, SubsonicResult};
+use super::{
+    ApiFuture, PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError,
+    SubsonicResult,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScrobbleRecord {
@@ -63,7 +66,12 @@ impl FakeServer {
         let caps = ServerCapabilities {
             server_version: Some("0.63.1 (fake)".into()),
             open_subsonic: true,
-            extensions: vec!["transcodeOffset".into(), "formPost".into(), "songLyrics".into(), "sonicSimilarity".into()],
+            extensions: vec![
+                "transcodeOffset".into(),
+                "formPost".into(),
+                "songLyrics".into(),
+                "sonicSimilarity".into(),
+            ],
             transcode_offset: true,
             form_post: true,
             song_lyrics: true,
@@ -73,7 +81,10 @@ impl FakeServer {
             native_api: true,
             meets_floor: true,
         };
-        let state = FakeState { version: "0.63.1 (fake)".into(), ..Default::default() };
+        let state = FakeState {
+            version: "0.63.1 (fake)".into(),
+            ..Default::default()
+        };
         FakeServer {
             server_id: server_id.into(),
             username: username.into(),
@@ -102,7 +113,11 @@ impl FakeServer {
             });
         }
         if let (Some(arid), Some(name)) = (&c.artist_id, &c.artist) {
-            st.artists.entry(arid.clone()).or_insert_with(|| ArtistId3 { id: arid.clone(), name: name.clone(), ..Default::default() });
+            st.artists.entry(arid.clone()).or_insert_with(|| ArtistId3 {
+                id: arid.clone(),
+                name: name.clone(),
+                ..Default::default()
+            });
         }
         st.songs.insert(c.id.clone(), c);
         self
@@ -127,7 +142,14 @@ impl FakeServer {
         }
     }
 
-    pub fn add_playlist(&self, id: &str, name: &str, owner: &str, song_ids: &[&str], readonly: bool) -> &Self {
+    pub fn add_playlist(
+        &self,
+        id: &str,
+        name: &str,
+        owner: &str,
+        song_ids: &[&str],
+        readonly: bool,
+    ) -> &Self {
         let mut st = self.state.lock();
         st.playlists.insert(
             id.into(),
@@ -142,7 +164,8 @@ impl FakeServer {
                 ..Default::default()
             },
         );
-        st.playlist_songs.insert(id.into(), song_ids.iter().map(|s| s.to_string()).collect());
+        st.playlist_songs
+            .insert(id.into(), song_ids.iter().map(|s| s.to_string()).collect());
         self
     }
 
@@ -167,19 +190,39 @@ impl FakeServer {
     }
 
     pub fn calls_to(&self, endpoint: &str) -> usize {
-        self.state.lock().calls.iter().filter(|c| c.as_str() == endpoint).count()
+        self.state
+            .lock()
+            .calls
+            .iter()
+            .filter(|c| c.as_str() == endpoint)
+            .count()
     }
 
     pub fn rating_of(&self, id: &str) -> u32 {
-        self.state.lock().songs.get(id).and_then(|s| s.user_rating).unwrap_or(0)
+        self.state
+            .lock()
+            .songs
+            .get(id)
+            .and_then(|s| s.user_rating)
+            .unwrap_or(0)
     }
 
     pub fn starred(&self, id: &str) -> bool {
-        self.state.lock().songs.get(id).and_then(|s| s.starred.clone()).is_some()
+        self.state
+            .lock()
+            .songs
+            .get(id)
+            .and_then(|s| s.starred.clone())
+            .is_some()
     }
 
     pub fn playlist_song_ids(&self, id: &str) -> Vec<String> {
-        self.state.lock().playlist_songs.get(id).cloned().unwrap_or_default()
+        self.state
+            .lock()
+            .playlist_songs
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn scrobbles(&self) -> Vec<ScrobbleRecord> {
@@ -199,10 +242,17 @@ impl FakeServer {
     }
 
     fn playlist_with_songs(st: &FakeState, id: &str) -> SubsonicResult<PlaylistWithSongs> {
-        let mut p = st.playlists.get(id).cloned().ok_or_else(|| SubsonicError::NotFound(format!("playlist {id}")))?;
+        let mut p = st
+            .playlists
+            .get(id)
+            .cloned()
+            .ok_or_else(|| SubsonicError::NotFound(format!("playlist {id}")))?;
         let ids = st.playlist_songs.get(id).cloned().unwrap_or_default();
         p.song_count = ids.len() as u32;
-        let entry: Vec<Child> = ids.iter().filter_map(|s| st.songs.get(s).cloned()).collect();
+        let entry: Vec<Child> = ids
+            .iter()
+            .filter_map(|s| st.songs.get(s).cloned())
+            .collect();
         Ok(PlaylistWithSongs { playlist: p, entry })
     }
 
@@ -246,14 +296,26 @@ impl SubsonicApi for FakeServer {
     fn open_subsonic_extensions(&self) -> ApiFuture<'_, Vec<OpenSubsonicExtension>> {
         Box::pin(async move {
             self.gate("getOpenSubsonicExtensions")?;
-            Ok(self.caps.lock().extensions.iter().map(|n| OpenSubsonicExtension { name: n.clone(), versions: vec![1] }).collect())
+            Ok(self
+                .caps
+                .lock()
+                .extensions
+                .iter()
+                .map(|n| OpenSubsonicExtension {
+                    name: n.clone(),
+                    versions: vec![1],
+                })
+                .collect())
         })
     }
 
     fn music_folders(&self) -> ApiFuture<'_, Vec<MusicFolder>> {
         Box::pin(async move {
             self.gate("getMusicFolders")?;
-            Ok(vec![MusicFolder { id: "1".into(), name: Some("Music".into()) }])
+            Ok(vec![MusicFolder {
+                id: "1".into(),
+                name: Some("Music".into()),
+            }])
         })
     }
 
@@ -263,12 +325,20 @@ impl SubsonicApi for FakeServer {
             let st = self.state.lock();
             let mut by_letter: BTreeMap<String, Vec<ArtistId3>> = BTreeMap::new();
             for a in st.artists.values() {
-                let letter = a.name.chars().next().map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_else(|| "#".into());
+                let letter = a
+                    .name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase().to_string())
+                    .unwrap_or_else(|| "#".into());
                 by_letter.entry(letter).or_default().push(a.clone());
             }
             Ok(ArtistsIndex {
                 ignored_articles: None,
-                index: by_letter.into_iter().map(|(name, artist)| IndexEntry { name, artist }).collect(),
+                index: by_letter
+                    .into_iter()
+                    .map(|(name, artist)| IndexEntry { name, artist })
+                    .collect(),
             })
         })
     }
@@ -278,8 +348,17 @@ impl SubsonicApi for FakeServer {
         Box::pin(async move {
             self.gate("getArtist")?;
             let st = self.state.lock();
-            let artist = st.artists.get(&id).cloned().ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
-            let album = st.albums.values().filter(|a| a.artist_id.as_deref() == Some(&id)).cloned().collect();
+            let artist = st
+                .artists
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
+            let album = st
+                .albums
+                .values()
+                .filter(|a| a.artist_id.as_deref() == Some(&id))
+                .cloned()
+                .collect();
             Ok(ArtistWithAlbums { artist, album })
         })
     }
@@ -289,25 +368,45 @@ impl SubsonicApi for FakeServer {
         Box::pin(async move {
             self.gate("getAlbum")?;
             let st = self.state.lock();
-            let album = st.albums.get(&id).cloned().ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
-            let song = st.songs.values().filter(|s| s.album_id.as_deref() == Some(&id)).cloned().collect();
+            let album = st
+                .albums
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
+            let song = st
+                .songs
+                .values()
+                .filter(|s| s.album_id.as_deref() == Some(&id))
+                .cloned()
+                .collect();
             Ok(AlbumWithSongs { album, song })
         })
     }
 
-    fn album_list2(&self, kind: AlbumListType, size: u32, offset: u32) -> ApiFuture<'_, Vec<AlbumId3>> {
+    fn album_list2(
+        &self,
+        kind: AlbumListType,
+        size: u32,
+        offset: u32,
+    ) -> ApiFuture<'_, Vec<AlbumId3>> {
         Box::pin(async move {
             self.gate("getAlbumList2")?;
             let st = self.state.lock();
             let mut all: Vec<AlbumId3> = st.albums.values().cloned().collect();
             match kind {
-                AlbumListType::Newest => all.sort_by(|a, b| b.created.cmp(&a.created).then(b.id.cmp(&a.id))),
+                AlbumListType::Newest => {
+                    all.sort_by(|a, b| b.created.cmp(&a.created).then(b.id.cmp(&a.id)))
+                }
                 AlbumListType::AlphabeticalByName => all.sort_by(|a, b| a.name.cmp(&b.name)),
                 AlbumListType::Starred => all.retain(|a| a.starred.is_some()),
                 AlbumListType::ByGenre(g) => all.retain(|a| a.genre.as_deref() == Some(&g)),
                 _ => {}
             }
-            Ok(all.into_iter().skip(offset as usize).take(size as usize).collect())
+            Ok(all
+                .into_iter()
+                .skip(offset as usize)
+                .take(size as usize)
+                .collect())
         })
     }
 
@@ -315,11 +414,22 @@ impl SubsonicApi for FakeServer {
         let id = id.to_string();
         Box::pin(async move {
             self.gate("getSong")?;
-            self.state.lock().songs.get(&id).cloned().ok_or_else(|| SubsonicError::NotFound(id.clone()))
+            self.state
+                .lock()
+                .songs
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| SubsonicError::NotFound(id.clone()))
         })
     }
 
-    fn random_songs(&self, size: u32, genre: Option<&str>, _f: Option<u32>, _t: Option<u32>) -> ApiFuture<'_, Vec<Child>> {
+    fn random_songs(
+        &self,
+        size: u32,
+        genre: Option<&str>,
+        _f: Option<u32>,
+        _t: Option<u32>,
+    ) -> ApiFuture<'_, Vec<Child>> {
         let genre = genre.map(String::from);
         Box::pin(async move {
             self.gate("getRandomSongs")?;
@@ -327,7 +437,11 @@ impl SubsonicApi for FakeServer {
             Ok(st
                 .songs
                 .values()
-                .filter(|s| genre.as_deref().is_none_or(|g| s.genre.as_deref() == Some(g)))
+                .filter(|s| {
+                    genre
+                        .as_deref()
+                        .is_none_or(|g| s.genre.as_deref() == Some(g))
+                })
                 .take(size as usize)
                 .cloned()
                 .collect())
@@ -363,7 +477,14 @@ impl SubsonicApi for FakeServer {
                     *counts.entry(g.clone()).or_default() += 1;
                 }
             }
-            Ok(counts.into_iter().map(|(value, song_count)| GenreBody { value, song_count, album_count: 0 }).collect())
+            Ok(counts
+                .into_iter()
+                .map(|(value, song_count)| GenreBody {
+                    value,
+                    song_count,
+                    album_count: 0,
+                })
+                .collect())
         })
     }
 
@@ -372,9 +493,24 @@ impl SubsonicApi for FakeServer {
             self.gate("getStarred2")?;
             let st = self.state.lock();
             Ok(Starred2 {
-                artist: st.artists.values().filter(|a| a.starred.is_some()).cloned().collect(),
-                album: st.albums.values().filter(|a| a.starred.is_some()).cloned().collect(),
-                song: st.songs.values().filter(|s| s.starred.is_some()).cloned().collect(),
+                artist: st
+                    .artists
+                    .values()
+                    .filter(|a| a.starred.is_some())
+                    .cloned()
+                    .collect(),
+                album: st
+                    .albums
+                    .values()
+                    .filter(|a| a.starred.is_some())
+                    .cloned()
+                    .collect(),
+                song: st
+                    .songs
+                    .values()
+                    .filter(|s| s.starred.is_some())
+                    .cloned()
+                    .collect(),
             })
         })
     }
@@ -388,7 +524,11 @@ impl SubsonicApi for FakeServer {
                 .values()
                 .map(|p| {
                     let mut p = p.clone();
-                    p.song_count = st.playlist_songs.get(&p.id).map(|v| v.len() as u32).unwrap_or(0);
+                    p.song_count = st
+                        .playlist_songs
+                        .get(&p.id)
+                        .map(|v| v.len() as u32)
+                        .unwrap_or(0);
                     p
                 })
                 .collect())
@@ -427,7 +567,11 @@ impl SubsonicApi for FakeServer {
         })
     }
 
-    fn replace_playlist(&self, playlist_id: &str, song_ids: &[String]) -> ApiFuture<'_, PlaylistWithSongs> {
+    fn replace_playlist(
+        &self,
+        playlist_id: &str,
+        song_ids: &[String],
+    ) -> ApiFuture<'_, PlaylistWithSongs> {
         let id = playlist_id.to_string();
         let ids = song_ids.to_vec();
         Box::pin(async move {
@@ -450,8 +594,12 @@ impl SubsonicApi for FakeServer {
             if !st.playlists.contains_key(&id) {
                 return Err(SubsonicError::NotFound(id));
             }
-            if st.playlists.get(&id).and_then(|p| p.readonly) == Some(true) && (!update.song_ids_to_add.is_empty() || !update.song_indices_to_remove.is_empty()) {
-                return Err(SubsonicError::Forbidden("smart playlist is read-only".into()));
+            if st.playlists.get(&id).and_then(|p| p.readonly) == Some(true)
+                && (!update.song_ids_to_add.is_empty() || !update.song_indices_to_remove.is_empty())
+            {
+                return Err(SubsonicError::Forbidden(
+                    "smart playlist is read-only".into(),
+                ));
             }
             if let Some(p) = st.playlists.get_mut(&id) {
                 if let Some(n) = update.name {
@@ -485,7 +633,9 @@ impl SubsonicApi for FakeServer {
         Box::pin(async move {
             self.gate("deletePlaylist")?;
             let mut st = self.state.lock();
-            st.playlists.remove(&id).ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
+            st.playlists
+                .remove(&id)
+                .ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
             st.playlist_songs.remove(&id);
             Ok(())
         })
@@ -530,7 +680,13 @@ impl SubsonicApi for FakeServer {
         let id = id.to_string();
         Box::pin(async move {
             self.gate("getLyricsBySongId")?;
-            Ok(self.state.lock().lyrics.get(&id).cloned().unwrap_or_default())
+            Ok(self
+                .state
+                .lock()
+                .lyrics
+                .get(&id)
+                .cloned()
+                .unwrap_or_default())
         })
     }
 
@@ -538,7 +694,16 @@ impl SubsonicApi for FakeServer {
         let id = id.to_string();
         Box::pin(async move {
             self.gate("getSimilarSongs2")?;
-            Ok(self.state.lock().similar.get(&id).cloned().unwrap_or_default().into_iter().take(count as usize).collect())
+            Ok(self
+                .state
+                .lock()
+                .similar
+                .get(&id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .take(count as usize)
+                .collect())
         })
     }
 
@@ -547,7 +712,13 @@ impl SubsonicApi for FakeServer {
         Box::pin(async move {
             self.gate("getTopSongs")?;
             let st = self.state.lock();
-            Ok(st.songs.values().filter(|s| s.artist.as_deref() == Some(&artist)).take(count as usize).cloned().collect())
+            Ok(st
+                .songs
+                .values()
+                .filter(|s| s.artist.as_deref() == Some(&artist))
+                .take(count as usize)
+                .cloned()
+                .collect())
         })
     }
 
@@ -558,7 +729,12 @@ impl SubsonicApi for FakeServer {
             let st = self.state.lock();
             Ok(ArtistInfo2 {
                 biography: st.artists.get(&id).map(|a| format!("About {}", a.name)),
-                similar_artist: st.artists.values().filter(|a| a.id != id).cloned().collect(),
+                similar_artist: st
+                    .artists
+                    .values()
+                    .filter(|a| a.id != id)
+                    .cloned()
+                    .collect(),
                 ..Default::default()
             })
         })
@@ -571,7 +747,16 @@ impl SubsonicApi for FakeServer {
                 return Err(SubsonicError::Unsupported("sonicSimilarity".into()));
             }
             self.gate("getSonicSimilarTracks")?;
-            Ok(self.state.lock().sonic.get(&id).cloned().unwrap_or_default().into_iter().take(count as usize).collect())
+            Ok(self
+                .state
+                .lock()
+                .sonic
+                .get(&id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .take(count as usize)
+                .collect())
         })
     }
 
@@ -658,7 +843,11 @@ impl SubsonicApi for FakeServer {
                     s.play_count = Some(s.play_count.unwrap_or(0) + 1);
                 }
             }
-            st.scrobbles.push(ScrobbleRecord { id, time_ms, submission });
+            st.scrobbles.push(ScrobbleRecord {
+                id,
+                time_ms,
+                submission,
+            });
             Ok(())
         })
     }
@@ -679,7 +868,11 @@ impl SubsonicApi for FakeServer {
         Box::pin(async move {
             self.gate("savePlayQueue")?;
             let mut st = self.state.lock();
-            let entry = save.song_ids.iter().filter_map(|s| st.songs.get(s).cloned()).collect();
+            let entry = save
+                .song_ids
+                .iter()
+                .filter_map(|s| st.songs.get(s).cloned())
+                .collect();
             st.play_queue = Some(PlayQueue {
                 entry,
                 current: save.current,
@@ -719,7 +912,8 @@ impl SubsonicApi for FakeServer {
             u.query_pairs_mut().append_pair("format", f);
         }
         if let Some(b) = options.max_bit_rate {
-            u.query_pairs_mut().append_pair("maxBitRate", &b.to_string());
+            u.query_pairs_mut()
+                .append_pair("maxBitRate", &b.to_string());
         }
         u
     }
@@ -732,18 +926,34 @@ impl SubsonicApi for FakeServer {
         let dest = dest.to_path_buf();
         Box::pin(async move {
             self.gate("download")?;
-            let id = url.query_pairs().find(|(k, _)| k == "id").map(|(_, v)| v.into_owned()).unwrap_or_default();
+            let id = url
+                .query_pairs()
+                .find(|(k, _)| k == "id")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
             let (bytes, content_type) = {
                 let st = self.state.lock();
-                let bytes = st.media.get(&id).cloned().unwrap_or_else(|| format!("audio:{id}").into_bytes());
+                let bytes = st
+                    .media
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("audio:{id}").into_bytes());
                 let ct = st.songs.get(&id).and_then(|s| s.content_type.clone());
                 (bytes, ct)
             };
             if let Some(parent) = dest.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| SubsonicError::Io(e.to_string()))?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| SubsonicError::Io(e.to_string()))?;
             }
-            tokio::fs::write(&dest, &bytes).await.map_err(|e| SubsonicError::Io(e.to_string()))?;
-            Ok(DownloadOutcome { status: 200, content_type, bytes: bytes.len() as u64 })
+            tokio::fs::write(&dest, &bytes)
+                .await
+                .map_err(|e| SubsonicError::Io(e.to_string()))?;
+            Ok(DownloadOutcome {
+                status: 200,
+                content_type,
+                bytes: bytes.len() as u64,
+            })
         })
     }
 
@@ -755,12 +965,19 @@ impl SubsonicApi for FakeServer {
             }
             self.gate("native:getPlaylist")?;
             let st = self.state.lock();
-            let p = st.playlists.get(&id).ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
+            let p = st
+                .playlists
+                .get(&id)
+                .ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
             Ok(NativePlaylist {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 comment: p.comment.clone().unwrap_or_default(),
-                song_count: st.playlist_songs.get(&id).map(|v| v.len() as u32).unwrap_or(0),
+                song_count: st
+                    .playlist_songs
+                    .get(&id)
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0),
                 owner_name: p.owner.clone(),
                 public: p.public,
                 rules: st.native_rules.get(&id).cloned(),
@@ -769,7 +986,11 @@ impl SubsonicApi for FakeServer {
         })
     }
 
-    fn native_update_playlist(&self, id: &str, update: NativePlaylistUpdate) -> ApiFuture<'_, NativePlaylist> {
+    fn native_update_playlist(
+        &self,
+        id: &str,
+        update: NativePlaylistUpdate,
+    ) -> ApiFuture<'_, NativePlaylist> {
         let id = id.to_string();
         Box::pin(async move {
             if !self.caps.lock().native_api {
@@ -778,7 +999,10 @@ impl SubsonicApi for FakeServer {
             self.gate("native:updatePlaylist")?;
             {
                 let mut st = self.state.lock();
-                let p = st.playlists.get_mut(&id).ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
+                let p = st
+                    .playlists
+                    .get_mut(&id)
+                    .ok_or_else(|| SubsonicError::NotFound(id.clone()))?;
                 if let Some(n) = update.name {
                     p.name = n;
                 }

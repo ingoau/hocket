@@ -49,7 +49,12 @@ pub enum Method {
 
 impl HttpRequest {
     pub fn get(url: Url) -> Self {
-        HttpRequest { method: Method::Get, url, headers: Vec::new(), body: None }
+        HttpRequest {
+            method: Method::Get,
+            url,
+            headers: Vec::new(),
+            body: None,
+        }
     }
     pub fn with_header(mut self, name: &str, value: &str) -> Self {
         self.headers.push((name.to_string(), value.to_string()));
@@ -57,7 +62,8 @@ impl HttpRequest {
     }
     pub fn with_json_body(mut self, method: Method, json: &str) -> Self {
         self.method = method;
-        self.headers.push(("content-type".into(), "application/json".into()));
+        self.headers
+            .push(("content-type".into(), "application/json".into()));
         self.body = Some(Bytes::from(json.to_string()));
         self
     }
@@ -139,10 +145,17 @@ impl HttpTransport for ReqwestTransport {
         Box::pin(async move {
             let resp = self.build(&request).send().await.map_err(map_reqwest)?;
             let status = resp.status().as_u16();
-            let content_type =
-                resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(String::from);
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
             let body = resp.bytes().await.map_err(map_reqwest)?;
-            Ok(HttpResponse { status, content_type, body })
+            Ok(HttpResponse {
+                status,
+                content_type,
+                body,
+            })
         })
     }
 
@@ -158,10 +171,17 @@ impl HttpTransport for ReqwestTransport {
             use tokio::io::AsyncWriteExt;
             let resp = self.client.get(url).send().await.map_err(map_reqwest)?;
             let status = resp.status().as_u16();
-            let content_type =
-                resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(String::from);
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
             if !(200..300).contains(&status) {
-                return Ok(DownloadOutcome { status, content_type, bytes: 0 });
+                return Ok(DownloadOutcome {
+                    status,
+                    content_type,
+                    bytes: 0,
+                });
             }
             let total = resp.content_length();
             if let Some(parent) = dest.parent() {
@@ -182,7 +202,11 @@ impl HttpTransport for ReqwestTransport {
             file.flush().await?;
             drop(file);
             tokio::fs::rename(&tmp, &dest).await?;
-            Ok(DownloadOutcome { status, content_type, bytes: written })
+            Ok(DownloadOutcome {
+                status,
+                content_type,
+                bytes: written,
+            })
         })
     }
 }
@@ -246,11 +270,22 @@ impl FakeTransport {
     /// Route on a path prefix (native API) and optional method.
     pub fn on_path(&self, path_prefix: &str, method: Option<Method>, reply: FakeReply) -> &Self {
         let p = path_prefix.to_string();
-        self.on(move |r| r.url.path().starts_with(&p) && method.is_none_or(|m| m == r.method), vec![reply])
+        self.on(
+            move |r| r.url.path().starts_with(&p) && method.is_none_or(|m| m == r.method),
+            vec![reply],
+        )
     }
 
-    pub fn on(&self, matcher: impl Fn(&HttpRequest) -> bool + Send + Sync + 'static, replies: Vec<FakeReply>) -> &Self {
-        self.inner.lock().routes.push(Route { matcher: Arc::new(matcher), replies, hits: 0 });
+    pub fn on(
+        &self,
+        matcher: impl Fn(&HttpRequest) -> bool + Send + Sync + 'static,
+        replies: Vec<FakeReply>,
+    ) -> &Self {
+        self.inner.lock().routes.push(Route {
+            matcher: Arc::new(matcher),
+            replies,
+            hits: 0,
+        });
         self
     }
 
@@ -261,7 +296,10 @@ impl FakeTransport {
 
     /// Requests whose endpoint name matches.
     pub fn requests_to(&self, endpoint: &str) -> Vec<HttpRequest> {
-        self.requests().into_iter().filter(|r| endpoint_of(&r.url) == endpoint).collect()
+        self.requests()
+            .into_iter()
+            .filter(|r| endpoint_of(&r.url) == endpoint)
+            .collect()
     }
 
     pub fn clear_requests(&self) {
@@ -271,7 +309,11 @@ impl FakeTransport {
     fn reply_for(&self, request: &HttpRequest) -> Option<FakeReply> {
         let mut inner = self.inner.lock();
         inner.requests.push(request.clone());
-        let route = inner.routes.iter_mut().rev().find(|r| (r.matcher)(request))?;
+        let route = inner
+            .routes
+            .iter_mut()
+            .rev()
+            .find(|r| (r.matcher)(request))?;
         let idx = route.hits.min(route.replies.len().saturating_sub(1));
         route.hits += 1;
         route.replies.get(idx).cloned()
@@ -280,18 +322,30 @@ impl FakeTransport {
 
 /// The Subsonic endpoint name of a URL: last path segment without `.view`.
 pub fn endpoint_of(url: &Url) -> String {
-    let last = url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("");
+    let last = url
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .unwrap_or("");
     last.trim_end_matches(".view").to_string()
 }
 
 /// Read a query parameter from a request URL.
 pub fn query_param(request: &HttpRequest, key: &str) -> Option<String> {
-    request.url.query_pairs().find(|(k, _)| k == key).map(|(_, v)| v.into_owned())
+    request
+        .url
+        .query_pairs()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
 }
 
 /// All values of a repeated query parameter.
 pub fn query_params(request: &HttpRequest, key: &str) -> Vec<String> {
-    request.url.query_pairs().filter(|(k, _)| k == key).map(|(_, v)| v.into_owned()).collect()
+    request
+        .url
+        .query_pairs()
+        .filter(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
+        .collect()
 }
 
 impl HttpTransport for FakeTransport {
@@ -299,17 +353,29 @@ impl HttpTransport for FakeTransport {
         let reply = self.reply_for(&request);
         Box::pin(async move {
             match reply {
-                None => Ok(HttpResponse { status: 404, content_type: None, body: Bytes::new() }),
+                None => Ok(HttpResponse {
+                    status: 404,
+                    content_type: None,
+                    body: Bytes::new(),
+                }),
                 Some(FakeReply::Json(j)) => Ok(HttpResponse {
                     status: 200,
                     content_type: Some("application/json".into()),
                     body: Bytes::from(j),
                 }),
-                Some(FakeReply::Bytes { content_type, body }) => {
-                    Ok(HttpResponse { status: 200, content_type: Some(content_type), body })
+                Some(FakeReply::Bytes { content_type, body }) => Ok(HttpResponse {
+                    status: 200,
+                    content_type: Some(content_type),
+                    body,
+                }),
+                Some(FakeReply::Status(s)) => Ok(HttpResponse {
+                    status: s,
+                    content_type: None,
+                    body: Bytes::new(),
+                }),
+                Some(FakeReply::Network) => {
+                    Err(TransportError::Network("fake network failure".into()))
                 }
-                Some(FakeReply::Status(s)) => Ok(HttpResponse { status: s, content_type: None, body: Bytes::new() }),
-                Some(FakeReply::Network) => Err(TransportError::Network("fake network failure".into())),
                 Some(FakeReply::Timeout) => Err(TransportError::Timeout),
             }
         })
@@ -327,14 +393,22 @@ impl HttpTransport for FakeTransport {
         Box::pin(async move {
             let (status, content_type, body) = match reply {
                 None => (404, None, Bytes::new()),
-                Some(FakeReply::Json(j)) => (200, Some("application/json".to_string()), Bytes::from(j)),
+                Some(FakeReply::Json(j)) => {
+                    (200, Some("application/json".to_string()), Bytes::from(j))
+                }
                 Some(FakeReply::Bytes { content_type, body }) => (200, Some(content_type), body),
                 Some(FakeReply::Status(s)) => (s, None, Bytes::new()),
-                Some(FakeReply::Network) => return Err(TransportError::Network("fake network failure".into())),
+                Some(FakeReply::Network) => {
+                    return Err(TransportError::Network("fake network failure".into()))
+                }
                 Some(FakeReply::Timeout) => return Err(TransportError::Timeout),
             };
             if !(200..300).contains(&status) {
-                return Ok(DownloadOutcome { status, content_type, bytes: 0 });
+                return Ok(DownloadOutcome {
+                    status,
+                    content_type,
+                    bytes: 0,
+                });
             }
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -343,12 +417,20 @@ impl HttpTransport for FakeTransport {
             if let Some(p) = progress {
                 p(body.len() as u64, Some(body.len() as u64));
             }
-            Ok(DownloadOutcome { status, content_type, bytes: body.len() as u64 })
+            Ok(DownloadOutcome {
+                status,
+                content_type,
+                bytes: body.len() as u64,
+            })
         })
     }
 }
 
 /// Convenience: a map of header name → value.
 pub fn headers_map(request: &HttpRequest) -> HashMap<String, String> {
-    request.headers.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect()
+    request
+        .headers
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+        .collect()
 }

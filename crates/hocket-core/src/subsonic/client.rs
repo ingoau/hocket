@@ -15,7 +15,10 @@ use super::auth::{auth_params, AuthMode, Credential};
 use super::native::{NativePlaylistUpdate, NativeSession};
 use super::transport::{DownloadOutcome, HttpRequest, HttpResponse, HttpTransport};
 use super::types::*;
-use super::{ApiFuture, PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError, SubsonicResult};
+use super::{
+    ApiFuture, PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError,
+    SubsonicResult,
+};
 
 /// How failed requests are retried. Only transient failures (network,
 /// timeout, HTTP 5xx/429) retry; auth and protocol errors surface at once.
@@ -29,19 +32,29 @@ pub struct RetryPolicy {
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        RetryPolicy { max_attempts: 4, initial_backoff: Duration::from_millis(500), max_backoff: Duration::from_secs(8) }
+        RetryPolicy {
+            max_attempts: 4,
+            initial_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(8),
+        }
     }
 }
 
 impl RetryPolicy {
     /// No retries, no waiting (tests).
     pub fn none() -> Self {
-        RetryPolicy { max_attempts: 1, initial_backoff: Duration::ZERO, max_backoff: Duration::ZERO }
+        RetryPolicy {
+            max_attempts: 1,
+            initial_backoff: Duration::ZERO,
+            max_backoff: Duration::ZERO,
+        }
     }
 
     pub fn backoff_for(&self, attempt: u32) -> Duration {
         let mult = 2u32.saturating_pow(attempt.saturating_sub(1));
-        self.initial_backoff.saturating_mul(mult).min(self.max_backoff)
+        self.initial_backoff
+            .saturating_mul(mult)
+            .min(self.max_backoff)
     }
 }
 
@@ -58,7 +71,13 @@ pub struct ClientConfig {
 
 impl ClientConfig {
     pub fn new(server_id: impl Into<String>, base_url: Url, auth: AuthMode) -> Self {
-        ClientConfig { server_id: server_id.into(), base_url, auth, retry: RetryPolicy::default(), max_concurrent: 4 }
+        ClientConfig {
+            server_id: server_id.into(),
+            base_url,
+            auth,
+            retry: RetryPolicy::default(),
+            max_concurrent: 4,
+        }
     }
 }
 
@@ -90,16 +109,44 @@ pub struct Search3Page {
 
 impl Search3Page {
     pub fn songs(count: u32, offset: u32) -> Self {
-        Search3Page { artist_count: 0, artist_offset: 0, album_count: 0, album_offset: 0, song_count: count, song_offset: offset }
+        Search3Page {
+            artist_count: 0,
+            artist_offset: 0,
+            album_count: 0,
+            album_offset: 0,
+            song_count: count,
+            song_offset: offset,
+        }
     }
     pub fn albums(count: u32, offset: u32) -> Self {
-        Search3Page { artist_count: 0, artist_offset: 0, album_count: count, album_offset: offset, song_count: 0, song_offset: 0 }
+        Search3Page {
+            artist_count: 0,
+            artist_offset: 0,
+            album_count: count,
+            album_offset: offset,
+            song_count: 0,
+            song_offset: 0,
+        }
     }
     pub fn artists(count: u32, offset: u32) -> Self {
-        Search3Page { artist_count: count, artist_offset: offset, album_count: 0, album_offset: 0, song_count: 0, song_offset: 0 }
+        Search3Page {
+            artist_count: count,
+            artist_offset: offset,
+            album_count: 0,
+            album_offset: 0,
+            song_count: 0,
+            song_offset: 0,
+        }
     }
     pub fn all(count: u32) -> Self {
-        Search3Page { artist_count: count, artist_offset: 0, album_count: count, album_offset: 0, song_count: count, song_offset: 0 }
+        Search3Page {
+            artist_count: count,
+            artist_offset: 0,
+            album_count: count,
+            album_offset: 0,
+            song_count: count,
+            song_offset: 0,
+        }
     }
 }
 
@@ -168,7 +215,9 @@ impl Client {
     pub fn rest_url(&self, endpoint: &str, params: &[(&str, String)]) -> Url {
         let mut url = self.config.base_url.clone();
         {
-            let mut segs = url.path_segments_mut().expect("base url is not cannot-be-a-base");
+            let mut segs = url
+                .path_segments_mut()
+                .expect("base url is not cannot-be-a-base");
             segs.pop_if_empty();
             segs.push("rest");
             segs.push(endpoint);
@@ -187,7 +236,11 @@ impl Client {
     }
 
     /// Execute one endpoint with retries; returns the inner response on `status: ok`.
-    pub async fn call(&self, endpoint: &str, params: &[(&str, String)]) -> SubsonicResult<SubsonicResponse> {
+    pub async fn call(
+        &self,
+        endpoint: &str,
+        params: &[(&str, String)],
+    ) -> SubsonicResult<SubsonicResponse> {
         let mut attempt = 0u32;
         loop {
             attempt += 1;
@@ -217,8 +270,15 @@ impl Client {
     }
 
     /// Raw request through the concurrency limiter (also used by the native API).
-    pub(super) async fn execute_raw(&self, request: HttpRequest) -> Result<HttpResponse, super::transport::TransportError> {
-        let _permit = self.limiter.acquire().await.map_err(|_| super::transport::TransportError::Network("closed".into()))?;
+    pub(super) async fn execute_raw(
+        &self,
+        request: HttpRequest,
+    ) -> Result<HttpResponse, super::transport::TransportError> {
+        let _permit = self
+            .limiter
+            .acquire()
+            .await
+            .map_err(|_| super::transport::TransportError::Network("closed".into()))?;
         self.transport.execute(request).await
     }
 
@@ -240,8 +300,13 @@ fn classify(resp: HttpResponse) -> SubsonicResult<bytes::Bytes> {
         200..=299 => Ok(resp.body),
         401 | 403 => Err(SubsonicError::Auth(format!("http {}", resp.status))),
         404 => Err(SubsonicError::NotFound("http 404".into())),
-        429 | 500..=599 => Err(SubsonicError::Server { code: resp.status as u32, message: format!("http {}", resp.status) }),
-        s => Err(SubsonicError::Protocol(format!("unexpected http status {s}"))),
+        429 | 500..=599 => Err(SubsonicError::Server {
+            code: resp.status as u32,
+            message: format!("http {}", resp.status),
+        }),
+        s => Err(SubsonicError::Protocol(format!(
+            "unexpected http status {s}"
+        ))),
     }
 }
 
@@ -269,7 +334,11 @@ impl SubsonicApi for Client {
     }
 
     fn username(&self) -> Option<String> {
-        self.auth.read().username().map(String::from).or_else(|| self.native.username())
+        self.auth
+            .read()
+            .username()
+            .map(String::from)
+            .or_else(|| self.native.username())
     }
 
     fn capabilities(&self) -> ServerCapabilities {
@@ -295,22 +364,43 @@ impl SubsonicApi for Client {
     }
 
     fn artists(&self) -> ApiFuture<'_, ArtistsIndex> {
-        Box::pin(async move { self.call("getArtists", &[]).await?.artists.ok_or_else(|| missing("artists")) })
+        Box::pin(async move {
+            self.call("getArtists", &[])
+                .await?
+                .artists
+                .ok_or_else(|| missing("artists"))
+        })
     }
 
     fn artist(&self, id: &str) -> ApiFuture<'_, ArtistWithAlbums> {
         let id = id.to_string();
-        Box::pin(async move { self.call("getArtist", &[("id", id)]).await?.artist.ok_or_else(|| missing("artist")) })
+        Box::pin(async move {
+            self.call("getArtist", &[("id", id)])
+                .await?
+                .artist
+                .ok_or_else(|| missing("artist"))
+        })
     }
 
     fn album(&self, id: &str) -> ApiFuture<'_, AlbumWithSongs> {
         let id = id.to_string();
-        Box::pin(async move { self.call("getAlbum", &[("id", id)]).await?.album.ok_or_else(|| missing("album")) })
+        Box::pin(async move {
+            self.call("getAlbum", &[("id", id)])
+                .await?
+                .album
+                .ok_or_else(|| missing("album"))
+        })
     }
 
-    fn album_list2(&self, kind: AlbumListType, size: u32, offset: u32) -> ApiFuture<'_, Vec<AlbumId3>> {
+    fn album_list2(
+        &self,
+        kind: AlbumListType,
+        size: u32,
+        offset: u32,
+    ) -> ApiFuture<'_, Vec<AlbumId3>> {
         Box::pin(async move {
-            let mut params: Vec<(&str, String)> = vec![("size", size.to_string()), ("offset", offset.to_string())];
+            let mut params: Vec<(&str, String)> =
+                vec![("size", size.to_string()), ("offset", offset.to_string())];
             let ty = match &kind {
                 AlbumListType::Random => "random",
                 AlbumListType::Newest => "newest",
@@ -338,7 +428,12 @@ impl SubsonicApi for Client {
 
     fn song(&self, id: &str) -> ApiFuture<'_, Child> {
         let id = id.to_string();
-        Box::pin(async move { self.call("getSong", &[("id", id)]).await?.song.ok_or_else(|| missing("song")) })
+        Box::pin(async move {
+            self.call("getSong", &[("id", id)])
+                .await?
+                .song
+                .ok_or_else(|| missing("song"))
+        })
     }
 
     fn random_songs(
@@ -368,39 +463,82 @@ impl SubsonicApi for Client {
     fn songs_by_genre(&self, genre: &str, count: u32, offset: u32) -> ApiFuture<'_, Vec<Child>> {
         let genre = genre.to_string();
         Box::pin(async move {
-            let params = [("genre", genre), ("count", count.to_string()), ("offset", offset.to_string())];
+            let params = [
+                ("genre", genre),
+                ("count", count.to_string()),
+                ("offset", offset.to_string()),
+            ];
             let r = self.call("getSongsByGenre", &params).await?;
             Ok(r.songs_by_genre.map(|s| s.song).unwrap_or_default())
         })
     }
 
     fn genres(&self) -> ApiFuture<'_, Vec<GenreBody>> {
-        Box::pin(async move { Ok(self.call("getGenres", &[]).await?.genres.map(|g| g.genre).unwrap_or_default()) })
+        Box::pin(async move {
+            Ok(self
+                .call("getGenres", &[])
+                .await?
+                .genres
+                .map(|g| g.genre)
+                .unwrap_or_default())
+        })
     }
 
     fn starred2(&self) -> ApiFuture<'_, Starred2> {
-        Box::pin(async move { Ok(self.call("getStarred2", &[]).await?.starred2.unwrap_or_default()) })
+        Box::pin(async move {
+            Ok(self
+                .call("getStarred2", &[])
+                .await?
+                .starred2
+                .unwrap_or_default())
+        })
     }
 
     fn playlists(&self) -> ApiFuture<'_, Vec<PlaylistBody>> {
-        Box::pin(async move { Ok(self.call("getPlaylists", &[]).await?.playlists.map(|p| p.playlist).unwrap_or_default()) })
+        Box::pin(async move {
+            Ok(self
+                .call("getPlaylists", &[])
+                .await?
+                .playlists
+                .map(|p| p.playlist)
+                .unwrap_or_default())
+        })
     }
 
     fn playlist(&self, id: &str) -> ApiFuture<'_, PlaylistWithSongs> {
         let id = id.to_string();
-        Box::pin(async move { self.call("getPlaylist", &[("id", id)]).await?.playlist.ok_or_else(|| missing("playlist")) })
+        Box::pin(async move {
+            self.call("getPlaylist", &[("id", id)])
+                .await?
+                .playlist
+                .ok_or_else(|| missing("playlist"))
+        })
     }
 
     fn create_playlist(&self, name: &str, song_ids: &[String]) -> ApiFuture<'_, PlaylistWithSongs> {
         let mut params: Vec<(&str, String)> = vec![("name", name.to_string())];
         params.extend(song_ids.iter().map(|s| ("songId", s.clone())));
-        Box::pin(async move { self.call("createPlaylist", &params).await?.playlist.ok_or_else(|| missing("playlist")) })
+        Box::pin(async move {
+            self.call("createPlaylist", &params)
+                .await?
+                .playlist
+                .ok_or_else(|| missing("playlist"))
+        })
     }
 
-    fn replace_playlist(&self, playlist_id: &str, song_ids: &[String]) -> ApiFuture<'_, PlaylistWithSongs> {
+    fn replace_playlist(
+        &self,
+        playlist_id: &str,
+        song_ids: &[String],
+    ) -> ApiFuture<'_, PlaylistWithSongs> {
         let mut params: Vec<(&str, String)> = vec![("playlistId", playlist_id.to_string())];
         params.extend(song_ids.iter().map(|s| ("songId", s.clone())));
-        Box::pin(async move { self.call("createPlaylist", &params).await?.playlist.ok_or_else(|| missing("playlist")) })
+        Box::pin(async move {
+            self.call("createPlaylist", &params)
+                .await?
+                .playlist
+                .ok_or_else(|| missing("playlist"))
+        })
     }
 
     fn update_playlist(&self, id: &str, update: PlaylistUpdate) -> ApiFuture<'_, ()> {
@@ -414,8 +552,18 @@ impl SubsonicApi for Client {
         if let Some(p) = update.public {
             params.push(("public", p.to_string()));
         }
-        params.extend(update.song_ids_to_add.into_iter().map(|s| ("songIdToAdd", s)));
-        params.extend(update.song_indices_to_remove.into_iter().map(|i| ("songIndexToRemove", i.to_string())));
+        params.extend(
+            update
+                .song_ids_to_add
+                .into_iter()
+                .map(|s| ("songIdToAdd", s)),
+        );
+        params.extend(
+            update
+                .song_indices_to_remove
+                .into_iter()
+                .map(|i| ("songIndexToRemove", i.to_string())),
+        );
         Box::pin(async move { self.call("updatePlaylist", &params).await.map(|_| ()) })
     }
 
@@ -436,7 +584,11 @@ impl SubsonicApi for Client {
                 ("songCount", page.song_count.to_string()),
                 ("songOffset", page.song_offset.to_string()),
             ];
-            Ok(self.call("search3", &params).await?.search_result3.unwrap_or_default())
+            Ok(self
+                .call("search3", &params)
+                .await?
+                .search_result3
+                .unwrap_or_default())
         })
     }
 
@@ -444,14 +596,21 @@ impl SubsonicApi for Client {
         let id = id.to_string();
         Box::pin(async move {
             let r = self.call("getLyricsBySongId", &[("id", id)]).await?;
-            Ok(r.lyrics_list.map(|l| l.structured_lyrics).unwrap_or_default())
+            Ok(r.lyrics_list
+                .map(|l| l.structured_lyrics)
+                .unwrap_or_default())
         })
     }
 
     fn similar_songs2(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<Child>> {
         let id = id.to_string();
         Box::pin(async move {
-            let r = self.call("getSimilarSongs2", &[("id", id), ("count", count.to_string())]).await?;
+            let r = self
+                .call(
+                    "getSimilarSongs2",
+                    &[("id", id), ("count", count.to_string())],
+                )
+                .await?;
             Ok(r.similar_songs2.map(|s| s.song).unwrap_or_default())
         })
     }
@@ -459,16 +618,34 @@ impl SubsonicApi for Client {
     fn top_songs(&self, artist: &str, count: u32) -> ApiFuture<'_, Vec<Child>> {
         let artist = artist.to_string();
         Box::pin(async move {
-            let r = self.call("getTopSongs", &[("artist", artist), ("count", count.to_string())]).await?;
+            let r = self
+                .call(
+                    "getTopSongs",
+                    &[("artist", artist), ("count", count.to_string())],
+                )
+                .await?;
             Ok(r.top_songs.map(|s| s.song).unwrap_or_default())
         })
     }
 
-    fn artist_info2(&self, id: &str, count: u32, include_not_present: bool) -> ApiFuture<'_, ArtistInfo2> {
+    fn artist_info2(
+        &self,
+        id: &str,
+        count: u32,
+        include_not_present: bool,
+    ) -> ApiFuture<'_, ArtistInfo2> {
         let id = id.to_string();
         Box::pin(async move {
-            let params = [("id", id), ("count", count.to_string()), ("includeNotPresent", include_not_present.to_string())];
-            Ok(self.call("getArtistInfo2", &params).await?.artist_info2.unwrap_or_default())
+            let params = [
+                ("id", id),
+                ("count", count.to_string()),
+                ("includeNotPresent", include_not_present.to_string()),
+            ];
+            Ok(self
+                .call("getArtistInfo2", &params)
+                .await?
+                .artist_info2
+                .unwrap_or_default())
         })
     }
 
@@ -478,8 +655,15 @@ impl SubsonicApi for Client {
             if !self.caps.read().sonic_similarity {
                 return Err(SubsonicError::Unsupported("sonicSimilarity".into()));
             }
-            let r = self.call("getSonicSimilarTracks", &[("id", id), ("count", count.to_string())]).await?;
-            Ok(r.sonic_match.or_else(|| r.sonic_similar_tracks.map(|s| s.sonic_match)).unwrap_or_default())
+            let r = self
+                .call(
+                    "getSonicSimilarTracks",
+                    &[("id", id), ("count", count.to_string())],
+                )
+                .await?;
+            Ok(r.sonic_match
+                .or_else(|| r.sonic_similar_tracks.map(|s| s.sonic_match))
+                .unwrap_or_default())
         })
     }
 
@@ -495,7 +679,14 @@ impl SubsonicApi for Client {
 
     fn set_rating(&self, id: &str, rating: u32) -> ApiFuture<'_, ()> {
         let id = id.to_string();
-        Box::pin(async move { self.call("setRating", &[("id", id), ("rating", rating.min(5).to_string())]).await.map(|_| ()) })
+        Box::pin(async move {
+            self.call(
+                "setRating",
+                &[("id", id), ("rating", rating.min(5).to_string())],
+            )
+            .await
+            .map(|_| ())
+        })
     }
 
     fn scrobble(&self, id: &str, time_ms: Option<f64>, submission: bool) -> ApiFuture<'_, ()> {
@@ -510,12 +701,19 @@ impl SubsonicApi for Client {
     }
 
     fn scan_status(&self) -> ApiFuture<'_, ScanStatus> {
-        Box::pin(async move { Ok(self.call("getScanStatus", &[]).await?.scan_status.unwrap_or_default()) })
+        Box::pin(async move {
+            Ok(self
+                .call("getScanStatus", &[])
+                .await?
+                .scan_status
+                .unwrap_or_default())
+        })
     }
 
     fn save_play_queue(&self, save: PlayQueueSave) -> ApiFuture<'_, ()> {
         Box::pin(async move {
-            let mut params: Vec<(&str, String)> = save.song_ids.into_iter().map(|s| ("id", s)).collect();
+            let mut params: Vec<(&str, String)> =
+                save.song_ids.into_iter().map(|s| ("id", s)).collect();
             if let Some(c) = save.current {
                 params.push(("current", c));
             }
@@ -531,7 +729,14 @@ impl SubsonicApi for Client {
     }
 
     fn now_playing(&self) -> ApiFuture<'_, Vec<NowPlayingEntry>> {
-        Box::pin(async move { Ok(self.call("getNowPlaying", &[]).await?.now_playing.map(|n| n.entry).unwrap_or_default()) })
+        Box::pin(async move {
+            Ok(self
+                .call("getNowPlaying", &[])
+                .await?
+                .now_playing
+                .map(|n| n.entry)
+                .unwrap_or_default())
+        })
     }
 
     fn cover_art_url(&self, id: &str, size: Option<u32>) -> Url {
@@ -570,13 +775,20 @@ impl SubsonicApi for Client {
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
         let dest = dest.to_path_buf();
         Box::pin(async move {
-            let _permit = self.limiter.acquire().await.map_err(|_| SubsonicError::Network("closed".into()))?;
+            let _permit = self
+                .limiter
+                .acquire()
+                .await
+                .map_err(|_| SubsonicError::Network("closed".into()))?;
             let out = self.transport.download(url, &dest, None).await?;
             match out.status {
                 200..=299 => Ok(out),
                 401 | 403 => Err(SubsonicError::Auth(format!("http {}", out.status))),
                 404 => Err(SubsonicError::NotFound("http 404".into())),
-                s => Err(SubsonicError::Server { code: s as u32, message: format!("http {s}") }),
+                s => Err(SubsonicError::Server {
+                    code: s as u32,
+                    message: format!("http {s}"),
+                }),
             }
         })
     }
@@ -586,7 +798,11 @@ impl SubsonicApi for Client {
         Box::pin(async move { super::native::get_playlist(self, &id).await })
     }
 
-    fn native_update_playlist(&self, id: &str, update: NativePlaylistUpdate) -> ApiFuture<'_, NativePlaylist> {
+    fn native_update_playlist(
+        &self,
+        id: &str,
+        update: NativePlaylistUpdate,
+    ) -> ApiFuture<'_, NativePlaylist> {
         let id = id.to_string();
         Box::pin(async move { super::native::update_playlist(self, &id, &update).await })
     }

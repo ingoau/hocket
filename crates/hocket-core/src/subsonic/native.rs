@@ -30,7 +30,11 @@ impl NativeSession {
         self.inner.read().as_ref().map(|l| l.token.clone())
     }
     pub fn username(&self) -> Option<String> {
-        self.inner.read().as_ref().map(|l| l.username.clone()).filter(|u| !u.is_empty())
+        self.inner
+            .read()
+            .as_ref()
+            .map(|l| l.username.clone())
+            .filter(|u| !u.is_empty())
     }
     pub fn is_logged_in(&self) -> bool {
         self.inner.read().is_some()
@@ -63,7 +67,9 @@ pub struct NativePlaylistUpdate {
 pub(super) fn native_url(client: &Client, path: &str) -> Url {
     let mut url = client.base_url().clone();
     {
-        let mut segs = url.path_segments_mut().expect("base url is not cannot-be-a-base");
+        let mut segs = url
+            .path_segments_mut()
+            .expect("base url is not cannot-be-a-base");
         segs.pop_if_empty();
         for s in path.trim_start_matches('/').split('/') {
             segs.push(s);
@@ -77,10 +83,16 @@ pub(super) fn native_url(client: &Client, path: &str) -> Url {
 pub(super) async fn login(client: &Client) -> SubsonicResult<NativeLogin> {
     let (username, password) = match client.auth_mode() {
         AuthMode::Password { username, password } => (username, password),
-        AuthMode::ApiKey { .. } => return Err(SubsonicError::Unsupported("native api needs a password".into())),
+        AuthMode::ApiKey { .. } => {
+            return Err(SubsonicError::Unsupported(
+                "native api needs a password".into(),
+            ))
+        }
     };
-    let body = serde_json::json!({ "username": username, "password": password.expose() }).to_string();
-    let req = HttpRequest::get(native_url(client, "auth/login")).with_json_body(Method::Post, &body);
+    let body =
+        serde_json::json!({ "username": username, "password": password.expose() }).to_string();
+    let req =
+        HttpRequest::get(native_url(client, "auth/login")).with_json_body(Method::Post, &body);
     let resp = client.execute_raw(req).await?;
     match resp.status {
         200..=299 => {
@@ -94,13 +106,20 @@ pub(super) async fn login(client: &Client) -> SubsonicResult<NativeLogin> {
         }
         401 | 403 => Err(SubsonicError::Auth("native login rejected".into())),
         404 => Err(SubsonicError::NotFound("native api absent".into())),
-        s => Err(SubsonicError::Server { code: s as u32, message: format!("native login http {s}") }),
+        s => Err(SubsonicError::Server {
+            code: s as u32,
+            message: format!("native login http {s}"),
+        }),
     }
 }
 
 /// `GET /api/keepalive/keepalive`. True when the native API answered 200.
 pub(super) async fn keepalive(client: &Client) -> SubsonicResult<bool> {
-    let resp = authed(client, HttpRequest::get(native_url(client, "api/keepalive/keepalive"))).await?;
+    let resp = authed(
+        client,
+        HttpRequest::get(native_url(client, "api/keepalive/keepalive")),
+    )
+    .await?;
     Ok((200..300).contains(&resp.status))
 }
 
@@ -111,7 +130,8 @@ async fn authed(client: &Client, request: HttpRequest) -> SubsonicResult<HttpRes
     }
     let send = |token: String| {
         let mut r = request.clone();
-        r.headers.push((AUTH_HEADER.into(), format!("Bearer {token}")));
+        r.headers
+            .push((AUTH_HEADER.into(), format!("Bearer {token}")));
         r.headers.push(("accept".into(), "application/json".into()));
         r
     };
@@ -125,17 +145,31 @@ async fn authed(client: &Client, request: HttpRequest) -> SubsonicResult<HttpRes
     Ok(resp)
 }
 
-fn parse_native<T: serde::de::DeserializeOwned>(resp: HttpResponse, what: &str) -> SubsonicResult<T> {
+fn parse_native<T: serde::de::DeserializeOwned>(
+    resp: HttpResponse,
+    what: &str,
+) -> SubsonicResult<T> {
     match resp.status {
-        200..=299 => serde_json::from_slice(&resp.body).map_err(|e| SubsonicError::Protocol(format!("native {what}: {e}"))),
-        401 | 403 => Err(SubsonicError::Auth(format!("native {what}: http {}", resp.status))),
+        200..=299 => serde_json::from_slice(&resp.body)
+            .map_err(|e| SubsonicError::Protocol(format!("native {what}: {e}"))),
+        401 | 403 => Err(SubsonicError::Auth(format!(
+            "native {what}: http {}",
+            resp.status
+        ))),
         404 => Err(SubsonicError::NotFound(format!("native {what}"))),
-        s => Err(SubsonicError::Server { code: s as u32, message: format!("native {what} http {s}") }),
+        s => Err(SubsonicError::Server {
+            code: s as u32,
+            message: format!("native {what} http {s}"),
+        }),
     }
 }
 
 pub(super) async fn get_playlist(client: &Client, id: &str) -> SubsonicResult<NativePlaylist> {
-    let resp = authed(client, HttpRequest::get(native_url(client, &format!("api/playlist/{id}")))).await?;
+    let resp = authed(
+        client,
+        HttpRequest::get(native_url(client, &format!("api/playlist/{id}"))),
+    )
+    .await?;
     parse_native(resp, "playlist")
 }
 
@@ -145,7 +179,8 @@ pub(super) async fn update_playlist(
     update: &NativePlaylistUpdate,
 ) -> SubsonicResult<NativePlaylist> {
     let body = serde_json::to_string(update).map_err(|e| SubsonicError::Protocol(e.to_string()))?;
-    let req = HttpRequest::get(native_url(client, &format!("api/playlist/{id}"))).with_json_body(Method::Put, &body);
+    let req = HttpRequest::get(native_url(client, &format!("api/playlist/{id}")))
+        .with_json_body(Method::Put, &body);
     let resp = authed(client, req).await?;
     // Navidrome answers PUT with the updated resource, but be lenient: on an
     // empty body re-read it.
@@ -160,9 +195,13 @@ struct Created {
     id: String,
 }
 
-pub(super) async fn create_playlist(client: &Client, update: &NativePlaylistUpdate) -> SubsonicResult<String> {
+pub(super) async fn create_playlist(
+    client: &Client,
+    update: &NativePlaylistUpdate,
+) -> SubsonicResult<String> {
     let body = serde_json::to_string(update).map_err(|e| SubsonicError::Protocol(e.to_string()))?;
-    let req = HttpRequest::get(native_url(client, "api/playlist")).with_json_body(Method::Post, &body);
+    let req =
+        HttpRequest::get(native_url(client, "api/playlist")).with_json_body(Method::Post, &body);
     let resp = authed(client, req).await?;
     let created: Created = parse_native(resp, "playlist create")?;
     Ok(created.id)

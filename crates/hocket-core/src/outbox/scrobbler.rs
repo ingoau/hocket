@@ -44,9 +44,15 @@ pub fn threshold_ms(duration_ms: Ms) -> Ms {
 /// What the state machine wants done.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScrobbleAction {
-    NowPlaying { track_id: TrackId },
+    NowPlaying {
+        track_id: TrackId,
+    },
     /// Threshold reached: record and submit. `played_at` is when the play started.
-    Submit { track_id: TrackId, started_at: f64, played_ms: Ms },
+    Submit {
+        track_id: TrackId,
+        started_at: f64,
+        played_ms: Ms,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,13 +78,23 @@ pub struct Scrobbler {
 
 impl Scrobbler {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
-        Scrobbler { clock, current: None }
+        Scrobbler {
+            clock,
+            current: None,
+        }
     }
 
     /// A new item started. `carried_played_ms` is the accumulated time from a
     /// handoff (0 for a fresh start). Returns the now-playing action for
     /// eligible tracks, and implicitly abandons the previous item.
-    pub fn track_started(&mut self, track_id: &str, duration_ms: Ms, position_ms: Ms, carried_played_ms: Ms, playing: bool) -> Vec<ScrobbleAction> {
+    pub fn track_started(
+        &mut self,
+        track_id: &str,
+        duration_ms: Ms,
+        position_ms: Ms,
+        carried_played_ms: Ms,
+        playing: bool,
+    ) -> Vec<ScrobbleAction> {
         let now = self.clock.now_ms();
         self.current = Some(Current {
             track_id: track_id.to_string(),
@@ -94,7 +110,9 @@ impl Scrobbler {
         });
         let mut actions = vec![];
         if duration_ms >= MIN_TRACK_MS && playing {
-            actions.push(ScrobbleAction::NowPlaying { track_id: track_id.to_string() });
+            actions.push(ScrobbleAction::NowPlaying {
+                track_id: track_id.to_string(),
+            });
         }
         actions.extend(self.check());
         actions
@@ -109,7 +127,9 @@ impl Scrobbler {
         }
         // now-playing is repeated per pass, as any player would
         if a.is_empty() && duration_ms >= MIN_TRACK_MS {
-            a.push(ScrobbleAction::NowPlaying { track_id: track_id.to_string() });
+            a.push(ScrobbleAction::NowPlaying {
+                track_id: track_id.to_string(),
+            });
         }
         a
     }
@@ -118,7 +138,9 @@ impl Scrobbler {
     /// with elapsed wall time counts as played.
     pub fn progress(&mut self, track_id: &str, position_ms: Ms) -> Vec<ScrobbleAction> {
         let now = self.clock.now_ms();
-        let Some(c) = self.current.as_mut() else { return vec![] };
+        let Some(c) = self.current.as_mut() else {
+            return vec![];
+        };
         if c.track_id != track_id || c.failed {
             return vec![];
         }
@@ -154,8 +176,16 @@ impl Scrobbler {
             let was = c.playing;
             c.playing = playing;
             c.last_progress_at = now;
-            if playing && !was && !c.submitted && !c.failed && c.duration_ms >= MIN_TRACK_MS && c.played_ms == 0.0 {
-                actions.push(ScrobbleAction::NowPlaying { track_id: c.track_id.clone() });
+            if playing
+                && !was
+                && !c.submitted
+                && !c.failed
+                && c.duration_ms >= MIN_TRACK_MS
+                && c.played_ms == 0.0
+            {
+                actions.push(ScrobbleAction::NowPlaying {
+                    track_id: c.track_id.clone(),
+                });
             }
         }
         actions
@@ -174,12 +204,20 @@ impl Scrobbler {
     /// Item ended naturally or was skipped away from. Returns a submit if
     /// the threshold was crossed but not yet reported (e.g. the final
     /// progress event arrived late).
-    pub fn track_ended(&mut self, track_id: &str, final_position_ms: Option<Ms>) -> Vec<ScrobbleAction> {
+    pub fn track_ended(
+        &mut self,
+        track_id: &str,
+        final_position_ms: Option<Ms>,
+    ) -> Vec<ScrobbleAction> {
         let mut actions = vec![];
         if let Some(p) = final_position_ms {
             actions.extend(self.progress(track_id, p));
         }
-        if self.current.as_ref().is_some_and(|c| c.track_id == track_id) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|c| c.track_id == track_id)
+        {
             actions.extend(self.check());
             self.current = None;
         }
@@ -188,7 +226,10 @@ impl Scrobbler {
 
     /// Accumulated played time of the current item (travels with a handoff).
     pub fn played_ms(&self) -> Ms {
-        self.current.as_ref().map(|c| c.played_ms.round().max(0.0) as Ms).unwrap_or(0)
+        self.current
+            .as_ref()
+            .map(|c| c.played_ms.round().max(0.0) as Ms)
+            .unwrap_or(0)
     }
 
     pub fn current_track(&self) -> Option<&str> {
@@ -200,7 +241,9 @@ impl Scrobbler {
     }
 
     fn check(&mut self) -> Vec<ScrobbleAction> {
-        let Some(c) = self.current.as_mut() else { return vec![] };
+        let Some(c) = self.current.as_mut() else {
+            return vec![];
+        };
         if c.submitted || c.failed || c.duration_ms < MIN_TRACK_MS {
             return vec![];
         }
@@ -226,7 +269,11 @@ pub struct ScrobbleRecorder {
 
 impl ScrobbleRecorder {
     pub fn new(db: Db, outbox: Outbox, device_id: impl Into<String>) -> Self {
-        ScrobbleRecorder { db, outbox, device_id: device_id.into() }
+        ScrobbleRecorder {
+            db,
+            outbox,
+            device_id: device_id.into(),
+        }
     }
 
     pub fn apply(&self, server_id: &str, action: &ScrobbleAction) -> DbResult<()> {
@@ -234,15 +281,36 @@ impl ScrobbleRecorder {
             ScrobbleAction::NowPlaying { track_id } => {
                 self.outbox.enqueue(
                     server_id,
-                    Mutation::Scrobble { track_id: track_id.clone(), played_at: self.outbox_now(), submission: false, history_id: None },
+                    Mutation::Scrobble {
+                        track_id: track_id.clone(),
+                        played_at: self.outbox_now(),
+                        submission: false,
+                        history_id: None,
+                    },
                     None,
                 )?;
             }
-            ScrobbleAction::Submit { track_id, started_at, played_ms } => {
-                let history_id = self.db.record_play(server_id, track_id, *started_at, *played_ms, false, &self.device_id)?;
+            ScrobbleAction::Submit {
+                track_id,
+                started_at,
+                played_ms,
+            } => {
+                let history_id = self.db.record_play(
+                    server_id,
+                    track_id,
+                    *started_at,
+                    *played_ms,
+                    false,
+                    &self.device_id,
+                )?;
                 self.outbox.enqueue(
                     server_id,
-                    Mutation::Scrobble { track_id: track_id.clone(), played_at: *started_at, submission: true, history_id: Some(history_id) },
+                    Mutation::Scrobble {
+                        track_id: track_id.clone(),
+                        played_at: *started_at,
+                        submission: true,
+                        history_id: Some(history_id),
+                    },
                     None,
                 )?;
             }
@@ -291,7 +359,13 @@ mod tests {
     }
 
     /// Simulate real playback: 1 s ticks with matching position.
-    fn play_for(s: &mut Scrobbler, clock: &TestClock, id: &str, from_ms: Ms, seconds: u32) -> Vec<ScrobbleAction> {
+    fn play_for(
+        s: &mut Scrobbler,
+        clock: &TestClock,
+        id: &str,
+        from_ms: Ms,
+        seconds: u32,
+    ) -> Vec<ScrobbleAction> {
         let mut out = vec![];
         for i in 1..=seconds {
             clock.advance(1000.0);
@@ -311,12 +385,24 @@ mod tests {
     fn now_playing_then_submit_at_half() {
         let (mut s, clock) = scrobbler();
         let a = s.track_started("t", 200_000, 0, 0, true);
-        assert_eq!(a, vec![ScrobbleAction::NowPlaying { track_id: "t".into() }]);
+        assert_eq!(
+            a,
+            vec![ScrobbleAction::NowPlaying {
+                track_id: "t".into()
+            }]
+        );
         let a = play_for(&mut s, &clock, "t", 0, 99);
         assert!(a.is_empty());
         assert_eq!(s.played_ms(), 99_000);
         let a = play_for(&mut s, &clock, "t", 99_000, 1);
-        assert_eq!(a, vec![ScrobbleAction::Submit { track_id: "t".into(), started_at: 1_000_000.0, played_ms: 100_000 }]);
+        assert_eq!(
+            a,
+            vec![ScrobbleAction::Submit {
+                track_id: "t".into(),
+                started_at: 1_000_000.0,
+                played_ms: 100_000
+            }]
+        );
         assert!(s.is_submitted());
         // no double submit
         assert!(play_for(&mut s, &clock, "t", 100_000, 50).is_empty());
@@ -329,7 +415,13 @@ mod tests {
         let (mut s, clock) = scrobbler();
         s.track_started("long", 3_600_000, 0, 0, true);
         let a = play_for(&mut s, &clock, "long", 0, 240);
-        assert!(matches!(a.last(), Some(ScrobbleAction::Submit { played_ms: 240_000, .. })));
+        assert!(matches!(
+            a.last(),
+            Some(ScrobbleAction::Submit {
+                played_ms: 240_000,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -340,7 +432,9 @@ mod tests {
         assert!(s.track_ended("short", Some(29_999)).is_empty());
         let (mut s, clock) = scrobbler();
         assert_eq!(s.track_started("edge", 30_000, 0, 0, true).len(), 1);
-        assert!(play_for(&mut s, &clock, "edge", 0, 15).iter().any(|a| matches!(a, ScrobbleAction::Submit { .. })));
+        assert!(play_for(&mut s, &clock, "edge", 0, 15)
+            .iter()
+            .any(|a| matches!(a, ScrobbleAction::Submit { .. })));
     }
 
     #[test]
@@ -393,7 +487,10 @@ mod tests {
         s.progress("t", 20_000);
         assert_eq!(s.played_ms(), 20_000);
         let a = s.set_playing(true);
-        assert!(a.is_empty(), "resume of a partly-played track isn't a new now-playing");
+        assert!(
+            a.is_empty(),
+            "resume of a partly-played track isn't a new now-playing"
+        );
         play_for(&mut s, &clock, "t", 20_000, 80);
         assert!(s.is_submitted());
     }
@@ -402,7 +499,12 @@ mod tests {
     fn started_paused_announces_on_play() {
         let (mut s, _) = scrobbler();
         assert!(s.track_started("t", 200_000, 0, 0, false).is_empty());
-        assert_eq!(s.set_playing(true), vec![ScrobbleAction::NowPlaying { track_id: "t".into() }]);
+        assert_eq!(
+            s.set_playing(true),
+            vec![ScrobbleAction::NowPlaying {
+                track_id: "t".into()
+            }]
+        );
     }
 
     #[test]
@@ -420,14 +522,31 @@ mod tests {
         let (mut s, clock) = scrobbler();
         s.track_started("t", 60_000, 0, 0, true);
         let a = play_for(&mut s, &clock, "t", 0, 60);
-        assert_eq!(a.iter().filter(|a| matches!(a, ScrobbleAction::Submit { .. })).count(), 1);
+        assert_eq!(
+            a.iter()
+                .filter(|a| matches!(a, ScrobbleAction::Submit { .. }))
+                .count(),
+            1
+        );
         let a = s.track_repeated("t", 60_000);
-        assert_eq!(a, vec![ScrobbleAction::NowPlaying { track_id: "t".into() }]);
+        assert_eq!(
+            a,
+            vec![ScrobbleAction::NowPlaying {
+                track_id: "t".into()
+            }]
+        );
         let a = play_for(&mut s, &clock, "t", 0, 60);
-        let subs: Vec<_> = a.iter().filter(|a| matches!(a, ScrobbleAction::Submit { .. })).collect();
+        let subs: Vec<_> = a
+            .iter()
+            .filter(|a| matches!(a, ScrobbleAction::Submit { .. }))
+            .collect();
         assert_eq!(subs.len(), 1);
         if let ScrobbleAction::Submit { started_at, .. } = subs[0] {
-            assert_eq!(*started_at, 1_000_000.0 + 60_000.0, "second pass has its own start time");
+            assert_eq!(
+                *started_at,
+                1_000_000.0 + 60_000.0,
+                "second pass has its own start time"
+            );
         }
     }
 
@@ -441,13 +560,29 @@ mod tests {
         // device B takes over 90 s in, with the carried played time
         let (mut b, clock_b) = scrobbler();
         let started = b.track_started("t", 200_000, 90_000, carried, true);
-        assert_eq!(started, vec![ScrobbleAction::NowPlaying { track_id: "t".into() }]);
+        assert_eq!(
+            started,
+            vec![ScrobbleAction::NowPlaying {
+                track_id: "t".into()
+            }]
+        );
         let acts = play_for(&mut b, &clock_b, "t", 90_000, 10);
-        assert!(matches!(acts.last(), Some(ScrobbleAction::Submit { played_ms: 100_000, .. })), "{acts:?}");
+        assert!(
+            matches!(
+                acts.last(),
+                Some(ScrobbleAction::Submit {
+                    played_ms: 100_000,
+                    ..
+                })
+            ),
+            "{acts:?}"
+        );
         // without the carry it would not have scrobbled
         let (mut c, clock_c) = scrobbler();
         c.track_started("t", 200_000, 90_000, 0, true);
-        assert!(play_for(&mut c, &clock_c, "t", 90_000, 10).iter().all(|a| !matches!(a, ScrobbleAction::Submit { .. })));
+        assert!(play_for(&mut c, &clock_c, "t", 90_000, 10)
+            .iter()
+            .all(|a| !matches!(a, ScrobbleAction::Submit { .. })));
     }
 
     #[test]
@@ -466,7 +601,10 @@ mod tests {
         s.track_started("a", 100_000, 0, 0, true);
         play_for(&mut s, &clock, "a", 0, 10);
         s.track_started("b", 100_000, 0, 0, true);
-        assert!(s.progress("a", 60_000).is_empty(), "stale reports for a are ignored");
+        assert!(
+            s.progress("a", 60_000).is_empty(),
+            "stale reports for a are ignored"
+        );
         assert_eq!(s.played_ms(), 0);
         assert_eq!(s.current_track(), Some("b"));
     }
@@ -474,29 +612,59 @@ mod tests {
     #[test]
     fn recorder_writes_history_and_outbox() {
         let db = Db::open_in_memory().unwrap();
-        db.upsert_tracks(&[crate::api::Track { id: "t".into(), server_id: "srv".into(), title: "T".into(), ..Default::default() }], &[], 1).unwrap();
+        db.upsert_tracks(
+            &[crate::api::Track {
+                id: "t".into(),
+                server_id: "srv".into(),
+                title: "T".into(),
+                ..Default::default()
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
         let clock = Arc::new(TestClock(Mutex::new(5_000.0)));
         let outbox = Outbox::new(db.clone(), clock.clone());
         let rec = ScrobbleRecorder::new(db.clone(), outbox.clone(), "dev");
         rec.apply_all(
             "srv",
             &[
-                ScrobbleAction::NowPlaying { track_id: "t".into() },
-                ScrobbleAction::Submit { track_id: "t".into(), started_at: 4_000.0, played_ms: 120_000 },
+                ScrobbleAction::NowPlaying {
+                    track_id: "t".into(),
+                },
+                ScrobbleAction::Submit {
+                    track_id: "t".into(),
+                    started_at: 4_000.0,
+                    played_ms: 120_000,
+                },
             ],
         )
         .unwrap();
         let pending = outbox.pending().unwrap();
         assert_eq!(pending.len(), 2);
-        assert!(matches!(&pending[0].mutation, Mutation::Scrobble { submission: false, .. }));
-        assert!(matches!(&pending[1].mutation, Mutation::Scrobble { submission: true, history_id: Some(_), played_at, .. } if *played_at == 4_000.0));
+        assert!(matches!(
+            &pending[0].mutation,
+            Mutation::Scrobble {
+                submission: false,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&pending[1].mutation, Mutation::Scrobble { submission: true, history_id: Some(_), played_at, .. } if *played_at == 4_000.0)
+        );
         let h = db.recently_played(5).unwrap();
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].played_ms, 120_000);
         assert!(!h[0].scrobbled);
         assert_eq!(h[0].device_id, "dev");
         let (lpc, llp): (i64, Option<f64>) = db
-            .with_conn(|c| Ok(c.query_row("SELECT local_play_count, local_last_played FROM tracks WHERE id='t'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT local_play_count, local_last_played FROM tracks WHERE id='t'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
             .unwrap();
         assert_eq!((lpc, llp), (1, Some(4_000.0)));
     }

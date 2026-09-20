@@ -729,7 +729,9 @@ fn de_string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String,
     })
 }
 
-fn de_opt_string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+fn de_opt_string_or_number<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<String>, D::Error> {
     let v = Option::<serde_json::Value>::deserialize(d)?;
     Ok(match v {
         None | Some(serde_json::Value::Null) => None,
@@ -759,7 +761,8 @@ pub fn parse_iso_ms(s: &str) -> Option<f64> {
     if year < 1900 {
         return None;
     }
-    let (mut hour, mut minute, mut second, mut frac_ms, mut offset_min) = (0i64, 0i64, 0i64, 0i64, 0i64);
+    let (mut hour, mut minute, mut second, mut frac_ms, mut offset_min) =
+        (0i64, 0i64, 0i64, 0i64, 0i64);
     if s.len() > 10 {
         if !matches!(b[10], b'T' | b't' | b' ') {
             return None;
@@ -775,7 +778,11 @@ pub fn parse_iso_ms(s: &str) -> Option<f64> {
                 end += 1;
             }
             let digits = &s[start..end];
-            let padded: String = digits.chars().chain(std::iter::repeat('0')).take(3).collect();
+            let padded: String = digits
+                .chars()
+                .chain(std::iter::repeat('0'))
+                .take(3)
+                .collect();
             frac_ms = padded.parse().ok()?;
             i = end;
         }
@@ -784,7 +791,11 @@ pub fn parse_iso_ms(s: &str) -> Option<f64> {
             Some(b'+') | Some(b'-') => {
                 let sign = if b[i] == b'+' { 1 } else { -1 };
                 let oh = num(i + 1, i + 3)?;
-                let om = if b.get(i + 3) == Some(&b':') { num(i + 4, i + 6)? } else { num(i + 3, i + 5).unwrap_or(0) };
+                let om = if b.get(i + 3) == Some(&b':') {
+                    num(i + 4, i + 6)?
+                } else {
+                    num(i + 3, i + 5).unwrap_or(0)
+                };
                 offset_min = sign * (oh * 60 + om);
             }
             _ => return None,
@@ -813,9 +824,18 @@ mod tests {
     #[test]
     fn iso_parsing() {
         assert_eq!(parse_iso_ms("1970-01-01T00:00:00Z"), Some(0.0));
-        assert_eq!(parse_iso_ms("2024-05-01T12:34:56.789Z"), Some(1_714_566_896_789.0));
-        assert_eq!(parse_iso_ms("2024-05-01T12:34:56.789123456Z"), Some(1_714_566_896_789.0));
-        assert_eq!(parse_iso_ms("2024-05-01T14:34:56+02:00"), Some(1_714_566_896_000.0));
+        assert_eq!(
+            parse_iso_ms("2024-05-01T12:34:56.789Z"),
+            Some(1_714_566_896_789.0)
+        );
+        assert_eq!(
+            parse_iso_ms("2024-05-01T12:34:56.789123456Z"),
+            Some(1_714_566_896_789.0)
+        );
+        assert_eq!(
+            parse_iso_ms("2024-05-01T14:34:56+02:00"),
+            Some(1_714_566_896_000.0)
+        );
         assert_eq!(parse_iso_ms("2024-05-01"), Some(1_714_521_600_000.0));
         assert_eq!(parse_iso_ms("0001-01-01T00:00:00Z"), None);
         assert_eq!(parse_iso_ms("garbage"), None);

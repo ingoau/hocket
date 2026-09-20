@@ -52,7 +52,11 @@ pub enum CacheError {
 
 /// Snap a requested size up to the nearest fixed size.
 pub fn snap_size(size: u32) -> u32 {
-    IMAGE_SIZES.iter().copied().find(|s| *s >= size).unwrap_or(IMAGE_SIZES[IMAGE_SIZES.len() - 1])
+    IMAGE_SIZES
+        .iter()
+        .copied()
+        .find(|s| *s >= size)
+        .unwrap_or(IMAGE_SIZES[IMAGE_SIZES.len() - 1])
 }
 
 fn source_name(s: LyricsSource) -> &'static str {
@@ -108,13 +112,28 @@ impl Caches {
     }
 
     fn image_path(&self, server_id: &str, image_id: &str, size: u32) -> PathBuf {
-        let safe: String = image_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        self.images_dir(server_id).join(format!("{safe}_{size}.img"))
+        let safe: String = image_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        self.images_dir(server_id)
+            .join(format!("{safe}_{size}.img"))
     }
 
     /// Cached artwork file for the exact snapped size, touching LRU. Never
     /// substitutes another size.
-    pub fn artwork_cached(&self, server_id: &str, image_id: &str, size: u32) -> DbResult<Option<PathBuf>> {
+    pub fn artwork_cached(
+        &self,
+        server_id: &str,
+        image_id: &str,
+        size: u32,
+    ) -> DbResult<Option<PathBuf>> {
         let size = snap_size(size);
         let now = self.now();
         let path: Option<String> = self.inner.db.with_conn(|c| {
@@ -129,7 +148,10 @@ impl Caches {
         let p = PathBuf::from(&path);
         if !p.exists() {
             self.inner.db.with_conn(|c| {
-                c.execute("DELETE FROM image_cache WHERE server_id = ?1 AND image_id = ?2 AND size = ?3", params![server_id, image_id, size])?;
+                c.execute(
+                    "DELETE FROM image_cache WHERE server_id = ?1 AND image_id = ?2 AND size = ?3",
+                    params![server_id, image_id, size],
+                )?;
                 Ok(())
             })?;
             return Ok(None);
@@ -143,7 +165,12 @@ impl Caches {
 
     /// Resolve artwork to a local file, fetching `getCoverArt?size=` when
     /// not cached. Returns `None` when the server has no image (404).
-    pub async fn artwork_path(&self, api: &dyn SubsonicApi, image_id: &str, size: u32) -> Result<Option<PathBuf>, CacheError> {
+    pub async fn artwork_path(
+        &self,
+        api: &dyn SubsonicApi,
+        image_id: &str,
+        size: u32,
+    ) -> Result<Option<PathBuf>, CacheError> {
         let server_id = api.server_id();
         let size = snap_size(size);
         if let Some(p) = self.artwork_cached(server_id, image_id, size)? {
@@ -170,7 +197,13 @@ impl Caches {
     }
 
     pub fn images_bytes(&self) -> DbResult<f64> {
-        self.inner.db.with_conn(|c| Ok(c.query_row("SELECT COALESCE(SUM(bytes), 0) FROM image_cache", [], |r| r.get(0))?))
+        self.inner.db.with_conn(|c| {
+            Ok(
+                c.query_row("SELECT COALESCE(SUM(bytes), 0) FROM image_cache", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
     }
 
     /// Evict least-recently-used images until under budget.
@@ -198,7 +231,10 @@ impl Caches {
                 }
             }
             self.inner.db.with_conn(|c| {
-                c.execute("DELETE FROM image_cache WHERE server_id = ?1 AND image_id = ?2 AND size = ?3", params![sid, iid, size])?;
+                c.execute(
+                    "DELETE FROM image_cache WHERE server_id = ?1 AND image_id = ?2 AND size = ?3",
+                    params![sid, iid, size],
+                )?;
                 Ok(())
             })?;
             total -= bytes;
@@ -231,7 +267,12 @@ impl Caches {
     /// Cached lyrics for (track, source). `Ok(Some(None))` is a still-valid
     /// negative entry ("known to have none"); `Ok(None)` means not cached
     /// (or the negative entry expired).
-    pub fn lyrics_get(&self, server_id: &str, track_id: &str, source: LyricsSource) -> Result<Option<Option<Lyrics>>, CacheError> {
+    pub fn lyrics_get(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        source: LyricsSource,
+    ) -> Result<Option<Option<Lyrics>>, CacheError> {
         let now = self.now();
         let row: Option<(String, f64)> = self.inner.db.with_conn(|c| {
             Ok(c.query_row(
@@ -241,7 +282,9 @@ impl Caches {
             )
             .optional()?)
         })?;
-        let Some((json, fetched_at)) = row else { return Ok(None) };
+        let Some((json, fetched_at)) = row else {
+            return Ok(None);
+        };
         if json.is_empty() {
             if now - fetched_at > LYRICS_NEGATIVE_TTL_MS {
                 self.inner.db.with_conn(|c| {
@@ -263,8 +306,16 @@ impl Caches {
     }
 
     /// Any cached lyrics for the track, server first.
-    pub fn lyrics_get_any(&self, server_id: &str, track_id: &str) -> Result<Option<Lyrics>, CacheError> {
-        for s in [LyricsSource::Server, LyricsSource::Embedded, LyricsSource::External] {
+    pub fn lyrics_get_any(
+        &self,
+        server_id: &str,
+        track_id: &str,
+    ) -> Result<Option<Lyrics>, CacheError> {
+        for s in [
+            LyricsSource::Server,
+            LyricsSource::Embedded,
+            LyricsSource::External,
+        ] {
             if let Some(Some(l)) = self.lyrics_get(server_id, track_id, s)? {
                 return Ok(Some(l));
             }
@@ -272,7 +323,12 @@ impl Caches {
         Ok(None)
     }
 
-    pub fn lyrics_put(&self, server_id: &str, track_id: &str, lyrics: &Lyrics) -> Result<(), CacheError> {
+    pub fn lyrics_put(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        lyrics: &Lyrics,
+    ) -> Result<(), CacheError> {
         let json = serde_json::to_string(lyrics)?;
         self.lyrics_store(server_id, track_id, lyrics.source, &json)?;
         self.inner.db.set_track_has_lyrics(track_id, true)?;
@@ -281,11 +337,22 @@ impl Caches {
     }
 
     /// Remember that a source has nothing for this track.
-    pub fn lyrics_put_none(&self, server_id: &str, track_id: &str, source: LyricsSource) -> Result<(), CacheError> {
+    pub fn lyrics_put_none(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        source: LyricsSource,
+    ) -> Result<(), CacheError> {
         Ok(self.lyrics_store(server_id, track_id, source, "")?)
     }
 
-    fn lyrics_store(&self, server_id: &str, track_id: &str, source: LyricsSource, json: &str) -> DbResult<()> {
+    fn lyrics_store(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        source: LyricsSource,
+        json: &str,
+    ) -> DbResult<()> {
         let now = self.now();
         self.inner.db.with_conn(|c| {
             c.execute(
@@ -298,7 +365,12 @@ impl Caches {
     }
 
     pub fn lyrics_invalidate(&self, server_id: &str, track_id: &str) -> DbResult<usize> {
-        self.inner.db.with_conn(|c| Ok(c.execute("DELETE FROM lyrics_cache WHERE server_id = ?1 AND track_id = ?2", params![server_id, track_id])?))
+        self.inner.db.with_conn(|c| {
+            Ok(c.execute(
+                "DELETE FROM lyrics_cache WHERE server_id = ?1 AND track_id = ?2",
+                params![server_id, track_id],
+            )?)
+        })
     }
 
     /// Keep at most `lyrics_max` positive entries (LRU).
@@ -317,23 +389,40 @@ impl Caches {
     }
 
     pub fn lyrics_bytes(&self) -> DbResult<f64> {
-        self.inner.db.with_conn(|c| Ok(c.query_row("SELECT COALESCE(SUM(bytes), 0) FROM lyrics_cache", [], |r| r.get::<_, f64>(0))?))
+        self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(bytes), 0) FROM lyrics_cache",
+                [],
+                |r| r.get::<_, f64>(0),
+            )?)
+        })
     }
 
     // -- metadata -----------------------------------------------------------
 
     /// Unexpired metadata blob.
-    pub fn meta_get<T: serde::de::DeserializeOwned>(&self, server_id: &str, key: &str) -> Result<Option<T>, CacheError> {
+    pub fn meta_get<T: serde::de::DeserializeOwned>(
+        &self,
+        server_id: &str,
+        key: &str,
+    ) -> Result<Option<T>, CacheError> {
         let now = self.now();
         let row: Option<(String, f64)> = self.inner.db.with_conn(|c| {
-            Ok(c.query_row("SELECT json, expires_at FROM metadata_cache WHERE server_id = ?1 AND key = ?2", params![server_id, key], |r| Ok((r.get(0)?, r.get(1)?)))
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT json, expires_at FROM metadata_cache WHERE server_id = ?1 AND key = ?2",
+                params![server_id, key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
         })?;
         match row {
             Some((json, expires)) if expires > now => Ok(Some(serde_json::from_str(&json)?)),
             Some(_) => {
                 self.inner.db.with_conn(|c| {
-                    c.execute("DELETE FROM metadata_cache WHERE server_id = ?1 AND key = ?2", params![server_id, key])?;
+                    c.execute(
+                        "DELETE FROM metadata_cache WHERE server_id = ?1 AND key = ?2",
+                        params![server_id, key],
+                    )?;
                     Ok(())
                 })?;
                 Ok(None)
@@ -342,7 +431,13 @@ impl Caches {
         }
     }
 
-    pub fn meta_put<T: serde::Serialize>(&self, server_id: &str, key: &str, value: &T, ttl_ms: Option<f64>) -> Result<(), CacheError> {
+    pub fn meta_put<T: serde::Serialize>(
+        &self,
+        server_id: &str,
+        key: &str,
+        value: &T,
+        ttl_ms: Option<f64>,
+    ) -> Result<(), CacheError> {
         let json = serde_json::to_string(value)?;
         let now = self.now();
         let expires = now + ttl_ms.unwrap_or(DEFAULT_META_TTL_MS);
@@ -360,7 +455,9 @@ impl Caches {
     /// Drop expired metadata (housekeeping).
     pub fn meta_prune(&self) -> DbResult<usize> {
         let now = self.now();
-        self.inner.db.with_conn(|c| Ok(c.execute("DELETE FROM metadata_cache WHERE expires_at <= ?1", [now])?))
+        self.inner.db.with_conn(|c| {
+            Ok(c.execute("DELETE FROM metadata_cache WHERE expires_at <= ?1", [now])?)
+        })
     }
 
     /// `images_bytes` for `api::StorageSummary` (lyrics/metadata live in the
@@ -390,7 +487,17 @@ mod tests {
         let clock = Arc::new(TestClock(parking_lot::Mutex::new(1_000.0)));
         let caches = Caches::new(db.clone(), clock.clone(), dir.path());
         let server = FakeServer::new("srv", "alice");
-        db.upsert_tracks(&[crate::api::Track { id: "t".into(), server_id: "srv".into(), title: "T".into(), ..Default::default() }], &[], 1).unwrap();
+        db.upsert_tracks(
+            &[crate::api::Track {
+                id: "t".into(),
+                server_id: "srv".into(),
+                title: "T".into(),
+                ..Default::default()
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
         (dir, db, caches, clock, server)
     }
 
@@ -406,29 +513,62 @@ mod tests {
     #[tokio::test]
     async fn artwork_fetches_per_size_and_never_substitutes() {
         let (dir, _db, caches, _clock, server) = fixture();
-        server.add_song(Child { id: "al-1".into(), title: "x".into(), ..Default::default() });
+        server.add_song(Child {
+            id: "al-1".into(),
+            title: "x".into(),
+            ..Default::default()
+        });
         server.set_media("al-1", vec![1u8; 300]);
-        let big = caches.artwork_path(&server, "al-1", 1000).await.unwrap().unwrap();
+        let big = caches
+            .artwork_path(&server, "al-1", 1000)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(big.starts_with(dir.path().join("images").join("srv")));
         assert!(big.to_string_lossy().ends_with("al-1_1280.img"));
         assert_eq!(server.calls_to("download"), 1);
-        assert!(caches.artwork_cached("srv", "al-1", 64).unwrap().is_none(), "a large image is never downscaled for a grid");
-        let small = caches.artwork_path(&server, "al-1", 64).await.unwrap().unwrap();
+        assert!(
+            caches.artwork_cached("srv", "al-1", 64).unwrap().is_none(),
+            "a large image is never downscaled for a grid"
+        );
+        let small = caches
+            .artwork_path(&server, "al-1", 64)
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(small, big);
         assert_eq!(server.calls_to("download"), 2);
         // second request is served from cache
-        assert_eq!(caches.artwork_path(&server, "al-1", 1280).await.unwrap().unwrap(), big);
+        assert_eq!(
+            caches
+                .artwork_path(&server, "al-1", 1280)
+                .await
+                .unwrap()
+                .unwrap(),
+            big
+        );
         assert_eq!(server.calls_to("download"), 2);
         assert_eq!(caches.images_bytes().unwrap(), 600.0);
         assert_eq!(caches.storage_contribution().unwrap(), 600.0);
         // deleted behind our back → refetched
         std::fs::remove_file(&big).unwrap();
-        assert!(caches.artwork_cached("srv", "al-1", 1280).unwrap().is_none());
-        caches.artwork_path(&server, "al-1", 1280).await.unwrap().unwrap();
+        assert!(caches
+            .artwork_cached("srv", "al-1", 1280)
+            .unwrap()
+            .is_none());
+        caches
+            .artwork_path(&server, "al-1", 1280)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(server.calls_to("download"), 3);
         // missing artwork on the server is None, not an error
         server.fail_next(SubsonicError::NotFound("no art".into()), 1);
-        assert!(caches.artwork_path(&server, "none", 320).await.unwrap().is_none());
+        assert!(caches
+            .artwork_path(&server, "none", 320)
+            .await
+            .unwrap()
+            .is_none());
         // the fetch URL carried the snapped size
         let s = server.stream_url("x", &Default::default());
         assert!(s.as_str().contains("stream"));
@@ -441,14 +581,29 @@ mod tests {
         server.set_media("b", vec![0u8; 100]);
         server.set_media("c", vec![0u8; 100]);
         caches.set_image_budget(250.0);
-        let a = caches.artwork_path(&server, "a", 64).await.unwrap().unwrap();
+        let a = caches
+            .artwork_path(&server, "a", 64)
+            .await
+            .unwrap()
+            .unwrap();
         *clock.0.lock() += 10.0;
-        let b = caches.artwork_path(&server, "b", 64).await.unwrap().unwrap();
+        let b = caches
+            .artwork_path(&server, "b", 64)
+            .await
+            .unwrap()
+            .unwrap();
         *clock.0.lock() += 10.0;
         caches.artwork_cached("srv", "a", 64).unwrap(); // touch a
         *clock.0.lock() += 10.0;
-        let c = caches.artwork_path(&server, "c", 64).await.unwrap().unwrap();
-        assert!(a.exists() && !b.exists() && c.exists(), "b was least recently used");
+        let c = caches
+            .artwork_path(&server, "c", 64)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            a.exists() && !b.exists() && c.exists(),
+            "b was least recently used"
+        );
         assert_eq!(caches.images_bytes().unwrap(), 200.0);
         assert_eq!(caches.clear_images().unwrap(), 2);
         assert_eq!(caches.images_bytes().unwrap(), 0.0);
@@ -462,7 +617,15 @@ mod tests {
             display_artist: None,
             display_title: None,
             agents: vec![],
-            lines: vec![LyricLine { start_ms: Some(0), end_ms: None, text: "la".into(), syllables: vec![], agent: None, background: false, translation: None }],
+            lines: vec![LyricLine {
+                start_ms: Some(0),
+                end_ms: None,
+                text: "la".into(),
+                syllables: vec![],
+                agent: None,
+                background: false,
+                translation: None,
+            }],
             source,
             offset_ms: 0,
         }
@@ -471,33 +634,82 @@ mod tests {
     #[test]
     fn lyrics_cache_positive_negative_and_budget() {
         let (_dir, db, caches, clock, _server) = fixture();
-        assert!(caches.lyrics_get("srv", "t", LyricsSource::Server).unwrap().is_none());
-        caches.lyrics_put_none("srv", "t", LyricsSource::Server).unwrap();
-        assert_eq!(caches.lyrics_get("srv", "t", LyricsSource::Server).unwrap(), Some(None));
+        assert!(caches
+            .lyrics_get("srv", "t", LyricsSource::Server)
+            .unwrap()
+            .is_none());
+        caches
+            .lyrics_put_none("srv", "t", LyricsSource::Server)
+            .unwrap();
+        assert_eq!(
+            caches.lyrics_get("srv", "t", LyricsSource::Server).unwrap(),
+            Some(None)
+        );
         assert!(caches.lyrics_get_any("srv", "t").unwrap().is_none());
         *clock.0.lock() += LYRICS_NEGATIVE_TTL_MS + 1.0;
-        assert!(caches.lyrics_get("srv", "t", LyricsSource::Server).unwrap().is_none(), "negative entry expired");
+        assert!(
+            caches
+                .lyrics_get("srv", "t", LyricsSource::Server)
+                .unwrap()
+                .is_none(),
+            "negative entry expired"
+        );
         let l = lyrics("t", LyricsSource::External);
         caches.lyrics_put("srv", "t", &l).unwrap();
-        assert_eq!(caches.lyrics_get("srv", "t", LyricsSource::External).unwrap(), Some(Some(l.clone())));
+        assert_eq!(
+            caches
+                .lyrics_get("srv", "t", LyricsSource::External)
+                .unwrap(),
+            Some(Some(l.clone()))
+        );
         assert_eq!(caches.lyrics_get_any("srv", "t").unwrap(), Some(l));
-        let has: i64 = db.with_conn(|c| Ok(c.query_row("SELECT has_lyrics FROM tracks WHERE id='t'", [], |r| r.get(0))?)).unwrap();
+        let has: i64 = db
+            .with_conn(|c| {
+                Ok(
+                    c.query_row("SELECT has_lyrics FROM tracks WHERE id='t'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
         assert_eq!(has, 1);
         assert!(caches.lyrics_bytes().unwrap() > 0.0);
         caches.set_lyrics_max_entries(2);
         for i in 0..3 {
             *clock.0.lock() += 1.0;
-            caches.lyrics_put("srv", &format!("x{i}"), &lyrics(&format!("x{i}"), LyricsSource::Server)).unwrap();
+            caches
+                .lyrics_put(
+                    "srv",
+                    &format!("x{i}"),
+                    &lyrics(&format!("x{i}"), LyricsSource::Server),
+                )
+                .unwrap();
         }
-        assert!(caches.lyrics_get("srv", "t", LyricsSource::External).unwrap().is_none(), "oldest evicted");
-        assert!(caches.lyrics_get("srv", "x2", LyricsSource::Server).unwrap().is_some());
+        assert!(
+            caches
+                .lyrics_get("srv", "t", LyricsSource::External)
+                .unwrap()
+                .is_none(),
+            "oldest evicted"
+        );
+        assert!(caches
+            .lyrics_get("srv", "x2", LyricsSource::Server)
+            .unwrap()
+            .is_some());
         assert_eq!(caches.lyrics_invalidate("srv", "x2").unwrap(), 1);
     }
 
     #[test]
     fn metadata_ttl() {
         let (_dir, _db, caches, clock, _server) = fixture();
-        caches.meta_put("srv", "artistInfo2:ar1", &serde_json::json!({"bio": "x"}), Some(1000.0)).unwrap();
+        caches
+            .meta_put(
+                "srv",
+                "artistInfo2:ar1",
+                &serde_json::json!({"bio": "x"}),
+                Some(1000.0),
+            )
+            .unwrap();
         let v: Option<serde_json::Value> = caches.meta_get("srv", "artistInfo2:ar1").unwrap();
         assert_eq!(v.unwrap()["bio"], "x");
         *clock.0.lock() += 1001.0;

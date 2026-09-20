@@ -117,7 +117,9 @@ pub struct Db {
 
 impl std::fmt::Debug for Db {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Db").field("path", &self.inner.path).finish()
+        f.debug_struct("Db")
+            .field("path", &self.inner.path)
+            .finish()
     }
 }
 
@@ -131,7 +133,9 @@ impl Db {
         }
         let conn = Connection::open_with_flags(
             path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         configure(&conn)?;
         let report = migrate(&conn, Some(path), Some(backup_dir))?;
@@ -148,7 +152,14 @@ impl Db {
 
     fn wrap(conn: Connection, path: Option<PathBuf>, open_report: OpenReport) -> Db {
         let random_seed = (now_ms() as i64) ^ 0x5DEE_CE66;
-        Db { inner: Arc::new(Inner { conn: Mutex::new(conn), path, random_seed, open_report }) }
+        Db {
+            inner: Arc::new(Inner {
+                conn: Mutex::new(conn),
+                path,
+                random_seed,
+                open_report,
+            }),
+        }
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -187,10 +198,15 @@ impl Db {
     // -- saved_state --------------------------------------------------------
 
     /// JSON document by key (session doc, saved queues, shortcuts, cursors...).
-    pub fn saved_state_get<T: serde::de::DeserializeOwned>(&self, key: &str) -> DbResult<Option<T>> {
+    pub fn saved_state_get<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> DbResult<Option<T>> {
         self.with_conn(|c| {
             let json: Option<String> = c
-                .query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| r.get(0))
+                .query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
                 .optional()?;
             match json {
                 Some(j) => Ok(Some(serde_json::from_str(&j)?)),
@@ -201,11 +217,21 @@ impl Db {
 
     pub fn saved_state_get_raw(&self, key: &str) -> DbResult<Option<String>> {
         self.with_conn(|c| {
-            Ok(c.query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+            Ok(
+                c.query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
+                .optional()?,
+            )
         })
     }
 
-    pub fn saved_state_set<T: serde::Serialize>(&self, key: &str, value: &T, clock: &dyn Clock) -> DbResult<()> {
+    pub fn saved_state_set<T: serde::Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+        clock: &dyn Clock,
+    ) -> DbResult<()> {
         let json = serde_json::to_string(value)?;
         self.saved_state_set_raw(key, &json, clock)
     }
@@ -228,7 +254,8 @@ impl Db {
     /// Keys with a prefix (e.g. `lyricsOffset:`).
     pub fn saved_state_keys(&self, prefix: &str) -> DbResult<Vec<String>> {
         self.with_conn(|c| {
-            let mut st = c.prepare("SELECT key FROM saved_state WHERE key LIKE ?1 || '%' ORDER BY key")?;
+            let mut st =
+                c.prepare("SELECT key FROM saved_state WHERE key LIKE ?1 || '%' ORDER BY key")?;
             let rows = st.query_map([prefix], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
@@ -238,7 +265,10 @@ impl Db {
     pub fn clear_mirror(&self, server_id: &str) -> DbResult<()> {
         self.with_tx(|tx| {
             for t in MIRROR_TABLES {
-                tx.execute(&format!("DELETE FROM {t} WHERE server_id = ?1"), [server_id])?;
+                tx.execute(
+                    &format!("DELETE FROM {t} WHERE server_id = ?1"),
+                    [server_id],
+                )?;
             }
             Ok(())
         })
@@ -277,25 +307,33 @@ fn configure(conn: &Connection) -> DbResult<()> {
 
 fn current_version(conn: &Connection) -> rusqlite::Result<u32> {
     let has_table: bool = conn
-        .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'", [], |r| {
-            r.get::<_, i64>(0)
-        })
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
         .map(|n| n > 0)?;
     if !has_table {
         return Ok(0);
     }
-    conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |r| r.get::<_, i64>(0)).map(|v| v as u32)
+    conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v as u32)
 }
 
 fn apply_migration(conn: &Connection, version: u32, sql: &str) -> Result<(), rusqlite::Error> {
     // One transaction per migration so a failure leaves the previous version intact.
     conn.execute_batch("BEGIN")?;
-    let result = conn
-        .execute_batch(sql)
-        .and_then(|_| {
-            conn.execute("INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)", rusqlite::params![version, now_ms()])
-                .map(|_| ())
-        });
+    let result = conn.execute_batch(sql).and_then(|_| {
+        conn.execute(
+            "INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)",
+            rusqlite::params![version, now_ms()],
+        )
+        .map(|_| ())
+    });
     match result {
         Ok(()) => conn.execute_batch("COMMIT"),
         Err(e) => {
@@ -308,11 +346,22 @@ fn apply_migration(conn: &Connection, version: u32, sql: &str) -> Result<(), rus
 /// Apply pending migrations. Backs up the file first when upgrading an
 /// existing database; on failure, drops the mirror tables (they are a cache)
 /// and retries once, and only then gives up.
-fn migrate(conn: &Connection, path: Option<&Path>, backup_dir: Option<&Path>) -> DbResult<OpenReport> {
+fn migrate(
+    conn: &Connection,
+    path: Option<&Path>,
+    backup_dir: Option<&Path>,
+) -> DbResult<OpenReport> {
     let from = current_version(conn)?;
-    let mut report = OpenReport { from_version: from, to_version: from, ..Default::default() };
+    let mut report = OpenReport {
+        from_version: from,
+        to_version: from,
+        ..Default::default()
+    };
     if from > SCHEMA_VERSION {
-        return Err(DbError::TooNew { found: from, supported: SCHEMA_VERSION });
+        return Err(DbError::TooNew {
+            found: from,
+            supported: SCHEMA_VERSION,
+        });
     }
     let pending: Vec<_> = MIGRATIONS.iter().filter(|(v, _, _)| *v > from).collect();
     if pending.is_empty() {
@@ -321,7 +370,14 @@ fn migrate(conn: &Connection, path: Option<&Path>, backup_dir: Option<&Path>) ->
     if from > 0 {
         if let (Some(path), Some(dir)) = (path, backup_dir) {
             std::fs::create_dir_all(dir)?;
-            let name = format!("{}.v{}.{}.bak", path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default(), from, now_ms() as i64);
+            let name = format!(
+                "{}.v{}.{}.bak",
+                path.file_name()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default(),
+                from,
+                now_ms() as i64
+            );
             let dest = dir.join(name);
             conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
             tracing::info!(?dest, from, "backed up database before migration");
@@ -335,7 +391,10 @@ fn migrate(conn: &Connection, path: Option<&Path>, backup_dir: Option<&Path>) ->
                 tracing::warn!(version, name, error = %first, "migration failed; rebuilding mirror tables");
                 drop_mirror_tables(conn)?;
                 report.mirror_rebuilt = true;
-                apply_migration(conn, *version, sql).map_err(|source| DbError::Migration { version: *version, source })?;
+                apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
+                    version: *version,
+                    source,
+                })?;
             }
         }
         report.to_version = *version;
@@ -346,9 +405,12 @@ fn migrate(conn: &Connection, path: Option<&Path>, backup_dir: Option<&Path>) ->
 fn drop_mirror_tables(conn: &Connection) -> DbResult<()> {
     // Triggers/FTS shadow tables go with their content tables.
     for t in MIRROR_TABLES {
-        conn.execute_batch(&format!("DROP TABLE IF EXISTS {t}_fts; DROP TABLE IF EXISTS {t};"))?;
+        conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {t}_fts; DROP TABLE IF EXISTS {t};"
+        ))?;
     }
-    conn.execute_batch("DELETE FROM saved_state WHERE key LIKE 'sync:%'").ok();
+    conn.execute_batch("DELETE FROM saved_state WHERE key LIKE 'sync:%'")
+        .ok();
     Ok(())
 }
 
@@ -364,7 +426,8 @@ mod tests {
         assert_eq!(db.open_report().from_version, 0);
         let tables: Vec<String> = db
             .with_conn(|c| {
-                let mut st = c.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
+                let mut st =
+                    c.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
                 let rows = st.query_map([], |r| r.get(0))?;
                 let names = rows.collect::<Result<Vec<String>, _>>()?;
                 Ok(names)
@@ -382,13 +445,19 @@ mod tests {
         let path = dir.path().join("hocket.db");
         {
             let db = Db::open(&path, &dir.path().join("backups")).unwrap();
-            let mode: String = db.with_conn(|c| Ok(c.pragma_query_value(None, "journal_mode", |r| r.get(0))?)).unwrap();
+            let mode: String = db
+                .with_conn(|c| Ok(c.pragma_query_value(None, "journal_mode", |r| r.get(0))?))
+                .unwrap();
             assert_eq!(mode.to_lowercase(), "wal");
-            db.saved_state_set("k", &serde_json::json!({"a": 1}), &WallClock).unwrap();
+            db.saved_state_set("k", &serde_json::json!({"a": 1}), &WallClock)
+                .unwrap();
         }
         let db = Db::open(&path, &dir.path().join("backups")).unwrap();
         assert_eq!(db.open_report().from_version, SCHEMA_VERSION);
-        assert!(db.open_report().backup_path.is_none(), "no migration, no backup");
+        assert!(
+            db.open_report().backup_path.is_none(),
+            "no migration, no backup"
+        );
         let v: serde_json::Value = db.saved_state_get("k").unwrap().unwrap();
         assert_eq!(v["a"], 1);
     }
@@ -419,7 +488,9 @@ mod tests {
         db.backup_to(&dest).unwrap();
         assert!(dest.exists());
         let copy = Connection::open(&dest).unwrap();
-        let v: i64 = copy.query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0)).unwrap();
+        let v: i64 = copy
+            .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(v as u32, SCHEMA_VERSION);
     }
 
@@ -461,7 +532,10 @@ mod tests {
         assert_eq!(v["x"], 1, "durable rows survive a mirror rebuild");
         // the rebuilt tracks table has the full column set
         db.with_conn(|c| {
-            c.execute("INSERT INTO tracks(id, server_id, title) VALUES ('t', 's', 'x')", [])?;
+            c.execute(
+                "INSERT INTO tracks(id, server_id, title) VALUES ('t', 's', 'x')",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -470,11 +544,19 @@ mod tests {
     #[test]
     fn saved_state_roundtrip_and_keys() {
         let db = Db::open_in_memory().unwrap();
-        db.saved_state_set("lyricsOffset:a", &5, &WallClock).unwrap();
-        db.saved_state_set("lyricsOffset:b", &-3, &WallClock).unwrap();
+        db.saved_state_set("lyricsOffset:a", &5, &WallClock)
+            .unwrap();
+        db.saved_state_set("lyricsOffset:b", &-3, &WallClock)
+            .unwrap();
         db.saved_state_set("other", &1, &WallClock).unwrap();
-        assert_eq!(db.saved_state_keys("lyricsOffset:").unwrap(), vec!["lyricsOffset:a", "lyricsOffset:b"]);
-        assert_eq!(db.saved_state_get::<i32>("lyricsOffset:b").unwrap(), Some(-3));
+        assert_eq!(
+            db.saved_state_keys("lyricsOffset:").unwrap(),
+            vec!["lyricsOffset:a", "lyricsOffset:b"]
+        );
+        assert_eq!(
+            db.saved_state_get::<i32>("lyricsOffset:b").unwrap(),
+            Some(-3)
+        );
         assert!(db.saved_state_delete("other").unwrap());
         assert!(!db.saved_state_delete("other").unwrap());
         assert_eq!(db.saved_state_get::<i32>("other").unwrap(), None);

@@ -65,7 +65,13 @@ pub struct JobSpec {
 
 impl JobSpec {
     pub fn new(kind: JobKind, label: impl Into<String>) -> Self {
-        JobSpec { kind, label: label.into(), payload: "{}".into(), items: vec![], cancellable: true }
+        JobSpec {
+            kind,
+            label: label.into(),
+            payload: "{}".into(),
+            items: vec![],
+            cancellable: true,
+        }
     }
     pub fn payload(mut self, json: impl Into<String>) -> Self {
         self.payload = json.into();
@@ -146,7 +152,12 @@ pub enum RetryAction {
     /// Re-run the failed items of the job (or the whole job if it had none).
     RetryJob { job_id: String },
     /// Re-submit a fresh job with this spec (used by the outbox and downloads).
-    Resubmit { kind: JobKind, label: String, payload: String, items: Vec<String> },
+    Resubmit {
+        kind: JobKind,
+        label: String,
+        payload: String,
+        items: Vec<String>,
+    },
 }
 
 type Listener = Box<dyn Fn(QueueEvent) + Send + Sync>;
@@ -182,7 +193,11 @@ const KIND_NAMES: &[(JobKind, &str)] = &[
 ];
 
 pub fn kind_name(k: JobKind) -> &'static str {
-    KIND_NAMES.iter().find(|(kk, _)| *kk == k).map(|(_, n)| *n).unwrap_or("unknown")
+    KIND_NAMES
+        .iter()
+        .find(|(kk, _)| *kk == k)
+        .map(|(_, n)| *n)
+        .unwrap_or("unknown")
 }
 
 pub fn kind_from_name(s: &str) -> Option<JobKind> {
@@ -256,7 +271,13 @@ impl JobQueue {
 
     /// Register the runner for a kind with its maximum parallelism.
     pub fn register(&self, kind: JobKind, concurrency: usize, runner: Arc<dyn JobRunner>) {
-        self.inner.runners.write().insert(kind_name(kind), Registered { runner, semaphore: Arc::new(Semaphore::new(concurrency.max(1))) });
+        self.inner.runners.write().insert(
+            kind_name(kind),
+            Registered {
+                runner,
+                semaphore: Arc::new(Semaphore::new(concurrency.max(1))),
+            },
+        );
         self.inner.notify.notify_one();
     }
 
@@ -286,7 +307,10 @@ impl JobQueue {
     /// resume from their cursor. Call once before `start`.
     pub fn recover(&self) -> DbResult<usize> {
         let n = self.inner.db.with_conn(|c| {
-            Ok(c.execute("UPDATE jobs SET state = 'queued', updated_at = ?1 WHERE state = 'running'", [self.inner.clock.now_ms()])?)
+            Ok(c.execute(
+                "UPDATE jobs SET state = 'queued', updated_at = ?1 WHERE state = 'running'",
+                [self.inner.clock.now_ms()],
+            )?)
         })?;
         self.inner.notify.notify_one();
         Ok(n)
@@ -295,7 +319,11 @@ impl JobQueue {
     pub fn submit(&self, spec: JobSpec) -> DbResult<JobId> {
         let id = new_id();
         let now = self.inner.clock.now_ms();
-        let total: Option<i64> = if spec.items.is_empty() { None } else { Some(spec.items.len() as i64) };
+        let total: Option<i64> = if spec.items.is_empty() {
+            None
+        } else {
+            Some(spec.items.len() as i64)
+        };
         self.inner.db.with_tx(|tx| {
             tx.execute(
                 "INSERT INTO jobs(id, kind, label, state, payload, done, total, failed, created_at, updated_at, cancellable) VALUES (?1, ?2, ?3, 'queued', ?4, 0, ?5, 0, ?6, ?6, ?7)",
@@ -326,12 +354,22 @@ impl JobQueue {
 
     pub fn job(&self, id: &str) -> DbResult<Option<Job>> {
         self.inner.db.with_conn(|c| {
-            Ok(c.query_row(&format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1"), [id], job_from_row).optional()?)
+            Ok(c.query_row(
+                &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1"),
+                [id],
+                job_from_row,
+            )
+            .optional()?)
         })
     }
 
     pub fn payload(&self, id: &str) -> DbResult<Option<String>> {
-        self.inner.db.with_conn(|c| Ok(c.query_row("SELECT payload FROM jobs WHERE id = ?1", [id], |r| r.get(0)).optional()?))
+        self.inner.db.with_conn(|c| {
+            Ok(
+                c.query_row("SELECT payload FROM jobs WHERE id = ?1", [id], |r| r.get(0))
+                    .optional()?,
+            )
+        })
     }
 
     /// Cancel a queued/running/paused job. Running jobs stop at their next checkpoint.
@@ -376,7 +414,10 @@ impl JobQueue {
         let is_running = self.inner.running.lock().contains_key(id);
         let new_state = if is_running { "running" } else { "queued" };
         let changed = self.inner.db.with_conn(|c| {
-            Ok(c.execute("UPDATE jobs SET state = ?3, updated_at = ?2 WHERE id = ?1 AND state = 'paused'", params![id, now, new_state])? > 0)
+            Ok(c.execute(
+                "UPDATE jobs SET state = ?3, updated_at = ?2 WHERE id = ?1 AND state = 'paused'",
+                params![id, now, new_state],
+            )? > 0)
         })?;
         if changed {
             if let Some(r) = self.inner.running.lock().get(id) {
@@ -468,7 +509,9 @@ impl JobQueue {
     }
 
     pub fn dismiss_problem(&self, id: &str) -> DbResult<bool> {
-        let n = self.inner.db.with_conn(|c| Ok(c.execute("UPDATE problems SET dismissed = 1 WHERE id = ?1", [id])?))?;
+        let n = self.inner.db.with_conn(|c| {
+            Ok(c.execute("UPDATE problems SET dismissed = 1 WHERE id = ?1", [id])?)
+        })?;
         if n > 0 {
             self.emit_problems();
         }
@@ -476,7 +519,9 @@ impl JobQueue {
     }
 
     pub fn dismiss_all_problems(&self) -> DbResult<usize> {
-        let n = self.inner.db.with_conn(|c| Ok(c.execute("UPDATE problems SET dismissed = 1 WHERE dismissed = 0", [])?))?;
+        let n = self.inner.db.with_conn(|c| {
+            Ok(c.execute("UPDATE problems SET dismissed = 1 WHERE dismissed = 0", [])?)
+        })?;
         self.emit_problems();
         Ok(n)
     }
@@ -485,7 +530,13 @@ impl JobQueue {
     /// retry runs under, if any.
     pub fn retry_problem(&self, id: &str) -> DbResult<Option<JobId>> {
         let retry: Option<String> = self.inner.db.with_conn(|c| {
-            Ok(c.query_row("SELECT retry FROM problems WHERE id = ?1 AND dismissed = 0", [id], |r| r.get(0)).optional()?.flatten())
+            Ok(c.query_row(
+                "SELECT retry FROM problems WHERE id = ?1 AND dismissed = 0",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
         })?;
         let Some(retry) = retry else { return Ok(None) };
         let action: RetryAction = serde_json::from_str(&retry)?;
@@ -497,9 +548,18 @@ impl JobQueue {
                     None
                 }
             }
-            RetryAction::Resubmit { kind, label, payload, items } => {
-                Some(self.submit(JobSpec { kind, label, payload, items, cancellable: true })?)
-            }
+            RetryAction::Resubmit {
+                kind,
+                label,
+                payload,
+                items,
+            } => Some(self.submit(JobSpec {
+                kind,
+                label,
+                payload,
+                items,
+                cancellable: true,
+            })?),
         };
         self.dismiss_problem(id)?;
         Ok(job_id)
@@ -530,10 +590,20 @@ impl JobQueue {
             self.schedule_once()?;
             let running = self.inner.running.lock().len();
             let queued_runnable: i64 = self.inner.db.with_conn(|c| {
-                let kinds: Vec<String> = self.inner.runners.read().keys().map(|k| k.to_string()).collect();
+                let kinds: Vec<String> = self
+                    .inner
+                    .runners
+                    .read()
+                    .keys()
+                    .map(|k| k.to_string())
+                    .collect();
                 let mut n = 0;
                 for k in kinds {
-                    n += c.query_row("SELECT count(*) FROM jobs WHERE state = 'queued' AND kind = ?1", [k], |r| r.get::<_, i64>(0))?;
+                    n += c.query_row(
+                        "SELECT count(*) FROM jobs WHERE state = 'queued' AND kind = ?1",
+                        [k],
+                        |r| r.get::<_, i64>(0),
+                    )?;
                 }
                 Ok(n)
             })?;
@@ -555,19 +625,27 @@ impl JobQueue {
     /// Start every queued job whose kind has a free slot.
     pub fn schedule_once(&self) -> DbResult<()> {
         let queued: Vec<(String, String)> = self.inner.db.with_conn(|c| {
-            let mut st = c.prepare_cached("SELECT id, kind FROM jobs WHERE state = 'queued' ORDER BY created_at ASC")?;
+            let mut st = c.prepare_cached(
+                "SELECT id, kind FROM jobs WHERE state = 'queued' ORDER BY created_at ASC",
+            )?;
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
         for (id, kind_s) in queued {
-            let Some(kind) = kind_from_name(&kind_s) else { continue };
+            let Some(kind) = kind_from_name(&kind_s) else {
+                continue;
+            };
             if self.inner.running.lock().contains_key(&id) {
                 continue;
             }
             let (runner, permit) = {
                 let runners = self.inner.runners.read();
-                let Some(reg) = runners.get(kind_name(kind)) else { continue };
-                let Ok(permit) = reg.semaphore.clone().try_acquire_owned() else { continue };
+                let Some(reg) = runners.get(kind_name(kind)) else {
+                    continue;
+                };
+                let Ok(permit) = reg.semaphore.clone().try_acquire_owned() else {
+                    continue;
+                };
                 (reg.runner.clone(), permit)
             };
             self.launch(id, kind, runner, permit)?;
@@ -585,14 +663,30 @@ impl JobQueue {
         let now = self.inner.clock.now_ms();
         let payload = self.payload(&id)?.unwrap_or_else(|| "{}".into());
         self.inner.db.with_conn(|c| {
-            c.execute("UPDATE jobs SET state = 'running', updated_at = ?2 WHERE id = ?1", params![id, now])?;
+            c.execute(
+                "UPDATE jobs SET state = 'running', updated_at = ?2 WHERE id = ?1",
+                params![id, now],
+            )?;
             Ok(())
         })?;
         let cancel = CancellationToken::new();
         let (pause_tx, pause_rx) = watch::channel(false);
-        self.inner.running.lock().insert(id.clone(), Running { cancel: cancel.clone(), pause: pause_tx });
+        self.inner.running.lock().insert(
+            id.clone(),
+            Running {
+                cancel: cancel.clone(),
+                pause: pause_tx,
+            },
+        );
         self.emit_jobs();
-        let ctx = JobContext { queue: self.clone(), job_id: id.clone(), kind, payload, cancel, pause: pause_rx };
+        let ctx = JobContext {
+            queue: self.clone(),
+            job_id: id.clone(),
+            kind,
+            payload,
+            cancel,
+            pause: pause_rx,
+        };
         let q = self.clone();
         let fut = runner.run(ctx);
         tokio::spawn(async move {
@@ -618,7 +712,7 @@ impl JobQueue {
             let failed = failed.max(item_failed);
             let new_state = if cancelled {
                 "cancelled"
-            } else if matches!(result, Err(_)) || failed > 0 {
+            } else if result.is_err() || failed > 0 {
                 "failed"
             } else {
                 "done"
@@ -627,8 +721,7 @@ impl JobQueue {
             let errors: Vec<String> = {
                 let mut st = tx.prepare_cached("SELECT item, error FROM job_items WHERE job_id = ?1 AND state = 'failed' ORDER BY seq LIMIT 5")?;
                 let rows = st.query_map([id], |r| Ok(format!("{}: {}", r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))?;
-                let collected = rows.collect::<Result<Vec<_>, _>>()?;
-                collected
+                rows.collect::<Result<Vec<_>, _>>()?
             };
             Ok((new_state.to_string(), label, failed, errors))
         });
@@ -639,11 +732,25 @@ impl JobQueue {
                         Err(JobError::Failed(m)) => (format!("{label} failed"), Some(m.clone())),
                         Err(JobError::Db(e)) => (format!("{label} failed"), Some(e.to_string())),
                         _ => (
-                            format!("{label}: {failed} item{} failed", if failed == 1 { "" } else { "s" }),
-                            if errors.is_empty() { None } else { Some(errors.join("\n")) },
+                            format!(
+                                "{label}: {failed} item{} failed",
+                                if failed == 1 { "" } else { "s" }
+                            ),
+                            if errors.is_empty() {
+                                None
+                            } else {
+                                Some(errors.join("\n"))
+                            },
                         ),
                     };
-                    if let Err(e) = self.add_problem(Some(id), &summary, detail.as_deref(), Some(RetryAction::RetryJob { job_id: id.to_string() })) {
+                    if let Err(e) = self.add_problem(
+                        Some(id),
+                        &summary,
+                        detail.as_deref(),
+                        Some(RetryAction::RetryJob {
+                            job_id: id.to_string(),
+                        }),
+                    ) {
                         tracing::error!(error = %e, "filing problem");
                     }
                 }
@@ -732,14 +839,23 @@ impl JobContext {
     /// Persist a resume point (opaque JSON).
     pub fn set_cursor(&self, cursor: &str) -> DbResult<()> {
         self.queue.inner.db.with_conn(|c| {
-            c.execute("UPDATE jobs SET cursor = ?2 WHERE id = ?1", params![self.job_id, cursor])?;
+            c.execute(
+                "UPDATE jobs SET cursor = ?2 WHERE id = ?1",
+                params![self.job_id, cursor],
+            )?;
             Ok(())
         })
     }
 
     pub fn cursor(&self) -> DbResult<Option<String>> {
         self.queue.inner.db.with_conn(|c| {
-            Ok(c.query_row("SELECT cursor FROM jobs WHERE id = ?1", [&self.job_id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten())
+            Ok(c.query_row(
+                "SELECT cursor FROM jobs WHERE id = ?1",
+                [&self.job_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
         })
     }
 
@@ -808,22 +924,24 @@ mod tests {
 
     /// A runner that processes every item, failing those containing "bad".
     fn item_runner(delay_ms: u64) -> Arc<dyn JobRunner> {
-        Arc::new(move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
-            Box::pin(async move {
-                for it in ctx.pending_items()? {
-                    ctx.checkpoint().await?;
-                    if delay_ms > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        Arc::new(
+            move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                Box::pin(async move {
+                    for it in ctx.pending_items()? {
+                        ctx.checkpoint().await?;
+                        if delay_ms > 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        }
+                        if it.item.contains("bad") {
+                            ctx.item_failed(it.seq, "bad item")?;
+                        } else {
+                            ctx.item_done(it.seq)?;
+                        }
                     }
-                    if it.item.contains("bad") {
-                        ctx.item_failed(it.seq, "bad item")?;
-                    } else {
-                        ctx.item_done(it.seq)?;
-                    }
-                }
-                Ok(())
-            })
-        })
+                    Ok(())
+                })
+            },
+        )
     }
 
     #[tokio::test]
@@ -833,7 +951,15 @@ mod tests {
         let ev = events.clone();
         q.on_change(move |e| ev.lock().push(e));
         q.register(JobKind::BulkRating, 4, item_runner(0));
-        let id = q.submit(JobSpec::new(JobKind::BulkRating, "Rate 3 tracks").items(vec!["a".into(), "b".into(), "c".into()])).unwrap();
+        let id = q
+            .submit(
+                JobSpec::new(JobKind::BulkRating, "Rate 3 tracks").items(vec![
+                    "a".into(),
+                    "b".into(),
+                    "c".into(),
+                ]),
+            )
+            .unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!(j.state, JobState::Queued);
         assert_eq!(j.total, Some(3));
@@ -843,14 +969,23 @@ mod tests {
         assert_eq!(j.done, 3);
         assert_eq!(j.failed, 0);
         assert!(q.problems().unwrap().is_empty());
-        assert!(events.lock().iter().any(|e| matches!(e, QueueEvent::JobsChanged(_))));
+        assert!(events
+            .lock()
+            .iter()
+            .any(|e| matches!(e, QueueEvent::JobsChanged(_))));
     }
 
     #[tokio::test]
     async fn finished_with_problems_files_one_retryable_problem() {
         let q = queue();
         q.register(JobKind::BulkLove, 2, item_runner(0));
-        let id = q.submit(JobSpec::new(JobKind::BulkLove, "Love").items(vec!["ok".into(), "bad1".into(), "bad2".into()])).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::BulkLove, "Love").items(vec![
+                "ok".into(),
+                "bad1".into(),
+                "bad2".into(),
+            ]))
+            .unwrap();
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!(j.state, JobState::Failed);
@@ -881,9 +1016,13 @@ mod tests {
         q.register(
             JobKind::PlaylistImport,
             1,
-            Arc::new(|_ctx: JobContext| -> BoxFuture<'static, JobResult<()>> { Box::pin(async { Err(JobError::Failed("boom".into())) }) }),
+            Arc::new(|_ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                Box::pin(async { Err(JobError::Failed("boom".into())) })
+            }),
         );
-        let id = q.submit(JobSpec::new(JobKind::PlaylistImport, "Import")).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::PlaylistImport, "Import"))
+            .unwrap();
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Failed);
         let p = q.problems().unwrap();
@@ -904,19 +1043,22 @@ mod tests {
         q.register(
             JobKind::Download,
             2,
-            Arc::new(move |_ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
-                let (i, m) = (i2.clone(), m2.clone());
-                Box::pin(async move {
-                    let n = i.fetch_add(1, Ordering::SeqCst) + 1;
-                    m.fetch_max(n, Ordering::SeqCst);
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                    i.fetch_sub(1, Ordering::SeqCst);
-                    Ok(())
-                })
-            }),
+            Arc::new(
+                move |_ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                    let (i, m) = (i2.clone(), m2.clone());
+                    Box::pin(async move {
+                        let n = i.fetch_add(1, Ordering::SeqCst) + 1;
+                        m.fetch_max(n, Ordering::SeqCst);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        i.fetch_sub(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                },
+            ),
         );
         for i in 0..6 {
-            q.submit(JobSpec::new(JobKind::Download, format!("dl {i}"))).unwrap();
+            q.submit(JobSpec::new(JobKind::Download, format!("dl {i}")))
+                .unwrap();
         }
         q.run_until_idle().await.unwrap();
         assert_eq!(max.load(Ordering::SeqCst), 2);
@@ -928,8 +1070,12 @@ mod tests {
         let q = queue();
         q.register(JobKind::BulkRating, 1, item_runner(10));
         let items: Vec<String> = (0..50).map(|i| i.to_string()).collect();
-        let id = q.submit(JobSpec::new(JobKind::BulkRating, "big").items(items)).unwrap();
-        let other = q.submit(JobSpec::new(JobKind::LibrarySync, "no runner yet")).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::BulkRating, "big").items(items))
+            .unwrap();
+        let other = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "no runner yet"))
+            .unwrap();
         q.schedule_once().unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(35)).await;
         assert!(q.cancel(&id).unwrap());
@@ -945,7 +1091,9 @@ mod tests {
     #[tokio::test]
     async fn not_cancellable_jobs_refuse_cancel() {
         let q = queue();
-        let id = q.submit(JobSpec::new(JobKind::OutboxFlush, "flush").not_cancellable()).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::OutboxFlush, "flush").not_cancellable())
+            .unwrap();
         assert!(!q.cancel(&id).unwrap());
         assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Queued);
     }
@@ -955,7 +1103,9 @@ mod tests {
         let q = queue();
         q.register(JobKind::BulkRating, 1, item_runner(5));
         let items: Vec<String> = (0..40).map(|i| i.to_string()).collect();
-        let id = q.submit(JobSpec::new(JobKind::BulkRating, "big").items(items)).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::BulkRating, "big").items(items))
+            .unwrap();
         q.schedule_once().unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         assert!(q.pause(&id).unwrap());
@@ -963,7 +1113,11 @@ mod tests {
         let paused = q.job(&id).unwrap().unwrap();
         assert_eq!(paused.state, JobState::Paused);
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        assert_eq!(q.job(&id).unwrap().unwrap().done, paused.done, "no progress while paused");
+        assert_eq!(
+            q.job(&id).unwrap().unwrap().done,
+            paused.done,
+            "no progress while paused"
+        );
         assert!(q.resume(&id).unwrap());
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
@@ -975,7 +1129,9 @@ mod tests {
     async fn pause_queued_job_then_resume_runs_it() {
         let q = queue();
         q.register(JobKind::BulkRating, 1, item_runner(0));
-        let id = q.submit(JobSpec::new(JobKind::BulkRating, "x").items(vec!["a".into()])).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::BulkRating, "x").items(vec!["a".into()]))
+            .unwrap();
         assert!(q.pause(&id).unwrap());
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Paused);
@@ -989,7 +1145,13 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let q = JobQueue::new(db.clone(), Arc::new(WallClock));
         // Simulate a job left "running" by a dead process with 1 of 3 items done and a cursor.
-        let id = q.submit(JobSpec::new(JobKind::LibrarySync, "sync").items(vec!["a".into(), "b".into(), "c".into()])).unwrap();
+        let id = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync").items(vec![
+                "a".into(),
+                "b".into(),
+                "c".into(),
+            ]))
+            .unwrap();
         db.with_conn(|c| {
             c.execute("UPDATE jobs SET state = 'running', done = 1, cursor = '{\"offset\":500}' WHERE id = ?1", [&id])?;
             c.execute("UPDATE job_items SET state = 'done' WHERE job_id = ?1 AND seq = 0", [&id])?;
@@ -1003,17 +1165,19 @@ mod tests {
         q.register(
             JobKind::LibrarySync,
             1,
-            Arc::new(move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
-                let seen = s2.clone();
-                Box::pin(async move {
-                    seen.lock().push(ctx.cursor()?.unwrap_or_default());
-                    for it in ctx.pending_items()? {
-                        seen.lock().push(it.item.clone());
-                        ctx.item_done(it.seq)?;
-                    }
-                    Ok(())
-                })
-            }),
+            Arc::new(
+                move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                    let seen = s2.clone();
+                    Box::pin(async move {
+                        seen.lock().push(ctx.cursor()?.unwrap_or_default());
+                        for it in ctx.pending_items()? {
+                            seen.lock().push(it.item.clone());
+                            ctx.item_done(it.seq)?;
+                        }
+                        Ok(())
+                    })
+                },
+            ),
         );
         q.run_until_idle().await.unwrap();
         assert_eq!(*seen.lock(), vec!["{\"offset\":500}", "b", "c"]);
@@ -1040,8 +1204,13 @@ mod tests {
                 })
             }),
         );
-        let id = q.submit(JobSpec::new(JobKind::Download, "pin").payload(r#"{"target":"album"}"#)).unwrap();
-        assert_eq!(q.payload(&id).unwrap().as_deref(), Some(r#"{"target":"album"}"#));
+        let id = q
+            .submit(JobSpec::new(JobKind::Download, "pin").payload(r#"{"target":"album"}"#))
+            .unwrap();
+        assert_eq!(
+            q.payload(&id).unwrap().as_deref(),
+            Some(r#"{"target":"album"}"#)
+        );
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!((j.done, j.total, j.state), (2, Some(2), JobState::Done));
@@ -1056,13 +1225,22 @@ mod tests {
                 None,
                 "outbox flush failed",
                 None,
-                Some(RetryAction::Resubmit { kind: JobKind::BulkRating, label: "again".into(), payload: "{}".into(), items: vec!["a".into()] }),
+                Some(RetryAction::Resubmit {
+                    kind: JobKind::BulkRating,
+                    label: "again".into(),
+                    payload: "{}".into(),
+                    items: vec!["a".into()],
+                }),
             )
             .unwrap();
         let jid = q.retry_problem(&pid).unwrap().unwrap();
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&jid).unwrap().unwrap().state, JobState::Done);
-        assert_eq!(q.retry_problem(&pid).unwrap(), None, "dismissed problems can't be retried twice");
+        assert_eq!(
+            q.retry_problem(&pid).unwrap(),
+            None,
+            "dismissed problems can't be retried twice"
+        );
         assert_eq!(q.prune().unwrap(), 0, "within retention");
     }
 
@@ -1070,6 +1248,9 @@ mod tests {
     fn failure_classification() {
         assert_eq!(classify_failure(true), FailureSurface::Toast);
         assert_eq!(classify_failure(false), FailureSurface::ProblemsList);
-        assert_eq!(kind_from_name(kind_name(JobKind::FilterMaterialise)), Some(JobKind::FilterMaterialise));
+        assert_eq!(
+            kind_from_name(kind_name(JobKind::FilterMaterialise)),
+            Some(JobKind::FilterMaterialise)
+        );
     }
 }

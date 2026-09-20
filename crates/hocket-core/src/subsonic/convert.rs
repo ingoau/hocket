@@ -2,11 +2,17 @@
 
 use crate::api::{self, OfflineState};
 
-use super::types::{parse_iso_ms, AlbumId3, ArtistId3, Child, GenreBody, PlaylistBody, ReplayGainBody};
+use super::types::{
+    parse_iso_ms, AlbumId3, ArtistId3, Child, GenreBody, PlaylistBody, ReplayGainBody,
+};
 
 fn replay_gain(rg: &Option<ReplayGainBody>) -> Option<api::ReplayGain> {
     let rg = rg.as_ref()?;
-    if rg.track_gain.is_none() && rg.album_gain.is_none() && rg.track_peak.is_none() && rg.album_peak.is_none() {
+    if rg.track_gain.is_none()
+        && rg.album_gain.is_none()
+        && rg.track_peak.is_none()
+        && rg.album_peak.is_none()
+    {
         return None;
     }
     Some(api::ReplayGain {
@@ -19,23 +25,37 @@ fn replay_gain(rg: &Option<ReplayGainBody>) -> Option<api::ReplayGain> {
 
 /// Server-reported modification time, if any (Navidrome varies the field name).
 pub fn child_changed_ms(c: &Child) -> Option<f64> {
-    c.changed.as_deref().or(c.updated.as_deref()).and_then(parse_iso_ms)
+    c.changed
+        .as_deref()
+        .or(c.updated.as_deref())
+        .and_then(parse_iso_ms)
 }
 
 pub fn album_changed_ms(a: &AlbumId3) -> Option<f64> {
-    a.changed.as_deref().or(a.updated.as_deref()).and_then(parse_iso_ms)
+    a.changed
+        .as_deref()
+        .or(a.updated.as_deref())
+        .and_then(parse_iso_ms)
 }
 
 /// A song as the mirror stores it. `offline`, local counts and compilation
 /// flags are filled in by the database layer, not here.
 pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
-    let genre = c.genre.clone().or_else(|| c.genres.first().map(|g| g.name.clone())).filter(|g| !g.is_empty());
+    let genre = c
+        .genre
+        .clone()
+        .or_else(|| c.genres.first().map(|g| g.name.clone()))
+        .filter(|g| !g.is_empty());
     let album_artist = c
         .display_album_artist
         .clone()
         .or_else(|| c.album_artists.first().map(|a| a.name.clone()))
         .filter(|s| !s.is_empty());
-    let artist = c.artist.clone().or_else(|| c.display_artist.clone()).filter(|s| !s.is_empty());
+    let artist = c
+        .artist
+        .clone()
+        .or_else(|| c.display_artist.clone())
+        .filter(|s| !s.is_empty());
     let sonic = if c.bpm.is_some_and(|b| b > 0.0) || !c.moods.is_empty() {
         Some(api::SonicAttributes {
             bpm: c.bpm.filter(|b| *b > 0.0),
@@ -61,7 +81,10 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         disc_number: c.disc_number.filter(|n| *n > 0),
         year: c.year.filter(|n| *n > 0),
         genre,
-        duration_ms: c.duration.map(|d| (d * 1000.0).round().max(0.0) as u32).unwrap_or(0),
+        duration_ms: c
+            .duration
+            .map(|d| (d * 1000.0).round().max(0.0) as u32)
+            .unwrap_or(0),
         bit_rate: c.bit_rate.filter(|n| *n > 0),
         sample_rate: c.sampling_rate.filter(|n| *n > 0),
         bit_depth: c.bit_depth.filter(|n| *n > 0),
@@ -86,17 +109,28 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
 }
 
 pub fn album_from_id3(server_id: &str, a: &AlbumId3) -> api::Album {
-    let genre = a.genre.clone().or_else(|| a.genres.first().map(|g| g.name.clone())).filter(|g| !g.is_empty());
+    let genre = a
+        .genre
+        .clone()
+        .or_else(|| a.genres.first().map(|g| g.name.clone()))
+        .filter(|g| !g.is_empty());
     api::Album {
         id: a.id.clone(),
         server_id: server_id.to_string(),
         name: a.name.clone(),
         artist_id: a.artist_id.clone().filter(|s| !s.is_empty()),
-        artist: a.artist.clone().or_else(|| a.display_artist.clone()).filter(|s| !s.is_empty()),
+        artist: a
+            .artist
+            .clone()
+            .or_else(|| a.display_artist.clone())
+            .filter(|s| !s.is_empty()),
         year: a.year.filter(|n| *n > 0),
         genre,
         song_count: a.song_count.unwrap_or(0),
-        duration_ms: a.duration.map(|d| (d * 1000.0).round().max(0.0) as u32).unwrap_or(0),
+        duration_ms: a
+            .duration
+            .map(|d| (d * 1000.0).round().max(0.0) as u32)
+            .unwrap_or(0),
         cover_art: a.cover_art.clone().filter(|s| !s.is_empty()),
         rating: a.user_rating.unwrap_or(0).min(5),
         loved: a.starred.as_deref().is_some_and(|s| !s.is_empty()),
@@ -126,7 +160,11 @@ pub fn artist_from_id3(server_id: &str, a: &ArtistId3) -> api::Artist {
 }
 
 /// `username` is the authenticated user, for `is_mine`.
-pub fn playlist_from_body(server_id: &str, username: Option<&str>, p: &PlaylistBody) -> api::Playlist {
+pub fn playlist_from_body(
+    server_id: &str,
+    username: Option<&str>,
+    p: &PlaylistBody,
+) -> api::Playlist {
     api::Playlist {
         id: p.id.clone(),
         server_id: server_id.to_string(),
@@ -149,7 +187,11 @@ pub fn playlist_from_body(server_id: &str, username: Option<&str>, p: &PlaylistB
 }
 
 pub fn genre_from_body(g: &GenreBody) -> api::Genre {
-    api::Genre { name: g.value.clone(), song_count: g.song_count, album_count: g.album_count }
+    api::Genre {
+        name: g.value.clone(),
+        song_count: g.song_count,
+        album_count: g.album_count,
+    }
 }
 
 pub fn summary_of(t: &api::Track) -> api::TrackSummary {

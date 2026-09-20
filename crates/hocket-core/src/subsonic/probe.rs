@@ -16,8 +16,14 @@ pub const FLOOR: (u32, u32, u32) = (0, 63, 0);
 /// `v0.63.1-SNAPSHOT` into `(major, minor, patch)`.
 pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let s = s.trim().trim_start_matches('v');
-    let core: String = s.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-    let mut it = core.split('.').filter(|p| !p.is_empty()).map(|p| p.parse::<u32>().ok());
+    let core: String = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let mut it = core
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse::<u32>().ok());
     let major = it.next()??;
     let minor = it.next().flatten().unwrap_or(0);
     let patch = it.next().flatten().unwrap_or(0);
@@ -39,7 +45,11 @@ impl Client {
             ..Default::default()
         };
         caps.meets_floor = meets_floor(caps.server_version.as_deref());
-        if !ping.server_type.as_deref().is_some_and(|t| t.eq_ignore_ascii_case("navidrome")) {
+        if !ping
+            .server_type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("navidrome"))
+        {
             tracing::warn!(server_type = ?ping.server_type, "server is not navidrome; floor check may be wrong");
         }
 
@@ -85,7 +95,10 @@ mod tests {
     #[test]
     fn version_parsing_and_floor() {
         assert_eq!(parse_version("0.63.1 (abcd1234)"), Some((0, 63, 1)));
-        assert_eq!(parse_version("v0.64.0-SNAPSHOT (deadbeef)"), Some((0, 64, 0)));
+        assert_eq!(
+            parse_version("v0.64.0-SNAPSHOT (deadbeef)"),
+            Some((0, 64, 0))
+        );
         assert_eq!(parse_version("0.62.9"), Some((0, 62, 9)));
         assert_eq!(parse_version(""), None);
         assert!(meets_floor(Some("0.63.0")));

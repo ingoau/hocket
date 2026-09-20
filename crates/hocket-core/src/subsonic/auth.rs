@@ -19,7 +19,9 @@ pub struct Credential {
 
 impl Credential {
     pub fn new(secret: impl Into<String>) -> Self {
-        Credential { bytes: secret.into().into_bytes() }
+        Credential {
+            bytes: secret.into().into_bytes(),
+        }
     }
 
     /// Expose the secret. Callers must not copy it into long-lived storage.
@@ -54,7 +56,10 @@ impl fmt::Debug for Credential {
 #[derive(Debug, Clone)]
 pub enum AuthMode {
     /// Token+salt computed per request from the password held in memory.
-    Password { username: String, password: Credential },
+    Password {
+        username: String,
+        password: Credential,
+    },
     /// OpenSubsonic `apiKeyAuthentication`: no password retained at all.
     ApiKey { api_key: Credential },
 }
@@ -121,12 +126,18 @@ mod tests {
     #[test]
     fn token_matches_subsonic_reference() {
         // From the Subsonic API docs: password "sesame", salt "c19b2d" -> 26719a1196d2a940705a59634eb18eab
-        assert_eq!(token("sesame", "c19b2d"), "26719a1196d2a940705a59634eb18eab");
+        assert_eq!(
+            token("sesame", "c19b2d"),
+            "26719a1196d2a940705a59634eb18eab"
+        );
     }
 
     #[test]
     fn password_mode_never_sends_plaintext() {
-        let mode = AuthMode::Password { username: "alice".into(), password: Credential::new("sesame") };
+        let mode = AuthMode::Password {
+            username: "alice".into(),
+            password: Credential::new("sesame"),
+        };
         let params = auth_params_with_salt(&mode, "c19b2d");
         let map: std::collections::HashMap<_, _> = params.into_iter().collect();
         assert_eq!(map["u"], "alice");
@@ -142,7 +153,9 @@ mod tests {
 
     #[test]
     fn api_key_mode_sends_only_key() {
-        let mode = AuthMode::ApiKey { api_key: Credential::new("k123") };
+        let mode = AuthMode::ApiKey {
+            api_key: Credential::new("k123"),
+        };
         let params = auth_params(&mode);
         let map: std::collections::HashMap<_, _> = params.into_iter().collect();
         assert_eq!(map["apiKey"], "k123");

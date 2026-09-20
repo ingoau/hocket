@@ -79,7 +79,9 @@ impl SubsonicError {
         match self {
             SubsonicError::Auth(_) => ErrorKind::Auth,
             SubsonicError::Network(_) => ErrorKind::Network,
-            SubsonicError::NotFound(_) | SubsonicError::Forbidden(_) | SubsonicError::Server { .. } => ErrorKind::Server,
+            SubsonicError::NotFound(_)
+            | SubsonicError::Forbidden(_)
+            | SubsonicError::Server { .. } => ErrorKind::Server,
             SubsonicError::Protocol(_) | SubsonicError::Unsupported(_) => ErrorKind::Protocol,
             SubsonicError::Io(_) => ErrorKind::Storage,
         }
@@ -87,7 +89,10 @@ impl SubsonicError {
 
     /// Whether a retry could plausibly succeed without user intervention.
     pub fn is_transient(&self) -> bool {
-        matches!(self, SubsonicError::Network(_) | SubsonicError::Server { .. })
+        matches!(
+            self,
+            SubsonicError::Network(_) | SubsonicError::Server { .. }
+        )
     }
 
     pub(crate) fn from_code(code: u32, message: String) -> Self {
@@ -155,10 +160,20 @@ pub trait SubsonicApi: Send + Sync + 'static {
     fn artists(&self) -> ApiFuture<'_, ArtistsIndex>;
     fn artist(&self, id: &str) -> ApiFuture<'_, ArtistWithAlbums>;
     fn album(&self, id: &str) -> ApiFuture<'_, AlbumWithSongs>;
-    fn album_list2(&self, kind: AlbumListType, size: u32, offset: u32) -> ApiFuture<'_, Vec<AlbumId3>>;
+    fn album_list2(
+        &self,
+        kind: AlbumListType,
+        size: u32,
+        offset: u32,
+    ) -> ApiFuture<'_, Vec<AlbumId3>>;
     fn song(&self, id: &str) -> ApiFuture<'_, Child>;
-    fn random_songs(&self, size: u32, genre: Option<&str>, from_year: Option<u32>, to_year: Option<u32>)
-        -> ApiFuture<'_, Vec<Child>>;
+    fn random_songs(
+        &self,
+        size: u32,
+        genre: Option<&str>,
+        from_year: Option<u32>,
+        to_year: Option<u32>,
+    ) -> ApiFuture<'_, Vec<Child>>;
     fn songs_by_genre(&self, genre: &str, count: u32, offset: u32) -> ApiFuture<'_, Vec<Child>>;
     fn genres(&self) -> ApiFuture<'_, Vec<GenreBody>>;
     fn starred2(&self) -> ApiFuture<'_, Starred2>;
@@ -167,7 +182,11 @@ pub trait SubsonicApi: Send + Sync + 'static {
     /// `createPlaylist` with a name: a new playlist with the given songs.
     fn create_playlist(&self, name: &str, song_ids: &[String]) -> ApiFuture<'_, PlaylistWithSongs>;
     /// `createPlaylist` with `playlistId`: replaces the playlist's contents.
-    fn replace_playlist(&self, playlist_id: &str, song_ids: &[String]) -> ApiFuture<'_, PlaylistWithSongs>;
+    fn replace_playlist(
+        &self,
+        playlist_id: &str,
+        song_ids: &[String],
+    ) -> ApiFuture<'_, PlaylistWithSongs>;
     fn update_playlist(&self, id: &str, update: PlaylistUpdate) -> ApiFuture<'_, ()>;
     fn delete_playlist(&self, id: &str) -> ApiFuture<'_, ()>;
     /// `search3`. An empty query with paging is the full-library sync path.
@@ -175,7 +194,12 @@ pub trait SubsonicApi: Send + Sync + 'static {
     fn lyrics_by_song_id(&self, id: &str) -> ApiFuture<'_, Vec<StructuredLyrics>>;
     fn similar_songs2(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<Child>>;
     fn top_songs(&self, artist: &str, count: u32) -> ApiFuture<'_, Vec<Child>>;
-    fn artist_info2(&self, id: &str, count: u32, include_not_present: bool) -> ApiFuture<'_, ArtistInfo2>;
+    fn artist_info2(
+        &self,
+        id: &str,
+        count: u32,
+        include_not_present: bool,
+    ) -> ApiFuture<'_, ArtistInfo2>;
     /// `sonicSimilarity` extension. `Unsupported` when not advertised.
     fn sonic_similar_tracks(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<SonicMatch>>;
     fn star(&self, targets: &[StarTarget]) -> ApiFuture<'_, ()>;
@@ -203,7 +227,11 @@ pub trait SubsonicApi: Send + Sync + 'static {
     /// Read a playlist including smart-playlist `rules`.
     fn native_playlist(&self, id: &str) -> ApiFuture<'_, NativePlaylist>;
     /// Update playlist metadata and/or rules.
-    fn native_update_playlist(&self, id: &str, update: NativePlaylistUpdate) -> ApiFuture<'_, NativePlaylist>;
+    fn native_update_playlist(
+        &self,
+        id: &str,
+        update: NativePlaylistUpdate,
+    ) -> ApiFuture<'_, NativePlaylist>;
     /// Create a (smart) playlist through the native API; returns its id.
     fn native_create_playlist(&self, update: NativePlaylistUpdate) -> ApiFuture<'_, String>;
 }

@@ -23,11 +23,17 @@ use serde::{Deserialize, Serialize};
 use crate::api::{self, SyncProgress};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner};
 use crate::subsonic::client::{AlbumListType, Search3Page};
-use crate::subsonic::convert::{album_changed_ms, album_from_id3, artist_from_id3, child_changed_ms, genre_from_body, playlist_from_body, track_from_child};
+use crate::subsonic::convert::{
+    album_changed_ms, album_from_id3, artist_from_id3, child_changed_ms, genre_from_body,
+    playlist_from_body, track_from_child,
+};
 use crate::subsonic::{SubsonicApi, SubsonicError};
 use crate::util::Clock;
 
-use super::queries::{set_playlist_tracks_in, sweep, upsert_albums_in, upsert_artists_in, upsert_playlists_in, upsert_tracks_in};
+use super::queries::{
+    set_playlist_tracks_in, sweep, upsert_albums_in, upsert_artists_in, upsert_playlists_in,
+    upsert_tracks_in,
+};
 use super::{Db, DbError};
 
 /// Page size for `search3` / `getAlbumList2` (Navidrome's maximum).
@@ -189,8 +195,19 @@ pub struct LibrarySync {
 }
 
 impl LibrarySync {
-    pub fn new(db: Db, api: Arc<dyn SubsonicApi>, clock: Arc<dyn Clock>, on_progress: ProgressFn) -> Self {
-        LibrarySync { db, api, clock, on_progress, page_size: PAGE_SIZE }
+    pub fn new(
+        db: Db,
+        api: Arc<dyn SubsonicApi>,
+        clock: Arc<dyn Clock>,
+        on_progress: ProgressFn,
+    ) -> Self {
+        LibrarySync {
+            db,
+            api,
+            clock,
+            on_progress,
+            page_size: PAGE_SIZE,
+        }
     }
 
     /// Smaller pages (tests).
@@ -204,14 +221,25 @@ impl LibrarySync {
     }
 
     pub fn cursor(&self) -> Result<SyncCursor, DbError> {
-        Ok(self.db.saved_state_get(&SyncCursor::key(self.server_id()))?.unwrap_or_default())
+        Ok(self
+            .db
+            .saved_state_get(&SyncCursor::key(self.server_id()))?
+            .unwrap_or_default())
     }
 
     fn save_cursor(&self, c: &SyncCursor) -> Result<(), DbError> {
-        self.db.saved_state_set(&SyncCursor::key(self.server_id()), c, self.clock.as_ref())
+        self.db
+            .saved_state_set(&SyncCursor::key(self.server_id()), c, self.clock.as_ref())
     }
 
-    fn report(&self, obs: &dyn SyncObserver, c: &SyncCursor, done: u32, total: Option<u32>, finished: bool) {
+    fn report(
+        &self,
+        obs: &dyn SyncObserver,
+        c: &SyncCursor,
+        done: u32,
+        total: Option<u32>,
+        finished: bool,
+    ) {
         let p = SyncProgress {
             server_id: self.server_id().to_string(),
             phase: c.phase.name().to_string(),
@@ -233,10 +261,16 @@ impl LibrarySync {
         if c.in_progress() {
             tracing::info!(server = self.server_id(), phase = ?c.phase, offset = c.offset, "resuming interrupted sync");
         } else {
-            let due = c.last_full_at.is_none_or(|t| now - t >= FULL_RECONCILE_INTERVAL_MS);
+            let due = c
+                .last_full_at
+                .is_none_or(|t| now - t >= FULL_RECONCILE_INTERVAL_MS);
             c.full = full || due;
             c.gen += 1;
-            c.phase = if c.full { Phase::Artists } else { Phase::Albums };
+            c.phase = if c.full {
+                Phase::Artists
+            } else {
+                Phase::Albums
+            };
             c.offset = 0;
             c.started_at = Some(now);
             if c.full {
@@ -254,9 +288,17 @@ impl LibrarySync {
                 None
             }
         };
-        let total_tracks = scan.as_ref().and_then(|s| s.count).map(|n| n.max(0.0) as u32);
+        let total_tracks = scan
+            .as_ref()
+            .and_then(|s| s.count)
+            .map(|n| n.max(0.0) as u32);
         if !c.full && !c.in_progress_resumed() {
-            let unchanged = scan.as_ref().is_some_and(|s| !s.scanning && s.last_scan.is_some() && s.last_scan == c.last_scan && s.count == c.last_scan_count);
+            let unchanged = scan.as_ref().is_some_and(|s| {
+                !s.scanning
+                    && s.last_scan.is_some()
+                    && s.last_scan == c.last_scan
+                    && s.count == c.last_scan_count
+            });
             if unchanged {
                 // Library unchanged; only playlists and stars can have moved.
                 c.phase = Phase::Playlists;
@@ -287,7 +329,8 @@ impl LibrarySync {
                             c.offset = 0;
                         }
                     } else {
-                        let (n, tracks) = self.sync_new_albums(c.gen, c.newest_album_created).await?;
+                        let (n, tracks) =
+                            self.sync_new_albums(c.gen, c.newest_album_created).await?;
                         stats.albums += n;
                         stats.tracks += tracks;
                         self.sync_starred(c.gen).await?;
@@ -325,7 +368,11 @@ impl LibrarySync {
                     if !c.ready_tables.iter().any(|t| t == "genres") {
                         c.ready_tables.push("genres".into());
                     }
-                    c.phase = if c.full { Phase::Reconcile } else { Phase::Done };
+                    c.phase = if c.full {
+                        Phase::Reconcile
+                    } else {
+                        Phase::Done
+                    };
                     self.save_cursor(&c)?;
                     self.report(obs, &c, 0, None, false);
                 }
@@ -350,7 +397,8 @@ impl LibrarySync {
         c.newest_album_created = self.newest_album_created()?;
         c.offset = 0;
         self.save_cursor(&c)?;
-        self.db.set_server_last_sync(self.server_id(), finished_at)?;
+        self.db
+            .set_server_last_sync(self.server_id(), finished_at)?;
         self.report(obs, &c, c.offset, total_tracks, true);
         Ok(stats)
     }
@@ -358,7 +406,12 @@ impl LibrarySync {
     async fn sync_artists(&self, gen: i64) -> Result<usize, SyncError> {
         let index = self.api.artists().await?;
         let sid = self.server_id();
-        let artists: Vec<api::Artist> = index.index.iter().flat_map(|i| i.artist.iter()).map(|a| artist_from_id3(sid, a)).collect();
+        let artists: Vec<api::Artist> = index
+            .index
+            .iter()
+            .flat_map(|i| i.artist.iter())
+            .map(|a| artist_from_id3(sid, a))
+            .collect();
         let n = artists.len();
         self.db.with_tx(|tx| upsert_artists_in(tx, &artists, gen))?;
         Ok(n)
@@ -366,36 +419,64 @@ impl LibrarySync {
 
     /// One page of `getAlbumList2 alphabeticalByName`. Returns (count, done).
     async fn sync_albums_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
-        let page = self.api.album_list2(AlbumListType::AlphabeticalByName, self.page_size, offset).await?;
+        let page = self
+            .api
+            .album_list2(AlbumListType::AlphabeticalByName, self.page_size, offset)
+            .await?;
         let sid = self.server_id();
         let albums: Vec<api::Album> = page.iter().map(|a| album_from_id3(sid, a)).collect();
         let changed: Vec<Option<f64>> = page.iter().map(album_changed_ms).collect();
         let n = albums.len();
-        self.db.with_tx(|tx| upsert_albums_in(tx, &albums, &changed, gen))?;
+        self.db
+            .with_tx(|tx| upsert_albums_in(tx, &albums, &changed, gen))?;
         Ok((n, (n as u32) < self.page_size))
     }
 
     /// One page of `search3` with an empty query. Returns (count, done).
     async fn sync_tracks_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
-        let r = self.api.search3("", Search3Page::songs(self.page_size, offset)).await?;
+        let r = self
+            .api
+            .search3("", Search3Page::songs(self.page_size, offset))
+            .await?;
         let sid = self.server_id();
-        let tracks: Vec<api::Track> = r.song.iter().filter(|c| !c.is_dir).map(|c| track_from_child(sid, c)).collect();
-        let changed: Vec<Option<f64>> = r.song.iter().filter(|c| !c.is_dir).map(child_changed_ms).collect();
+        let tracks: Vec<api::Track> = r
+            .song
+            .iter()
+            .filter(|c| !c.is_dir)
+            .map(|c| track_from_child(sid, c))
+            .collect();
+        let changed: Vec<Option<f64>> = r
+            .song
+            .iter()
+            .filter(|c| !c.is_dir)
+            .map(child_changed_ms)
+            .collect();
         let n = tracks.len();
-        self.db.with_tx(|tx| upsert_tracks_in(tx, &tracks, &changed, gen))?;
+        self.db
+            .with_tx(|tx| upsert_tracks_in(tx, &tracks, &changed, gen))?;
         Ok((n, (r.song.len() as u32) < self.page_size))
     }
 
     /// Incremental: walk `newest` albums until one we already knew about.
-    async fn sync_new_albums(&self, gen: i64, newest_known: Option<f64>) -> Result<(usize, usize), SyncError> {
+    async fn sync_new_albums(
+        &self,
+        gen: i64,
+        newest_known: Option<f64>,
+    ) -> Result<(usize, usize), SyncError> {
         let sid = self.server_id();
         let mut offset = 0;
         let mut new_albums = vec![];
         'outer: loop {
-            let page = self.api.album_list2(AlbumListType::Newest, self.page_size, offset).await?;
+            let page = self
+                .api
+                .album_list2(AlbumListType::Newest, self.page_size, offset)
+                .await?;
             let len = page.len() as u32;
             for a in page {
-                let created = a.created.as_deref().and_then(crate::subsonic::types::parse_iso_ms);
+                let created = a
+                    .created
+                    .as_deref()
+                    .and_then(crate::subsonic::types::parse_iso_ms);
                 let known = self.db.album(&a.id)?.is_some();
                 if known && newest_known.is_some_and(|nk| created.is_some_and(|c| c <= nk)) {
                     break 'outer;
@@ -423,23 +504,33 @@ impl LibrarySync {
             };
             let album = album_from_id3(sid, &full.album);
             let changed = album_changed_ms(&full.album);
-            let songs: Vec<api::Track> = full.song.iter().map(|c| track_from_child(sid, c)).collect();
+            let songs: Vec<api::Track> =
+                full.song.iter().map(|c| track_from_child(sid, c)).collect();
             let song_changed: Vec<Option<f64>> = full.song.iter().map(child_changed_ms).collect();
             let artists: Vec<api::Artist> = full
                 .song
                 .iter()
                 .filter_map(|c| c.artist_id.as_ref().zip(c.artist.as_ref()))
-                .map(|(id, name)| api::Artist { id: id.clone(), server_id: sid.to_string(), name: name.clone(), ..Default::default() })
+                .map(|(id, name)| api::Artist {
+                    id: id.clone(),
+                    server_id: sid.to_string(),
+                    name: name.clone(),
+                    ..Default::default()
+                })
                 .collect();
             self.db.with_tx(|tx| {
                 // Artists first (only fills in unknown ones: album_count 0 keeps the existing value via the upsert's CASE).
                 for ar in &artists {
-                    let exists: i64 = tx.query_row("SELECT count(*) FROM artists WHERE server_id = ?1 AND id = ?2", [sid, &ar.id], |r| r.get(0))?;
+                    let exists: i64 = tx.query_row(
+                        "SELECT count(*) FROM artists WHERE server_id = ?1 AND id = ?2",
+                        [sid, &ar.id],
+                        |r| r.get(0),
+                    )?;
                     if exists == 0 {
                         upsert_artists_in(tx, std::slice::from_ref(ar), gen)?;
                     }
                 }
-                upsert_albums_in(tx, &[album.clone()], &[changed], gen)?;
+                upsert_albums_in(tx, std::slice::from_ref(&album), &[changed], gen)?;
                 upsert_tracks_in(tx, &songs, &song_changed, gen)?;
                 Ok(())
             })?;
@@ -457,12 +548,38 @@ impl LibrarySync {
         let sid = self.server_id();
         self.db.with_tx(|tx| {
             for (table, ids) in [
-                ("tracks", starred.song.iter().map(|s| s.id.clone()).collect::<Vec<_>>()),
-                ("albums", starred.album.iter().map(|a| a.id.clone()).collect::<Vec<_>>()),
-                ("artists", starred.artist.iter().map(|a| a.id.clone()).collect::<Vec<_>>()),
+                (
+                    "tracks",
+                    starred
+                        .song
+                        .iter()
+                        .map(|s| s.id.clone())
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    "albums",
+                    starred
+                        .album
+                        .iter()
+                        .map(|a| a.id.clone())
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    "artists",
+                    starred
+                        .artist
+                        .iter()
+                        .map(|a| a.id.clone())
+                        .collect::<Vec<_>>(),
+                ),
             ] {
-                tx.execute(&format!("UPDATE {table} SET loved = 0 WHERE server_id = ?1 AND loved = 1"), [sid])?;
-                let mut st = tx.prepare_cached(&format!("UPDATE {table} SET loved = 1 WHERE server_id = ?1 AND id = ?2"))?;
+                tx.execute(
+                    &format!("UPDATE {table} SET loved = 0 WHERE server_id = ?1 AND loved = 1"),
+                    [sid],
+                )?;
+                let mut st = tx.prepare_cached(&format!(
+                    "UPDATE {table} SET loved = 1 WHERE server_id = ?1 AND id = ?2"
+                ))?;
                 for id in ids {
                     st.execute([sid, &id])?;
                 }
@@ -477,7 +594,10 @@ impl LibrarySync {
         let username = self.api.username();
         let list = self.api.playlists().await?;
         let existing = self.db.playlists(sid)?;
-        let playlists: Vec<api::Playlist> = list.iter().map(|p| playlist_from_body(sid, username.as_deref(), p)).collect();
+        let playlists: Vec<api::Playlist> = list
+            .iter()
+            .map(|p| playlist_from_body(sid, username.as_deref(), p))
+            .collect();
         self.db.with_tx(|tx| {
             upsert_playlists_in(tx, &playlists, gen)?;
             sweep(tx, "playlists", sid, gen)?;
@@ -487,7 +607,9 @@ impl LibrarySync {
         for p in &playlists {
             let prev = existing.iter().find(|e| e.id == p.id);
             let synced = self.db.playlist_tracks_synced(&p.id)?;
-            let stale = !synced || full || prev.is_none_or(|e| e.changed != p.changed || e.song_count != p.song_count);
+            let stale = !synced
+                || full
+                || prev.is_none_or(|e| e.changed != p.changed || e.song_count != p.song_count);
             if !stale {
                 continue;
             }
@@ -496,7 +618,11 @@ impl LibrarySync {
                 Err(SubsonicError::NotFound(_)) => continue,
                 Err(e) => return Err(e.into()),
             };
-            let tracks: Vec<api::Track> = detail.entry.iter().map(|c| track_from_child(sid, c)).collect();
+            let tracks: Vec<api::Track> = detail
+                .entry
+                .iter()
+                .map(|c| track_from_child(sid, c))
+                .collect();
             let changed: Vec<Option<f64>> = detail.entry.iter().map(child_changed_ms).collect();
             let ids: Vec<String> = detail.entry.iter().map(|c| c.id.clone()).collect();
             self.db.with_tx(|tx| {
@@ -511,7 +637,13 @@ impl LibrarySync {
     }
 
     async fn sync_genres(&self, gen: i64) -> Result<(), SyncError> {
-        let genres: Vec<api::Genre> = self.api.genres().await?.iter().map(genre_from_body).collect();
+        let genres: Vec<api::Genre> = self
+            .api
+            .genres()
+            .await?
+            .iter()
+            .map(genre_from_body)
+            .collect();
         self.db.replace_genres(self.server_id(), &genres, gen)?;
         Ok(())
     }
@@ -539,7 +671,11 @@ impl LibrarySync {
 
     fn newest_album_created(&self) -> Result<Option<f64>, DbError> {
         self.db.with_conn(|c| {
-            Ok(c.query_row("SELECT MAX(created) FROM albums WHERE server_id = ?1", [self.server_id()], |r| r.get::<_, Option<f64>>(0))?)
+            Ok(c.query_row(
+                "SELECT MAX(created) FROM albums WHERE server_id = ?1",
+                [self.server_id()],
+                |r| r.get::<_, Option<f64>>(0),
+            )?)
         })
     }
 }
@@ -574,7 +710,10 @@ impl JobRunner for LibrarySyncRunner {
         let sync = self.sync.clone();
         Box::pin(async move {
             let payload: SyncJobPayload = serde_json::from_str(&ctx.payload).unwrap_or_default();
-            sync.run(payload.full, &ctx).await.map(|_| ()).map_err(JobError::from)
+            sync.run(payload.full, &ctx)
+                .await
+                .map(|_| ())
+                .map_err(JobError::from)
         })
     }
 }
@@ -592,9 +731,19 @@ mod tests {
     fn server() -> FakeServer {
         let s = FakeServer::new("srv", "alice");
         for i in 0..12 {
-            let mut c = FakeServer::song(&format!("s{i:02}"), &format!("Song {i}"), &format!("al{}", i / 4), &format!("ar{}", i / 8), 100.0 + i as f64);
+            let mut c = FakeServer::song(
+                &format!("s{i:02}"),
+                &format!("Song {i}"),
+                &format!("al{}", i / 4),
+                &format!("ar{}", i / 8),
+                100.0 + i as f64,
+            );
             c.created = Some(format!("2024-01-{:02}T00:00:00Z", 1 + i / 4));
-            c.genre = Some(if i % 2 == 0 { "Even".into() } else { "Odd".into() });
+            c.genre = Some(if i % 2 == 0 {
+                "Even".into()
+            } else {
+                "Odd".into()
+            });
             c.user_rating = Some((i % 6) as u32);
             s.add_song(c);
         }
@@ -605,7 +754,13 @@ mod tests {
 
     fn sync_for(db: &Db, s: &FakeServer, progress: Arc<Mutex<Vec<SyncProgress>>>) -> LibrarySync {
         let p = progress.clone();
-        LibrarySync::new(db.clone(), Arc::new(s.clone()), Arc::new(WallClock), Arc::new(move |sp| p.lock().push(sp))).with_page_size(5)
+        LibrarySync::new(
+            db.clone(),
+            Arc::new(s.clone()),
+            Arc::new(WallClock),
+            Arc::new(move |sp| p.lock().push(sp)),
+        )
+        .with_page_size(5)
     }
 
     #[tokio::test]
@@ -622,7 +777,11 @@ mod tests {
         assert_eq!(stats.playlists, 2);
         assert_eq!(db.track_count("srv", &None).unwrap(), 12);
         assert_eq!(db.artists("srv", None).unwrap().len(), 2);
-        assert_eq!(db.artist("ar0").unwrap().unwrap().song_count, 8, "derived at reconcile");
+        assert_eq!(
+            db.artist("ar0").unwrap().unwrap().song_count,
+            8,
+            "derived at reconcile"
+        );
         assert_eq!(db.genres("srv").unwrap().len(), 2);
         let pls = db.playlists("srv").unwrap();
         assert_eq!(pls.len(), 2);
@@ -635,13 +794,26 @@ mod tests {
         let p = progress.lock();
         let phases: Vec<&str> = p.iter().map(|x| x.phase.as_str()).collect();
         assert!(phases.starts_with(&["albums"]), "{phases:?}");
-        assert!(phases.contains(&"tracks") && phases.contains(&"playlists") && phases.contains(&"genres"));
+        assert!(
+            phases.contains(&"tracks")
+                && phases.contains(&"playlists")
+                && phases.contains(&"genres")
+        );
         assert!(p.last().unwrap().finished);
-        assert_eq!(p.last().unwrap().ready_tables, vec!["artists", "albums", "tracks", "playlists", "genres"]);
-        assert_eq!(p.iter().find(|x| x.phase == "tracks").unwrap().total, Some(12));
+        assert_eq!(
+            p.last().unwrap().ready_tables,
+            vec!["artists", "albums", "tracks", "playlists", "genres"]
+        );
+        assert_eq!(
+            p.iter().find(|x| x.phase == "tracks").unwrap().total,
+            Some(12)
+        );
         let c = sync.cursor().unwrap();
         assert!(!c.in_progress() && c.has_completed_once());
-        assert!(db.servers().unwrap().is_empty(), "sync doesn't create server rows");
+        assert!(
+            db.servers().unwrap().is_empty(),
+            "sync doesn't create server rows"
+        );
     }
 
     #[tokio::test]
@@ -665,7 +837,10 @@ mod tests {
                 })
             }
         }
-        let e = sync.run(true, &FailAt(Default::default())).await.unwrap_err();
+        let e = sync
+            .run(true, &FailAt(Default::default()))
+            .await
+            .unwrap_err();
         assert!(matches!(e, SyncError::Cancelled));
         let c = sync.cursor().unwrap();
         assert!(c.in_progress());
@@ -675,7 +850,10 @@ mod tests {
         let stats = sync.run(false, &NoopObserver).await.unwrap();
         assert!(stats.full, "resumed run keeps its full flag");
         assert_eq!(db.track_count("srv", &None).unwrap(), 12);
-        assert!(s.calls_to("search3") - calls_before < 3, "did not restart from page 0");
+        assert!(
+            s.calls_to("search3") - calls_before < 3,
+            "did not restart from page 0"
+        );
         assert!(!sync.cursor().unwrap().in_progress());
     }
 
@@ -685,7 +863,8 @@ mod tests {
         let s = server();
         let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
         sync.run(true, &NoopObserver).await.unwrap();
-        db.set_track_offline("s03", api::OfflineState::Downloaded).unwrap();
+        db.set_track_offline("s03", api::OfflineState::Downloaded)
+            .unwrap();
         {
             let mut st = s.state.lock();
             st.songs.remove("s11");
@@ -697,7 +876,11 @@ mod tests {
         assert!(db.track("s11").unwrap().is_none());
         let t = db.track("s03").unwrap().unwrap();
         assert_eq!(t.title, "Renamed");
-        assert_eq!(t.offline, api::OfflineState::Downloaded, "local state survives");
+        assert_eq!(
+            t.offline,
+            api::OfflineState::Downloaded,
+            "local state survives"
+        );
         assert_eq!(db.playlists("srv").unwrap().len(), 1);
     }
 
@@ -714,7 +897,11 @@ mod tests {
         assert!(!stats.full);
         assert_eq!(stats.tracks, 0);
         assert_eq!(s.calls_to("search3"), calls);
-        assert_eq!(s.calls_to("getAlbumList2"), 1, "only the full run listed albums");
+        assert_eq!(
+            s.calls_to("getAlbumList2"),
+            1,
+            "only the full run listed albums"
+        );
         // a new album appears and the scan moves
         {
             let mut st = s.state.lock();
@@ -729,7 +916,11 @@ mod tests {
         assert_eq!(stats.tracks, 1);
         assert!(db.track("s99").unwrap().is_some());
         assert!(db.album("al9").unwrap().is_some());
-        assert_eq!(s.calls_to("search3"), calls, "incremental never pages search3");
+        assert_eq!(
+            s.calls_to("search3"),
+            calls,
+            "incremental never pages search3"
+        );
     }
 
     #[tokio::test]
@@ -740,13 +931,30 @@ mod tests {
         let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
         sync.run(true, &NoopObserver).await.unwrap();
         s.state.lock().scan_status.last_scan = Some("2024-06-03T00:00:00Z".into());
-        s.star(&[crate::subsonic::StarTarget::Song("s02".into())]).await.unwrap();
-        s.update_playlist("pl1", crate::subsonic::PlaylistUpdate { song_ids_to_add: vec!["s07".into()], ..Default::default() }).await.unwrap();
+        s.star(&[crate::subsonic::StarTarget::Song("s02".into())])
+            .await
+            .unwrap();
+        s.update_playlist(
+            "pl1",
+            crate::subsonic::PlaylistUpdate {
+                song_ids_to_add: vec!["s07".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let getpl = s.calls_to("getPlaylist");
         sync.run(false, &NoopObserver).await.unwrap();
         assert!(db.track("s02").unwrap().unwrap().loved);
-        assert_eq!(db.playlist_track_ids("pl1").unwrap(), vec!["s00", "s05", "s07"]);
-        assert_eq!(s.calls_to("getPlaylist") - getpl, 1, "only the changed playlist was refetched");
+        assert_eq!(
+            db.playlist_track_ids("pl1").unwrap(),
+            vec!["s00", "s05", "s07"]
+        );
+        assert_eq!(
+            s.calls_to("getPlaylist") - getpl,
+            1,
+            "only the changed playlist was refetched"
+        );
     }
 
     #[tokio::test]
@@ -755,8 +963,14 @@ mod tests {
         let s = server();
         let sync = Arc::new(sync_for(&db, &s, Arc::new(Mutex::new(vec![]))));
         let q = JobQueue::new(db.clone(), Arc::new(WallClock));
-        q.register(api::JobKind::LibrarySync, 1, Arc::new(LibrarySyncRunner::new(sync.clone())));
-        let id = q.submit(JobSpec::new(api::JobKind::LibrarySync, "Sync").payload(r#"{"full":true}"#)).unwrap();
+        q.register(
+            api::JobKind::LibrarySync,
+            1,
+            Arc::new(LibrarySyncRunner::new(sync.clone())),
+        );
+        let id = q
+            .submit(JobSpec::new(api::JobKind::LibrarySync, "Sync").payload(r#"{"full":true}"#))
+            .unwrap();
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!(j.state, api::JobState::Done);
@@ -764,7 +978,9 @@ mod tests {
         assert_eq!(db.track_count("srv", &None).unwrap(), 12);
 
         s.set_offline(true);
-        let id = q.submit(JobSpec::new(api::JobKind::LibrarySync, "Sync").payload(r#"{"full":true}"#)).unwrap();
+        let id = q
+            .submit(JobSpec::new(api::JobKind::LibrarySync, "Sync").payload(r#"{"full":true}"#))
+            .unwrap();
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&id).unwrap().unwrap().state, api::JobState::Failed);
         let p = q.problems().unwrap();
@@ -788,7 +1004,10 @@ mod tests {
         let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
         sync.run(true, &NoopObserver).await.unwrap();
         assert_eq!(db.playlist_track_ids("pl").unwrap(), vec!["a"]);
-        let q = TrackQuery { server_id: "srv".into(), ..Default::default() };
+        let q = TrackQuery {
+            server_id: "srv".into(),
+            ..Default::default()
+        };
         assert_eq!(db.tracks(&q).unwrap().len(), 1);
         let _ = Child::default();
     }
