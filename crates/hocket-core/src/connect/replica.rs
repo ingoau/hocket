@@ -398,8 +398,9 @@ mod tests {
             r.claim_scrobble("t", i as f64 * 10_000.0, "a", i as f64);
         }
         assert_eq!(r.scrobbles.len(), SCROBBLE_LOG_CAP);
+        // kept: recorded_at 10..=509; expiring at TTL+100 drops recorded_at <= 100
         r.expire(SCROBBLE_LOG_TTL_MS + 100.0);
-        assert_eq!(r.scrobbles.len(), SCROBBLE_LOG_CAP - 101);
+        assert_eq!(r.scrobbles.len(), SCROBBLE_LOG_CAP - 91);
     }
 
     #[test]

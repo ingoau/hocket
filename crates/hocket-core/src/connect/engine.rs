@@ -42,12 +42,10 @@ use crate::connect::wire::{
     WireMessage, PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
-    apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp, SyncPoint,
+    apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp, SyncPoint, LOOPBACK,
 };
 use crate::util::Clock;
 
-/// The peer id of the in-process loopback to the embedded room.
-pub const LOOPBACK: &str = "loopback";
 /// Default pre-buffer fan-out cap.
 pub const DEFAULT_PREBUFFER_FANOUT: usize = 4;
 /// Targets discard a pre-buffer nobody picked after this long.
@@ -342,6 +340,8 @@ pub struct Engine {
     upstream_ready: bool,
     last_upstream_msg_at: EpochMs,
     offset: OffsetEstimator,
+    /// Offset implied by the welcome, used until the first pong lands.
+    provisional_offset: Option<f64>,
     last_ping_at: EpochMs,
     pings_in_burst: u32,
     last_reported_offset: Option<(f64, Option<f64>)>,
@@ -424,6 +424,7 @@ impl Engine {
             upstream_ready: false,
             last_upstream_msg_at: now,
             offset: OffsetEstimator::new(),
+            provisional_offset: None,
             last_ping_at: 0.0,
             pings_in_burst: 0,
             last_reported_offset: None,
@@ -530,10 +531,12 @@ impl Engine {
     }
 
     pub fn offset_ms(&self) -> f64 {
-        if self.is_connected() {
+        if !self.is_connected() {
+            0.0
+        } else if self.offset.sample_count() > 0 {
             self.offset.offset_ms()
         } else {
-            0.0
+            self.provisional_offset.unwrap_or(0.0)
         }
     }
 
@@ -766,7 +769,7 @@ impl Engine {
             }
             while let Some(m) = self.from_room.pop_front() {
                 progressed = true;
-                self.on_upstream_message(m);
+                self.on_upstream_message(m, true);
             }
             guard += 1;
             if !progressed || guard > 10_000 {
@@ -869,8 +872,11 @@ impl Engine {
     fn reevaluate(&mut self) {
         let now = self.now_local_ms();
         let coordinator = self.coordinator_target();
-        let coordinator_usable = coordinator.is_some() && (self.coordinator_failures < 2 || now >= self.coordinator_retry_at);
         let leader = self.lan_leader();
+        let lan_alternative = leader.as_ref().map(|l| l != &self.cfg.device.id).unwrap_or(false)
+            || (leader.is_some() && !self.lan_peers.is_empty());
+        let coordinator_usable = coordinator.is_some()
+            && (self.coordinator_failures < 2 || now >= self.coordinator_retry_at || !lan_alternative);
 
         // The listener runs whenever LAN is on; it costs nothing and lets
         // peers find us whichever way the election goes.
@@ -999,7 +1005,7 @@ impl Engine {
             self.emit_connection();
         }
         // Losing the coordinator may hand the LAN its turn.
-        if tier == ConnectionTier::Coordinator && self.coordinator_failures >= 2 {
+        if tier == ConnectionTier::Coordinator && self.coordinator_failures >= 2 && !self.lan_peers.is_empty() {
             self.reevaluate();
         }
     }
@@ -1066,7 +1072,7 @@ impl Engine {
             return;
         }
         self.last_upstream_msg_at = self.now_local_ms();
-        self.on_upstream_message(msg);
+        self.on_upstream_message(msg, false);
     }
 
     fn on_peer_discovered(&mut self, advert: PeerAdvert) {
@@ -1113,9 +1119,15 @@ impl Engine {
 
     // -- upstream messages ----------------------------------------------------
 
-    fn on_upstream_message(&mut self, msg: WireMessage) {
+    fn on_upstream_message(&mut self, msg: WireMessage, from_loopback: bool) {
         match msg.msg {
-            Msg::Welcome { session_clock_ms, replica, members, .. } => self.on_welcome(session_clock_ms, replica, members),
+            Msg::Welcome { session_clock_ms, replica, members, .. } => {
+                self.on_welcome(session_clock_ms, replica, members, !from_loopback)
+            }
+            Msg::Refuse { .. } | Msg::Bye { .. } if from_loopback => {
+                self.log("warn", "own room refused the loopback; re-attaching");
+                self.attach_loopback();
+            }
             Msg::Refuse { reason, message } => {
                 self.log("warn", format!("refused: {reason:?}: {message}"));
                 let attempt_bump = if reason == RefuseReason::Unauthorised { 4 } else { 0 };
@@ -1164,8 +1176,24 @@ impl Engine {
                     self.out.push(Output::TransportCommand(command));
                 }
             }
-            Msg::LeaseGranted { lease } => self.on_lease_granted(lease),
-            Msg::LeaseFenced { lease, .. } => self.on_lease_fenced(lease),
+            Msg::LeaseGranted { lease } => {
+                if from_loopback && lease.owner.is_none() && self.held.is_some() {
+                    // Our own room lapsed us (a long suspend); it holds nothing
+                    // authoritative, so just take it back.
+                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+                } else {
+                    self.on_lease_granted(lease)
+                }
+            }
+            Msg::LeaseFenced { lease, .. } => {
+                if from_loopback && self.remote.is_some() && self.held.is_some() {
+                    // Detached: our own room only stands in for the remote one;
+                    // it cannot fence a lease it never granted.
+                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+                } else {
+                    self.on_lease_fenced(lease)
+                }
+            }
             Msg::Presence { devices } => {
                 self.devices = devices;
                 if let Some(p) = &mut self.picker {
@@ -1275,25 +1303,26 @@ impl Engine {
         }
     }
 
-    fn on_welcome(&mut self, session_clock_ms: EpochMs, replica: Option<ReplicaState>, members: Vec<DeviceInfo>) {
+    fn on_welcome(&mut self, session_clock_ms: EpochMs, replica: Option<ReplicaState>, members: Vec<DeviceInfo>, remote: bool) {
         let now = self.now_local_ms();
-        let remote = match &mut self.remote {
-            Some(r) => {
-                if let RemoteState::Handshaking { peer, .. } = &r.state {
-                    let peer = peer.clone();
-                    r.state = RemoteState::Attached { peer };
+        if remote {
+            match &mut self.remote {
+                Some(Remote { state, .. }) if matches!(state, RemoteState::Handshaking { .. }) => {
+                    if let RemoteState::Handshaking { peer, .. } = state {
+                        let peer = peer.clone();
+                        *state = RemoteState::Attached { peer };
+                    }
                 }
-                true
+                _ => return, // a stray welcome from a socket we no longer follow
             }
-            None => false,
-        };
+        }
         self.upstream_ready = true;
         self.last_error = None;
         if remote {
             self.coordinator_failures = 0;
-            // Provisional offset from the welcome; real pings refine it.
+            // Provisional offset from the welcome; real pings replace it.
             self.offset.reset();
-            self.offset.record(ClockSample { t0: now - 1000.0, t1: session_clock_ms, t2: session_clock_ms, t3: now });
+            self.provisional_offset = Some(session_clock_ms - now);
             self.pings_in_burst = 0;
             self.last_ping_at = 0.0;
             self.send_ping();
@@ -1314,8 +1343,6 @@ impl Engine {
         let room_trivial = room_doc.as_ref().map(|d| doc_is_trivial(d) && d.revision == 0).unwrap_or(true);
         let room_rev = room_doc.as_ref().map(|d| d.revision).unwrap_or(0);
         self.pending.clear();
-
-        eprintln!("DBG welcome remote={remote} room_trivial={room_trivial} state={:?} pending={}", self.remote, self.pending.len());
         if room_trivial {
             if !doc_is_trivial(&self.doc) {
                 let doc = self.doc.clone();
@@ -1522,7 +1549,6 @@ impl Engine {
     }
 
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
-        eprintln!("DBG ack {op_id} pending={:?} connected={} base={:?}", self.pending.iter().map(|p| p.op_id.clone()).collect::<Vec<_>>(), self.is_connected(), self.sync_base);
         let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else { return };
         let p = self.pending.remove(pos).expect("position exists");
         let ctx = op_context(&p.op_id, self.now_session_ms(), self.local_position());
@@ -1547,7 +1573,6 @@ impl Engine {
                 self.unsynced.push((p.op_id, p.op));
             }
         }
-        eprintln!("DBG after ack unsynced={} overflow={}", self.unsynced.len(), self.unsynced_overflow);
         self.maybe_advertise(false);
     }
 
@@ -1638,9 +1663,11 @@ impl Engine {
                 None => self.held = Some(HeldLease::new(lease.epoch, now)),
             }
             if self.is_connected() {
+                // Only the remote room's word ends detachment; our own room
+                // granting us the lease while cut off proves nothing.
                 self.held_remote_epoch = Some(lease.epoch);
+                self.detached = false;
             }
-            self.detached = false;
             if let Some(t) = self.pending_take.take() {
                 self.stamp = Some(CurrentStamp {
                     key: Some(t.key.clone()),
@@ -1931,7 +1958,7 @@ impl Engine {
 
         // Heartbeat while owning transport.
         if let Some(h) = self.held.clone() {
-            if h.heartbeat_due(now) && self.upstream_authoritative() {
+            if h.heartbeat_due(now) {
                 if let Some(h) = &mut self.held {
                     h.last_heartbeat_at = now;
                 }
@@ -2084,8 +2111,10 @@ mod tests {
         assert!(w.iter().any(|(_, m)| matches!(m, Msg::Op { base_revision: 0, op: SessionOp::Replace { .. }, .. })));
         assert!(e.is_connected());
         assert_eq!(e.connection_state().tier, ConnectionTier::Coordinator);
-        // provisional offset ~ 490_000
-        assert!((e.offset_ms() - 490_000.0).abs() < 2000.0);
+        // provisional offset until the first pong
+        assert_eq!(e.offset_ms(), 490_000.0);
+        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::ClockPong { t0: 10_000.0, t1: 500_040.0, t2: 500_040.0 }) });
+        assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if s.round_trip_ms.is_some())));
         let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::OpAck { op_id: "a-2".into(), revision: 1 }) });
         assert!(outs.is_empty() || !outs.iter().any(|o| matches!(o, Output::DocumentChanged { .. })));
         assert_eq!(e.sync_base().unwrap().revision, 1);
@@ -2167,8 +2196,7 @@ mod tests {
         // connection drops; user presses next twice offline
         let outs = e.handle(Input::Disconnected { peer: "up".into() });
         assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if !s.connected)));
-        let o1 = e.handle(Input::LocalOp { op: SessionOp::Next });
-        eprintln!("DBG remote={:?} ready={} sync_base={:?} pending={} outs={:?}", e.remote, e.upstream_ready, e.sync_base, e.pending.len(), o1);
+        e.handle(Input::LocalOp { op: SessionOp::Next });
         e.handle(Input::LocalOp { op: SessionOp::Next });
         assert_eq!(e.unsynced.len(), 2);
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
@@ -2346,6 +2374,7 @@ mod tests {
     #[test]
     fn prebuffer_times_out_and_is_discarded() {
         let (mut e, clock) = engine("b");
+        e.cfg.upstream_idle_ms = 1e12;
         attach(&mut e, None, vec![dev("a")]);
         e.handle(Input::WireIn {
             peer: "up".into(),

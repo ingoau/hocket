@@ -20,7 +20,7 @@ use crate::connect::replica::{new_replica, ReplicaExt, ScrobbleClaim};
 use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState, WireMessage,
 };
-use crate::connect::{apply_op, doc_is_trivial, op_context, PeerId, ReducerHandle, SessionOp};
+use crate::connect::{apply_op, doc_is_trivial, op_context, PeerId, ReducerHandle, SessionOp, LOOPBACK};
 use crate::util::Clock;
 
 /// A member that has sent nothing for this long is dropped. Clients ping
@@ -330,7 +330,7 @@ impl Room {
             self.refuse(peer, RefuseReason::Full, "room is full");
             return;
         }
-        if self.cfg.verify {
+        if self.cfg.verify && peer != LOOPBACK {
             let Some(cred) = credential else {
                 self.refuse(peer, RefuseReason::Unauthorised, "credential required");
                 return;
@@ -371,6 +371,8 @@ impl Room {
         device.is_self = false;
         device.last_seen = now;
         self.replica.touch_device(&device, now);
+        // A second Hello on the same socket re-admits rather than duplicates.
+        self.members.retain(|m| m.peer != peer);
         let members_before = self.presence_list();
         self.members.push(Member {
             peer: peer.to_string(),
@@ -686,8 +688,12 @@ impl Room {
             tracing::info!(scope = %self.cfg.scope, ?previous_owner, "transport lease lapsed");
             self.broadcast_lease();
         }
-        let idle: Vec<PeerId> =
-            self.members.iter().filter(|m| now - m.last_seen >= MEMBER_TIMEOUT_MS).map(|m| m.peer.clone()).collect();
+        let idle: Vec<PeerId> = self
+            .members
+            .iter()
+            .filter(|m| m.peer != LOOPBACK && now - m.last_seen >= MEMBER_TIMEOUT_MS)
+            .map(|m| m.peer.clone())
+            .collect();
         for p in idle {
             tracing::info!(scope = %self.cfg.scope, peer = %p, "member timed out");
             self.send(&p, Msg::Bye { reason: "timed out".into() });

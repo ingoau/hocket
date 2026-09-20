@@ -68,9 +68,20 @@ impl WireMessage {
     }
 
     /// Parse one JSON text frame. Unknown message types become
-    /// [`Msg::Unknown`]; a malformed envelope is an error.
+    /// [`Msg::Unknown`] (whatever payload they carry); a malformed envelope
+    /// or a malformed known message is an error.
     pub fn decode(text: &str) -> Result<Self, WireError> {
-        serde_json::from_str(text).map_err(WireError::Json)
+        let mut v: Value = serde_json::from_str(text).map_err(WireError::Json)?;
+        let unknown = v
+            .get("msg")
+            .and_then(|m| m.get("type"))
+            .and_then(|t| t.as_str())
+            .map(|t| !Msg::is_known(t))
+            .unwrap_or(false);
+        if unknown {
+            v["msg"] = serde_json::json!({ "type": "unknown" });
+        }
+        serde_json::from_value(v).map_err(WireError::Json)
     }
 }
 
@@ -518,6 +529,47 @@ pub enum Msg {
 }
 
 impl Msg {
+    /// Every tag this build understands (the `type` values [`Msg::name`] returns).
+    pub const KNOWN: &'static [&'static str] = &[
+        "hello",
+        "welcome",
+        "refuse",
+        "bye",
+        "op",
+        "opAck",
+        "opReject",
+        "opCommitted",
+        "document",
+        "syncRequest",
+        "transportStamp",
+        "transportRequest",
+        "leaseHeartbeat",
+        "leaseClaim",
+        "leaseRelease",
+        "leaseGranted",
+        "leaseFenced",
+        "presence",
+        "clockPing",
+        "clockPong",
+        "handoffPickerOpen",
+        "handoffPickerClose",
+        "handoffPrepare",
+        "handoffReady",
+        "handoffTakeover",
+        "handoffRelease",
+        "scrobbleSubmitted",
+        "scrobbleDedupeQuery",
+        "scrobbleDedupeAnswer",
+        "savedQueuesSync",
+        "settingsSync",
+        "undoEntryShared",
+        "unknown",
+    ];
+
+    pub fn is_known(tag: &str) -> bool {
+        Self::KNOWN.contains(&tag)
+    }
+
     /// Short name for logs.
     pub fn name(&self) -> &'static str {
         match self {
@@ -667,6 +719,29 @@ mod tests {
         let m = WireMessage::decode(text).unwrap();
         assert_eq!(m.msg, Msg::Unknown);
         assert_eq!(m.protocol_version, 7);
+    }
+
+    #[test]
+    fn known_tags_match_serialised_names() {
+        let samples = vec![
+            Msg::SyncRequest,
+            Msg::Bye { reason: "x".into() },
+            Msg::ClockPing { t0: 0.0 },
+            Msg::LeaseHeartbeat { epoch: 0 },
+            Msg::HandoffPickerOpen { from: "a".into() },
+            Msg::ScrobbleDedupeAnswer { query_id: "q".into(), duplicate: false },
+            Msg::SavedQueuesSync { queues: vec![] },
+            Msg::SettingsSync { settings: vec![] },
+            Msg::Unknown,
+        ];
+        for m in samples {
+            let v = serde_json::to_value(&m).unwrap();
+            let tag = v["type"].as_str().unwrap();
+            assert_eq!(tag, m.name());
+            assert!(Msg::is_known(tag), "{tag}");
+        }
+        // a malformed known message is still an error
+        assert!(WireMessage::decode(r#"{"protocolVersion":1,"msg":{"type":"op","data":{"nope":1}}}"#).is_err());
     }
 
     #[test]

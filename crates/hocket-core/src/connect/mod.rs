@@ -83,6 +83,10 @@ pub use wire::{Msg, SessionOp, WireMessage};
 /// Opaque to the engine; it only routes on it.
 pub type PeerId = String;
 
+/// The peer id of the in-process loopback between an engine and its own
+/// room. Never times out, never verified.
+pub const LOOPBACK: &str = "loopback";
+
 /// Why a reducer could not apply an op. Turned into an [`wire::OpReject`]
 /// by the room and a rollback by the engine.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
