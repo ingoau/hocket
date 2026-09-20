@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,6 +24,7 @@ class CoreClientTest {
     fun snapshotPopulatesStateFlows() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent() // let the client's collector subscribe before the fake emits
         client.requestSnapshot()
         advanceUntilIdle()
         assertTrue(client.started.value)
@@ -39,6 +41,7 @@ class CoreClientTest {
     fun eventsUpdateDerivedState() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent() // let the client's collector subscribe before the fake emits
         client.requestSnapshot()
         advanceUntilIdle()
         val before = client.nowPlaying.value!!.track.id
@@ -55,6 +58,7 @@ class CoreClientTest {
     fun positionExtrapolatesFromStamp() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent() // let the client's collector subscribe before the fake emits
         client.requestSnapshot()
         advanceUntilIdle()
         client.dispatch(Commands.seekTo(10_000))
@@ -68,6 +72,7 @@ class CoreClientTest {
     fun libraryChangedInvalidatesPageCaches() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent() // let the client's collector subscribe before the fake emits
         client.requestSnapshot()
         advanceUntilIdle()
         val key = TrackListKey(core.library.serverId, SortOrder.Title, false)
@@ -83,6 +88,7 @@ class CoreClientTest {
     fun selectionPublishesToCore() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent() // let the client's collector subscribe before the fake emits
         client.toggleSelected(SelectionKind.Tracks, "t1")
         client.toggleSelected(SelectionKind.Tracks, "t2")
         assertEquals(2, client.selection.value.count)

@@ -282,7 +282,7 @@ impl Caches {
 
     /// Remember that a source has nothing for this track.
     pub fn lyrics_put_none(&self, server_id: &str, track_id: &str, source: LyricsSource) -> Result<(), CacheError> {
-        self.lyrics_store(server_id, track_id, source, "")
+        Ok(self.lyrics_store(server_id, track_id, source, "")?)
     }
 
     fn lyrics_store(&self, server_id: &str, track_id: &str, source: LyricsSource, json: &str) -> DbResult<()> {
