@@ -10,13 +10,15 @@ uniffi::setup_scaffolding!();
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum HocketError {
-    #[error("{message}")]
-    Failed { message: String },
+    /// `reason`, not `message`: UniFFI turns the variant into a Kotlin exception and a field called
+    /// `message` collides with `Throwable.message`.
+    #[error("{reason}")]
+    Failed { reason: String },
 }
 
 impl From<CoreError> for HocketError {
     fn from(e: CoreError) -> Self {
-        HocketError::Failed { message: e.to_string() }
+        HocketError::Failed { reason: e.to_string() }
     }
 }
 
@@ -46,7 +48,7 @@ impl HocketCore {
     /// `config_json` is a serialised `CoreConfig`.
     #[uniffi::constructor]
     pub fn new(config_json: String) -> Result<Arc<Self>, HocketError> {
-        let config = serde_json::from_str(&config_json).map_err(|e| HocketError::Failed { message: e.to_string() })?;
+        let config = serde_json::from_str(&config_json).map_err(|e| HocketError::Failed { reason: e.to_string() })?;
         let core = Core::new(config)?;
         Ok(Arc::new(Self { core }))
     }

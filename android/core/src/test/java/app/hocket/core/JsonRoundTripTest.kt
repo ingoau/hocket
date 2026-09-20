@@ -1,8 +1,13 @@
 package app.hocket.core
 
 import app.hocket.core.api.*
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -23,7 +28,19 @@ class JsonRoundTripTest {
     private fun roundTrip(name: String, decode: (String) -> JsonElement) {
         val original = fixtures[name] ?: error("fixture $name missing")
         val reencoded = decode(original.toString())
-        assertEquals("round trip of $name", original, reencoded)
+        assertEquals("round trip of $name", normalise(original), normalise(reencoded))
+    }
+
+    /**
+     * Rust writes `Option::None` as an explicit `null`; Kotlin omits it (`explicitNulls = false`) so
+     * `#[serde(default)]` fields fall back. Both decode identically, so nulls are dropped before
+     * comparing. Numbers are compared by value (`1.7E12` vs `1700000000000.0`).
+     */
+    private fun normalise(e: JsonElement): JsonElement = when (e) {
+        is JsonObject -> JsonObject(e.filterValues { it !is JsonNull }.mapValues { normalise(it.value) })
+        is JsonArray -> JsonArray(e.map(::normalise))
+        is JsonPrimitive -> if (!e.isString && e.doubleOrNull != null && e.content != "true" && e.content != "false") JsonPrimitive(e.double) else e
+        else -> e
     }
 
     @Test

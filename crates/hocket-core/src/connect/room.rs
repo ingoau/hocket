@@ -879,7 +879,7 @@ mod tests {
         let outs_a = r.handle(RoomInput::Message("p1".into(), op(1, SessionOp::Next, "a", "o2", None)));
         let outs_b = r.handle(RoomInput::Message("p2".into(), op(1, SessionOp::Next, "b", "o3", None)));
         assert!(matches!(sent(&outs_a, "p1")[0], Msg::OpAck { revision: 2, .. }));
-        assert!(matches!(sent(&outs_b, "p2")[0], Msg::OpReject { reason: RejectReason::Stale, current_revision: 2, document } if document.revision == 2));
+        assert!(matches!(sent(&outs_b, "p2")[0], Msg::OpReject { reason: RejectReason::Stale, current_revision: 2, document, .. } if document.revision == 2));
         assert_eq!(r.revision(), 2);
         assert_eq!(r.replica().document.current.as_ref().unwrap().track_id, "t2");
     }

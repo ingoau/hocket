@@ -17,6 +17,10 @@ mkdir -p "$ROOT/desktop/src/core" "$ROOT/android/core/src/main/java/app/hocket/c
 typeshare "$API" --lang=typescript --output-file="$ROOT/desktop/src/core/api.ts"
 typeshare "$API" --lang=kotlin --java-package=app.hocket.core.api --module-name=core \
   --output-file="$ROOT/android/core/src/main/java/app/hocket/core/api/Generated.kt"
+# typeshare names the `FilterValue::List` variant `List`, which shadows kotlin.collections.List inside
+# the sealed class; qualify the payload type.
+sed -i 's/data class List(val data: List</data class List(val data: kotlin.collections.List</' \
+  "$ROOT/android/core/src/main/java/app/hocket/core/api/Generated.kt"
 
 # UniFFI Kotlin glue (from the compiled host cdylib; proc-macro metadata lives in the binary).
 cargo build -p hocket-android --features bindgen --quiet

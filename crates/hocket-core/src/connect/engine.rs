@@ -1315,6 +1315,7 @@ impl Engine {
         let room_rev = room_doc.as_ref().map(|d| d.revision).unwrap_or(0);
         self.pending.clear();
 
+        eprintln!("DBG welcome remote={remote} room_trivial={room_trivial} state={:?} pending={}", self.remote, self.pending.len());
         if room_trivial {
             if !doc_is_trivial(&self.doc) {
                 let doc = self.doc.clone();
@@ -1521,6 +1522,7 @@ impl Engine {
     }
 
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
+        eprintln!("DBG ack {op_id} pending={:?} connected={} base={:?}", self.pending.iter().map(|p| p.op_id.clone()).collect::<Vec<_>>(), self.is_connected(), self.sync_base);
         let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else { return };
         let p = self.pending.remove(pos).expect("position exists");
         let ctx = op_context(&p.op_id, self.now_session_ms(), self.local_position());
@@ -1545,6 +1547,7 @@ impl Engine {
                 self.unsynced.push((p.op_id, p.op));
             }
         }
+        eprintln!("DBG after ack unsynced={} overflow={}", self.unsynced.len(), self.unsynced_overflow);
         self.maybe_advertise(false);
     }
 
@@ -2141,7 +2144,7 @@ mod tests {
 
     #[test]
     fn offline_ops_fast_forward_when_nobody_moved() {
-        let (mut e, _) = engine("a");
+        let (mut e, clock) = engine("a");
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 2;
         room_doc.context = Some(crate::api::QueueContext {
@@ -2164,12 +2167,13 @@ mod tests {
         // connection drops; user presses next twice offline
         let outs = e.handle(Input::Disconnected { peer: "up".into() });
         assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if !s.connected)));
-        e.handle(Input::LocalOp { op: SessionOp::Next });
+        let o1 = e.handle(Input::LocalOp { op: SessionOp::Next });
+        eprintln!("DBG remote={:?} ready={} sync_base={:?} pending={} outs={:?}", e.remote, e.upstream_ready, e.sync_base, e.pending.len(), o1);
         e.handle(Input::LocalOp { op: SessionOp::Next });
         assert_eq!(e.unsynced.len(), 2);
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
         // reconnect: room still at revision 2 → replay
-        e.clock.0.store(100_000, Ordering::SeqCst);
+        clock.0.store(100_000, Ordering::SeqCst);
         e.handle(Input::Tick);
         e.handle(Input::Connected { peer: "up2".into(), url: "wss://c/".into() });
         let outs = e.handle(Input::WireIn {

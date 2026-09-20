@@ -25,6 +25,12 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
     private val albumIndex = HashMap<AlbumId, Int>()
     private val artistIndex = HashMap<ArtistId, Int>()
 
+    private val verses = listOf(
+        "We drove out past the harbour lights", "And the radio was only static", "You said the city never sleeps", "But tonight it's holding its breath",
+        "Every window was a photograph", "Of someone else's summer", "I kept the change in my coat pocket", "Just to hear it when I walk",
+        "Open water, open water", "Take me somewhere I can float", "All the lanterns on the shoreline", "Are counting down to morning",
+    )
+
     init {
         val genreNames = listOf("Ambient", "Jazz", "Post-rock", "Electronic", "Folk", "Hip hop", "Classical", "Indie", "Soul", "Techno", "Shoegaze", "Dub")
         val now = 1_758_000_000_000.0
@@ -183,12 +189,6 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
         val w = listOf("Open Water", "Paper Boats", "Nightshift", "All the Way Down", "Gardens", "Lighthouse", "Every Other Day", "Tallest Building", "Second Nature", "Static", "Half Moon", "Copper", "Slow Motion", "Last Train", "Undone", "Wintering", "Cascade", "Low Tide", "Circles", "Empty Rooms", "Marigold", "Airplane Mode", "Skylines", "Fault Lines")
         return w[(i * 11) % w.size].let { if (i % 13 == 0) "$it (Reprise)" else it }
     }
-
-    private val verses = listOf(
-        "We drove out past the harbour lights", "And the radio was only static", "You said the city never sleeps", "But tonight it's holding its breath",
-        "Every window was a photograph", "Of someone else's summer", "I kept the change in my coat pocket", "Just to hear it when I walk",
-        "Open water, open water", "Take me somewhere I can float", "All the lanterns on the shoreline", "Are counting down to morning",
-    )
 
     private fun syllableLyrics(t: Track): Lyrics {
         val lines = ArrayList<LyricLine>()

@@ -24,6 +24,7 @@ export default defineConfig({
   },
   server: { port: 5178, strictPort: true },
   test: {
+    root: fileURLToPath(new URL(".", import.meta.url)),
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",
   },

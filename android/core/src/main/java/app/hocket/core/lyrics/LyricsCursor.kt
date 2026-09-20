@@ -24,13 +24,15 @@ data class LyricsCursor(
     val syllableProgress: Float,
     /** 0..1 within the active line (line + syllable tiers). */
     val lineProgress: Float,
-    /** True when between timed lines (a gap larger than [GAP_MS]). */
+    /** True when between timed lines: a gap longer than [GAP_MS], entered [GAP_GRACE_MS] after the line ended. */
     val inGap: Boolean,
 ) {
     companion object {
         const val NONE = -1
         /** Gaps shorter than this keep the previous line lit rather than flashing an empty state. */
         const val GAP_MS = 4_000L
+        /** The previous line stays lit this long after its end before the gap state shows. */
+        const val GAP_GRACE_MS = 1_000L
 
         val EMPTY = LyricsCursor(NONE, NONE, 0f, 0f, inGap = false)
 
@@ -48,7 +50,7 @@ data class LyricsCursor(
             val start = line.startMs!!.toLong()
             val end = lineEnd(lines, active)
             val nextStart = nextTimedStart(lines, active)
-            val inGap = position > end && nextStart != null && nextStart - end > GAP_MS && position < nextStart
+            val inGap = nextStart != null && nextStart - end > GAP_MS && position >= end + GAP_GRACE_MS && position < nextStart
             val lineProgress = if (end > start) ((position - start).toFloat() / (end - start)).coerceIn(0f, 1f) else 1f
 
             if (lyrics.tier != LyricsTier.Syllable || line.syllables.isEmpty()) {

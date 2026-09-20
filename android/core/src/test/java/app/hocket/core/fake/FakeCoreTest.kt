@@ -4,11 +4,10 @@ import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -208,5 +207,6 @@ class FakeCoreTest {
         assertEquals("play", actions[1].id)
     }
 
-    private fun <T> kotlinx.coroutines.test.TestScope.async(block: suspend () -> T) = kotlinx.coroutines.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { block() }
+    private fun <T> kotlinx.coroutines.test.TestScope.async(block: suspend () -> T): kotlinx.coroutines.Deferred<T> =
+        this.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { block() }
 }

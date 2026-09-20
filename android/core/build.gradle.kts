@@ -36,6 +36,7 @@ dependencies {
     api(libs.kotlinx.serialization.json)
     api(libs.kotlinx.coroutines.android)
     implementation("${libs.jna.get()}@aar")
+    implementation(libs.androidx.annotation)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

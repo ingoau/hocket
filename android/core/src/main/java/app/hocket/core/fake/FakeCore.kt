@@ -8,7 +8,6 @@ import app.hocket.core.toSummary
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -102,7 +101,7 @@ class FakeCore(
     private val playHistory = ArrayList<PlayHistoryEntry>()
     private var keyCounter = 0
     private var idCounter = 0
-    private var advanceJob: Job? = null
+    private var advanceJob: kotlinx.coroutines.Job? = null
     private var storage = StorageSummary(1.8e9, 6.4e8, 1.2e8, warnThreshold, 2.4e10)
 
     init {

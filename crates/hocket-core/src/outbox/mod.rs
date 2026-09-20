@@ -1079,10 +1079,11 @@ mod tests {
         assert!(mine.retryable);
         // retrying resets the failed entry and runs a fresh flush
         let jid = q.retry_problem(&mine.id).unwrap().unwrap();
-        assert_eq!(outbox.pending_count().unwrap(), 1);
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&jid).unwrap().unwrap().state, api::JobState::Failed, "still a ghost");
-        assert_eq!(outbox.failed().unwrap().len(), 1);
+        let failed = outbox.failed().unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].attempts, 2, "the retry reset it to pending and tried again");
     }
 
     #[test]

@@ -307,7 +307,7 @@ impl HttpSource {
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "no response from server"));
                 }
             }
-            if let Some(e) = &st.error {
+            if let Some(e) = st.error.clone() {
                 st.closed = true;
                 shared.wake_downloader.notify_one();
                 return Err(io::Error::other(e.to_string()));
@@ -331,6 +331,12 @@ impl HttpSource {
     }
 }
 
+impl std::fmt::Debug for HttpSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpSource").field("pos", &self.pos).field("total", &self.total_len()).finish()
+    }
+}
+
 impl Drop for HttpSource {
     fn drop(&mut self) {
         self.shared.state.lock().closed = true;
@@ -339,115 +345,137 @@ impl Drop for HttpSource {
     }
 }
 
+/// What the downloader should do next.
+enum Next {
+    Fetch(u64),
+    Done,
+    Closed,
+}
+
+fn plan_next(shared: &Shared) -> Next {
+    let mut st = shared.state.lock();
+    if st.closed {
+        return Next::Closed;
+    }
+    let ranges_ok = st.supports_ranges.unwrap_or(true);
+    let want = if ranges_ok { st.want } else { 0 };
+    let gap = if ranges_ok { st.first_gap_from(want).or_else(|| st.first_gap_from(0)) } else { st.first_gap_from(0) };
+    match gap {
+        Some(g) => Next::Fetch(g),
+        None => {
+            st.complete = true;
+            st.opened = true;
+            shared.data_ready.notify_all();
+            Next::Done
+        }
+    }
+}
+
+/// Record a fetch failure. Returns `true` when the downloader should stop
+/// (the very first request failed, so `open` reports the error).
+fn record_fetch_error(shared: &Shared, e: FetchError) -> bool {
+    let mut st = shared.state.lock();
+    let first = !st.opened;
+    st.error = Some(e);
+    st.opened = true;
+    shared.data_ready.notify_all();
+    first
+}
+
+fn record_headers(shared: &Shared, resp: &FetchResponse) {
+    let mut st = shared.state.lock();
+    if let Some(t) = resp.total_len {
+        st.total = Some(t);
+    }
+    st.supports_ranges = Some(resp.supports_ranges);
+    st.opened = true;
+    st.error = None;
+    shared.data_ready.notify_all();
+}
+
+/// Whether the reader has moved somewhere this response won't reach soon.
+/// `None` when the source was closed.
+fn should_abandon(shared: &Shared, pos: u64) -> Option<bool> {
+    let st = shared.state.lock();
+    if st.closed {
+        return None;
+    }
+    let want = st.want;
+    let ranges_ok = st.supports_ranges.unwrap_or(true);
+    let far = want < pos || want > pos + READAHEAD_TOLERANCE;
+    Some(ranges_ok && far && !st.has(want))
+}
+
+/// Store a chunk; `false` when the source was closed meanwhile.
+fn store_chunk(shared: &Shared, pos: u64, bytes: &[u8]) -> bool {
+    let mut st = shared.state.lock();
+    if st.closed {
+        return false;
+    }
+    st.append(pos, bytes);
+    shared.data_ready.notify_all();
+    true
+}
+
+fn record_body_end(shared: &Shared, pos: u64) {
+    let mut st = shared.state.lock();
+    if st.total.is_none() {
+        st.total = Some(pos);
+    }
+    shared.data_ready.notify_all();
+}
+
+fn is_closed(shared: &Shared) -> bool {
+    shared.state.lock().closed
+}
+
 async fn downloader(shared: Arc<Shared>, fetcher: Arc<dyn RangeFetcher>, url: String, headers: HashMap<String, String>) {
     loop {
-        // Decide where to fetch from.
-        let start = {
-            let st = shared.state.lock();
-            if st.closed {
-                return;
-            }
-            let ranges_ok = st.supports_ranges.unwrap_or(true);
-            let want = if ranges_ok { st.want } else { 0 };
-            match st.first_gap_from(want).or_else(|| st.first_gap_from(0)) {
-                Some(gap) => {
-                    if !ranges_ok && gap != 0 && !st.has(0) {
-                        0
-                    } else if !ranges_ok {
-                        // Sequential only: continue from the end of the prefix.
-                        st.first_gap_from(0).unwrap_or(0)
-                    } else {
-                        gap
-                    }
-                }
-                None => {
-                    // Everything present.
-                    drop(st);
-                    let mut st = shared.state.lock();
-                    st.complete = true;
-                    st.opened = true;
-                    shared.data_ready.notify_all();
-                    return;
-                }
-            }
+        let start = match plan_next(&shared) {
+            Next::Fetch(s) => s,
+            Next::Done | Next::Closed => return,
         };
-        let resp = fetcher.fetch(url.clone(), headers.clone(), start).await;
-        let mut resp = match resp {
+        let mut resp = match fetcher.fetch(url.clone(), headers.clone(), start).await {
             Ok(r) => r,
             Err(e) => {
-                let mut st = shared.state.lock();
-                if !st.opened {
-                    st.error = Some(e);
-                    st.opened = true;
-                    shared.data_ready.notify_all();
+                tracing::warn!(target: "hocket::audio::http", error = %e, "fetch failed");
+                if record_fetch_error(&shared, e) {
                     return;
                 }
-                // Mid-stream failure: retry a few times with backoff, then give up.
-                st.error = Some(e.clone());
-                shared.data_ready.notify_all();
-                drop(st);
-                tracing::warn!(target: "hocket::audio::http", error = %e, "fetch failed, retrying");
+                // Mid-stream failure: back off and retry from the same gap.
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                let st = shared.state.lock();
-                if st.closed {
+                if is_closed(&shared) {
                     return;
                 }
                 continue;
             }
         };
         let mut pos = resp.range_start;
-        {
-            let mut st = shared.state.lock();
-            if let Some(t) = resp.total_len {
-                st.total = Some(t);
-            }
-            st.supports_ranges = Some(resp.supports_ranges);
-            st.opened = true;
-            st.error = None;
-            shared.data_ready.notify_all();
-        }
+        record_headers(&shared, &resp);
         loop {
             let chunk = tokio::select! {
                 c = resp.body.next() => c,
                 _ = shared.wake_downloader.notified() => {
-                    // The reader moved. Abandon this response if it wants
-                    // something we don't have and won't have soon.
-                    let st = shared.state.lock();
-                    if st.closed {
-                        return;
+                    match should_abandon(&shared, pos) {
+                        None => return,
+                        Some(true) => break,
+                        Some(false) => continue,
                     }
-                    let want = st.want;
-                    let ranges_ok = st.supports_ranges.unwrap_or(true);
-                    let far = want < pos || want > pos + READAHEAD_TOLERANCE;
-                    if ranges_ok && far && !st.has(want) {
-                        break;
-                    }
-                    continue;
                 }
             };
             match chunk {
                 Some(Ok(bytes)) => {
-                    let mut st = shared.state.lock();
-                    if st.closed {
+                    if !store_chunk(&shared, pos, &bytes) {
                         return;
                     }
-                    st.append(pos, &bytes);
                     pos += bytes.len() as u64;
-                    if st.total.is_none() && st.supports_ranges == Some(false) {
-                        // Unknown length: grows until the body ends.
-                    }
-                    shared.data_ready.notify_all();
                 }
                 Some(Err(e)) => {
                     tracing::warn!(target: "hocket::audio::http", error = %e, "body stream error");
                     break;
                 }
                 None => {
-                    let mut st = shared.state.lock();
-                    if st.total.is_none() {
-                        st.total = Some(pos);
-                    }
-                    shared.data_ready.notify_all();
+                    record_body_end(&shared, pos);
                     break;
                 }
             }

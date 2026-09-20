@@ -534,6 +534,8 @@ mod tests {
                 let mut pos: u32 = 0;
                 let mut playing = true;
                 let mut wall_playing = 0.0;
+                // model: real listening = playback progress, which stops at the end of the track
+                let mut expected_played = 0.0;
                 let mut submits = 0;
                 for e in events {
                     match e {
@@ -541,7 +543,9 @@ mod tests {
                             clock.advance(f64::from(ms));
                             if playing {
                                 wall_playing += f64::from(ms);
+                                let before = pos;
                                 pos = (pos + ms).min(duration);
+                                expected_played += f64::from(pos - before);
                             }
                             for a in s.progress("t", pos) {
                                 if matches!(a, ScrobbleAction::Submit { .. }) { submits += 1; }
@@ -559,7 +563,8 @@ mod tests {
                 }
                 prop_assert!(submits <= 1);
                 let eligible = duration >= MIN_TRACK_MS;
-                prop_assert_eq!(submits == 1, eligible && wall_playing >= f64::from(threshold_ms(duration)), "submits={} eligible={} wall={} thr={}", submits, eligible, wall_playing, threshold_ms(duration));
+                prop_assert!((f64::from(s.played_ms()) - expected_played).abs() <= 1.0 || s.current_track().is_none());
+                prop_assert_eq!(submits == 1, eligible && expected_played >= f64::from(threshold_ms(duration)), "submits={} eligible={} played={} thr={}", submits, eligible, expected_played, threshold_ms(duration));
             }
         }
     }
