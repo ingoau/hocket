@@ -28,10 +28,7 @@ export function encodePng(width: number, height: number, rgba: Uint8Array): Buff
   const raw = Buffer.alloc((width * 4 + 1) * height);
   for (let y = 0; y < height; y++) {
     raw[y * (width * 4 + 1)] = 0; // filter: none
-    rgba.copy?.(raw, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4);
-    if (!rgba.copy) {
-      for (let x = 0; x < width * 4; x++) raw[y * (width * 4 + 1) + 1 + x] = rgba[y * width * 4 + x] as number;
-    }
+    raw.set(rgba.subarray(y * width * 4, (y + 1) * width * 4), y * (width * 4 + 1) + 1);
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);

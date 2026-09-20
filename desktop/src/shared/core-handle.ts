@@ -15,12 +15,11 @@ export interface CoreHandle {
 }
 
 /** Narrow a QueryResult to one variant or throw: the core answered with the wrong shape. */
-export function expectResult<K extends QueryResult["type"]>(
-  result: QueryResult,
-  type: K,
-): Extract<QueryResult, { type: K }>["data"] {
+export type ResultData<K extends QueryResult["type"]> = Extract<QueryResult, { type: K }>["data"];
+
+export function expectResult<K extends QueryResult["type"]>(result: QueryResult, type: K): ResultData<K> {
   if (result.type !== type) {
     throw new Error(`expected query result '${type}', got '${result.type}'`);
   }
-  return (result as Extract<QueryResult, { type: K }>).data;
+  return (result as unknown as { data: ResultData<K> }).data;
 }

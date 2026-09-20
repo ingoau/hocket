@@ -53,7 +53,7 @@ async function main(): Promise<void> {
     store.set("deviceId", deviceId);
   }
   const dataDir = join(userData, "core");
-  const cacheDir = process.env.HOCKET_CACHE_DIR ?? join(app.getPath("cache"), "hocket", "stream-cache");
+  const cacheDir = process.env.HOCKET_CACHE_DIR ?? join(app.getPath("sessionData"), "stream-cache");
   const platform: CoreConfig["platform"] = process.platform === "darwin" ? "macOs" : process.platform === "win32" ? "windows" : "linux";
   const config: CoreConfig = {
     dataDir,
@@ -264,7 +264,7 @@ function installProtocols(appRoot: string, cacheDir: string, dataDir: string): v
     if (!file.startsWith(rendererDir + sep) && file !== rendererDir) return new Response("forbidden", { status: 403 });
     return net.fetch(pathToFileURL(file).toString());
   });
-  const allowedRoots = [resolve(cacheDir), resolve(dataDir), resolve(app.getPath("cache")), resolve(app.getPath("userData"))];
+  const allowedRoots = [resolve(cacheDir), resolve(dataDir), resolve(app.getPath("sessionData")), resolve(app.getPath("userData"))];
   protocol.handle(ART_SCHEME, (req) => {
     const url = new URL(req.url);
     const encoded = url.pathname.replace(/^\/+/, "");

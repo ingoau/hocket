@@ -20,6 +20,7 @@
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],
+      "@shared/*": ["src/shared/*"],
       "@renderer/*": ["src/renderer/*"]
     }
   },
