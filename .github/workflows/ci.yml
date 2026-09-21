@@ -46,6 +46,8 @@ jobs:
         working-directory: desktop
       - run: pnpm typecheck && pnpm lint && pnpm test && pnpm build
         working-directory: desktop
+      - run: xvfb-run -a pnpm test:e2e
+        working-directory: desktop
 
   android:
     name: Android
@@ -61,9 +63,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+      - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
       - run: cargo install cargo-ndk typeshare-cli
       - run: scripts/gen-bindings.sh
-      - run: scripts/build-android-core.sh
-      - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - run: scripts/build-android-core.sh release
+      - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
         working-directory: android
