@@ -73,11 +73,6 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":playback"))
 
-    val bom = platform(libs.compose.bom)
-    implementation(bom)
-    androidTestImplementation(bom)
-    testImplementation(bom)
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -91,6 +86,8 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.foundation)
+    implementation(libs.compose.runtime)
+    implementation(libs.compose.animation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material3.window.size)
     implementation(libs.compose.material.icons.extended)

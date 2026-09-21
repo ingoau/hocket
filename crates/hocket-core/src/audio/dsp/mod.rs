@@ -70,6 +70,17 @@ impl From<&AudioSettings> for DspSettings {
 /// Ramp length for gain changes that happen mid-stream (settings edits).
 pub const GAIN_RAMP_MS: f64 = 20.0;
 
+/// Where the current track's gain comes from.
+#[derive(Debug, Clone, PartialEq)]
+enum TrackGainSource {
+    /// Derived from tags through [`gain_for_track`]; re-derived when the
+    /// settings change.
+    Tags { rg: Option<ReplayGain>, is_album_context: bool },
+    /// Precomputed by the actor (what `MediaSource.gain_db` carries): the
+    /// settings' ReplayGain mode and preamp are already folded in.
+    Explicit { gain_db: f64 },
+}
+
 /// See the module docs.
 #[derive(Debug, Clone)]
 pub struct DspChain {
@@ -77,8 +88,7 @@ pub struct DspChain {
     channels: usize,
     settings: DspSettings,
     track_gain: SmoothGain,
-    track_rg: Option<ReplayGain>,
-    is_album_context: bool,
+    track: TrackGainSource,
     eq: Equalizer,
     normaliser: Normaliser,
     limiter: SoftLimiter,
@@ -97,8 +107,7 @@ impl DspChain {
             channels,
             settings,
             track_gain: SmoothGain::new(1.0, ramp),
-            track_rg: None,
-            is_album_context: false,
+            track: TrackGainSource::Tags { rg: None, is_album_context: false },
             eq,
             normaliser,
             limiter: SoftLimiter::default(),
@@ -156,19 +165,27 @@ impl DspChain {
     /// the boundary is the discontinuity) and keep the EQ/AGC state running
     /// so a gapless transition stays seamless.
     pub fn begin_track(&mut self, rg: Option<&ReplayGain>, is_album_context: bool) {
-        self.track_rg = rg.cloned();
-        self.is_album_context = is_album_context;
+        self.track = TrackGainSource::Tags { rg: rg.cloned(), is_album_context };
+        self.track_gain.snap(self.current_gain_linear());
+    }
+
+    /// Like [`Self::begin_track`] but with a gain the actor already computed
+    /// (from [`gain_for_track`]) — the native backend uses this so the
+    /// external and native paths make the ReplayGain decision in one place.
+    pub fn begin_track_gain_db(&mut self, gain_db: f64) {
+        let gain_db = if gain_db.is_finite() { gain_db.clamp(-40.0, 40.0) } else { 0.0 };
+        self.track = TrackGainSource::Explicit { gain_db };
         self.track_gain.snap(self.current_gain_linear());
     }
 
     /// Gain in dB the chain applies for the current track.
     pub fn track_gain_db(&self) -> f64 {
-        gain_for_track(
-            self.track_rg.as_ref(),
-            self.settings.replay_gain,
-            self.is_album_context,
-            self.settings.replay_gain_preamp_db,
-        )
+        match &self.track {
+            TrackGainSource::Tags { rg, is_album_context } => {
+                gain_for_track(rg.as_ref(), self.settings.replay_gain, *is_album_context, self.settings.replay_gain_preamp_db)
+            }
+            TrackGainSource::Explicit { gain_db } => *gain_db,
+        }
     }
 
     fn current_gain_linear(&self) -> f64 {
@@ -384,5 +401,20 @@ mod tests {
         chain.process(&mut x);
         assert!(x.iter().all(|v| v.is_finite()));
         chain.reset();
+    }
+
+    #[test]
+    fn explicit_gain_survives_settings_changes() {
+        let mut chain = DspChain::new(48_000.0, 2, DspSettings { replay_gain: ReplayGainMode::Off, ..Default::default() });
+        chain.begin_track_gain_db(-4.5);
+        assert_eq!(chain.track_gain_db(), -4.5);
+        let mut s = chain.settings().clone();
+        s.replay_gain = ReplayGainMode::Track;
+        s.replay_gain_preamp_db = 6.0;
+        chain.set_settings(s);
+        assert_eq!(chain.track_gain_db(), -4.5, "the actor folded settings in already");
+        chain.begin_track_gain_db(f64::NAN);
+        assert_eq!(chain.track_gain_db(), 0.0);
+        assert!(chain.is_bypassed());
     }
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- The mirror is a cache; downloads are large. Only settings/session survive a backup. -->
+    <exclude domain="file" path="hocket/cache" />
+    <exclude domain="file" path="hocket/downloads" />
+    <exclude domain="cache" path="." />
+</full-backup-content>

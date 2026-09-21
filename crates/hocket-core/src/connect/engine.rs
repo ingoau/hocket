@@ -513,6 +513,24 @@ impl Engine {
         &self.room
     }
 
+    /// Optimistic ops awaiting the room's verdict.
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Locally confirmed ops not yet confirmed by a remote room.
+    pub fn has_unsynced(&self) -> bool {
+        !self.unsynced.is_empty() || self.unsynced_overflow
+    }
+
+    /// The LAN leader this device follows (tier 2 client), if any.
+    pub fn lan_leader(&self) -> Option<&DeviceId> {
+        match &self.remote {
+            Some(Remote { tier: ConnectionTier::Lan, leader, .. }) => leader.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn saved_queues(&self) -> &[SavedQueue] {
         &self.saved_queues
     }
@@ -851,7 +869,7 @@ impl Engine {
         self.cfg.coordinator_url.clone()
     }
 
-    fn lan_leader(&self) -> Option<DeviceId> {
+    fn elect_lan_leader(&self) -> Option<DeviceId> {
         if !self.cfg.lan_enabled || self.lan_peers.is_empty() {
             return None;
         }
@@ -872,7 +890,7 @@ impl Engine {
     fn reevaluate(&mut self) {
         let now = self.now_local_ms();
         let coordinator = self.coordinator_target();
-        let leader = self.lan_leader();
+        let leader = self.elect_lan_leader();
         let lan_alternative = leader.as_ref().map(|l| l != &self.cfg.device.id).unwrap_or(false)
             || (leader.is_some() && !self.lan_peers.is_empty());
         let coordinator_usable = coordinator.is_some()
@@ -1460,6 +1478,9 @@ impl Engine {
         }
         if self.held.is_some() {
             let expected = if remote { self.held_remote_epoch } else { None };
+            if let Some(h) = &mut self.held {
+                h.sent(now);
+            }
             self.upstream_send(Msg::LeaseClaim { epoch_expected: expected, takeover: !remote });
         }
         if remote {
@@ -1658,7 +1679,7 @@ impl Engine {
             match &mut self.held {
                 Some(h) => {
                     h.epoch = lease.epoch;
-                    h.last_ack_at = now;
+                    h.acked(now);
                 }
                 None => self.held = Some(HeldLease::new(lease.epoch, now)),
             }
@@ -1960,7 +1981,7 @@ impl Engine {
         if let Some(h) = self.held.clone() {
             if h.heartbeat_due(now) {
                 if let Some(h) = &mut self.held {
-                    h.last_heartbeat_at = now;
+                    h.sent(now);
                 }
                 self.upstream_send(Msg::LeaseHeartbeat { epoch: h.epoch });
             }
@@ -2482,7 +2503,7 @@ mod tests {
         let outs = e.handle(Input::Tick);
         assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseHeartbeat { epoch: 1 })));
         // no acks: after 20 s we're detached but still playing
-        clock.0.store(31_000, Ordering::SeqCst);
+        clock.0.store(29_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
         assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, detached: true, .. })));
         assert!(e.owns_transport());

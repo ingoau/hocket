@@ -193,20 +193,33 @@ impl LeaseMachine {
     }
 }
 
+/// Owner-side safety margin: a device stops trusting its lease this much
+/// before the room would lapse it, covering tick granularity and clock skew,
+/// so the two views can never both say "owner" at the same instant.
+pub const OWNER_LAPSE_MARGIN_MS: f64 = 2_000.0;
+
 /// The owner's own view: when did the room last confirm our lease, and are we
 /// still inside the window by our own clock. A device that hasn't heard an
-/// ack for [`LEASE_DURATION_MS`] must assume it has been fenced, keep playing
-/// as a detached participant, and reclaim (or be told) on reconnect.
+/// ack for [`LEASE_DURATION_MS`] (minus the margin) must assume it has been
+/// fenced, keep playing as a detached participant, and reclaim (or be told)
+/// on reconnect.
+///
+/// `last_ack_at` is the *send* time of the heartbeat (or claim) the room
+/// answered, not the arrival time of the answer: the room's window starts
+/// when it received the heartbeat, which is after we sent it, so measuring
+/// from the send keeps our window strictly inside the room's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldLease {
     pub epoch: u32,
     pub last_ack_at: EpochMs,
     pub last_heartbeat_at: EpochMs,
+    /// Send times of heartbeats/claims not yet answered, oldest first.
+    pub outstanding: std::collections::VecDeque<EpochMs>,
 }
 
 impl HeldLease {
     pub fn new(epoch: u32, now: EpochMs) -> Self {
-        HeldLease { epoch, last_ack_at: now, last_heartbeat_at: now }
+        HeldLease { epoch, last_ack_at: now, last_heartbeat_at: now, outstanding: Default::default() }
     }
 
     /// Whether a heartbeat is due.
@@ -214,9 +227,26 @@ impl HeldLease {
         now - self.last_heartbeat_at >= HEARTBEAT_INTERVAL_MS
     }
 
+    /// Record a heartbeat or claim being sent.
+    pub fn sent(&mut self, now: EpochMs) {
+        self.last_heartbeat_at = now;
+        self.outstanding.push_back(now);
+        while self.outstanding.len() > 8 {
+            self.outstanding.pop_front();
+        }
+    }
+
+    /// The room confirmed us: credit the oldest outstanding send.
+    pub fn acked(&mut self, now: EpochMs) {
+        let at = self.outstanding.pop_front().unwrap_or(now);
+        if at > self.last_ack_at {
+            self.last_ack_at = at;
+        }
+    }
+
     /// Whether the window has closed without an ack.
     pub fn lapsed(&self, now: EpochMs) -> bool {
-        now - self.last_ack_at >= LEASE_DURATION_MS
+        now - self.last_ack_at >= LEASE_DURATION_MS - OWNER_LAPSE_MARGIN_MS
     }
 }
 
@@ -408,11 +438,19 @@ mod tests {
     }
 
     #[test]
-    fn held_lease_timing() {
-        let h = HeldLease::new(3, 0.0);
+    fn held_lease_timing_measures_from_send() {
+        let mut h = HeldLease::new(3, 0.0);
         assert!(!h.heartbeat_due(4999.0));
         assert!(h.heartbeat_due(5000.0));
-        assert!(!h.lapsed(19_999.0));
-        assert!(h.lapsed(20_000.0));
+        assert!(!h.lapsed(17_999.0));
+        assert!(h.lapsed(18_000.0));
+        h.sent(5000.0);
+        h.sent(10_000.0);
+        h.acked(10_400.0); // answers the 5000 send
+        assert_eq!(h.last_ack_at, 5000.0);
+        h.acked(10_500.0); // answers the 10_000 send
+        assert_eq!(h.last_ack_at, 10_000.0);
+        h.acked(30_000.0); // nothing outstanding: credit now
+        assert_eq!(h.last_ack_at, 30_000.0);
     }
 }
