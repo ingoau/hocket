@@ -12,6 +12,7 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::connect::wire::WireMessage;
 use crate::connect::PeerId;
+use crate::sim::clock::to_micros;
 
 pub type NodeId = String;
 
@@ -31,7 +32,6 @@ pub enum NetEvent {
 #[derive(Debug, Clone)]
 struct Delivery {
     at: f64,
-    seq: u64,
     to: NodeId,
     event: NetEvent,
 }
@@ -178,8 +178,8 @@ impl Network {
 
     fn enqueue(&mut self, at: f64, to: &str, event: NetEvent) {
         self.seq += 1;
-        let key = ((at * 1000.0) as i64, self.seq);
-        self.queue.insert(key, Delivery { at, seq: self.seq, to: to.to_string(), event });
+        let key = (to_micros(at), self.seq);
+        self.queue.insert(key, Delivery { at, to: to.to_string(), event });
     }
 
     /// `from` opens a connection to the first candidate URL that resolves to
@@ -254,7 +254,7 @@ impl Network {
     /// Pop every delivery due at or before `now`.
     pub fn due(&mut self, now: f64) -> Vec<(NodeId, NetEvent)> {
         let mut out = vec![];
-        let limit = ((now * 1000.0) as i64, u64::MAX);
+        let limit = (to_micros(now), u64::MAX);
         let keys: Vec<(i64, u64)> = self.queue.range(..=limit).map(|(k, _)| *k).collect();
         for k in keys {
             if let Some(d) = self.queue.remove(&k) {

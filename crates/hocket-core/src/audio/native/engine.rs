@@ -23,10 +23,13 @@ use parking_lot::Mutex;
 use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice, QueueKey};
 use crate::audio::backend::{clamp_volume, BackendError, PlaybackBackend, ReportSink};
 use crate::audio::dsp::{DspChain, DspSettings, SmoothGain};
-use crate::audio::native::decoder::{open_file, open_media_source, DecodeError, DecodeHandle, Spec};
+use crate::audio::native::decoder::{
+    open_file, open_media_source, DecodeError, DecodeHandle, Spec,
+};
 use crate::audio::native::http::{HttpSource, RangeFetcher};
 use crate::audio::native::output::{
-    list_output_devices, open_output, probe_format, DeviceWatcher, OutputConfig, OutputRing, OutputStream,
+    list_output_devices, open_output, probe_format, DeviceWatcher, OutputConfig, OutputRing,
+    OutputStream,
 };
 use crate::audio::native::resample::{remap_channels, Resampler, CHUNK_FRAMES};
 
@@ -67,21 +70,38 @@ struct Loaded {
     handle: DecodeHandle,
 }
 
+/// Engine commands. `Load` carries whole `MediaSource`s and dwarfs the unit
+/// variants; the channel carries a handful of these per track, so boxing
+/// would buy nothing.
+#[allow(clippy::large_enum_variant)]
 enum Cmd {
-    Load { source: MediaSource, next: Option<MediaSource>, position_ms: u32, play: bool },
+    Load {
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: u32,
+        play: bool,
+    },
     SetNext(Option<MediaSource>),
     Play,
     Pause,
     Stop,
     Seek(u32),
     SetVolume(f64),
-    PreBuffer { source: MediaSource, position_ms: u32 },
+    PreBuffer {
+        source: MediaSource,
+        position_ms: u32,
+    },
     DiscardPreBuffer,
     SetGapless(bool),
     SetOutputDevice(Option<String>),
     SetExclusive(bool),
     SetDsp(DspSettings),
-    Loaded { role: Role, generation: u64, key: QueueKey, result: Result<Loaded, DecodeError> },
+    Loaded {
+        role: Role,
+        generation: u64,
+        key: QueueKey,
+        result: Result<Box<Loaded>, DecodeError>,
+    },
     Shutdown,
 }
 
@@ -102,7 +122,8 @@ struct Source {
 }
 
 impl Source {
-    fn new(l: Loaded) -> Self {
+    fn new(l: Box<Loaded>) -> Self {
+        let l = *l;
         let spec = l.handle.spec;
         let duration_ms = l
             .handle
@@ -147,6 +168,25 @@ impl Source {
     }
 }
 
+enum Step {
+    Continue,
+    Wait,
+}
+
+/// Everything the engine thread needs to build itself (all `Send`; the
+/// cpal stream is created on the thread because it isn't).
+struct EngineParams {
+    rx: Receiver<Cmd>,
+    tx: Sender<Cmd>,
+    sink: ReportSink,
+    fetcher: Arc<dyn RangeFetcher>,
+    runtime: tokio::runtime::Handle,
+    output: OutputConfig,
+    dsp: DspSettings,
+    gapless: bool,
+    exclusive: bool,
+}
+
 struct Engine {
     rx: Receiver<Cmd>,
     tx: Sender<Cmd>,
@@ -169,6 +209,8 @@ struct Engine {
     next: Option<Source>,
     next_key: Option<QueueKey>,
     awaiting_next: bool,
+    /// A `Current` load is in flight; `playing` must survive until it lands.
+    loading_current: bool,
     pre_buffer: Option<Source>,
     pre_buffer_key: Option<QueueKey>,
     pre_buffer_position_ms: u32,
@@ -183,6 +225,43 @@ struct Engine {
 }
 
 impl Engine {
+    fn new(p: EngineParams) -> Self {
+        Engine {
+            rx: p.rx,
+            tx: p.tx,
+            sink: p.sink,
+            fetcher: p.fetcher,
+            runtime: p.runtime,
+            output_config: p.output,
+            output: None,
+            ring: OutputRing::new(16, 2),
+            out_rate: 48_000,
+            out_channels: 2,
+            dsp: DspChain::new(48_000.0, 2, p.dsp),
+            volume: SmoothGain::new(1.0, 480),
+            user_volume: 1.0,
+            playing: false,
+            fading_out: false,
+            gapless: p.gapless,
+            exclusive: p.exclusive,
+            current: None,
+            next: None,
+            next_key: None,
+            awaiting_next: false,
+            loading_current: false,
+            pre_buffer: None,
+            pre_buffer_key: None,
+            pre_buffer_position_ms: 0,
+            generation: 0,
+            pre_buffer_generation: 0,
+            pending_out: Vec::new(),
+            scratch_src: Vec::with_capacity(CHUNK_FRAMES * 8),
+            scratch_map: Vec::with_capacity(CHUNK_FRAMES * 8),
+            last_position_report: Instant::now(),
+            error_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     fn report(&self, r: BackendReport) {
         tracing::trace!(target: "hocket::audio::native", report = ?r);
         (self.sink)(r);
@@ -194,7 +273,10 @@ impl Engine {
         let (rate, channels) = probe_format(&config).map_err(|e| e.to_string())?;
         let ring = OutputRing::new((rate * RING_MS / 1000) as usize, channels);
         let flag = self.error_flag.clone();
-        let stream = open_output(&config, ring.clone(), move |_| flag.store(true, Ordering::Release)).map_err(|e| e.to_string())?;
+        let stream = open_output(&config, ring.clone(), move |_| {
+            flag.store(true, Ordering::Release)
+        })
+        .map_err(|e| e.to_string())?;
         let (rate, channels) = (stream.rate(), stream.channels());
         self.output = None; // close the old one before keeping the new
         self.output = Some(stream);
@@ -220,7 +302,10 @@ impl Engine {
         let cfg = self.output_config.clone();
         if let Err(e) = self.open_output(cfg) {
             tracing::warn!(target: "hocket::audio::native", error = %e, "opening output failed, using null sink");
-            let cfg = OutputConfig { null_sink: true, ..self.output_config.clone() };
+            let cfg = OutputConfig {
+                null_sink: true,
+                ..self.output_config.clone()
+            };
             if let Err(e) = self.open_output(cfg) {
                 tracing::error!(target: "hocket::audio::native", error = %e, "null sink failed");
             }
@@ -230,15 +315,24 @@ impl Engine {
     /// Reopen the output at the source's rate when exclusive mode asks for
     /// it and the device can; otherwise keep resampling.
     fn maybe_switch_rate(&mut self) {
-        let Some(rate) = self.current.as_ref().map(|c| c.spec.sample_rate) else { return };
+        let Some(rate) = self.current.as_ref().map(|c| c.spec.sample_rate) else {
+            return;
+        };
         let wanted = if self.exclusive { Some(rate) } else { None };
         if self.output_config.sample_rate == wanted {
             return;
         }
-        let cfg = OutputConfig { sample_rate: wanted, ..self.output_config.clone() };
+        let cfg = OutputConfig {
+            sample_rate: wanted,
+            ..self.output_config.clone()
+        };
         match self.open_output(cfg) {
-            Ok(()) => tracing::info!(target: "hocket::audio::native", rate = self.out_rate, "output rate switched"),
-            Err(e) => tracing::info!(target: "hocket::audio::native", error = %e, "device can't follow the source rate, resampling"),
+            Ok(()) => {
+                tracing::info!(target: "hocket::audio::native", rate = self.out_rate, "output rate switched")
+            }
+            Err(e) => {
+                tracing::info!(target: "hocket::audio::native", error = %e, "device can't follow the source rate, resampling")
+            }
         }
     }
 
@@ -250,39 +344,90 @@ impl Engine {
         let runtime = self.runtime.clone();
         let gapless = self.gapless;
         let key = source.key.clone();
-        let seconds = if role == Role::PreBuffer { PREBUFFER_SECONDS } else { QUEUE_SECONDS };
+        let seconds = if role == Role::PreBuffer {
+            PREBUFFER_SECONDS
+        } else {
+            QUEUE_SECONDS
+        };
         let name = format!("{role:?}").to_ascii_lowercase();
-        let spawn = thread::Builder::new().name(format!("hocket-load-{name}")).spawn(move || {
-            let result = load_source(&source, position_ms, gapless, seconds, fetcher, runtime, &name).map(|handle| Loaded { media: source, handle });
-            let _ = tx.send(Cmd::Loaded { role, generation, key, result });
-        });
+        let key2 = key.clone();
+        let spawn = thread::Builder::new()
+            .name(format!("hocket-load-{name}"))
+            .spawn(move || {
+                let result = load_source(
+                    &source,
+                    position_ms,
+                    gapless,
+                    seconds,
+                    fetcher,
+                    runtime,
+                    &name,
+                )
+                .map(|handle| {
+                    Box::new(Loaded {
+                        media: source,
+                        handle,
+                    })
+                });
+                let _ = tx.send(Cmd::Loaded {
+                    role,
+                    generation,
+                    key: key2,
+                    result,
+                });
+            });
         if let Err(e) = spawn {
-            let _ = self.tx.send(Cmd::Loaded { role, generation, key: source.key, result: Err(DecodeError::Io(e.to_string())) });
+            let _ = self.tx.send(Cmd::Loaded {
+                role,
+                generation,
+                key,
+                result: Err(DecodeError::Io(e.to_string())),
+            });
         }
     }
 
-    fn on_loaded(&mut self, role: Role, generation: u64, key: QueueKey, result: Result<Loaded, DecodeError>) {
+    fn on_loaded(
+        &mut self,
+        role: Role,
+        generation: u64,
+        key: QueueKey,
+        result: Result<Box<Loaded>, DecodeError>,
+    ) {
         match role {
             Role::Current => {
                 if generation != self.generation || self.current.is_some() {
                     return;
                 }
+                self.loading_current = false;
                 match result {
                     Ok(l) => {
                         let src = Source::new(l);
                         self.begin_source(src);
                         let cur = self.current.as_ref().expect("just set");
-                        self.report(BackendReport::Ready { key: key.clone(), duration_ms: cur.duration_ms });
+                        self.report(BackendReport::Ready {
+                            key: key.clone(),
+                            duration_ms: cur.duration_ms,
+                        });
                         let pos = self.current_position();
                         if self.playing {
-                            self.report(BackendReport::Playing { key, position_ms: pos });
+                            self.report(BackendReport::Playing {
+                                key,
+                                position_ms: pos,
+                            });
                         } else {
-                            self.report(BackendReport::Paused { key, position_ms: pos });
+                            self.report(BackendReport::Paused {
+                                key,
+                                position_ms: pos,
+                            });
                         }
                     }
                     Err(e) => {
                         self.playing = false;
-                        self.report(BackendReport::Error { key, message: e.to_string(), fatal: true });
+                        self.report(BackendReport::Error {
+                            key,
+                            message: e.to_string(),
+                            fatal: true,
+                        });
                     }
                 }
             }
@@ -301,7 +446,11 @@ impl Engine {
                     Err(e) => {
                         self.next_key = None;
                         self.awaiting_next = false;
-                        self.report(BackendReport::Error { key, message: e.to_string(), fatal: true });
+                        self.report(BackendReport::Error {
+                            key,
+                            message: e.to_string(),
+                            fatal: true,
+                        });
                         if self.current.is_none() {
                             self.playing = false;
                         }
@@ -309,7 +458,9 @@ impl Engine {
                 }
             }
             Role::PreBuffer => {
-                if generation != self.pre_buffer_generation || self.pre_buffer_key.as_ref() != Some(&key) {
+                if generation != self.pre_buffer_generation
+                    || self.pre_buffer_key.as_ref() != Some(&key)
+                {
                     return;
                 }
                 match result {
@@ -319,7 +470,11 @@ impl Engine {
                     }
                     Err(e) => {
                         self.pre_buffer_key = None;
-                        self.report(BackendReport::Error { key, message: e.to_string(), fatal: false });
+                        self.report(BackendReport::Error {
+                            key,
+                            message: e.to_string(),
+                            fatal: false,
+                        });
                     }
                 }
             }
@@ -328,7 +483,8 @@ impl Engine {
 
     /// Install `src` as current: DSP format and gain, exclusive rate.
     fn begin_source(&mut self, src: Source) {
-        self.dsp.set_format(f64::from(src.spec.sample_rate), src.spec.channels);
+        self.dsp
+            .set_format(f64::from(src.spec.sample_rate), src.spec.channels);
         self.dsp.begin_track_gain_db(src.media.gain_db);
         self.current = Some(src);
         self.maybe_switch_rate();
@@ -343,22 +499,32 @@ impl Engine {
         let Some(next) = self.next.take() else { return };
         self.next_key = None;
         let key = next.key().clone();
-        self.dsp.set_format(f64::from(next.spec.sample_rate), next.spec.channels);
+        self.dsp
+            .set_format(f64::from(next.spec.sample_rate), next.spec.channels);
         self.dsp.begin_track_gain_db(next.media.gain_db);
         self.current = Some(next);
         self.maybe_switch_rate();
         self.report(BackendReport::TransitionedToNext { key: key.clone() });
-        self.report(BackendReport::Position { key, position_ms: 0 });
+        self.report(BackendReport::Position {
+            key,
+            position_ms: 0,
+        });
         self.last_position_report = Instant::now();
     }
 
     // -- positions --------------------------------------------------------
 
     fn pending_src_frames(&self, src: &Source) -> u64 {
-        let ring_out_frames = (self.ring.ring.len() / self.out_channels.max(1)) as u64 + (self.pending_out.len() / self.out_channels.max(1)) as u64;
+        let ring_out_frames = (self.ring.ring.len() / self.out_channels.max(1)) as u64
+            + (self.pending_out.len() / self.out_channels.max(1)) as u64;
         let ratio = f64::from(src.spec.sample_rate) / f64::from(self.out_rate.max(1));
         let ring_src = (ring_out_frames as f64 * ratio) as u64;
-        ring_src + src.resampler.as_ref().map(|r| r.latency_in_frames() as u64).unwrap_or(0)
+        ring_src
+            + src
+                .resampler
+                .as_ref()
+                .map(|r| r.latency_in_frames() as u64)
+                .unwrap_or(0)
     }
 
     fn current_position(&self) -> u32 {
@@ -373,7 +539,12 @@ impl Engine {
     fn handle(&mut self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::Shutdown => return false,
-            Cmd::Load { source, next, position_ms, play } => self.load(source, next, position_ms, play),
+            Cmd::Load {
+                source,
+                next,
+                position_ms,
+                play,
+            } => self.load(source, next, position_ms, play),
             Cmd::SetNext(next) => {
                 self.next = None;
                 self.next_key = next.as_ref().map(|n| n.key.clone());
@@ -397,7 +568,10 @@ impl Engine {
                         self.seek(0);
                     }
                     let pos = self.current_position();
-                    self.report(BackendReport::Playing { key, position_ms: pos });
+                    self.report(BackendReport::Playing {
+                        key,
+                        position_ms: pos,
+                    });
                 }
             }
             Cmd::Pause => {
@@ -413,6 +587,7 @@ impl Engine {
             }
             Cmd::Stop => {
                 self.generation += 1;
+                self.loading_current = false;
                 self.current = None;
                 self.next = None;
                 self.next_key = None;
@@ -432,12 +607,20 @@ impl Engine {
                     self.volume.set_target(v);
                 }
             }
-            Cmd::PreBuffer { source, position_ms } => {
+            Cmd::PreBuffer {
+                source,
+                position_ms,
+            } => {
                 self.pre_buffer = None;
                 self.pre_buffer_generation += 1;
                 self.pre_buffer_key = Some(source.key.clone());
                 self.pre_buffer_position_ms = position_ms;
-                self.spawn_load(Role::PreBuffer, self.pre_buffer_generation, source, position_ms);
+                self.spawn_load(
+                    Role::PreBuffer,
+                    self.pre_buffer_generation,
+                    source,
+                    position_ms,
+                );
             }
             Cmd::DiscardPreBuffer => {
                 self.pre_buffer = None;
@@ -446,10 +629,16 @@ impl Engine {
             }
             Cmd::SetGapless(g) => self.gapless = g,
             Cmd::SetOutputDevice(id) => {
-                let cfg = OutputConfig { device_id: id, ..self.output_config.clone() };
+                let cfg = OutputConfig {
+                    device_id: id,
+                    ..self.output_config.clone()
+                };
                 if let Err(e) = self.open_output(cfg) {
                     tracing::warn!(target: "hocket::audio::native", error = %e, "switching output device failed, keeping default");
-                    let cfg = OutputConfig { device_id: None, ..self.output_config.clone() };
+                    let cfg = OutputConfig {
+                        device_id: None,
+                        ..self.output_config.clone()
+                    };
                     if self.open_output(cfg).is_err() {
                         self.output = None;
                         self.ensure_output();
@@ -461,12 +650,23 @@ impl Engine {
                 self.maybe_switch_rate();
             }
             Cmd::SetDsp(s) => self.dsp.set_settings(s),
-            Cmd::Loaded { role, generation, key, result } => self.on_loaded(role, generation, key, result),
+            Cmd::Loaded {
+                role,
+                generation,
+                key,
+                result,
+            } => self.on_loaded(role, generation, key, result),
         }
         true
     }
 
-    fn load(&mut self, source: MediaSource, next: Option<MediaSource>, position_ms: u32, play: bool) {
+    fn load(
+        &mut self,
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: u32,
+        play: bool,
+    ) {
         self.ensure_output();
         self.generation += 1;
         self.current = None;
@@ -477,7 +677,8 @@ impl Engine {
         self.dsp.reset();
         self.playing = play;
         self.fading_out = false;
-        self.volume.set_target(if play { self.user_volume } else { 0.0 });
+        self.volume
+            .set_target(if play { self.user_volume } else { 0.0 });
         self.next_key = next.as_ref().map(|n| n.key.clone());
         if let Some(n) = next {
             self.spawn_load(Role::Next, self.generation, n, 0);
@@ -499,7 +700,10 @@ impl Engine {
             let key = pre.key().clone();
             let duration = pre.duration_ms;
             self.begin_source(pre);
-            self.report(BackendReport::Ready { key: key.clone(), duration_ms: duration });
+            self.report(BackendReport::Ready {
+                key: key.clone(),
+                duration_ms: duration,
+            });
             if play {
                 self.report(BackendReport::Playing { key, position_ms });
             } else {
@@ -507,11 +711,14 @@ impl Engine {
             }
             return;
         }
+        self.loading_current = true;
         self.spawn_load(Role::Current, self.generation, source, position_ms);
     }
 
     fn seek(&mut self, ms: u32) {
-        let Some(cur) = self.current.as_mut() else { return };
+        let Some(cur) = self.current.as_mut() else {
+            return;
+        };
         let ms = cur.duration_ms.map(|d| ms.min(d)).unwrap_or(ms);
         let frame = cur.ms_to_frames(ms);
         cur.handle.seek(frame);
@@ -528,11 +735,20 @@ impl Engine {
         self.dsp.reset();
         // Ramp back in so the discontinuity doesn't click.
         self.volume.snap(0.0);
-        self.volume.set_target(if self.fading_out { 0.0 } else if self.playing { self.user_volume } else { 0.0 });
+        self.volume.set_target(if self.fading_out {
+            0.0
+        } else if self.playing {
+            self.user_volume
+        } else {
+            0.0
+        });
         if !self.playing {
             self.volume.snap(self.user_volume);
         }
-        self.report(BackendReport::Position { key, position_ms: ms });
+        self.report(BackendReport::Position {
+            key,
+            position_ms: ms,
+        });
         self.last_position_report = Instant::now();
     }
 
@@ -561,104 +777,150 @@ impl Engine {
                 // Fade finished: now actually pause.
                 self.fading_out = false;
                 self.playing = false;
-                if let Some(c) = &self.current {
-                    let key = c.key().clone();
+                if let Some(key) = self.current.as_ref().map(|c| c.key().clone()) {
                     let pos = self.current_position();
-                    self.report(BackendReport::Paused { key, position_ms: pos });
+                    self.report(BackendReport::Paused {
+                        key,
+                        position_ms: pos,
+                    });
                 }
                 return;
             }
-            let Some(cur) = self.current.as_mut() else {
-                if self.awaiting_next {
-                    return;
-                }
-                self.playing = false;
-                self.fading_out = false;
-                return;
-            };
-            // Room for one chunk at the worst-case ratio.
-            let ratio = f64::from(self.out_rate) / f64::from(cur.spec.sample_rate);
-            let need = ((CHUNK_FRAMES as f64 * ratio) as usize + 64) * out_ch;
-            if self.ring.ring.free() < need {
-                return;
-            }
-            self.scratch_src.clear();
-            let (n, _start) = cur.handle.queue.pop(CHUNK_FRAMES, &mut self.scratch_src);
-            if n == 0 {
-                if let Some(e) = cur.handle.queue.error() {
-                    let key = cur.key().clone();
-                    self.current = None;
+            if self.current.is_none() {
+                if !self.awaiting_next && !self.loading_current {
                     self.playing = false;
                     self.fading_out = false;
-                    self.report(BackendReport::Error { key, message: e.to_string(), fatal: true });
-                    return;
-                }
-                if cur.handle.queue.is_eof() {
-                    if !cur.finished {
-                        cur.finished = true;
-                        if let Some(r) = cur.resampler.as_mut() {
-                            let mut tail = Vec::new();
-                            if r.flush(&mut tail).is_ok() {
-                                self.volume.process(&mut tail, out_ch);
-                                self.pending_out.extend_from_slice(&tail);
-                            }
-                        }
-                    }
-                    if !self.pending_out.is_empty() {
-                        continue;
-                    }
-                    self.finish_current();
-                    if self.current.is_none() {
-                        return;
-                    }
-                    continue;
-                }
-                if !cur.buffering {
-                    cur.buffering = true;
-                    let key = cur.key().clone();
-                    self.report(BackendReport::Buffering { key, buffering: true });
                 }
                 return;
             }
-            if cur.buffering {
-                cur.buffering = false;
-                let key = cur.key().clone();
-                self.report(BackendReport::Buffering { key, buffering: false });
+            match self.feed_one_chunk(out_ch) {
+                Step::Continue => {}
+                Step::Wait => return,
             }
-            cur.pushed_frames += n as u64;
-            self.dsp.process(&mut self.scratch_src);
-            self.scratch_map.clear();
-            remap_channels(&self.scratch_src, cur.spec.channels, out_ch, &mut self.scratch_map);
-            let mut converted = std::mem::take(&mut self.pending_out);
-            if cur.spec.sample_rate != self.out_rate {
-                let fmt = (self.out_rate, out_ch);
-                if cur.resampler_for != Some(fmt) {
-                    cur.resampler = Resampler::new(cur.spec.sample_rate, self.out_rate, out_ch).ok();
-                    cur.resampler_for = Some(fmt);
-                }
-                match cur.resampler.as_mut() {
-                    Some(r) => {
-                        let before = converted.len();
-                        if let Err(e) = r.process(&self.scratch_map, &mut converted) {
-                            tracing::warn!(target: "hocket::audio::native", error = %e, "resampling failed, passing through");
-                            converted.truncate(before);
-                            converted.extend_from_slice(&self.scratch_map);
+        }
+    }
+
+    /// One iteration of [`Self::feed`] with a current source present.
+    fn feed_one_chunk(&mut self, out_ch: usize) -> Step {
+        let (src_rate, src_channels) = {
+            let cur = self.current.as_ref().expect("caller checked");
+            (cur.spec.sample_rate, cur.spec.channels)
+        };
+        // Room for one chunk at the worst-case ratio.
+        let ratio = f64::from(self.out_rate) / f64::from(src_rate);
+        let need = ((CHUNK_FRAMES as f64 * ratio) as usize + 64) * out_ch;
+        if self.ring.ring.free() < need {
+            return Step::Wait;
+        }
+        self.scratch_src.clear();
+        let mut reports: Vec<BackendReport> = Vec::new();
+        let n = {
+            let cur = self.current.as_mut().expect("caller checked");
+            let (n, _) = cur.handle.queue.pop(CHUNK_FRAMES, &mut self.scratch_src);
+            n
+        };
+        if n == 0 {
+            let cur = self.current.as_mut().expect("caller checked");
+            if let Some(e) = cur.handle.queue.error() {
+                let key = cur.key().clone();
+                self.current = None;
+                self.playing = false;
+                self.fading_out = false;
+                self.report(BackendReport::Error {
+                    key,
+                    message: e.to_string(),
+                    fatal: true,
+                });
+                return Step::Wait;
+            }
+            if cur.handle.queue.is_eof() {
+                if !cur.finished {
+                    cur.finished = true;
+                    if let Some(r) = cur.resampler.as_mut() {
+                        let mut tail = Vec::new();
+                        if r.flush(&mut tail).is_ok() {
+                            self.volume.process(&mut tail, out_ch);
+                            self.pending_out.extend_from_slice(&tail);
                         }
                     }
-                    None => converted.extend_from_slice(&self.scratch_map),
                 }
-            } else {
-                converted.extend_from_slice(&self.scratch_map);
+                if !self.pending_out.is_empty() {
+                    return Step::Continue;
+                }
+                self.finish_current();
+                return if self.current.is_some() {
+                    Step::Continue
+                } else {
+                    Step::Wait
+                };
             }
-            self.volume.process(&mut converted, out_ch);
-            self.pending_out = converted;
+            if !cur.buffering {
+                cur.buffering = true;
+                let key = cur.key().clone();
+                self.report(BackendReport::Buffering {
+                    key,
+                    buffering: true,
+                });
+            }
+            return Step::Wait;
         }
+        {
+            let cur = self.current.as_mut().expect("caller checked");
+            if cur.buffering {
+                cur.buffering = false;
+                reports.push(BackendReport::Buffering {
+                    key: cur.key().clone(),
+                    buffering: false,
+                });
+            }
+            cur.pushed_frames += n as u64;
+        }
+        self.dsp.process(&mut self.scratch_src);
+        self.scratch_map.clear();
+        remap_channels(
+            &self.scratch_src,
+            src_channels,
+            out_ch,
+            &mut self.scratch_map,
+        );
+        let mut converted = std::mem::take(&mut self.pending_out);
+        if src_rate != self.out_rate {
+            let fmt = (self.out_rate, out_ch);
+            let cur = self.current.as_mut().expect("caller checked");
+            if cur.resampler_for != Some(fmt) {
+                cur.resampler = Resampler::new(src_rate, self.out_rate, out_ch).ok();
+                cur.resampler_for = Some(fmt);
+            }
+            match cur.resampler.as_mut() {
+                Some(r) => {
+                    let before = converted.len();
+                    if let Err(e) = r.process(&self.scratch_map, &mut converted) {
+                        tracing::warn!(target: "hocket::audio::native", error = %e, "resampling failed, passing through");
+                        converted.truncate(before);
+                        converted.extend_from_slice(&self.scratch_map);
+                    }
+                }
+                None => converted.extend_from_slice(&self.scratch_map),
+            }
+        } else {
+            converted.extend_from_slice(&self.scratch_map);
+        }
+        self.volume.process(&mut converted, out_ch);
+        self.pending_out = converted;
+        for r in reports {
+            self.report(r);
+        }
+        Step::Continue
     }
 
     /// The current source has played out: report and move on.
     fn finish_current(&mut self) {
-        let Some(cur) = self.current.take() else { return };
-        self.report(BackendReport::Ended { key: cur.key().clone() });
+        let Some(cur) = self.current.take() else {
+            return;
+        };
+        self.report(BackendReport::Ended {
+            key: cur.key().clone(),
+        });
         drop(cur);
         if self.next.is_some() {
             self.promote_next();
@@ -682,7 +944,10 @@ impl Engine {
                 if self.last_position_report.elapsed() >= POSITION_INTERVAL {
                     let key = c.key().clone();
                     let pos = self.current_position();
-                    self.report(BackendReport::Position { key, position_ms: pos });
+                    self.report(BackendReport::Position {
+                        key,
+                        position_ms: pos,
+                    });
                     self.last_position_report = Instant::now();
                 }
             }
@@ -728,13 +993,32 @@ fn load_source(
             open_file(&path)?
         } else {
             let file = std::fs::File::open(&path)?;
-            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_string);
-            open_media_source(Box::new(file), ext.as_deref(), source.mime_type.as_deref(), false)?
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_string);
+            open_media_source(
+                Box::new(file),
+                ext.as_deref(),
+                source.mime_type.as_deref(),
+                false,
+            )?
         }
     } else {
-        let http = HttpSource::open(fetcher, runtime, url.to_string(), source.headers.clone(), OPEN_TIMEOUT)?;
+        let http = HttpSource::open(
+            fetcher,
+            runtime,
+            url.to_string(),
+            source.headers.clone(),
+            OPEN_TIMEOUT,
+        )?;
         let ext = url_extension(url);
-        open_media_source(Box::new(http), ext.as_deref(), source.mime_type.as_deref(), gapless)?
+        open_media_source(
+            Box::new(http),
+            ext.as_deref(),
+            source.mime_type.as_deref(),
+            gapless,
+        )?
     };
     let start_frame = u64::from(position_ms) * u64::from(opened.spec.sample_rate) / 1000;
     let capacity = (opened.spec.sample_rate * queue_seconds) as usize;
@@ -776,58 +1060,50 @@ pub struct NativeBackend {
 impl NativeBackend {
     pub fn new(config: NativeConfig, sink: ReportSink) -> Result<Self, BackendError> {
         let (tx, rx) = mpsc::channel();
-        let initial_devices = if config.output.null_sink { Vec::new() } else { list_output_devices() };
+        let initial_devices = if config.output.null_sink {
+            Vec::new()
+        } else {
+            list_output_devices()
+        };
         let devices = Arc::new(Mutex::new(initial_devices.clone()));
         let watcher = if config.watch_devices {
             let s = sink.clone();
             let d = devices.clone();
-            Some(DeviceWatcher::start(Duration::from_secs(2), initial_devices, move |list| {
-                *d.lock() = list.clone();
-                s(BackendReport::OutputDevicesChanged { devices: list });
-            }))
+            Some(DeviceWatcher::start(
+                Duration::from_secs(2),
+                initial_devices,
+                move |list| {
+                    *d.lock() = list.clone();
+                    s(BackendReport::OutputDevicesChanged { devices: list });
+                },
+            ))
         } else {
             None
         };
-        let dsp_settings = DspSettings::from(&config.audio);
-        let output = OutputConfig { device_id: config.audio.output_device.clone(), ..config.output };
-        let engine = Engine {
+        let params = EngineParams {
             rx,
             tx: tx.clone(),
             sink,
             fetcher: config.fetcher,
             runtime: config.runtime,
-            output_config: output,
-            output: None,
-            ring: OutputRing::new(16, 2),
-            out_rate: 48_000,
-            out_channels: 2,
-            dsp: DspChain::new(48_000.0, 2, dsp_settings),
-            volume: SmoothGain::new(1.0, 480),
-            user_volume: 1.0,
-            playing: false,
-            fading_out: false,
+            output: OutputConfig {
+                device_id: config.audio.output_device.clone(),
+                ..config.output
+            },
+            dsp: DspSettings::from(&config.audio),
             gapless: config.audio.gapless,
             exclusive: config.audio.exclusive,
-            current: None,
-            next: None,
-            next_key: None,
-            awaiting_next: false,
-            pre_buffer: None,
-            pre_buffer_key: None,
-            pre_buffer_position_ms: 0,
-            generation: 0,
-            pre_buffer_generation: 0,
-            pending_out: Vec::new(),
-            scratch_src: Vec::with_capacity(CHUNK_FRAMES * 8),
-            scratch_map: Vec::with_capacity(CHUNK_FRAMES * 8),
-            last_position_report: Instant::now(),
-            error_flag: Arc::new(AtomicBool::new(false)),
         };
         let thread = thread::Builder::new()
             .name("hocket-audio-engine".into())
-            .spawn(move || engine.run())
+            .spawn(move || Engine::new(params).run())
             .map_err(|e| BackendError::Other(e.to_string()))?;
-        Ok(Self { tx, thread: Mutex::new(Some(thread)), devices, watcher: Mutex::new(watcher) })
+        Ok(Self {
+            tx,
+            thread: Mutex::new(Some(thread)),
+            devices,
+            watcher: Mutex::new(watcher),
+        })
     }
 
     fn send(&self, cmd: Cmd) -> Result<(), BackendError> {
@@ -863,8 +1139,19 @@ impl Drop for NativeBackend {
 }
 
 impl PlaybackBackend for NativeBackend {
-    fn load(&self, source: MediaSource, next: Option<MediaSource>, position_ms: u32, play: bool) -> Result<(), BackendError> {
-        self.send(Cmd::Load { source, next, position_ms, play })
+    fn load(
+        &self,
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: u32,
+        play: bool,
+    ) -> Result<(), BackendError> {
+        self.send(Cmd::Load {
+            source,
+            next,
+            position_ms,
+            play,
+        })
     }
     fn set_next(&self, next: Option<MediaSource>) -> Result<(), BackendError> {
         self.send(Cmd::SetNext(next))
@@ -885,7 +1172,10 @@ impl PlaybackBackend for NativeBackend {
         self.send(Cmd::SetVolume(clamp_volume(volume)))
     }
     fn pre_buffer(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
-        self.send(Cmd::PreBuffer { source, position_ms })
+        self.send(Cmd::PreBuffer {
+            source,
+            position_ms,
+        })
     }
     fn discard_pre_buffer(&self) -> Result<(), BackendError> {
         self.send(Cmd::DiscardPreBuffer)
@@ -895,7 +1185,8 @@ impl PlaybackBackend for NativeBackend {
     }
     fn set_output_device(&self, id: Option<String>) -> Result<(), BackendError> {
         if let Some(id) = &id {
-            let known = self.devices.lock().iter().any(|d| &d.id == id) || self.refresh_devices().iter().any(|d| &d.id == id);
+            let known = self.devices.lock().iter().any(|d| &d.id == id)
+                || self.refresh_devices().iter().any(|d| &d.id == id);
             if !known {
                 return Err(BackendError::UnknownDevice(id.clone()));
             }
@@ -931,21 +1222,33 @@ mod tests {
     }
 
     fn rig_with(fetcher: Arc<dyn RangeFetcher>) -> Rig {
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         let reports: Reports = Default::default();
         let r2 = reports.clone();
         let backend = NativeBackend::new(
             NativeConfig {
                 fetcher,
                 runtime: rt.handle().clone(),
-                output: OutputConfig { null_sink: true, ..Default::default() },
+                output: OutputConfig {
+                    null_sink: true,
+                    ..Default::default()
+                },
                 audio: default_audio_settings(),
                 watch_devices: false,
             },
             Arc::new(move |r| r2.lock().push(r)),
         )
         .unwrap();
-        Rig { backend, reports, _rt: rt, dir: tempfile::tempdir().unwrap() }
+        Rig {
+            backend,
+            reports,
+            _rt: rt,
+            dir: tempfile::tempdir().unwrap(),
+        }
     }
 
     fn rig() -> Rig {
@@ -958,7 +1261,11 @@ mod tests {
             write_test_wav(&p, rate, frames);
             MediaSource {
                 key: name.into(),
-                track: TrackSummary { id: name.into(), duration_ms: frames * 1000 / rate, ..Default::default() },
+                track: TrackSummary {
+                    id: name.into(),
+                    duration_ms: frames * 1000 / rate,
+                    ..Default::default()
+                },
                 url: url::Url::from_file_path(&p).unwrap().to_string(),
                 headers: Default::default(),
                 mime_type: Some("audio/wav".into()),
@@ -967,7 +1274,11 @@ mod tests {
             }
         }
 
-        fn wait_for(&self, timeout: Duration, pred: impl Fn(&BackendReport) -> bool) -> Vec<BackendReport> {
+        fn wait_for(
+            &self,
+            timeout: Duration,
+            pred: impl Fn(&BackendReport) -> bool,
+        ) -> Vec<BackendReport> {
             let deadline = Instant::now() + timeout;
             loop {
                 {
@@ -976,7 +1287,11 @@ mod tests {
                         return r.clone();
                     }
                 }
-                assert!(Instant::now() < deadline, "timed out; reports: {:?}", self.reports.lock());
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out; reports: {:?}",
+                    self.reports.lock()
+                );
                 thread::sleep(Duration::from_millis(5));
             }
         }
@@ -991,15 +1306,38 @@ mod tests {
         let rig = rig();
         let a = rig.wav("a.wav", 44_100, 44_100 * 3 / 2);
         rig.backend.load(a, None, 0, true).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(10), |r| matches!(r, BackendReport::Ended { .. }));
-        assert_eq!(reports[0], BackendReport::Ready { key: "a.wav".into(), duration_ms: Some(1500) });
-        assert!(matches!(&reports[1], BackendReport::Playing { key, position_ms: 0 } if key == "a.wav"));
-        let positions: Vec<u32> =
-            reports.iter().filter_map(|r| if let BackendReport::Position { position_ms, .. } = r { Some(*position_ms) } else { None }).collect();
-        assert!(!positions.is_empty(), "at least one 1 Hz position report: {reports:?}");
+        let reports = rig.wait_for(Duration::from_secs(10), |r| {
+            matches!(r, BackendReport::Ended { .. })
+        });
+        assert_eq!(
+            reports[0],
+            BackendReport::Ready {
+                key: "a.wav".into(),
+                duration_ms: Some(1500)
+            }
+        );
+        assert!(
+            matches!(&reports[1], BackendReport::Playing { key, position_ms: 0 } if key == "a.wav")
+        );
+        let positions: Vec<u32> = reports
+            .iter()
+            .filter_map(|r| {
+                if let BackendReport::Position { position_ms, .. } = r {
+                    Some(*position_ms)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            !positions.is_empty(),
+            "at least one 1 Hz position report: {reports:?}"
+        );
         assert!(positions.windows(2).all(|w| w[1] >= w[0]));
         assert!(positions.iter().all(|p| *p <= 1500));
-        assert!(!reports.iter().any(|r| matches!(r, BackendReport::Error { .. })));
+        assert!(!reports
+            .iter()
+            .any(|r| matches!(r, BackendReport::Error { .. })));
     }
 
     #[test]
@@ -1008,13 +1346,25 @@ mod tests {
         let a = rig.wav("a.wav", 48_000, 48_000 / 2);
         let b = rig.wav("b.wav", 44_100, 44_100 / 2);
         rig.backend.load(a, Some(b), 0, true).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(10), |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"));
-        let idx = |pred: &dyn Fn(&BackendReport) -> bool| reports.iter().position(pred).expect("present");
+        let reports = rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        let idx =
+            |pred: &dyn Fn(&BackendReport) -> bool| reports.iter().position(pred).expect("present");
         let ended_a = idx(&|r| matches!(r, BackendReport::Ended { key } if key == "a.wav"));
-        let trans = idx(&|r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"));
-        let pos0 = idx(&|r| matches!(r, BackendReport::Position { key, position_ms: 0 } if key == "b.wav"));
+        let trans =
+            idx(&|r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"));
+        let pos0 = idx(
+            &|r| matches!(r, BackendReport::Position { key, position_ms: 0 } if key == "b.wav"),
+        );
         assert!(ended_a < trans && trans < pos0, "{reports:?}");
-        assert!(!reports.iter().any(|r| matches!(r, BackendReport::Error { .. })), "{reports:?}");
+        assert!(
+            !reports
+                .iter()
+                .any(|r| matches!(r, BackendReport::Error { .. })),
+            "{reports:?}"
+        );
     }
 
     #[test]
@@ -1022,20 +1372,54 @@ mod tests {
         let rig = rig();
         let a = rig.wav("a.wav", 48_000, 48_000 * 4);
         rig.backend.load(a, None, 0, true).unwrap();
-        rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Playing { .. }));
+        rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Playing { .. })
+        });
         thread::sleep(Duration::from_millis(300));
         rig.backend.pause().unwrap();
-        let reports = rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Paused { .. }));
-        let paused_at = reports.iter().find_map(|r| if let BackendReport::Paused { position_ms, .. } = r { Some(*position_ms) } else { None }).unwrap();
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Paused { .. })
+        });
+        let paused_at = reports
+            .iter()
+            .find_map(|r| {
+                if let BackendReport::Paused { position_ms, .. } = r {
+                    Some(*position_ms)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert!((100..=1000).contains(&paused_at), "{paused_at}");
         rig.take();
         rig.backend.seek(2_500).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Position { position_ms: 2_500, .. }));
-        assert!(reports.iter().all(|r| !matches!(r, BackendReport::Playing { .. })));
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(
+                r,
+                BackendReport::Position {
+                    position_ms: 2_500,
+                    ..
+                }
+            )
+        });
+        assert!(reports
+            .iter()
+            .all(|r| !matches!(r, BackendReport::Playing { .. })));
         rig.take();
         rig.backend.play().unwrap();
-        let reports = rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Playing { .. }));
-        let resumed_at = reports.iter().find_map(|r| if let BackendReport::Playing { position_ms, .. } = r { Some(*position_ms) } else { None }).unwrap();
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Playing { .. })
+        });
+        let resumed_at = reports
+            .iter()
+            .find_map(|r| {
+                if let BackendReport::Playing { position_ms, .. } = r {
+                    Some(*position_ms)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert!((2_400..=2_700).contains(&resumed_at), "{resumed_at}");
         rig.backend.set_volume(0.5).unwrap();
         rig.backend.stop().unwrap();
@@ -1050,19 +1434,42 @@ mod tests {
         let rig = rig();
         let a = rig.wav("a.wav", 48_000, 48_000 * 2);
         rig.backend.pre_buffer(a.clone(), 500).unwrap();
-        rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::PreBufferReady { key } if key == "a.wav"));
+        rig.wait_for(
+            Duration::from_secs(5),
+            |r| matches!(r, BackendReport::PreBufferReady { key } if key == "a.wav"),
+        );
         rig.take();
         rig.backend.load(a, None, 700, true).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Playing { .. }));
-        assert_eq!(reports[0], BackendReport::Ready { key: "a.wav".into(), duration_ms: Some(2000) });
-        assert_eq!(reports[1], BackendReport::Playing { key: "a.wav".into(), position_ms: 700 });
-        rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Ended { .. }));
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Playing { .. })
+        });
+        assert_eq!(
+            reports[0],
+            BackendReport::Ready {
+                key: "a.wav".into(),
+                duration_ms: Some(2000)
+            }
+        );
+        assert_eq!(
+            reports[1],
+            BackendReport::Playing {
+                key: "a.wav".into(),
+                position_ms: 700
+            }
+        );
+        rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Ended { .. })
+        });
         // Discarded pre-buffers never report.
         let b = rig.wav("b.wav", 48_000, 48_000);
         rig.backend.pre_buffer(b, 0).unwrap();
         rig.backend.discard_pre_buffer().unwrap();
         thread::sleep(Duration::from_millis(300));
-        assert!(!rig.reports.lock().iter().any(|r| matches!(r, BackendReport::PreBufferReady { key } if key == "b.wav")));
+        assert!(!rig
+            .reports
+            .lock()
+            .iter()
+            .any(|r| matches!(r, BackendReport::PreBufferReady { key } if key == "b.wav")));
     }
 
     #[test]
@@ -1070,11 +1477,19 @@ mod tests {
         let rig = rig();
         let mut bad = rig.wav("a.wav", 48_000, 100);
         bad.key = "bad".into();
-        bad.url = url::Url::from_file_path(rig.dir.path().join("missing.wav")).unwrap().to_string();
+        bad.url = url::Url::from_file_path(rig.dir.path().join("missing.wav"))
+            .unwrap()
+            .to_string();
         rig.backend.load(bad, None, 0, true).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(5), |r| matches!(r, BackendReport::Error { .. }));
-        assert!(matches!(&reports[0], BackendReport::Error { key, fatal: true, .. } if key == "bad"));
-        assert!(!reports.iter().any(|r| matches!(r, BackendReport::Ended { .. } | BackendReport::Ready { .. })));
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Error { .. })
+        });
+        assert!(
+            matches!(&reports[0], BackendReport::Error { key, fatal: true, .. } if key == "bad")
+        );
+        assert!(!reports
+            .iter()
+            .any(|r| matches!(r, BackendReport::Ended { .. } | BackendReport::Ready { .. })));
     }
 
     #[test]
@@ -1083,11 +1498,19 @@ mod tests {
         let p = dir.path().join("h.wav");
         write_test_wav(&p, 48_000, 48_000 / 2);
         let bytes = std::fs::read(&p).unwrap();
-        let fetcher = MemoryFetcher { chunk: 2048, delay: Duration::from_millis(1), ..MemoryFetcher::new(bytes) };
+        let fetcher = MemoryFetcher {
+            chunk: 2048,
+            delay: Duration::from_millis(1),
+            ..MemoryFetcher::new(bytes)
+        };
         let rig = rig_with(Arc::new(fetcher));
         let src = MediaSource {
             key: "h".into(),
-            track: TrackSummary { id: "h".into(), duration_ms: 500, ..Default::default() },
+            track: TrackSummary {
+                id: "h".into(),
+                duration_ms: 500,
+                ..Default::default()
+            },
             url: "https://navidrome.example/rest/stream?id=h&format=wav".into(),
             headers: Default::default(),
             mime_type: Some("audio/wav".into()),
@@ -1095,19 +1518,44 @@ mod tests {
             transcoded: false,
         };
         rig.backend.load(src, None, 100, true).unwrap();
-        let reports = rig.wait_for(Duration::from_secs(10), |r| matches!(r, BackendReport::Ended { key } if key == "h"));
-        assert_eq!(reports[0], BackendReport::Ready { key: "h".into(), duration_ms: Some(500) });
-        assert_eq!(reports[1], BackendReport::Playing { key: "h".into(), position_ms: 100 });
-        assert!(!reports.iter().any(|r| matches!(r, BackendReport::Error { .. })), "{reports:?}");
+        let reports = rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "h"),
+        );
+        assert_eq!(
+            reports[0],
+            BackendReport::Ready {
+                key: "h".into(),
+                duration_ms: Some(500)
+            }
+        );
+        assert_eq!(
+            reports[1],
+            BackendReport::Playing {
+                key: "h".into(),
+                position_ms: 100
+            }
+        );
+        assert!(
+            !reports
+                .iter()
+                .any(|r| matches!(r, BackendReport::Error { .. })),
+            "{reports:?}"
+        );
     }
 
     #[test]
     fn unknown_device_is_rejected_synchronously() {
         let rig = rig();
-        assert_eq!(rig.backend.set_output_device(Some("no such device".into())), Err(BackendError::UnknownDevice("no such device".into())));
+        assert_eq!(
+            rig.backend.set_output_device(Some("no such device".into())),
+            Err(BackendError::UnknownDevice("no such device".into()))
+        );
         assert!(rig.backend.set_output_device(None).is_ok());
         assert_eq!(rig.backend.name(), "native");
-        rig.backend.set_audio_settings(&default_audio_settings()).unwrap();
+        rig.backend
+            .set_audio_settings(&default_audio_settings())
+            .unwrap();
         rig.backend.set_gapless(false).unwrap();
     }
 

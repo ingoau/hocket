@@ -156,6 +156,7 @@ impl SimDevice {
             Some(p) => (p.document, p.sync_base, p.saved_queues, p.outbox),
             None => (crate::session::new_document(scope, format!("session-{id}"), now), None, vec![], vec![]),
         };
+        let world_start = clock.world_now_ms();
         let engine = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, sync_base);
         let mut d = SimDevice {
             id: id.into(),
@@ -173,7 +174,7 @@ impl SimDevice {
             listener_port: None,
             asleep: false,
             prebuffer_ready_at: None,
-            next_tick_at: now,
+            next_tick_at: world_start,
             queued: vec![],
             effects: vec![],
             id_counter: 0,
@@ -202,8 +203,14 @@ impl SimDevice {
         }
     }
 
+    /// Device-local time (skewed), what the engine sees.
     pub fn now(&self) -> EpochMs {
         self.clock.now_ms()
+    }
+
+    /// World time, for scheduling only.
+    pub fn world_now(&self) -> EpochMs {
+        self.clock.world_now_ms()
     }
 
     pub fn owns(&self) -> bool {
@@ -286,7 +293,7 @@ impl SimDevice {
             }
             Output::TransportCommand(cmd) => self.transport_command(cmd),
             Output::PreBuffer { key, .. } => {
-                self.prebuffer_ready_at = Some((self.now() + 500.0, key));
+                self.prebuffer_ready_at = Some((self.world_now() + 500.0, key));
             }
             Output::DiscardPreBuffer => self.prebuffer_ready_at = None,
             Output::Scrobble { track_id, started_at, allowed } => {
@@ -427,7 +434,7 @@ impl SimDevice {
         if self.asleep {
             return;
         }
-        let now = self.now();
+        let now = self.world_now();
         self.advance();
         if let Some((at, key)) = self.prebuffer_ready_at.clone() {
             if now >= at {

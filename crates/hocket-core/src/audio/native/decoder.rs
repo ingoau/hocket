@@ -16,9 +16,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_MP3, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{
+    Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_MP3, CODEC_TYPE_NULL,
+};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
@@ -85,14 +87,21 @@ pub struct Opened {
 
 impl std::fmt::Debug for Opened {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Opened").field("track_id", &self.track_id).field("spec", &self.spec).field("trim", &self.trim).finish()
+        f.debug_struct("Opened")
+            .field("track_id", &self.track_id)
+            .field("spec", &self.spec)
+            .field("trim", &self.trim)
+            .finish()
     }
 }
 
 /// Open a local file.
 pub fn open_file(path: &Path) -> Result<Opened, DecodeError> {
     let file = std::fs::File::open(path)?;
-    let hint = path.extension().and_then(|e| e.to_str()).map(str::to_string);
+    let hint = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_string);
     open_media_source(Box::new(file), hint.as_deref(), None, true)
 }
 
@@ -129,8 +138,16 @@ pub fn open_media_source(
         hint.mime_type(mime);
     }
     let mss = MediaSourceStream::new(source, MediaSourceStreamOptions::default());
-    let fmt_opts = FormatOptions { enable_gapless: gapless, ..Default::default() };
-    let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &MetadataOptions::default())?;
+    let fmt_opts = FormatOptions {
+        enable_gapless: gapless,
+        ..Default::default()
+    };
+    let probed = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &fmt_opts,
+        &MetadataOptions::default(),
+    )?;
     let mut format = probed.format;
     let track = format
         .tracks()
@@ -139,9 +156,17 @@ pub fn open_media_source(
         .ok_or(DecodeError::NoAudio)?;
     let track_id = track.id;
     let params = track.codec_params.clone();
-    let sample_rate = params.sample_rate.ok_or_else(|| DecodeError::Unsupported("unknown sample rate".into()))?;
-    let channels = params.channels.map(|c| c.count()).or_else(|| params.channel_layout.map(|l| l.into_channels().count())).unwrap_or(2);
-    let time_base = params.time_base.unwrap_or_else(|| TimeBase::new(1, sample_rate));
+    let sample_rate = params
+        .sample_rate
+        .ok_or_else(|| DecodeError::Unsupported("unknown sample rate".into()))?;
+    let channels = params
+        .channels
+        .map(|c| c.count())
+        .or_else(|| params.channel_layout.map(|l| l.into_channels().count()))
+        .unwrap_or(2);
+    let time_base = params
+        .time_base
+        .unwrap_or_else(|| TimeBase::new(1, sample_rate));
     let decoder = symphonia::default::get_codecs().make(&params, &DecoderOptions::default())?;
     // AAC priming/padding from iTunSMPB.
     let mut trim = Trim::default();
@@ -167,13 +192,19 @@ pub fn open_media_source(
         }
     }
     let raw_frames = params.n_frames;
-    let duration_frames = raw_frames.map(|n| n.saturating_sub(u64::from(trim.skip_start)).saturating_sub(u64::from(trim.skip_end)));
+    let duration_frames = raw_frames.map(|n| {
+        n.saturating_sub(u64::from(trim.skip_start))
+            .saturating_sub(u64::from(trim.skip_end))
+    });
     let _ = CODEC_TYPE_MP3; // MP3 trims are Symphonia's job (see module docs).
     Ok(Opened {
         format,
         decoder,
         track_id,
-        spec: Spec { sample_rate, channels },
+        spec: Spec {
+            sample_rate,
+            channels,
+        },
         time_base,
         duration_frames,
         trim,
@@ -224,8 +255,16 @@ struct PcmReader {
 impl PcmReader {
     /// Position `frame` is in trimmed frames.
     fn new(opened: &mut Opened, frame: u64) -> Result<Self, DecodeError> {
-        let mut r = Self { sample_buf: None, raw_pos: 0, skip: 0, raw_end: None, eof: false };
-        r.raw_end = opened.duration_frames.map(|d| d + u64::from(opened.trim.skip_start));
+        let mut r = Self {
+            sample_buf: None,
+            raw_pos: 0,
+            skip: 0,
+            raw_end: None,
+            eof: false,
+        };
+        r.raw_end = opened
+            .duration_frames
+            .map(|d| d + u64::from(opened.trim.skip_start));
         r.seek(opened, frame)?;
         Ok(r)
     }
@@ -237,7 +276,13 @@ impl PcmReader {
         if raw_target == 0 {
             // Fresh start: no seek needed unless we've already read.
             if self.raw_pos != 0 || self.sample_buf.is_some() {
-                let seeked = opened.format.seek(SeekMode::Accurate, SeekTo::Time { time: Time::new(0, 0.0), track_id: Some(opened.track_id) })?;
+                let seeked = opened.format.seek(
+                    SeekMode::Accurate,
+                    SeekTo::Time {
+                        time: Time::new(0, 0.0),
+                        track_id: Some(opened.track_id),
+                    },
+                )?;
                 opened.decoder.reset();
                 self.raw_pos = ts_to_frames(opened.time_base, seeked.actual_ts, rate);
             }
@@ -245,7 +290,13 @@ impl PcmReader {
             return Ok(());
         }
         let time = frames_to_time(raw_target, rate);
-        match opened.format.seek(SeekMode::Accurate, SeekTo::Time { time, track_id: Some(opened.track_id) }) {
+        match opened.format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time,
+                track_id: Some(opened.track_id),
+            },
+        ) {
             Ok(seeked) => {
                 opened.decoder.reset();
                 self.raw_pos = ts_to_frames(opened.time_base, seeked.actual_ts, rate);
@@ -254,7 +305,13 @@ impl PcmReader {
             Err(SymError::SeekError(k)) => {
                 // Unseekable (unknown length): restart and skip forward.
                 tracing::debug!(target: "hocket::audio::decoder", kind = ?k, "accurate seek unsupported, decoding forward");
-                let seeked = opened.format.seek(SeekMode::Coarse, SeekTo::Time { time: Time::new(0, 0.0), track_id: Some(opened.track_id) })?;
+                let seeked = opened.format.seek(
+                    SeekMode::Coarse,
+                    SeekTo::Time {
+                        time: Time::new(0, 0.0),
+                        track_id: Some(opened.track_id),
+                    },
+                )?;
                 opened.decoder.reset();
                 self.raw_pos = ts_to_frames(opened.time_base, seeked.actual_ts, rate);
                 self.skip = raw_target.saturating_sub(self.raw_pos);
@@ -266,7 +323,11 @@ impl PcmReader {
 
     /// Append the next chunk of interleaved frames to `out`; returns frames
     /// appended, 0 at end of stream.
-    fn next_chunk(&mut self, opened: &mut Opened, out: &mut Vec<f32>) -> Result<usize, DecodeError> {
+    fn next_chunk(
+        &mut self,
+        opened: &mut Opened,
+        out: &mut Vec<f32>,
+    ) -> Result<usize, DecodeError> {
         loop {
             if self.eof {
                 return Ok(0);
@@ -304,7 +365,9 @@ impl PcmReader {
             }
             let spec = *decoded.spec();
             let channels = spec.channels.count();
-            let buf = self.sample_buf.get_or_insert_with(|| SampleBuffer::new(frames as u64 * 2, spec));
+            let buf = self
+                .sample_buf
+                .get_or_insert_with(|| SampleBuffer::new(frames as u64 * 2, spec));
             if buf.capacity() < frames * channels {
                 *buf = SampleBuffer::new(frames as u64 * 2, spec);
             }
@@ -344,11 +407,18 @@ impl PcmReader {
     }
 }
 
+/// How long the decode thread sleeps on the command channel while its
+/// queue is full or finished.
+const IDLE_POLL: Duration = Duration::from_millis(10);
+
 /// What the decode thread is told.
 enum Cmd {
     /// Seek to a trimmed frame; bumps the queue generation so stale samples
     /// are discarded.
-    Seek { frame: u64, generation: u32 },
+    Seek {
+        frame: u64,
+        generation: u32,
+    },
     Stop,
 }
 
@@ -364,7 +434,6 @@ struct QueueState {
 /// Bounded PCM queue between a decode thread and the engine.
 pub struct PcmQueue {
     state: Mutex<QueueState>,
-    space: Condvar,
     channels: usize,
     capacity_samples: usize,
 }
@@ -372,8 +441,13 @@ pub struct PcmQueue {
 impl PcmQueue {
     fn new(channels: usize, capacity_frames: usize) -> Self {
         Self {
-            state: Mutex::new(QueueState { samples: VecDeque::new(), head_frame: 0, generation: 0, eof: false, error: None }),
-            space: Condvar::new(),
+            state: Mutex::new(QueueState {
+                samples: VecDeque::new(),
+                head_frame: 0,
+                generation: 0,
+                eof: false,
+                error: None,
+            }),
             channels,
             capacity_samples: capacity_frames.max(1) * channels,
         }
@@ -414,9 +488,6 @@ impl PcmQueue {
         out.extend(st.samples.drain(..n));
         let taken = n / self.channels;
         st.head_frame += taken as u64;
-        if taken > 0 {
-            self.space.notify_one();
-        }
         (taken, start)
     }
 }
@@ -433,14 +504,22 @@ pub struct DecodeHandle {
 
 impl std::fmt::Debug for DecodeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecodeHandle").field("spec", &self.spec).field("duration_frames", &self.duration_frames).finish()
+        f.debug_struct("DecodeHandle")
+            .field("spec", &self.spec)
+            .field("duration_frames", &self.duration_frames)
+            .finish()
     }
 }
 
 impl DecodeHandle {
     /// Start decoding `opened` from `start_frame` on its own thread into a
     /// queue of `capacity_frames`.
-    pub fn spawn(mut opened: Opened, start_frame: u64, capacity_frames: usize, name: &str) -> Result<Self, DecodeError> {
+    pub fn spawn(
+        mut opened: Opened,
+        start_frame: u64,
+        capacity_frames: usize,
+        name: &str,
+    ) -> Result<Self, DecodeError> {
         let spec = opened.spec;
         let duration_frames = opened.duration_frames;
         let queue = Arc::new(PcmQueue::new(spec.channels, capacity_frames));
@@ -458,7 +537,14 @@ impl DecodeHandle {
                 opened
             })
             .map_err(|e| DecodeError::Io(e.to_string()))?;
-        Ok(Self { cmd: tx, queue, spec, duration_frames, generation: Mutex::new(0), thread: Some(thread) })
+        Ok(Self {
+            cmd: tx,
+            queue,
+            spec,
+            duration_frames,
+            generation: Mutex::new(0),
+            thread: Some(thread),
+        })
     }
 
     /// Reposition. Buffered samples are discarded; the queue reports the
@@ -474,14 +560,15 @@ impl DecodeHandle {
             st.error = None;
             st.head_frame = frame;
         }
-        let _ = self.cmd.send(Cmd::Seek { frame, generation: *g });
-        self.queue.space.notify_all();
+        let _ = self.cmd.send(Cmd::Seek {
+            frame,
+            generation: *g,
+        });
     }
 
     /// Stop the thread and get the source back (for reuse).
     pub fn into_opened(mut self) -> Option<Opened> {
         let _ = self.cmd.send(Cmd::Stop);
-        self.queue.space.notify_all();
         self.thread.take().and_then(|t| t.join().ok())
     }
 }
@@ -489,7 +576,6 @@ impl DecodeHandle {
 impl Drop for DecodeHandle {
     fn drop(&mut self) {
         let _ = self.cmd.send(Cmd::Stop);
-        self.queue.space.notify_all();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -499,71 +585,49 @@ impl Drop for DecodeHandle {
 fn run_decoder(opened: &mut Opened, reader: &mut PcmReader, q: &Arc<PcmQueue>, rx: &Receiver<Cmd>) {
     let mut generation = 0u32;
     let mut chunk = Vec::new();
-    loop {
-        // Commands first.
-        loop {
-            match rx.try_recv() {
-                Ok(Cmd::Stop) => return,
-                Ok(Cmd::Seek { frame, generation: g }) => {
-                    generation = g;
-                    if let Err(e) = reader.seek(opened, frame) {
-                        let mut st = q.state.lock();
-                        if st.generation == generation {
-                            st.error = Some(e);
-                            st.eof = true;
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
+    let apply_seek = |reader: &mut PcmReader, opened: &mut Opened, frame: u64, g: u32| {
+        if let Err(e) = reader.seek(opened, frame) {
+            let mut st = q.state.lock();
+            if st.generation == g {
+                st.error = Some(e);
+                st.eof = true;
             }
         }
-        // Wait for space.
-        {
-            let mut st = q.state.lock();
-            while st.samples.len() >= q.capacity_samples && st.generation == generation {
-                q.space.wait_for(&mut st, Duration::from_millis(50));
-                if rx_has_cmd(rx) {
-                    break;
-                }
-            }
-            if st.generation != generation {
-                // A seek is pending; loop to pick it up.
-                drop(st);
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(Cmd::Stop) => return,
-                    Ok(Cmd::Seek { frame, generation: g }) => {
-                        generation = g;
-                        if let Err(e) = reader.seek(opened, frame) {
-                            let mut st = q.state.lock();
-                            st.error = Some(e);
-                            st.eof = true;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
+    };
+    loop {
+        // Commands first, never blocking.
+        match rx.try_recv() {
+            Ok(Cmd::Stop) | Err(TryRecvError::Disconnected) => return,
+            Ok(Cmd::Seek {
+                frame,
+                generation: g,
+            }) => {
+                generation = g;
+                apply_seek(reader, opened, frame, g);
                 continue;
             }
-            if st.samples.len() >= q.capacity_samples {
-                continue;
-            }
-            if st.eof {
-                drop(st);
-                match rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(Cmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    Ok(Cmd::Seek { frame, generation: g }) => {
-                        generation = g;
-                        if let Err(e) = reader.seek(opened, frame) {
-                            let mut st = q.state.lock();
-                            st.error = Some(e);
-                            st.eof = true;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(TryRecvError::Empty) => {}
+        }
+        let idle = {
+            let st = q.state.lock();
+            st.generation != generation || st.samples.len() >= q.capacity_samples || st.eof
+        };
+        if idle {
+            // Full, finished, or a seek is pending: block on the command
+            // channel briefly so stops and seeks are picked up promptly and
+            // the consumer's drains are noticed within one poll.
+            match rx.recv_timeout(IDLE_POLL) {
+                Ok(Cmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Ok(Cmd::Seek {
+                    frame,
+                    generation: g,
+                }) => {
+                    generation = g;
+                    apply_seek(reader, opened, frame, g);
                 }
-                continue;
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            continue;
         }
         chunk.clear();
         match reader.next_chunk(opened, &mut chunk) {
@@ -591,13 +655,6 @@ fn run_decoder(opened: &mut Opened, reader: &mut PcmReader, q: &Arc<PcmQueue>, r
     }
 }
 
-fn rx_has_cmd(rx: &Receiver<Cmd>) -> bool {
-    // Peek without consuming isn't available on std mpsc; a cheap proxy is
-    // to let the outer loop poll after a short wait.
-    let _ = rx;
-    false
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -621,8 +678,10 @@ pub(crate) mod tests {
         f.write_all(&data_len.to_le_bytes()).unwrap();
         let mut body = Vec::with_capacity(data_len as usize);
         for i in 0..frames {
-            let l = (0.5 * (2.0 * std::f64::consts::PI * 440.0 * f64::from(i) / f64::from(rate)).sin() * 32767.0) as i16;
-            let r = ((i % 1000) as i32 - 500) as i16 * 60;
+            let l = (0.5
+                * (2.0 * std::f64::consts::PI * 440.0 * f64::from(i) / f64::from(rate)).sin()
+                * 32767.0) as i16;
+            let r = ((i % 1000) as i16 - 500) * 60;
             body.extend_from_slice(&l.to_le_bytes());
             body.extend_from_slice(&r.to_le_bytes());
         }
@@ -636,7 +695,13 @@ pub(crate) mod tests {
         write_test_wav(&p, 44_100, 44_100);
         let mut pcm = Vec::new();
         let spec = decode_file(&p, |_, chunk| pcm.extend_from_slice(chunk)).unwrap();
-        assert_eq!(spec, Spec { sample_rate: 44_100, channels: 2 });
+        assert_eq!(
+            spec,
+            Spec {
+                sample_rate: 44_100,
+                channels: 2
+            }
+        );
         assert_eq!(pcm.len(), 44_100 * 2);
         let peak = pcm.iter().step_by(2).fold(0.0f32, |m, v| m.max(v.abs()));
         assert!((peak - 0.5).abs() < 0.01, "{peak}");
@@ -655,7 +720,7 @@ pub(crate) mod tests {
         let mut out = Vec::new();
         reader.next_chunk(&mut opened, &mut out).unwrap();
         // Right channel at frame 12345: (12345 % 1000 - 500) * 60.
-        let expected = f32::from(((12_345 % 1000) as i32 - 500) as i16 * 60) / 32768.0;
+        let expected = f32::from(((12_345 % 1000) as i16 - 500) * 60) / 32768.0;
         assert!((out[1] - expected).abs() < 1e-4, "{} vs {expected}", out[1]);
         assert_eq!(reader.raw_pos - (out.len() / 2) as u64, 12_345);
     }
@@ -696,11 +761,14 @@ pub(crate) mod tests {
             let (n, start) = handle.queue.pop(256, &mut buf);
             if n > 0 {
                 assert_eq!(start, 1000);
-                let expected = f32::from(((1000 % 1000) as i32 - 500) as i16 * 60) / 32768.0;
+                let expected = f32::from(((1000 % 1000) as i16 - 500) * 60) / 32768.0;
                 assert!((buf[1] - expected).abs() < 1e-4);
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "seek never produced data");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "seek never produced data"
+            );
             thread::sleep(Duration::from_millis(1));
         }
         let opened = handle.into_opened();

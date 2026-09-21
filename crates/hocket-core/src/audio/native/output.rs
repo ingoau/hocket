@@ -85,23 +85,46 @@ impl OutputRing {
             }
             self.underruns.fetch_add(1, Ordering::Relaxed);
         }
-        self.consumed_frames.fetch_add((n / channels.max(1)) as u64, Ordering::Relaxed);
+        self.consumed_frames
+            .fetch_add((n / channels.max(1)) as u64, Ordering::Relaxed);
     }
 }
 
 /// An open output. Dropping it closes the device.
 pub enum OutputStream {
-    Cpal { stream: cpal::Stream, rate: u32, channels: usize, device_id: Option<String> },
-    Null { stop: Arc<AtomicBool>, thread: Option<thread::JoinHandle<()>>, rate: u32, channels: usize },
+    Cpal {
+        stream: cpal::Stream,
+        rate: u32,
+        channels: usize,
+        device_id: Option<String>,
+    },
+    Null {
+        stop: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+        rate: u32,
+        channels: usize,
+    },
 }
 
 impl std::fmt::Debug for OutputStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OutputStream::Cpal { rate, channels, device_id, .. } => {
-                f.debug_struct("Cpal").field("rate", rate).field("channels", channels).field("device", device_id).finish()
-            }
-            OutputStream::Null { rate, channels, .. } => f.debug_struct("Null").field("rate", rate).field("channels", channels).finish(),
+            OutputStream::Cpal {
+                rate,
+                channels,
+                device_id,
+                ..
+            } => f
+                .debug_struct("Cpal")
+                .field("rate", rate)
+                .field("channels", channels)
+                .field("device", device_id)
+                .finish(),
+            OutputStream::Null { rate, channels, .. } => f
+                .debug_struct("Null")
+                .field("rate", rate)
+                .field("channels", channels)
+                .finish(),
         }
     }
 }
@@ -148,11 +171,17 @@ pub fn list_output_devices() -> Vec<OutputDevice> {
                     if out.iter().any(|o: &OutputDevice| o.id == name) {
                         continue;
                     }
-                    out.push(OutputDevice { id: name.clone(), name: name.clone(), is_default: Some(&name) == default_name.as_ref() });
+                    out.push(OutputDevice {
+                        id: name.clone(),
+                        name: name.clone(),
+                        is_default: Some(&name) == default_name.as_ref(),
+                    });
                 }
             }
         }
-        Err(e) => tracing::warn!(target: "hocket::audio::output", error = %e, "enumerating output devices failed"),
+        Err(e) => {
+            tracing::warn!(target: "hocket::audio::output", error = %e, "enumerating output devices failed")
+        }
     }
     out
 }
@@ -161,8 +190,12 @@ fn find_device(host: &cpal::Host, id: Option<&str>) -> Result<cpal::Device, Outp
     match id {
         None => host.default_output_device().ok_or(OutputError::NoDevice),
         Some(id) => {
-            let mut devices = host.output_devices().map_err(|e| OutputError::Stream(e.to_string()))?;
-            devices.find(|d| d.name().map(|n| n == id).unwrap_or(false)).ok_or_else(|| OutputError::UnknownDevice(id.to_string()))
+            let mut devices = host
+                .output_devices()
+                .map_err(|e| OutputError::Stream(e.to_string()))?;
+            devices
+                .find(|d| d.name().map(|n| n == id).unwrap_or(false))
+                .ok_or_else(|| OutputError::UnknownDevice(id.to_string()))
         }
     }
 }
@@ -190,7 +223,12 @@ pub fn open_null(rate: u32, channels: usize, ring: Arc<OutputRing>) -> OutputStr
             }
         })
         .ok();
-    OutputStream::Null { stop, thread, rate, channels }
+    OutputStream::Null {
+        stop,
+        thread,
+        rate,
+        channels,
+    }
 }
 
 /// Open the output described by `config`, feeding from `ring` (which must
@@ -199,7 +237,11 @@ pub fn open_null(rate: u32, channels: usize, ring: Arc<OutputRing>) -> OutputStr
 ///
 /// Falls back to the null sink, with a warning, when the host has no usable
 /// device so the app still runs without a sound card.
-pub fn open_output(config: &OutputConfig, ring: Arc<OutputRing>, on_error: impl Fn(String) + Send + 'static) -> Result<OutputStream, OutputError> {
+pub fn open_output(
+    config: &OutputConfig,
+    ring: Arc<OutputRing>,
+    on_error: impl Fn(String) + Send + Sync + 'static,
+) -> Result<OutputStream, OutputError> {
     if config.null_sink {
         let (rate, channels) = (config.sample_rate.unwrap_or(48_000), 2);
         return Ok(open_null(rate, channels, ring));
@@ -235,21 +277,32 @@ pub fn probe_format(config: &OutputConfig) -> Result<(u32, usize), OutputError> 
     Ok((supported.sample_rate().0, usize::from(supported.channels())))
 }
 
-fn choose_config(device: &cpal::Device, rate: Option<u32>) -> Result<cpal::SupportedStreamConfig, OutputError> {
-    let default = device.default_output_config().map_err(|e| OutputError::Stream(e.to_string()))?;
+fn choose_config(
+    device: &cpal::Device,
+    rate: Option<u32>,
+) -> Result<cpal::SupportedStreamConfig, OutputError> {
+    let default = device
+        .default_output_config()
+        .map_err(|e| OutputError::Stream(e.to_string()))?;
     let Some(rate) = rate else { return Ok(default) };
     if default.sample_rate().0 == rate {
         return Ok(default);
     }
     let want_channels = default.channels();
-    let ranges = device.supported_output_configs().map_err(|e| OutputError::Stream(e.to_string()))?;
+    let ranges = device
+        .supported_output_configs()
+        .map_err(|e| OutputError::Stream(e.to_string()))?;
     let mut best: Option<cpal::SupportedStreamConfig> = None;
     for r in ranges {
         if r.min_sample_rate().0 <= rate && rate <= r.max_sample_rate().0 {
             let cfg = r.with_sample_rate(cpal::SampleRate(rate));
             let better = match &best {
                 None => true,
-                Some(b) => (cfg.channels() == want_channels) && b.channels() != want_channels || (cfg.sample_format() == cpal::SampleFormat::F32 && b.sample_format() != cpal::SampleFormat::F32),
+                Some(b) => {
+                    (cfg.channels() == want_channels) && b.channels() != want_channels
+                        || (cfg.sample_format() == cpal::SampleFormat::F32
+                            && b.sample_format() != cpal::SampleFormat::F32)
+                }
             };
             if better {
                 best = Some(cfg);
@@ -259,13 +312,21 @@ fn choose_config(device: &cpal::Device, rate: Option<u32>) -> Result<cpal::Suppo
     best.ok_or(OutputError::UnsupportedRate(rate))
 }
 
-fn open_cpal(config: &OutputConfig, ring: Arc<OutputRing>, on_error: impl Fn(String) + Send + 'static) -> Result<OutputStream, OutputError> {
+fn open_cpal(
+    config: &OutputConfig,
+    ring: Arc<OutputRing>,
+    on_error: impl Fn(String) + Send + Sync + 'static,
+) -> Result<OutputStream, OutputError> {
     let host = cpal::default_host();
     let device = find_device(&host, config.device_id.as_deref())?;
     let supported = choose_config(&device, config.sample_rate)?;
     let rate = supported.sample_rate().0;
     let channels = usize::from(supported.channels());
-    let stream_config = cpal::StreamConfig { channels: supported.channels(), sample_rate: supported.sample_rate(), buffer_size: cpal::BufferSize::Default };
+    let stream_config = cpal::StreamConfig {
+        channels: supported.channels(),
+        sample_rate: supported.sample_rate(),
+        buffer_size: cpal::BufferSize::Default,
+    };
     let on_error = Arc::new(on_error);
     let err_cb = {
         let on_error = on_error.clone();
@@ -309,13 +370,25 @@ fn open_cpal(config: &OutputConfig, ring: Arc<OutputRing>, on_error: impl Fn(Str
         }
         _ => {
             let r = ring.clone();
-            device.build_output_stream::<f32, _, _>(&stream_config, move |data, _| r.drain_into(data, channels), err_cb, None)
+            device.build_output_stream::<f32, _, _>(
+                &stream_config,
+                move |data, _| r.drain_into(data, channels),
+                err_cb,
+                None,
+            )
         }
     }
     .map_err(|e| OutputError::Stream(e.to_string()))?;
-    stream.play().map_err(|e| OutputError::Stream(e.to_string()))?;
+    stream
+        .play()
+        .map_err(|e| OutputError::Stream(e.to_string()))?;
     tracing::info!(target: "hocket::audio::output", rate, channels, device = ?config.device_id, "output stream open");
-    Ok(OutputStream::Cpal { stream, rate, channels, device_id: config.device_id.clone() })
+    Ok(OutputStream::Cpal {
+        stream,
+        rate,
+        channels,
+        device_id: config.device_id.clone(),
+    })
 }
 
 /// Polls the device list and calls `on_change` with the new list when it
@@ -328,7 +401,11 @@ pub struct DeviceWatcher {
 }
 
 impl DeviceWatcher {
-    pub fn start(interval: Duration, initial: Vec<OutputDevice>, on_change: impl Fn(Vec<OutputDevice>) + Send + 'static) -> Self {
+    pub fn start(
+        interval: Duration,
+        initial: Vec<OutputDevice>,
+        on_change: impl Fn(Vec<OutputDevice>) + Send + 'static,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let devices = Arc::new(Mutex::new(initial));
         let s2 = stop.clone();
@@ -357,7 +434,11 @@ impl DeviceWatcher {
                 }
             })
             .ok();
-        Self { stop, thread, devices }
+        Self {
+            stop,
+            thread,
+            devices,
+        }
     }
 
     /// Force a refresh now (`Command::RefreshOutputDevices`).
@@ -414,7 +495,17 @@ mod tests {
         let out = open_output(&OutputConfig::default(), ring, |_| {}).expect("fallback");
         assert!(out.rate() > 0 && out.channels() > 0);
         let _ = probe_format(&OutputConfig::default()).unwrap();
-        assert!(matches!(open_output(&OutputConfig { device_id: Some("no such device".into()), ..Default::default() }, OutputRing::new(16, 2), |_| {}), Err(OutputError::UnknownDevice(_)) | Ok(_)));
+        assert!(matches!(
+            open_output(
+                &OutputConfig {
+                    device_id: Some("no such device".into()),
+                    ..Default::default()
+                },
+                OutputRing::new(16, 2),
+                |_| {}
+            ),
+            Err(OutputError::UnknownDevice(_)) | Ok(_)
+        ));
     }
 
     #[test]

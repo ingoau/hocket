@@ -34,7 +34,7 @@ use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::session_adapter::RealReducer;
 use crate::connect::wire::{scope_key, TransportCommand};
 use crate::connect::{same_session_state, SessionOp};
-use crate::sim::clock::{DeviceClock, SimTime};
+use crate::sim::clock::{to_micros, DeviceClock, SimTime};
 use crate::sim::device::{DeviceEffect, Library, Persisted, SimDevice};
 use crate::sim::network::{Conditions, NetEvent, Network};
 
@@ -207,7 +207,7 @@ impl World {
 
     pub fn schedule(&mut self, at: EpochMs, action: Action) {
         self.schedule_seq += 1;
-        self.schedule.insert(((at * 1000.0) as i64, self.schedule_seq), action);
+        self.schedule.insert((to_micros(at), self.schedule_seq), action);
     }
 
     pub fn schedule_in(&mut self, delay_ms: f64, action: Action) {
@@ -237,8 +237,19 @@ impl World {
     /// Run until `until` (virtual ms), processing everything in order and
     /// checking invariants after every step.
     pub fn run_until(&mut self, until: EpochMs) {
+        let trace = std::env::var("HOCKET_SIM_TRACE").is_ok();
         loop {
             let next = self.next_event_at();
+            if trace {
+                eprintln!(
+                    "TRACE now={:.0} next={:.0} inflight={} links={} events={}",
+                    self.now(),
+                    next,
+                    self.net.in_flight(),
+                    self.net.link_count(),
+                    self.events
+                );
+            }
             if next > until || next == f64::MAX {
                 self.time.set(until);
                 self.step();
@@ -257,7 +268,7 @@ impl World {
     fn step(&mut self) {
         let now = self.now();
         // scheduled actions
-        let due: Vec<(i64, u64)> = self.schedule.range(..=((now * 1000.0) as i64, u64::MAX)).map(|(k, _)| *k).collect();
+        let due: Vec<(i64, u64)> = self.schedule.range(..=(to_micros(now), u64::MAX)).map(|(k, _)| *k).collect();
         for k in due {
             if let Some(a) = self.schedule.remove(&k) {
                 self.perform(a);

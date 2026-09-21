@@ -6,7 +6,9 @@
 //! interleaved frames again. [`Resampler::flush`] pads the last partial chunk
 //! so the tail of a track isn't lost at a transition.
 
-use rubato::{Resampler as _, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use rubato::{
+    Resampler as _, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 /// Input chunk in frames.
 pub const CHUNK_FRAMES: usize = 1024;
@@ -25,11 +27,23 @@ pub struct Resampler {
     out_planar: Vec<Vec<f32>>,
     /// Frames of input accepted but not yet produced as output (latency).
     latency_in_frames: usize,
+    /// Output frames of filter delay still to drop at the start of a run.
+    delay_to_skip: usize,
+    /// Filter delay in output frames (what a flush has to produce).
+    delay_out: usize,
+    /// Input frames accepted and output frames emitted since the last
+    /// reset, so a flush can emit exactly `round(in × ratio)` in total.
+    in_frames: u64,
+    out_frames: u64,
 }
 
 impl std::fmt::Debug for Resampler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Resampler").field("in_rate", &self.in_rate).field("out_rate", &self.out_rate).field("channels", &self.channels).finish()
+        f.debug_struct("Resampler")
+            .field("in_rate", &self.in_rate)
+            .field("out_rate", &self.out_rate)
+            .field("channels", &self.channels)
+            .finish()
     }
 }
 
@@ -44,8 +58,10 @@ impl Resampler {
             window: WindowFunction::BlackmanHarris2,
         };
         let ratio = f64::from(out_rate) / f64::from(in_rate);
-        let inner = SincFixedIn::<f32>::new(ratio, 1.0, params, CHUNK_FRAMES, channels).map_err(|e| ResampleError(e.to_string()))?;
+        let inner = SincFixedIn::<f32>::new(ratio, 1.0, params, CHUNK_FRAMES, channels)
+            .map_err(|e| ResampleError(e.to_string()))?;
         let out_planar = inner.output_buffer_allocate(true);
+        let delay_out = inner.output_delay();
         Ok(Self {
             inner,
             channels,
@@ -55,6 +71,10 @@ impl Resampler {
             pending_frames: 0,
             out_planar,
             latency_in_frames: 0,
+            delay_to_skip: delay_out,
+            delay_out,
+            in_frames: 0,
+            out_frames: 0,
         })
     }
 
@@ -75,16 +95,24 @@ impl Resampler {
         }
         self.pending_frames = 0;
         self.latency_in_frames = 0;
+        self.delay_to_skip = self.delay_out;
+        self.in_frames = 0;
+        self.out_frames = 0;
     }
 
     /// Feed interleaved frames; converted interleaved frames are appended to
     /// `out`.
-    pub fn process(&mut self, interleaved: &[f32], out: &mut Vec<f32>) -> Result<(), ResampleError> {
+    pub fn process(
+        &mut self,
+        interleaved: &[f32],
+        out: &mut Vec<f32>,
+    ) -> Result<(), ResampleError> {
         for frame in interleaved.chunks_exact(self.channels) {
             for (ch, s) in frame.iter().enumerate() {
                 self.pending[ch].push(*s);
             }
             self.pending_frames += 1;
+            self.in_frames += 1;
             if self.pending_frames == CHUNK_FRAMES {
                 self.run_chunk(out)?;
             }
@@ -93,11 +121,12 @@ impl Resampler {
     }
 
     fn run_chunk(&mut self, out: &mut Vec<f32>) -> Result<(), ResampleError> {
-        let (used, produced) =
-            self.inner.process_into_buffer(&self.pending, &mut self.out_planar, None).map_err(|e| ResampleError(e.to_string()))?;
+        let (used, produced) = self
+            .inner
+            .process_into_buffer(&self.pending, &mut self.out_planar, None)
+            .map_err(|e| ResampleError(e.to_string()))?;
         debug_assert_eq!(used, CHUNK_FRAMES);
-        // The sinc filter delays output by about half its length.
-        self.latency_in_frames = 64;
+        self.latency_in_frames = (self.delay_out as f64 / self.ratio()) as usize;
         self.interleave(produced, out);
         for p in &mut self.pending {
             p.clear();
@@ -106,33 +135,52 @@ impl Resampler {
         Ok(())
     }
 
-    fn interleave(&self, frames: usize, out: &mut Vec<f32>) {
-        out.reserve(frames * self.channels);
-        for i in 0..frames {
+    /// Append `frames` converted frames, dropping the filter's start-up
+    /// delay first so the output lines up with the input sample for sample.
+    fn interleave(&mut self, frames: usize, out: &mut Vec<f32>) {
+        let skip = self.delay_to_skip.min(frames);
+        self.delay_to_skip -= skip;
+        self.out_frames += (frames - skip) as u64;
+        out.reserve((frames - skip) * self.channels);
+        for i in skip..frames {
             for ch in 0..self.channels {
                 out.push(self.out_planar[ch][i]);
             }
         }
     }
 
-    /// Convert whatever is pending (zero-padded) and drain the filter.
+    /// Convert whatever is pending (zero-padded) and drain the filter,
+    /// emitting exactly the output that corresponds to real input (the
+    /// padding chunk's tail is dropped) so a track's length is preserved
+    /// across the transition.
     pub fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), ResampleError> {
+        let target = (self.in_frames as f64 * self.ratio()).round() as u64;
+        let mut remaining = target.saturating_sub(self.out_frames) as usize;
         if self.pending_frames > 0 {
             let (_, produced) = self
                 .inner
                 .process_partial_into_buffer(Some(&self.pending), &mut self.out_planar, None)
                 .map_err(|e| ResampleError(e.to_string()))?;
-            self.interleave(produced, out);
+            let keep = produced.min(remaining);
+            self.interleave(keep, out);
+            remaining -= keep;
             for p in &mut self.pending {
                 p.clear();
             }
             self.pending_frames = 0;
         }
-        let (_, produced) = self
-            .inner
-            .process_partial_into_buffer(None::<&[Vec<f32>]>, &mut self.out_planar, None)
-            .map_err(|e| ResampleError(e.to_string()))?;
-        self.interleave(produced, out);
+        while remaining > 0 {
+            let (_, produced) = self
+                .inner
+                .process_partial_into_buffer(None::<&[Vec<f32>]>, &mut self.out_planar, None)
+                .map_err(|e| ResampleError(e.to_string()))?;
+            if produced == 0 {
+                break;
+            }
+            let keep = produced.min(remaining);
+            self.interleave(keep, out);
+            remaining -= keep;
+        }
         self.latency_in_frames = 0;
         Ok(())
     }
@@ -159,9 +207,21 @@ pub fn remap_channels(input: &[f32], in_ch: usize, out_ch: usize, out: &mut Vec<
             (2, 1) => out.push((frame[0] + frame[1]) * 0.5),
             (i, 2) if i >= 3 => {
                 // L R C (LFE) Ls Rs ...: fold centre and surrounds.
-                let c = if i >= 3 { frame[2] * std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 };
-                let ls = if i >= 5 { frame[i - 2] * std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 };
-                let rs = if i >= 6 { frame[i - 1] * std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 };
+                let c = if i >= 3 {
+                    frame[2] * std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    0.0
+                };
+                let ls = if i >= 5 {
+                    frame[i - 2] * std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    0.0
+                };
+                let rs = if i >= 6 {
+                    frame[i - 1] * std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    0.0
+                };
                 out.push(frame[0] + c + ls);
                 out.push(frame[1] + c + rs);
             }
@@ -184,10 +244,12 @@ mod tests {
     use std::f64::consts::PI;
 
     fn sine(freq: f64, rate: u32, frames: usize) -> Vec<f32> {
-        (0..frames).flat_map(|i| {
-            let s = (2.0 * PI * freq * i as f64 / f64::from(rate)).sin() as f32;
-            [s, s]
-        }).collect()
+        (0..frames)
+            .flat_map(|i| {
+                let s = (2.0 * PI * freq * i as f64 / f64::from(rate)).sin() as f32;
+                [s, s]
+            })
+            .collect()
     }
 
     #[test]
@@ -198,10 +260,19 @@ mod tests {
         r.process(&input, &mut out).unwrap();
         r.flush(&mut out).unwrap();
         let frames = out.len() / 2;
-        assert!((frames as i64 - 48_000).abs() < 300, "{frames}");
+        assert_eq!(frames, 48_000, "exactly round(in × ratio) frames");
+        // Alignment: the first output frames are signal, not filter delay.
+        let head_energy: f32 = out[..2 * 96].iter().map(|v| v * v).sum();
+        assert!(head_energy > 0.5, "{head_energy}");
         // Zero crossings of the middle second-half: 1 kHz → ~2000 crossings per second.
         let mid = &out[2 * 10_000..2 * 40_000];
-        let crossings = mid.chunks_exact(2).map(|f| f[0]).collect::<Vec<_>>().windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+        let crossings = mid
+            .chunks_exact(2)
+            .map(|f| f[0])
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
         let seconds = 30_000.0 / 48_000.0;
         let est = crossings as f64 / seconds / 2.0;
         assert!((est - 1000.0).abs() < 15.0, "{est}");

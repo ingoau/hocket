@@ -326,6 +326,7 @@ pub struct Engine {
     room: Room,
     listener_port: Option<u16>,
     listener_wanted: bool,
+    started: bool,
     inbound: Vec<PeerId>,
 
     doc: SessionDocument,
@@ -412,6 +413,7 @@ impl Engine {
             room,
             listener_port: None,
             listener_wanted: false,
+            started: false,
             inbound: vec![],
             confirmed: document.clone(),
             doc: document,
@@ -1931,6 +1933,11 @@ impl Engine {
 
     fn on_tick(&mut self) {
         let now = self.now_local_ms();
+        if !self.started {
+            // First tick: pick a tier (start the listener, connect the coordinator).
+            self.started = true;
+            self.reevaluate();
+        }
 
         // Own room timers (lease lapse for inbound peers, member timeouts).
         let outs = self.room.handle(RoomInput::Tick);

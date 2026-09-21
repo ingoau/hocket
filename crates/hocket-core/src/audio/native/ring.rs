@@ -25,7 +25,12 @@ impl SpscRing {
     pub fn new(min_capacity: usize) -> Self {
         let cap = (min_capacity + 1).next_power_of_two().max(2);
         let buf: Vec<UnsafeCell<f32>> = (0..cap).map(|_| UnsafeCell::new(0.0)).collect();
-        Self { buf: buf.into_boxed_slice(), mask: cap - 1, head: AtomicUsize::new(0), tail: AtomicUsize::new(0) }
+        Self {
+            buf: buf.into_boxed_slice(),
+            mask: cap - 1,
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+        }
     }
 
     /// Usable capacity in samples.
@@ -58,7 +63,8 @@ impl SpscRing {
             // SAFETY: slot is in the producer-owned region (see impl comment).
             unsafe { *self.buf[idx].get() = s };
         }
-        self.tail.store(tail.wrapping_add(n) & self.mask, Ordering::Release);
+        self.tail
+            .store(tail.wrapping_add(n) & self.mask, Ordering::Release);
         n
     }
 
@@ -73,7 +79,8 @@ impl SpscRing {
             // SAFETY: slot is in the consumer-owned region (see impl comment).
             *o = unsafe { *self.buf[idx].get() };
         }
-        self.head.store(head.wrapping_add(n) & self.mask, Ordering::Release);
+        self.head
+            .store(head.wrapping_add(n) & self.mask, Ordering::Release);
         n
     }
 

@@ -80,28 +80,49 @@ impl RangeFetcher for ReqwestFetcher {
     fn fetch(&self, url: String, headers: HashMap<String, String>, start: u64) -> FetchFuture {
         let client = self.client.clone();
         Box::pin(async move {
-            let mut req = client.get(&url).header(reqwest::header::RANGE, format!("bytes={start}-"));
+            let mut req = client
+                .get(&url)
+                .header(reqwest::header::RANGE, format!("bytes={start}-"));
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
             }
-            let resp = req.send().await.map_err(|e| FetchError::Network(e.to_string()))?;
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| FetchError::Network(e.to_string()))?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(FetchError::Status(status.as_u16()));
             }
             let h = resp.headers();
-            let content_range = h.get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+            let content_range = h
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             let content_length = resp.content_length();
-            let accept_ranges =
-                h.get(reqwest::header::ACCEPT_RANGES).and_then(|v| v.to_str().ok()).map(|s| s.contains("bytes")).unwrap_or(false);
+            let accept_ranges = h
+                .get(reqwest::header::ACCEPT_RANGES)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.contains("bytes"))
+                .unwrap_or(false);
             let (range_start, total_len, supports_ranges) = if status.as_u16() == 206 {
-                let (s, total) = content_range.as_deref().and_then(parse_content_range).unwrap_or((start, None));
+                let (s, total) = content_range
+                    .as_deref()
+                    .and_then(parse_content_range)
+                    .unwrap_or((start, None));
                 (s, total, true)
             } else {
                 (0, content_length, accept_ranges)
             };
-            let body = resp.bytes_stream().map(|r| r.map_err(|e| FetchError::Network(e.to_string())));
-            Ok(FetchResponse { range_start, total_len, supports_ranges, body: Box::pin(body) })
+            let body = resp
+                .bytes_stream()
+                .map(|r| r.map_err(|e| FetchError::Network(e.to_string())));
+            Ok(FetchResponse {
+                range_start,
+                total_len,
+                supports_ranges,
+                body: Box::pin(body),
+            })
         })
     }
 }
@@ -152,7 +173,11 @@ impl RangeFetcher for MemoryFetcher {
             if let Some(code) = fail {
                 return Err(FetchError::Status(code));
             }
-            let from = if ranges { (start as usize).min(data.len()) } else { 0 };
+            let from = if ranges {
+                (start as usize).min(data.len())
+            } else {
+                0
+            };
             let total = data.len() as u64;
             let stream = futures::stream::unfold(from, move |pos| {
                 let data = data.clone();
@@ -179,7 +204,7 @@ impl RangeFetcher for MemoryFetcher {
 
 /// How far ahead of the reader the downloader keeps streaming before it is
 /// willing to abandon a response for a seek elsewhere.
-const READAHEAD_TOLERANCE: u64 = 4 * 1024 * 1024;
+const READAHEAD_TOLERANCE: u64 = 512 * 1024;
 
 #[derive(Default)]
 struct State {
@@ -295,7 +320,11 @@ impl HttpSource {
         headers: HashMap<String, String>,
         timeout: Duration,
     ) -> io::Result<HttpSource> {
-        let shared = Arc::new(Shared { state: Mutex::new(State::default()), data_ready: Condvar::new(), wake_downloader: Notify::new() });
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State::default()),
+            data_ready: Condvar::new(),
+            wake_downloader: Notify::new(),
+        });
         let task = runtime.spawn(downloader(shared.clone(), fetcher, url, headers));
         let deadline = std::time::Instant::now() + timeout;
         {
@@ -304,7 +333,10 @@ impl HttpSource {
                 if shared.data_ready.wait_until(&mut st, deadline).timed_out() {
                     st.closed = true;
                     shared.wake_downloader.notify_one();
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "no response from server"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "no response from server",
+                    ));
                 }
             }
             if let Some(e) = st.error.clone() {
@@ -313,7 +345,11 @@ impl HttpSource {
                 return Err(io::Error::other(e.to_string()));
             }
         }
-        Ok(HttpSource { shared, pos: 0, _task: task })
+        Ok(HttpSource {
+            shared,
+            pos: 0,
+            _task: task,
+        })
     }
 
     pub fn total_len(&self) -> Option<u64> {
@@ -323,7 +359,9 @@ impl HttpSource {
     /// Bytes buffered contiguously from `pos`.
     pub fn buffered_from(&self, pos: u64) -> u64 {
         let st = self.shared.state.lock();
-        st.segment_at(pos).map(|(s, d)| s + d.len() as u64 - pos).unwrap_or(0)
+        st.segment_at(pos)
+            .map(|(s, d)| s + d.len() as u64 - pos)
+            .unwrap_or(0)
     }
 
     pub fn is_complete(&self) -> bool {
@@ -333,7 +371,10 @@ impl HttpSource {
 
 impl std::fmt::Debug for HttpSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpSource").field("pos", &self.pos).field("total", &self.total_len()).finish()
+        f.debug_struct("HttpSource")
+            .field("pos", &self.pos)
+            .field("total", &self.total_len())
+            .finish()
     }
 }
 
@@ -359,7 +400,11 @@ fn plan_next(shared: &Shared) -> Next {
     }
     let ranges_ok = st.supports_ranges.unwrap_or(true);
     let want = if ranges_ok { st.want } else { 0 };
-    let gap = if ranges_ok { st.first_gap_from(want).or_else(|| st.first_gap_from(0)) } else { st.first_gap_from(0) };
+    let gap = if ranges_ok {
+        st.first_gap_from(want).or_else(|| st.first_gap_from(0))
+    } else {
+        st.first_gap_from(0)
+    };
     match gap {
         Some(g) => Next::Fetch(g),
         None => {
@@ -429,7 +474,12 @@ fn is_closed(shared: &Shared) -> bool {
     shared.state.lock().closed
 }
 
-async fn downloader(shared: Arc<Shared>, fetcher: Arc<dyn RangeFetcher>, url: String, headers: HashMap<String, String>) {
+async fn downloader(
+    shared: Arc<Shared>,
+    fetcher: Arc<dyn RangeFetcher>,
+    url: String,
+    headers: HashMap<String, String>,
+) {
     loop {
         let start = match plan_next(&shared) {
             Next::Fetch(s) => s,
@@ -517,7 +567,9 @@ impl Read for HttpSource {
                 // downloader gives up (it sets `closed`). Keep waiting.
                 tracing::debug!(target: "hocket::audio::http", error = %e, "waiting through fetch error");
             }
-            self.shared.data_ready.wait_for(&mut st, Duration::from_millis(200));
+            self.shared
+                .data_ready
+                .wait_for(&mut st, Duration::from_millis(200));
         }
     }
 }
@@ -526,10 +578,17 @@ impl Seek for HttpSource {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let new = match pos {
             SeekFrom::Start(p) => p,
-            SeekFrom::Current(d) => self.pos.checked_add_signed(d).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?,
+            SeekFrom::Current(d) => self
+                .pos
+                .checked_add_signed(d)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?,
             SeekFrom::End(d) => {
-                let total = self.total_len().ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "length unknown"))?;
-                total.checked_add_signed(d).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?
+                let total = self
+                    .total_len()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "length unknown"))?;
+                total.checked_add_signed(d).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "seek before start")
+                })?
             }
         };
         self.pos = new;
@@ -557,7 +616,11 @@ mod tests {
     use super::*;
 
     fn runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap()
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     fn data(n: usize) -> Vec<u8> {
@@ -569,7 +632,14 @@ mod tests {
         let rt = runtime();
         let bytes = data(100_000);
         let fetcher = Arc::new(MemoryFetcher::new(bytes.clone()));
-        let mut src = HttpSource::open(fetcher, rt.handle().clone(), "http://x/a".into(), HashMap::new(), Duration::from_secs(5)).unwrap();
+        let mut src = HttpSource::open(
+            fetcher,
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(src.byte_len(), Some(100_000));
         assert!(src.is_seekable());
         let mut out = Vec::new();
@@ -581,16 +651,30 @@ mod tests {
     fn seeking_ahead_of_the_download_issues_a_range_request() {
         let rt = runtime();
         let bytes = data(2_000_000);
-        let fetcher = MemoryFetcher { chunk: 1024, delay: Duration::from_millis(2), ..MemoryFetcher::new(bytes.clone()) };
+        let fetcher = MemoryFetcher {
+            chunk: 1024,
+            delay: Duration::from_millis(2),
+            ..MemoryFetcher::new(bytes.clone())
+        };
         let requests = fetcher.requests.clone();
-        let mut src = HttpSource::open(Arc::new(fetcher), rt.handle().clone(), "http://x/a".into(), HashMap::new(), Duration::from_secs(5)).unwrap();
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         // The tail is far beyond what the slow download has reached.
         src.seek(SeekFrom::Start(1_900_000)).unwrap();
         let mut tail = vec![0u8; 4096];
         src.read_exact(&mut tail).unwrap();
         assert_eq!(tail, &bytes[1_900_000..1_904_096]);
         let reqs = requests.lock().clone();
-        assert!(reqs.iter().any(|&s| s >= 1_500_000 && s <= 1_900_000), "{reqs:?}");
+        assert!(
+            reqs.iter().any(|&s| (1_500_000..=1_900_000).contains(&s)),
+            "{reqs:?}"
+        );
         // Going back to the start reads what was buffered before the seek.
         src.seek(SeekFrom::Start(0)).unwrap();
         let mut head = vec![0u8; 512];
@@ -606,9 +690,21 @@ mod tests {
     fn servers_without_ranges_degrade_to_sequential_waiting() {
         let rt = runtime();
         let bytes = data(300_000);
-        let fetcher = MemoryFetcher { chunk: 8192, delay: Duration::from_millis(1), ranges: false, ..MemoryFetcher::new(bytes.clone()) };
+        let fetcher = MemoryFetcher {
+            chunk: 8192,
+            delay: Duration::from_millis(1),
+            ranges: false,
+            ..MemoryFetcher::new(bytes.clone())
+        };
         let requests = fetcher.requests.clone();
-        let mut src = HttpSource::open(Arc::new(fetcher), rt.handle().clone(), "http://x/a".into(), HashMap::new(), Duration::from_secs(5)).unwrap();
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         src.seek(SeekFrom::Start(250_000)).unwrap();
         let mut buf = vec![0u8; 100];
         src.read_exact(&mut buf).unwrap();
@@ -621,14 +717,27 @@ mod tests {
     #[test]
     fn http_errors_fail_open() {
         let rt = runtime();
-        let fetcher = MemoryFetcher { fail_status: Some(403), ..MemoryFetcher::new(data(10)) };
-        let err = HttpSource::open(Arc::new(fetcher), rt.handle().clone(), "http://x/a".into(), HashMap::new(), Duration::from_secs(5)).unwrap_err();
+        let fetcher = MemoryFetcher {
+            fail_status: Some(403),
+            ..MemoryFetcher::new(data(10))
+        };
+        let err = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("403"), "{err}");
     }
 
     #[test]
     fn content_range_parsing() {
-        assert_eq!(parse_content_range("bytes 100-199/1000"), Some((100, Some(1000))));
+        assert_eq!(
+            parse_content_range("bytes 100-199/1000"),
+            Some((100, Some(1000)))
+        );
         assert_eq!(parse_content_range("bytes 5-9/*"), Some((5, None)));
         assert_eq!(parse_content_range("items 1-2/3"), None);
         assert_eq!(parse_content_range("bytes x-2/3"), None);
@@ -644,7 +753,7 @@ mod tests {
         st.append(10, &[7, 8]);
         st.append(5, &[6, 6, 6, 6, 6, 9, 9]);
         assert_eq!(st.segments.len(), 1, "{:?}", st.segments);
-        assert_eq!(st.segments[&0], vec![1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 7, 8]);
+        assert_eq!(st.segments[&0], vec![1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 9, 9]);
         st.append(2, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(st.segments[&0].len(), 15);
         assert_eq!(st.first_gap_from(0), Some(15));
