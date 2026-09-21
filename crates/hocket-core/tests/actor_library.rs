@@ -498,7 +498,7 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
         clock.clone(),
         TestOptions {
             backend,
-            api: Arc::new(server.clone()),
+            api: Some(Arc::new(server.clone())),
             server_url: "https://music.example/".into(),
             password: "pw".into(),
             net: None,

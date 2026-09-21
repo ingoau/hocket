@@ -130,6 +130,8 @@ pub(crate) struct Actor {
     pub lyrics_http: Option<Arc<dyn crate::lyrics::LyricsHttp>>,
 
     pub server: Option<ServerState>,
+    /// Servers added but not yet verified by a probe.
+    pub pending_servers: HashMap<ServerId, super::PendingServer>,
     pub engine: Option<Engine>,
     pub scope: Option<String>,
     pub queued_inputs: VecDeque<Input>,
@@ -153,6 +155,8 @@ pub(crate) struct Actor {
     pub picker_open: bool,
     pub picker_targets: Vec<DeviceInfo>,
     pub media_art: Option<(String, u32, Option<String>)>,
+    /// Track the last lyrics fetch was announced for (now-playing changes).
+    pub lyrics_for: Option<TrackId>,
     pub media_art_pending: Option<(String, u32)>,
     pub log_ring: VecDeque<String>,
 
@@ -302,6 +306,7 @@ impl Actor {
             discovery: None,
             lyrics_http: deps.lyrics_http,
             server: None,
+            pending_servers: HashMap::new(),
             engine: None,
             scope: None,
             queued_inputs: VecDeque::new(),
@@ -326,6 +331,7 @@ impl Actor {
             picker_open: false,
             picker_targets: vec![],
             media_art: None,
+            lyrics_for: None,
             media_art_pending: None,
             log_ring: VecDeque::new(),
             started: false,
@@ -439,7 +445,8 @@ impl Actor {
                 server_id,
                 track_id,
                 lyrics,
-            } => self.on_lyrics_fetched(server_id, track_id, lyrics),
+                announce,
+            } => self.on_lyrics_fetched(server_id, track_id, lyrics, announce),
             Internal::Artwork { id, size, path } => self.on_artwork(id, size, path),
             Internal::OutboxFlushed { report } => self.on_outbox_flushed(report),
             Internal::CasResult { entry_id, result } => self.on_cas_result(entry_id, result),

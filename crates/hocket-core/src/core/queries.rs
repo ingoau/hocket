@@ -221,7 +221,7 @@ impl Actor {
             return;
         };
         if let Ok(Some(p)) = self.caches.artwork_cached(&sid, &id, size) {
-            let _ = reply.send(QueryResult::Path(Some(crate::downloads::file_url(&p))));
+            let _ = reply.send(QueryResult::Path(Some(p.to_string_lossy().into_owned())));
             return;
         }
         let Some(api) = self.api() else {
@@ -235,7 +235,7 @@ impl Actor {
                 .await
                 .ok()
                 .flatten()
-                .map(|p| crate::downloads::file_url(&p));
+                .map(|p| p.to_string_lossy().into_owned());
             let _ = reply.send(QueryResult::Path(path));
         });
     }

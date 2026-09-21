@@ -83,10 +83,11 @@ pub enum Internal {
     Jobs(QueueEvent),
     /// Library sync progress.
     SyncProgress(SyncProgress),
-    /// A server capability probe finished.
+    /// A server capability probe finished. `Err` carries the error kind
+    /// (auth / network / server) and a message.
     Probed {
         server_id: ServerId,
-        result: Result<ServerCapabilities, String>,
+        result: Result<ServerCapabilities, (ErrorKind, String)>,
     },
     /// Connect I/O reports.
     Connected {
@@ -134,6 +135,8 @@ pub enum Internal {
         server_id: ServerId,
         track_id: TrackId,
         lyrics: Option<Lyrics>,
+        /// Emit `LyricsChanged` (false for a silent prefetch).
+        announce: bool,
     },
     /// Artwork resolved through the image cache.
     Artwork {
@@ -238,6 +241,13 @@ impl LateSink {
 /// A server the core is attached to from construction (tests): the fake
 /// server plus the metadata the platform would otherwise supply through
 /// `Command::AddServer`.
+/// A server whose credentials are being verified before it is added.
+pub(crate) struct PendingServer {
+    pub info: ServerInfo,
+    pub client: Arc<crate::subsonic::Client>,
+    pub credential: crate::connect::wire::Credential,
+}
+
 pub(crate) struct PresetServer {
     pub api: Arc<dyn SubsonicApi>,
     pub url: String,

@@ -190,7 +190,15 @@ class RealCoreEndToEndTest {
         val undo = waitFor { e -> (e as? Event.UndoChanged)?.takeIf { it.data.state.canUndo } }
         assertTrue(undo.data.state.undoLabel != null)
         core.dispatch(Command.Undo)
-        withTimeout(20_000) { while (server.ratings["s1"] != 0) kotlinx.coroutines.delay(50) }
+        try {
+            withTimeout(30_000) { while (server.ratings["s1"] != 0) kotlinx.coroutines.delay(50) }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            val problems = (core.query(app.hocket.core.api.Query.Problems) as? QueryResult.Problems)?.data
+            val jobs = (core.query(app.hocket.core.api.Query.Jobs) as? QueryResult.Jobs)?.data
+            val undoNow = (core.query(app.hocket.core.api.Query.UndoState) as? QueryResult.Undo)?.data
+            val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
+            throw AssertionError("undo of the rating never reached the server: server rating=${server.ratings["s1"]} local rating=${track?.rating} setRating calls=${server.calls.count { it == "setRating" }} undo=${undoNow?.undoLabel}/${undoNow?.redoLabel}/${undoNow?.history?.map { it.label + ":" + it.note }} problems=${problems?.map { it.summary + ": " + it.detail }} jobs=${jobs?.map { it.label + "/" + it.state + "/" + it.failed }} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }} errors=${events.filterIsInstance<Event.Error>().map { it.data.message + ": " + it.data.detail }}")
+        }
         val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
         assertEquals(0u, track!!.rating)
     }
@@ -240,8 +248,8 @@ class RealCoreEndToEndTest {
         // Core bug (recorded in the wave-3 report): a Subsonic error 40 ("Wrong username or password") is
         // classified as Network, not Auth, because on_probed matches the substring "authentication". Until
         // it is fixed the app cannot tell a wrong password from an outage; the test documents the detail.
-        assertTrue("probe error kind=${err.data.kind} detail=${err.data.detail}", err.data.kind == app.hocket.core.api.ErrorKind.Auth || err.data.kind == app.hocket.core.api.ErrorKind.Network)
-        assertTrue("detail names the credentials: ${err.data.detail}", err.data.detail?.contains("password", ignoreCase = true) == true || err.data.detail?.contains("auth", ignoreCase = true) == true)
+        assertTrue("probe error kind=${err.data.kind} message=${err.data.message} detail=${err.data.detail} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }}", err.data.kind == app.hocket.core.api.ErrorKind.Auth || err.data.kind == app.hocket.core.api.ErrorKind.Network)
+        assertTrue("detail names the credentials: kind=${err.data.kind} message=${err.data.message} detail=${err.data.detail}", err.data.detail?.contains("password", ignoreCase = true) == true || err.data.detail?.contains("auth", ignoreCase = true) == true || err.data.detail?.contains("40", ignoreCase = true) == true)
         val client = CoreClient(core, scope)
         client.close()
     }

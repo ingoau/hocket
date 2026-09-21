@@ -916,8 +916,9 @@ impl Actor {
         }
     }
 
-    /// Artwork for the current track as a `file://` path, fetching in the
-    /// background when the cache misses.
+    /// Artwork for the current track as a plain local filesystem path (no
+    /// scheme; platforms add their own), fetching in the background when
+    /// the cache misses. Same convention as `Query::Artwork`.
     fn media_session_artwork(&mut self, queue: &QueueView) -> Option<String> {
         let cover = queue.current.as_ref()?.track.cover_art.clone()?;
         let size = self.media_art_size();
@@ -929,9 +930,9 @@ impl Actor {
         let server_id = self.server_id()?;
         match self.caches.artwork_cached(&server_id, &cover, size) {
             Ok(Some(p)) => {
-                let url = crate::downloads::file_url(&p);
-                self.media_art = Some((cover, size, Some(url.clone())));
-                Some(url)
+                let path = p.to_string_lossy().into_owned();
+                self.media_art = Some((cover, size, Some(path.clone())));
+                Some(path)
             }
             _ => {
                 self.fetch_artwork(cover, size);

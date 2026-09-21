@@ -8,7 +8,7 @@ use crate::connect::engine::Input;
 use crate::connect::wire::{scope_key, Credential as WireCredential};
 use crate::core::actor::Actor;
 use crate::core::state::ServerState;
-use crate::core::{ActorMsg, Internal, PresetServer};
+use crate::core::{ActorMsg, Internal, PendingServer, PresetServer};
 use crate::db::sync::{LibrarySync, LibrarySyncRunner, SyncCursor, SyncJobPayload};
 use crate::downloads::DownloadRunner;
 use crate::jobs::{JobSpec, RetryAction};
@@ -79,13 +79,28 @@ impl Actor {
             },
         };
         let credential = wire_credential(&url, &username, &password);
-        self.install_server(
-            info,
-            client.clone() as Arc<dyn SubsonicApi>,
-            Some(client),
-            credential,
+        // Verify first: the server is only persisted, announced and synced
+        // once the probe accepts the credentials.
+        self.pending_servers.insert(
+            id.clone(),
+            PendingServer {
+                info,
+                client: client.clone(),
+                credential,
+            },
         );
-        self.probe_server(&id);
+        self.spawn_probe(id, client);
+    }
+
+    fn spawn_probe(&mut self, server_id: ServerId, client: Arc<Client>) {
+        let tx = self.tx.clone();
+        self.spawn(async move {
+            let result = client
+                .probe()
+                .await
+                .map_err(|e| (e.kind(), e.to_string()));
+            let _ = tx.send(ActorMsg::Internal(Internal::Probed { server_id, result }));
+        });
     }
 
     /// A server supplied at construction (tests): already authenticated.
@@ -223,22 +238,41 @@ impl Actor {
             return;
         };
         s.probing = true;
-        let id = server_id.to_string();
-        let tx = self.tx.clone();
-        self.spawn(async move {
-            let result = client.probe().await.map_err(|e| e.to_string());
-            let _ = tx.send(ActorMsg::Internal(Internal::Probed {
-                server_id: id,
-                result,
-            }));
-        });
+        self.spawn_probe(server_id.to_string(), client);
     }
 
     pub(crate) fn on_probed(
         &mut self,
         server_id: ServerId,
-        result: Result<ServerCapabilities, String>,
+        result: Result<ServerCapabilities, (ErrorKind, String)>,
     ) {
+        if let Some(pending) = self.pending_servers.remove(&server_id) {
+            match result {
+                Ok(caps) => {
+                    let mut info = pending.info;
+                    info.capabilities = caps;
+                    info.reachable = true;
+                    if !info.capabilities.meets_floor {
+                        self.log(
+                            "warn",
+                            format!(
+                                "server version {:?} is below the Navidrome 0.63 floor",
+                                info.capabilities.server_version
+                            ),
+                        );
+                    }
+                    let client = pending.client;
+                    self.install_server(
+                        info,
+                        client.clone() as Arc<dyn SubsonicApi>,
+                        Some(client),
+                        pending.credential,
+                    );
+                }
+                Err((kind, e)) => self.probe_failed(kind, e),
+            }
+            return;
+        }
         let Some(s) = &mut self.server else { return };
         if s.info.id != server_id {
             return;
@@ -262,23 +296,27 @@ impl Actor {
                     );
                 }
             }
-            Err(e) => {
+            Err((kind, e)) => {
                 s.info.reachable = false;
-                self.toast(format!("Couldn't reach the server: {e}"), None);
-                let kind = if e.contains("authentication") {
-                    ErrorKind::Auth
-                } else {
-                    ErrorKind::Network
-                };
-                self.emit(Event::Error {
-                    kind,
-                    message: "server probe failed".into(),
-                    detail: Some(e),
-                });
+                self.probe_failed(kind, e);
             }
         }
         let servers = self.server_infos();
         self.emit(Event::ServersChanged { servers });
+    }
+
+    fn probe_failed(&mut self, kind: ErrorKind, detail: String) {
+        let message = match kind {
+            ErrorKind::Auth => "Wrong username or password",
+            ErrorKind::Network => "Couldn't reach the server",
+            _ => "The server refused the request",
+        };
+        self.toast(format!("{message}: {detail}"), None);
+        self.emit(Event::Error {
+            kind,
+            message: message.into(),
+            detail: Some(detail),
+        });
     }
 
     // -- jobs -----------------------------------------------------------------------

@@ -942,14 +942,61 @@ impl Actor {
 
     /// Server first; external only when opted in; everything cached.
     pub(crate) fn fetch_lyrics(&mut self, track_id: TrackId, force: bool) {
+        self.fetch_lyrics_with(track_id, force, true);
+    }
+
+    /// Warm the cache for a track without announcing it (the next item).
+    pub(crate) fn prefetch_lyrics(&mut self, track_id: TrackId) {
+        if self.battery_saver
+            && self
+                .settings
+                .get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH)
+        {
+            return;
+        }
+        let Some(sid) = self.server_id() else { return };
+        let cached = self.caches.lyrics_get_any(&sid, &track_id).ok().flatten().is_some()
+            || matches!(
+                self.caches.lyrics_get(&sid, &track_id, LyricsSource::Server),
+                Ok(Some(None))
+            );
+        if !cached {
+            self.fetch_lyrics_with(track_id, false, false);
+        }
+    }
+
+    /// Lyrics for whatever is now playing (cache → server → external),
+    /// announced through `LyricsChanged`; the derived next item is prefetched.
+    pub(crate) fn lyrics_for_now_playing(&mut self, queue: &QueueView) {
+        let current = queue.current.as_ref().map(|e| e.track.id.clone());
+        if current == self.lyrics_for {
+            return;
+        }
+        self.lyrics_for = current.clone();
+        let Some(id) = current else { return };
+        self.fetch_lyrics(id, false);
+        if let Some(next) = queue
+            .playing_next
+            .iter()
+            .chain(queue.upcoming.iter())
+            .find(|e| !e.item.unavailable)
+        {
+            let next_id = next.track.id.clone();
+            self.prefetch_lyrics(next_id);
+        }
+    }
+
+    fn fetch_lyrics_with(&mut self, track_id: TrackId, force: bool, announce: bool) {
         let Some(sid) = self.server_id() else { return };
         let Some(api) = self.api() else { return };
         if !force {
             if let Some(l) = self.cached_lyrics(&track_id) {
-                self.emit(Event::LyricsChanged {
-                    track_id,
-                    lyrics: Some(l),
-                });
+                if announce {
+                    self.emit(Event::LyricsChanged {
+                        track_id,
+                        lyrics: Some(l),
+                    });
+                }
                 return;
             }
         }
@@ -1034,6 +1081,7 @@ impl Actor {
                 server_id: sid,
                 track_id,
                 lyrics: found,
+                announce,
             }));
         });
     }
@@ -1043,7 +1091,11 @@ impl Actor {
         _server_id: ServerId,
         track_id: TrackId,
         lyrics: Option<Lyrics>,
+        announce: bool,
     ) {
+        if !announce {
+            return;
+        }
         let lyrics = lyrics.map(|mut l| {
             crate::lyrics::set_user_offset(&mut l, self.lyrics_offset(&track_id));
             l

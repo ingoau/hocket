@@ -18,6 +18,12 @@
 //! - Additive changes only once shipped: new fields are `Option` or have
 //!   `#[serde(default)]`, and unknown fields are preserved by the document
 //!   types that carry `extra` (older devices must round-trip newer state).
+//! - `Option` fields serialise as `null`, never as an absent key (serde's
+//!   default, and nothing here uses `skip_serializing_if` on an `Option`).
+//!   TypeScript consumers should test `== null`, not `in` / `undefined`.
+//! - Local paths (`MediaSessionMetadata::artwork_path`, `QueryResult::Path`)
+//!   are plain filesystem paths without a scheme; `MediaSource::url` is the
+//!   one place a `file://` URL travels.
 //!
 //! The core is an actor: [`Command`]s in, [`Event`]s out, [`Query`]s are async
 //! request/response and never expose interior state synchronously.

@@ -523,6 +523,7 @@ impl Actor {
         self.emit(Event::NowPlayingChanged {
             entry: queue.current.clone(),
         });
+        self.lyrics_for_now_playing(&queue);
         self.emit(Event::QueueChanged { queue });
         self.emit_media_session();
     }

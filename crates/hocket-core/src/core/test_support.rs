@@ -57,7 +57,8 @@ impl TestBackend {
 /// Everything a test can inject.
 pub struct TestOptions {
     pub backend: TestBackend,
-    pub api: Arc<dyn SubsonicApi>,
+    /// `None` starts with no server (the platform adds one with `AddServer`).
+    pub api: Option<Arc<dyn SubsonicApi>>,
     /// Server metadata (the platform would pass these with `AddServer`).
     pub server_url: String,
     pub password: String,
@@ -84,7 +85,7 @@ impl Core {
             clock,
             TestOptions {
                 backend,
-                api,
+                api: Some(api),
                 server_url: "https://music.example/".into(),
                 password: "secret".into(),
                 net: None,
@@ -103,7 +104,15 @@ impl Core {
             Some(net) => net.io(&config.device_id, true),
             None => Arc::new(NoNet),
         };
-        let username = opts.api.username().unwrap_or_else(|| "user".into());
+        let server = opts.api.map(|api| {
+            let username = api.username().unwrap_or_else(|| "user".into());
+            PresetServer {
+                api,
+                url: opts.server_url,
+                username,
+                password: opts.password,
+            }
+        });
         let deps = Deps {
             clock,
             backend: BackendChoice::Provided {
@@ -114,12 +123,7 @@ impl Core {
             io,
             storage: Arc::new(crate::downloads::UnknownStorage),
             lyrics_http: opts.lyrics_http,
-            server: Some(PresetServer {
-                api: opts.api,
-                url: opts.server_url,
-                username,
-                password: opts.password,
-            }),
+            server,
             seed: Some(opts.seed),
             manual_tick: true,
         };
@@ -245,7 +249,7 @@ impl TestCore {
             clock.clone(),
             TestOptions {
                 backend,
-                api: Arc::new(server.clone()),
+                api: Some(Arc::new(server.clone())),
                 server_url: "https://music.example/".into(),
                 password: "secret".into(),
                 net,
