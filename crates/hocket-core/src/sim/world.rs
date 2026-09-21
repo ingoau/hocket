@@ -1011,9 +1011,10 @@ impl World {
         for d in &self.devices {
             if !d.outbox.is_empty() && !d.asleep {
                 self.violations.push(format!(
-                    "[{now:.0}] {} has {} scrobbles without a verdict",
+                    "[{now:.0}] {} has {} scrobbles without a verdict; engine {:?}",
                     d.id,
-                    d.outbox.len()
+                    d.outbox.len(),
+                    d.engine
                 ));
             }
         }
@@ -1062,6 +1063,15 @@ impl World {
             msg.push_str("actions:\n");
             for (t, a) in &self.actions_run {
                 msg.push_str(&format!("  [{t:.0}] {a:?}\n"));
+            }
+            msg.push_str("engines at the end:\n");
+            for d in &self.devices {
+                msg.push_str(&format!(
+                    "  {:?} asleep={} links={}\n",
+                    d.engine,
+                    d.asleep,
+                    self.net.link_count()
+                ));
             }
             for d in &self.devices {
                 for l in &d.log {

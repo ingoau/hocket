@@ -463,16 +463,8 @@ fn lossy_and_reordering_network_still_converges() {
 
 /// Seeds with an open bug, excluded from the batches so the harness stays a
 /// gate for everything else. Reproduce one with `random_single_seed_from_env`.
-///
-/// - 266 (coordinator): a device that crashed while a resume/handoff chain was
-///   in flight submits a scrobble the coordinator's dedupe log already held for
-///   another device; the second submission comes through the restarted
-///   outbox. Suspected: the outbox retry runs before the fresh engine has
-///   learned the replica's dedupe log.
-/// - 1043 (LAN): after a leadership change a client ends one revision behind
-///   the leader's room with nothing in flight; suspected a commit sent on the
-///   old leader's socket right as the election moved.
-const KNOWN_FAILING: &[u64] = &[266, 1043];
+/// Empty at the moment; keep it that way.
+const KNOWN_FAILING: &[u64] = &[];
 
 fn run_seeds(range: std::ops::Range<u64>, topology: Topology, actions: usize) {
     for seed in range {
@@ -515,7 +507,8 @@ fn random_scenarios_lan() {
     run_seeds(1000..1060, Topology::Lan, 30);
 }
 
-/// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1] cargo test ... random_single_seed -- --nocapture`.
+/// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1] [HOCKET_SIM_ACTIONS=<n>] cargo test ... random_single_seed -- --nocapture`.
+/// The batches use 40 actions for coordinator seeds and 30 for LAN ones (60 for batch 3).
 #[test]
 fn random_single_seed_from_env() {
     let Ok(seed) = std::env::var("HOCKET_SIM_SEED") else {
@@ -538,7 +531,11 @@ fn random_single_seed_from_env() {
             drop: 0.05,
         };
     }
-    let w = World::run_random(cfg, 40);
+    let actions = std::env::var("HOCKET_SIM_ACTIONS")
+        .ok()
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(if topology == Topology::Lan { 30 } else { 40 });
+    let w = World::run_random(cfg, actions);
     w.assert_ok();
 }
 

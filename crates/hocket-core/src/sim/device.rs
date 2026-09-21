@@ -163,9 +163,6 @@ impl SimDevice {
         let mut cfg = EngineConfig::new(device_info(id), scope);
         cfg.coordinator_url = coordinator_url;
         cfg.lan_enabled = lan;
-        // Short enough that a device cut off for good settles its scrobbles
-        // inside the world's quiescent tail.
-        cfg.scrobble_grace_ms = 60_000.0;
         cfg.credential = Some(Credential {
             server_url: "https://music.example".into(),
             username: "user".into(),
@@ -385,7 +382,10 @@ impl SimDevice {
                 self.outbox
                     .retain(|(t, s)| !(t == &track_id && *s == started_at));
                 if allowed {
-                    self.note(format!("scrobble {track_id} @ {started_at}"));
+                    self.note(format!(
+                        "scrobble {track_id} @ {started_at} via {:?}",
+                        self.engine
+                    ));
                     self.effects.push(DeviceEffect::Scrobble {
                         track_id,
                         started_at,

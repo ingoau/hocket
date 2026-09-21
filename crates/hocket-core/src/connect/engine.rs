@@ -21,7 +21,7 @@
 //! Ops are optimistic: applied locally at submission, confirmed by `OpAck`,
 //! rolled back on `OpReject` or when someone else's op commits first.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,10 @@ pub const DEFAULT_SCROBBLE_GRACE_MS: f64 = 600_000.0;
 pub const DEFAULT_UPSTREAM_IDLE_MS: f64 = 30_000.0;
 /// A scrobble dedupe query without an answer is asked again after this long.
 pub const SCROBBLE_QUERY_RETRY_MS: f64 = 10_000.0;
+/// A LAN leader whose members have all been silent this long (two missed
+/// heartbeat/ping periods) may be the one that is cut off: its own room
+/// stops being authoritative for scrobble verdicts until they speak again.
+pub const MEMBER_QUIET_MS: f64 = 12_000.0;
 /// Clock ping cadence once synced.
 const PING_INTERVAL_MS: f64 = 5_000.0;
 /// Pings sent quickly after joining to converge the offset.
@@ -426,11 +430,22 @@ pub struct Engine {
     listener_port: Option<u16>,
     listener_wanted: bool,
     started: bool,
+    /// When the last inbound member left while we were serving: a leader
+    /// that lost everyone is as cut off as a client that lost its room, so
+    /// its own room stops being authoritative for scrobble verdicts.
+    lost_members_at: Option<EpochMs>,
+    /// Flush deferred scrobble queries at this time (a beat after members
+    /// return, so their announcements land in our log first).
+    flush_deferred_at: Option<EpochMs>,
     inbound: Vec<PeerId>,
 
     doc: SessionDocument,
     confirmed: SessionDocument,
     pending: VecDeque<PendingOp>,
+    /// Ops rolled back locally that the room may still accept: it commits
+    /// them if their base happens to match after someone else's op, and then
+    /// only the originator ever hears of it (an `OpAck`). Bounded.
+    abandoned: VecDeque<PendingOp>,
     unsynced: Vec<PendingOp>,
     unsynced_overflow: bool,
     sync_base: Option<SyncBase>,
@@ -470,7 +485,7 @@ pub struct Engine {
     deferred_scrobbles: Vec<DeferredScrobble>,
     /// Outstanding dedupe queries: id → (track, startedAt, sent at). Re-sent
     /// after [`SCROBBLE_QUERY_RETRY_MS`] without an answer.
-    scrobble_queries: HashMap<String, (TrackId, EpochMs, EpochMs)>,
+    scrobble_queries: BTreeMap<String, (TrackId, EpochMs, EpochMs)>,
     /// Scrobbles decided locally while cut off; told to the room on rejoin.
     unreported_scrobbles: Vec<(TrackId, EpochMs)>,
     /// Every `(track, startedAt)` this device knows was scrobbled by someone:
@@ -496,7 +511,21 @@ impl std::fmt::Debug for Engine {
             .field("device", &self.cfg.device.id)
             .field("revision", &self.doc.revision)
             .field("remote", &self.remote)
+            .field("upstream_ready", &self.upstream_ready)
+            .field("inbound", &self.inbound.len())
             .field("owns", &self.held.is_some())
+            .field("detached", &self.detached)
+            .field("lost_members_at", &self.lost_members_at)
+            .field("deferred_scrobbles", &self.deferred_scrobbles.len())
+            .field("scrobble_queries", &self.scrobble_queries.len())
+            .field(
+                "lan_peers",
+                &self
+                    .lan_peers
+                    .iter()
+                    .map(|p| (p.device_id.clone(), p.serving, p.session_revision))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -524,10 +553,13 @@ impl Engine {
             listener_port: None,
             listener_wanted: false,
             started: false,
+            lost_members_at: None,
+            flush_deferred_at: None,
             inbound: vec![],
             confirmed: document.clone(),
             doc: document,
             pending: VecDeque::new(),
+            abandoned: VecDeque::new(),
             unsynced: vec![],
             unsynced_overflow: false,
             sync_base,
@@ -557,7 +589,7 @@ impl Engine {
             prebuffer: None,
             resume: None,
             deferred_scrobbles: vec![],
-            scrobble_queries: HashMap::new(),
+            scrobble_queries: BTreeMap::new(),
             unreported_scrobbles: vec![],
             known_scrobbled: vec![],
             saved_queues: vec![],
@@ -932,10 +964,41 @@ impl Engine {
             return false; // a remote room is wanted and we are not attached to it
         }
         // LAN or alone: our own room is the authority when we are the leader
-        // (or nobody else is around).
+        // (or nobody else is around) and, if we have members, we have heard
+        // from one recently. Members all silent, or all gone a moment ago,
+        // means we may be the one who is cut off.
+        let now = self.now_local_ms();
+        if !self.inbound.is_empty() {
+            match self.room.last_member_seen() {
+                Some(t) if now - t <= MEMBER_QUIET_MS => {}
+                _ => return false,
+            }
+        } else if let Some(lost) = self.lost_members_at {
+            if now - lost < self.cfg.scrobble_grace_ms {
+                return false;
+            }
+        }
         match self.elect_lan_leader() {
             None => true,
             Some(l) => l == self.cfg.device.id,
+        }
+    }
+
+    /// Everything this device knows was scrobbled, as room announcements.
+    fn announce_known_scrobbles(&mut self) {
+        let known: Vec<(TrackId, EpochMs, DeviceId)> = self
+            .known_scrobbled
+            .iter()
+            .rev()
+            .take(64)
+            .cloned()
+            .collect();
+        for (track_id, started_at, device_id) in known {
+            self.upstream_send(Msg::ScrobbleSubmitted {
+                track_id,
+                started_at,
+                device_id,
+            });
         }
     }
 
@@ -968,6 +1031,7 @@ impl Engine {
     }
 
     fn process_room_outputs(&mut self, outs: Vec<RoomOutput>) {
+        let was_serving = self.is_serving();
         for o in outs {
             match o {
                 RoomOutput::Send(peer, msg) => {
@@ -990,6 +1054,10 @@ impl Engine {
                     .out
                     .push(Output::ReplicaChanged(self.room.replica().clone())),
             }
+        }
+        if was_serving && !self.is_serving() {
+            // The room timed our last member out: we may be the one cut off.
+            self.lost_members_at = Some(self.now_local_ms());
         }
     }
 
@@ -1161,6 +1229,13 @@ impl Engine {
         self.maybe_advertise(false);
     }
 
+    /// Inbound members are back: our room is in touch with the session
+    /// again. Their scrobble announcements arrive right after their Hello;
+    /// flush our deferred queries a beat later so they are judged against them.
+    fn members_returned(&mut self) {
+        self.lost_members_at = None;
+    }
+
     /// Our own room is now the authority (alone by choice, or elected LAN
     /// coordinator): nothing is "detached" from anywhere any more, and
     /// scrobbles waiting for a remote verdict get ours.
@@ -1175,9 +1250,16 @@ impl Engine {
                 self.emit_lease();
             }
         }
-        let deferred = std::mem::take(&mut self.deferred_scrobbles);
-        for d in deferred {
-            self.query_scrobble(d.track_id, d.started_at);
+        if !self.inbound.is_empty() {
+            self.members_returned();
+        }
+        // Only our own room's verdicts count now; if we lost our members
+        // recently they wait for them (or the grace) instead.
+        if self.upstream_authoritative() && self.flush_deferred_at.is_none() {
+            let deferred = std::mem::take(&mut self.deferred_scrobbles);
+            for d in deferred {
+                self.query_scrobble(d.track_id, d.started_at);
+            }
         }
     }
 
@@ -1225,7 +1307,7 @@ impl Engine {
         }
         // Queries the vanished room never answered are asked again on rejoin.
         let now = self.now_local_ms();
-        for (_, (track_id, started_at, _)) in self.scrobble_queries.drain() {
+        for (_, (track_id, started_at, _)) in std::mem::take(&mut self.scrobble_queries) {
             self.deferred_scrobbles.push(DeferredScrobble {
                 track_id,
                 started_at,
@@ -1292,6 +1374,13 @@ impl Engine {
             self.out.push(Output::Disconnect { peer });
             return;
         };
+        if !r.candidates.contains(&url) || !matches!(r.state, RemoteState::Connecting { .. }) {
+            // A socket from an attempt the election has since superseded (or a
+            // duplicate): it leads to the wrong room. Never adopt it.
+            self.log("debug", format!("dropping a stale connection to {url}"));
+            self.out.push(Output::Disconnect { peer });
+            return;
+        }
         let attempt = match &r.state {
             RemoteState::Connecting { attempt, .. } => *attempt,
             _ => 0,
@@ -1315,9 +1404,13 @@ impl Engine {
 
     fn on_disconnected(&mut self, peer: PeerId) {
         if self.inbound.contains(&peer) {
+            let was_serving = self.is_serving();
             self.inbound.retain(|p| p != &peer);
             let outs = self.room.handle(RoomInput::Disconnected(peer));
             self.process_room_outputs(outs);
+            if was_serving && !self.is_serving() {
+                self.lost_members_at = Some(self.now_local_ms());
+            }
             self.maybe_advertise(false);
             self.emit_connection();
             return;
@@ -1331,6 +1424,10 @@ impl Engine {
     fn on_peer_connected(&mut self, peer: PeerId) {
         if self.remote.is_some() {
             // We follow another room; don't fork the session.
+            self.log(
+                "debug",
+                "refused an inbound peer: this device follows another room",
+            );
             self.out.push(Output::WireOut {
                 peer: peer.clone(),
                 msg: WireMessage::new(Msg::Bye {
@@ -1340,16 +1437,24 @@ impl Engine {
             self.out.push(Output::Disconnect { peer });
             return;
         }
+        let was_serving = self.is_serving();
         self.inbound.push(peer.clone());
         let outs = self.room.handle(RoomInput::Connected(peer));
         self.process_room_outputs(outs);
+        if !was_serving && self.is_serving() {
+            self.members_returned();
+        }
     }
 
     fn on_wire_in(&mut self, peer: PeerId, msg: WireMessage) {
         if self.inbound.contains(&peer) {
+            let was_serving = self.is_serving();
             let outs = self.room.handle(RoomInput::Message(peer, msg));
             self.process_room_outputs(outs);
             let serving_now = self.is_serving();
+            if serving_now && !was_serving {
+                self.members_returned();
+            }
             if self.last_advert.as_ref().map(|a| a.serving) != Some(serving_now) {
                 self.maybe_advertise(true);
             }
@@ -1448,6 +1553,7 @@ impl Engine {
                 self.on_upstream_lost(Some(format!("{reason:?}: {message}")));
             }
             Msg::Bye { reason } => {
+                self.log("info", format!("upstream said bye: {reason}"));
                 if let Some(peer) = self.upstream_peer() {
                     self.out.push(Output::Disconnect { peer });
                 }
@@ -1902,6 +2008,7 @@ impl Engine {
                     device_id,
                 });
             }
+            self.announce_known_scrobbles();
             let deferred = std::mem::take(&mut self.deferred_scrobbles);
             for d in deferred {
                 self.query_scrobble(d.track_id, d.started_at);
@@ -2021,8 +2128,25 @@ impl Engine {
         self.upstream_send(msg);
     }
 
+    /// Forget the optimistic ops but keep them around for a late ack.
+    fn abandon_pending(&mut self) {
+        for p in self.pending.drain(..) {
+            self.abandoned.push_back(p);
+        }
+        while self.abandoned.len() > 64 {
+            self.abandoned.pop_front();
+        }
+    }
+
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
         let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else {
+            // A rolled-back op the room accepted anyway: it is now part of the
+            // session, so apply it exactly like anyone else's commit.
+            if let Some(pos) = self.abandoned.iter().position(|p| p.op_id == op_id) {
+                let p = self.abandoned.remove(pos).expect("position exists");
+                let me = self.cfg.device.id.clone();
+                self.on_op_committed(p.op, revision, me, p.op_id, p.at, p.position_ms);
+            }
             return;
         };
         let p = self.pending.remove(pos).expect("position exists");
@@ -2078,7 +2202,9 @@ impl Engine {
                 previous.revision
             ),
         );
-        self.pending.clear();
+        // Ops after the rejected one were chained on a base the room never
+        // saw; the room may still accept them if the revisions line up.
+        self.abandon_pending();
         let had_unsynced = !self.unsynced.is_empty() || self.unsynced_overflow;
         self.confirmed = document.clone();
         self.doc = document;
@@ -2119,6 +2245,7 @@ impl Engine {
         if device_id == self.cfg.device.id && self.pending.iter().any(|p| p.op_id == op_id) {
             return;
         }
+        self.abandoned.retain(|p| p.op_id != op_id);
         if revision <= self.confirmed.revision {
             // Already incorporated (a full document arrived first). Revisions
             // are monotonic, so this can only be a duplicate or a late frame.
@@ -2136,8 +2263,9 @@ impl Engine {
             return;
         }
         if !self.pending.is_empty() {
-            // Ours will be rejected (stale base); roll back now so one press = one skip.
-            self.pending.clear();
+            // Ours are probably stale now; roll back so one press = one skip.
+            // The room may still accept a chained one, hence "abandoned".
+            self.abandon_pending();
             self.doc = self.confirmed.clone();
         }
         let at = if at > 0.0 { at } else { self.now_session_ms() };
@@ -2174,6 +2302,7 @@ impl Engine {
 
     fn adopt(&mut self, document: SessionDocument, cause: DocChange) {
         self.pending.clear();
+        self.abandoned.clear();
         self.confirmed = document.clone();
         self.doc = document;
         let d = self.doc.clone();
@@ -2211,13 +2340,23 @@ impl Engine {
         {
             return;
         }
+        let position_ms = resume_position(&stamp.position, self.now_session_ms());
+        // Whatever played on since the stamp counts towards the scrobble too
+        // (unless the gap was so long we snapped to the start).
+        let played_ms = if position_ms >= stamp.position.position_ms {
+            stamp
+                .played_ms
+                .saturating_add(position_ms - stamp.position.position_ms)
+        } else {
+            stamp.played_ms
+        };
         let draft = ResumeOfferDraft {
             device_id: stamp.device_id.clone(),
             device_name: stamp.device_name.clone(),
             key: current.key.clone(),
             track_id: current.track_id.clone(),
-            position_ms: resume_position(&stamp.position, self.now_session_ms()),
-            played_ms: stamp.played_ms,
+            position_ms,
+            played_ms,
             started_at: stamp.started_at,
             scrobbled: stamp.scrobbled,
             last_seen: last_seen.unwrap_or(stamp.position.taken_at),
@@ -2723,6 +2862,20 @@ impl Engine {
 
         if self.upstream_authoritative() {
             self.retry_scrobble_queries(now);
+            // Deferred verdicts go to our own room a beat after it became
+            // authoritative again, so returning members' announcements land first.
+            if !self.deferred_scrobbles.is_empty() && self.flush_deferred_at.is_none() {
+                self.flush_deferred_at = Some(now + 2_000.0);
+            }
+            if self.flush_deferred_at.map(|t| now >= t).unwrap_or(false) {
+                self.flush_deferred_at = None;
+                let deferred = std::mem::take(&mut self.deferred_scrobbles);
+                for d in deferred {
+                    self.query_scrobble(d.track_id, d.started_at);
+                }
+            }
+        } else {
+            self.flush_deferred_at = None;
         }
 
         // Deferred scrobbles past the grace period: local judgement.
@@ -3420,7 +3573,7 @@ mod tests {
             o,
             Output::TakeTransport {
                 position_ms: 31_000,
-                played_ms: 30_000,
+                played_ms: 31_000,
                 ..
             }
         )));

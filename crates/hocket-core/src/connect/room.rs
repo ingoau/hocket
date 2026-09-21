@@ -221,6 +221,15 @@ impl Room {
         }
     }
 
+    /// When a member other than the loopback was last heard from.
+    pub fn last_member_seen(&self) -> Option<EpochMs> {
+        self.members
+            .iter()
+            .filter(|m| m.peer != LOOPBACK)
+            .map(|m| m.last_seen)
+            .fold(None, |acc, t| Some(acc.map_or(t, |a: EpochMs| a.max(t))))
+    }
+
     /// Live transport owner, if any.
     pub fn live_owner(&self) -> Option<DeviceId> {
         self.lease.live_owner(self.now()).cloned()
