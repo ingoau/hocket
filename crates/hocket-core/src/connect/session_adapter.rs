@@ -49,6 +49,71 @@ impl Entropy for OpEntropy {
     }
 }
 
+/// Reducer tunables the settings subsystem can change while the engine is
+/// running (`queue.historyCap`, `queue.savedCap`). Shared between the actor
+/// and the reducer the engine holds; every replica applies the same
+/// account-synced values, so determinism is preserved.
+#[derive(Debug)]
+pub struct ReducerPolicy {
+    inner: Mutex<(usize, SavedQueuePolicy)>,
+}
+
+impl Default for ReducerPolicy {
+    fn default() -> Self {
+        ReducerPolicy {
+            inner: Mutex::new((DEFAULT_HISTORY_CAP, SavedQueuePolicy::default())),
+        }
+    }
+}
+
+impl ReducerPolicy {
+    pub fn new(history_cap: usize, saved: SavedQueuePolicy) -> Arc<Self> {
+        Arc::new(ReducerPolicy {
+            inner: Mutex::new((history_cap, saved)),
+        })
+    }
+
+    pub fn get(&self) -> (usize, SavedQueuePolicy) {
+        self.inner.lock().clone()
+    }
+
+    pub fn set_history_cap(&self, cap: usize) {
+        self.inner.lock().0 = cap.max(1);
+    }
+
+    pub fn set_saved(&self, saved: SavedQueuePolicy) {
+        self.inner.lock().1 = saved;
+    }
+}
+
+/// [`RealReducer`] with a shared, adjustable [`ReducerPolicy`].
+#[derive(Debug, Clone)]
+pub struct TunableReducer {
+    policy: Arc<ReducerPolicy>,
+}
+
+impl TunableReducer {
+    pub fn new(policy: Arc<ReducerPolicy>) -> Self {
+        TunableReducer { policy }
+    }
+
+    pub fn shared(policy: Arc<ReducerPolicy>) -> Arc<dyn SessionReducer> {
+        Arc::new(TunableReducer { policy })
+    }
+}
+
+impl SessionReducer for TunableReducer {
+    fn apply(
+        &self,
+        doc: &SessionDocument,
+        op: &SessionOp,
+        ctx: &OpContext,
+    ) -> Result<SessionDocument, ReduceFailure> {
+        let (history_cap, saved) = self.policy.get();
+        RealReducer { history_cap, saved }.apply(doc, op, ctx)
+    }
+}
+
 /// The real reducer behind the seam.
 #[derive(Debug, Clone)]
 pub struct RealReducer {

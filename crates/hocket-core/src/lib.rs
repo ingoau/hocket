@@ -5,6 +5,10 @@
 //! Platform layers (Android via UniFFI, Electron via napi-rs, the headless
 //! coordinator) are thin shells around it.
 
+// The api enums carry whole documents in a few variants by design (they are
+// the wire and FFI shape); boxing them would only move the allocation.
+#![allow(clippy::large_enum_variant)]
+
 pub mod api;
 pub mod core;
 pub mod util;

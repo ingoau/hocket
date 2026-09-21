@@ -377,6 +377,21 @@ fn seek_backward(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Comma
     }]
 }
 
+/// Volume step for the keyboard / remote volume actions.
+pub const VOLUME_STEP: f64 = 0.05;
+
+fn volume_up(_: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    vec![Command::SetVolume {
+        volume: (s.volume + VOLUME_STEP).clamp(0.0, 1.0),
+    }]
+}
+
+fn volume_down(_: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    vec![Command::SetVolume {
+        volume: (s.volume - VOLUME_STEP).clamp(0.0, 1.0),
+    }]
+}
+
 fn reshuffle(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
     // Turning shuffle off and on again reshuffles with a new seed.
     vec![
@@ -577,6 +592,26 @@ static ALL: &[ActionDef] = &[
         transport_enabled,
         seek_backward,
         default_shortcut = Some("ArrowLeft")
+    ),
+    action!(
+        "volumeUp",
+        "Volume up",
+        "volume_up",
+        Playback,
+        GLOBAL,
+        always,
+        volume_up,
+        default_shortcut = Some("Mod+ArrowUp")
+    ),
+    action!(
+        "volumeDown",
+        "Volume down",
+        "volume_down",
+        Playback,
+        GLOBAL,
+        always,
+        volume_down,
+        default_shortcut = Some("Mod+ArrowDown")
     ),
     // -- queue --
     action!(
@@ -1180,6 +1215,16 @@ static ALL: &[ActionDef] = &[
         none,
         ui_handled = true
     ),
+    action!(
+        "navigateFilters",
+        "Filters",
+        "filter_alt",
+        Navigation,
+        GLOBAL,
+        ui_nav,
+        none,
+        ui_handled = true
+    ),
 ];
 
 pub fn all() -> &'static [ActionDef] {
@@ -1222,6 +1267,7 @@ const SIDEBAR: &[&str] = &[
     "navigatePlaylists",
     "navigateGenres",
     "navigateRecent",
+    "navigateFilters",
     "navigateDownloads",
     "navigateStats",
     "navigateSettings",

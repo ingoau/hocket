@@ -12,7 +12,7 @@ native-audio = ["dep:symphonia", "dep:cpal", "dep:rubato"]
 # LAN discovery. Off on the headless coordinator.
 mdns = ["dep:mdns-sd"]
 # Deterministic simulation harness (virtual clock, in-memory network). Also used by the coordinator's tests.
-sim = []
+sim = ["dep:tempfile"]
 
 [dependencies]
 serde.workspace = true
@@ -41,6 +41,7 @@ mdns-sd = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 rubato = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

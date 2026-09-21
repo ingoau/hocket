@@ -1,0 +1,941 @@
+//! Playback: only the lease owner drives the backend; everyone else forwards
+//! transport commands over Connect and renders from stamps.
+
+use crate::api::*;
+use crate::audio::dsp::gain_for_track;
+use crate::audio::sleep::SleepAction;
+use crate::connect::engine::Input;
+use crate::connect::wire::{SessionOp, TransportCommand};
+use crate::core::actor::{
+    Actor, LOAD_RETRIES, MAX_CONSECUTIVE_SKIPS, MEDIA_SESSION_ART, MEDIA_SESSION_ART_SMALL,
+};
+use crate::core::Internal;
+use crate::media_session::{command_for, derive_media_session_state};
+use crate::outbox::ScrobbleAction;
+use crate::session::reducer::derive;
+
+impl Actor {
+    // -- loading ----------------------------------------------------------------
+
+    /// Resolve a queue item to a media source: downloaded file, cached file
+    /// or stream URL, with ReplayGain folded into `gain_db`.
+    pub(crate) fn media_source_for(&self, key: &str, track: &Track) -> Option<MediaSource> {
+        let api = self.api()?;
+        let mut source = match self.downloads.resolve(api.as_ref(), key, track) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(target: "hocket_core", error = %e, "resolve media source");
+                return None;
+            }
+        };
+        let is_album = self
+            .doc()
+            .and_then(|d| d.context.as_ref())
+            .is_some_and(|c| matches!(c.kind, ContextKind::Album { .. }));
+        let download_gain = self
+            .downloads
+            .gain(&track.server_id, &track.id)
+            .ok()
+            .flatten();
+        let rg = track.replay_gain.clone().or_else(|| {
+            download_gain.map(|g| ReplayGain {
+                track_gain_db: Some(g),
+                ..Default::default()
+            })
+        });
+        source.gain_db = gain_for_track(
+            rg.as_ref(),
+            self.audio.replay_gain,
+            is_album,
+            self.audio.replay_gain_preamp_db,
+        );
+        Some(source)
+    }
+
+    /// The item that follows the current one, for gapless preload.
+    fn next_item(&self) -> Option<QueueItem> {
+        let doc = self.doc()?;
+        if doc.repeat == RepeatMode::One {
+            return None;
+        }
+        let d = derive(doc);
+        d.playing_next
+            .into_iter()
+            .chain(d.upcoming)
+            .find(|i| !i.unavailable)
+    }
+
+    pub(crate) fn refresh_next(&mut self) {
+        if !self.audio.gapless {
+            self.playback.next = None;
+            self.playback.next_doc_key = None;
+            let _ = self.backend.set_next(None);
+            return;
+        }
+        let next = self.next_item();
+        let next_key = next.as_ref().map(|i| i.key.clone());
+        if next_key == self.playback.next_doc_key && self.playback.next.is_some() {
+            return;
+        }
+        let source = next.and_then(|i| {
+            let track = self.track_or_bare(&i.track_id)?;
+            self.media_source_for(&i.key, &track)
+        });
+        self.playback.next_doc_key = next_key;
+        self.playback.next = source.clone();
+        if let Err(e) = self.backend.set_next(source) {
+            self.log("debug", format!("set_next: {e}"));
+        }
+    }
+
+    /// Load a document item into the backend. `carried` is the handoff
+    /// state (played time, scrobble identity) when taking over.
+    pub(crate) fn load_item(
+        &mut self,
+        item: &QueueItem,
+        position_ms: Ms,
+        play: bool,
+        carried: Option<(Ms, EpochMs, bool)>,
+    ) {
+        let Some(track) = self.track_or_bare(&item.track_id) else { return };
+        let now = self.now();
+        // Gapless: the backend already moved on to this track.
+        let transitioned = carried.is_none()
+            && position_ms == 0
+            && self.playback.next.as_ref().is_some_and(|n| n.track.id == item.track_id)
+            && self.playback.awaiting_transition;
+        let (played_ms, started_at, scrobbled) = match carried {
+            Some((p, s, sc)) => (p, s, sc),
+            None => (0, self.session_now(), false),
+        };
+        if transitioned {
+            let backend_key = self.playback.next.as_ref().map(|n| n.key.clone());
+            self.playback.doc_key = Some(item.key.clone());
+            self.playback.backend_key = backend_key;
+            self.playback.track = Some(track.clone());
+            self.playback.position_ms = 0;
+            self.playback.position_at = now;
+            self.playback.next = None;
+            self.playback.next_doc_key = None;
+            self.playback.awaiting_transition = false;
+            self.playback.loaded = true;
+        } else {
+            let Some(source) = self.media_source_for(&item.key, &track) else {
+                self.emit(Event::PlayerNotice {
+                    message: Some("No server connection: add or reconnect your server".into()),
+                });
+                self.playback.doc_key = Some(item.key.clone());
+                self.playback.track = Some(track);
+                self.playback.loaded = false;
+                return;
+            };
+            self.playback.doc_key = Some(item.key.clone());
+            self.playback.backend_key = Some(item.key.clone());
+            self.playback.track = Some(track.clone());
+            self.playback.position_ms = position_ms.min(track.duration_ms.max(position_ms));
+            self.playback.position_at = now;
+            self.playback.awaiting_transition = false;
+            self.playback.loaded = true;
+            self.playback.next = None;
+            self.playback.next_doc_key = None;
+            let next = self.audio.gapless.then(|| self.next_item()).flatten();
+            let next_source = next.as_ref().and_then(|i| {
+                let t = self.track_or_bare(&i.track_id)?;
+                self.media_source_for(&i.key, &t)
+            });
+            self.playback.next_doc_key = next.map(|i| i.key);
+            self.playback.next = next_source.clone();
+            if let Err(e) = self.backend.load(source, next_source, position_ms, play) {
+                self.error(ErrorKind::Playback, "load", Some(e.to_string()));
+            }
+        }
+        self.playback.playing = play;
+        self.playback.buffering = !transitioned;
+        self.playback.started_at = started_at;
+        self.playback.started_local = now - f64::from(played_ms);
+        self.playback.scrobbled = scrobbled;
+        self.playback.load_failures = 0;
+        if play {
+            self.playback.want_playing = true;
+        }
+        let actions = self.scrobbler.track_started(
+            &track.id,
+            track.duration_ms,
+            position_ms,
+            played_ms,
+            play,
+        );
+        self.apply_scrobble_actions(actions);
+        self.stamp();
+        self.emit_transport();
+        self.save_position();
+        self.prefetch_artwork_for_current();
+    }
+
+    pub(crate) fn unload(&mut self) {
+        if self.playback.loaded {
+            let _ = self.backend.stop();
+        }
+        if let Some(id) = self.playback.track_id().map(str::to_string) {
+            let pos = self.playback.position_now(self.now());
+            let actions = self.scrobbler.track_ended(&id, Some(pos));
+            self.apply_scrobble_actions(actions);
+        }
+        let volume = self.playback.volume;
+        let restore = self.playback.restore_position.take();
+        self.playback = crate::core::state::Playback {
+            volume,
+            restore_position: restore,
+            ..Default::default()
+        };
+        self.stamp();
+        self.emit_transport();
+    }
+
+    pub(crate) fn restart_current(&mut self) {
+        let Some(track) = self.playback.track.clone() else { return };
+        if !self.playback.loaded {
+            if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                self.load_item(&item, 0, true, None);
+            }
+            return;
+        }
+        let actions = self.scrobbler.track_repeated(&track.id, track.duration_ms);
+        self.apply_scrobble_actions(actions);
+        self.playback.position_ms = 0;
+        self.playback.position_at = self.now();
+        self.playback.started_at = self.session_now();
+        self.playback.started_local = self.now();
+        self.playback.scrobbled = false;
+        if let Err(e) = self.backend.seek(0) {
+            self.log("debug", format!("seek: {e}"));
+        }
+        if !self.playback.playing {
+            self.playback.playing = true;
+            let _ = self.backend.play();
+        }
+        self.stamp();
+        self.emit_transport();
+    }
+
+    // -- transport ownership ------------------------------------------------------
+
+    pub(crate) fn on_lease_changed(&mut self, owns: bool, detached: bool, lease: TransportLease) {
+        if owns {
+            self.playback.consecutive_skips = 0;
+            if !self.playback.loaded {
+                if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                    let position = self
+                        .playback
+                        .restore_position
+                        .take()
+                        .filter(|(k, _)| *k == item.key)
+                        .map(|(_, p)| p)
+                        .unwrap_or(self.playback.position_ms);
+                    let play = self.playback.want_playing;
+                    self.load_item(&item, position, play, None);
+                }
+            } else if self.playback.want_playing && !self.playback.playing {
+                self.set_playing(true);
+            }
+        } else if self.playback.playing {
+            self.set_playing(false);
+        }
+        if detached {
+            self.log("info", "owning transport while cut off from the room");
+        }
+        let _ = lease;
+        self.emit_transport();
+        if let Some(e) = &self.engine {
+            let devices = e.devices();
+            self.emit(Event::DevicesChanged { devices });
+        }
+    }
+
+    pub(crate) fn release_transport(&mut self) {
+        self.playback.want_playing = false;
+        if self.playback.loaded && self.playback.playing {
+            self.set_playing(false);
+        }
+        self.emit_transport();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn take_transport(
+        &mut self,
+        key: QueueKey,
+        track_id: TrackId,
+        position_ms: Ms,
+        played_ms: Ms,
+        started_at: EpochMs,
+        scrobbled: bool,
+        play: bool,
+    ) {
+        let item = self
+            .doc()
+            .and_then(|d| {
+                d.current
+                    .iter()
+                    .chain(d.history.iter())
+                    .chain(d.insertions.iter())
+                    .find(|i| i.key == key)
+                    .cloned()
+            })
+            .unwrap_or(QueueItem {
+                key: key.clone(),
+                track_id: track_id.clone(),
+                source: QueueSource::Inserted,
+                unavailable: false,
+            });
+        self.playback.want_playing = play;
+        self.load_item(&item, position_ms, play, Some((played_ms, started_at, scrobbled)));
+        self.emit(Event::PlayerNotice { message: None });
+    }
+
+    pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms) {
+        let Some(track) = self.track_or_bare(&track_id) else { return };
+        match self.media_source_for(&key, &track) {
+            Some(source) => {
+                if let Err(e) = self.backend.pre_buffer(source, position_ms) {
+                    self.log("debug", format!("pre_buffer: {e}"));
+                    self.engine_input(Input::PreBufferFailed { key });
+                }
+            }
+            None => self.engine_input(Input::PreBufferFailed { key }),
+        }
+    }
+
+    /// A transport command from this device's UI.
+    pub(crate) fn transport_command(&mut self, cmd: TransportCommand) {
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        if engine.owns_transport() {
+            self.apply_transport_command(cmd);
+            return;
+        }
+        let nobody = engine.lease().owner.is_none();
+        match (&cmd, nobody) {
+            (TransportCommand::Play | TransportCommand::TogglePlay, true) => {
+                if self.doc().is_some_and(|d| d.current.is_some()) {
+                    self.playback.want_playing = true;
+                    self.engine_input(Input::ClaimTransport { takeover: false });
+                }
+            }
+            (TransportCommand::SetVolume { volume }, _) => self.set_volume(*volume, false),
+            (_, true) => {}
+            (_, false) => self.engine_input(Input::TransportRequest(cmd)),
+        }
+    }
+
+    /// Apply a transport command on this device (we own transport).
+    pub(crate) fn apply_transport_command(&mut self, cmd: TransportCommand) {
+        match cmd {
+            TransportCommand::Play => {
+                self.playback.want_playing = true;
+                self.ensure_loaded_then_play();
+            }
+            TransportCommand::Pause => {
+                self.playback.want_playing = false;
+                self.set_playing(false);
+            }
+            TransportCommand::TogglePlay => {
+                if self.playback.playing {
+                    self.playback.want_playing = false;
+                    self.set_playing(false);
+                } else {
+                    self.playback.want_playing = true;
+                    self.ensure_loaded_then_play();
+                }
+            }
+            TransportCommand::Stop => {
+                self.playback.want_playing = false;
+                if self.playback.loaded {
+                    self.set_playing(false);
+                    self.seek_to(0);
+                }
+                self.engine_input(Input::ReleaseTransport);
+            }
+            TransportCommand::SeekTo { position_ms } => self.seek_to(position_ms),
+            TransportCommand::SeekBy { delta_ms } => {
+                let pos = self.playback.position_now(self.now()) as i64 + delta_ms as i64;
+                let cap = self.playback.duration_ms() as i64;
+                let pos = if cap > 0 { pos.clamp(0, cap) } else { pos.max(0) };
+                self.seek_to(pos as Ms);
+            }
+            TransportCommand::SetVolume { volume } => self.set_volume(volume, false),
+        }
+    }
+
+    fn ensure_loaded_then_play(&mut self) {
+        if self.playback.loaded {
+            self.set_playing(true);
+        } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+            let position = self
+                .playback
+                .restore_position
+                .take()
+                .filter(|(k, _)| *k == item.key)
+                .map(|(_, p)| p)
+                .unwrap_or(self.playback.position_ms);
+            self.load_item(&item, position, true, None);
+        }
+    }
+
+    pub(crate) fn set_playing(&mut self, playing: bool) {
+        if !self.playback.loaded || self.playback.playing == playing {
+            return;
+        }
+        let now = self.now();
+        self.playback.position_ms = self.playback.position_now(now);
+        self.playback.position_at = now;
+        self.playback.playing = playing;
+        let r = if playing {
+            self.backend.play()
+        } else {
+            self.backend.pause()
+        };
+        if let Err(e) = r {
+            self.error(ErrorKind::Playback, "play/pause", Some(e.to_string()));
+        }
+        let actions = self.scrobbler.set_playing(playing);
+        self.apply_scrobble_actions(actions);
+        if !playing {
+            self.save_position();
+        }
+        self.stamp();
+        self.emit_transport();
+    }
+
+    pub(crate) fn seek_to(&mut self, position_ms: Ms) {
+        if !self.playback.loaded {
+            self.playback.position_ms = position_ms;
+            return;
+        }
+        let cap = self.playback.duration_ms();
+        let position_ms = if cap > 0 { position_ms.min(cap) } else { position_ms };
+        self.playback.position_ms = position_ms;
+        self.playback.position_at = self.now();
+        if let Err(e) = self.backend.seek(position_ms) {
+            self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
+        }
+        if let Some(id) = self.playback.track_id().map(str::to_string) {
+            self.scrobbler.seeked(&id, position_ms);
+        }
+        self.stamp();
+        self.emit_transport();
+    }
+
+    pub(crate) fn set_volume(&mut self, volume: f64, persist: bool) {
+        let volume = crate::audio::backend::clamp_volume(volume);
+        self.playback.volume = volume;
+        if let Err(e) = self.backend.set_volume(self.effective_volume()) {
+            self.log("debug", format!("set_volume: {e}"));
+        }
+        if persist {
+            let _ = self
+                .db
+                .saved_state_set("volume", &volume, self.clock.as_ref());
+        }
+        self.emit_transport();
+    }
+
+    /// Send a transport stamp: only ever from here, only on change.
+    pub(crate) fn stamp(&mut self) {
+        if !self.owns_transport() {
+            return;
+        }
+        let now = self.now();
+        let p = &self.playback;
+        let input = Input::LocalStamp {
+            key: p.doc_key.clone(),
+            track_id: p.track_id().map(str::to_string),
+            position: PositionStamp {
+                position_ms: p.position_now(now),
+                taken_at: now,
+                rate: 1.0,
+                is_playing: p.playing && p.loaded,
+            },
+            played_ms: self.scrobbler.played_ms(),
+            started_at: p.started_at,
+            scrobbled: p.scrobbled,
+        };
+        self.engine_input(input);
+    }
+
+    // -- backend reports -----------------------------------------------------------
+
+    pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        let current = |k: &QueueKey, me: &Actor| me.playback.backend_key.as_ref() == Some(k);
+        match report {
+            BackendReport::Ready { key, duration_ms } => {
+                if !current(&key, self) {
+                    return;
+                }
+                if let (Some(d), Some(t)) = (duration_ms, self.playback.track.as_mut()) {
+                    if t.duration_ms == 0 && d > 0 {
+                        t.duration_ms = d;
+                    }
+                }
+                self.playback.buffering = false;
+                self.playback.load_failures = 0;
+                self.playback.consecutive_skips = 0;
+                self.emit(Event::PlayerNotice { message: None });
+                self.emit_transport();
+            }
+            BackendReport::Playing { key, position_ms } => {
+                if !current(&key, self) {
+                    return;
+                }
+                let now = self.now();
+                self.playback.position_ms = position_ms;
+                self.playback.position_at = now;
+                self.playback.buffering = false;
+                if !self.playback.playing {
+                    self.playback.playing = true;
+                    let actions = self.scrobbler.set_playing(true);
+                    self.apply_scrobble_actions(actions);
+                }
+                self.stamp();
+                self.emit_transport();
+            }
+            BackendReport::Paused { key, position_ms } => {
+                if !current(&key, self) {
+                    return;
+                }
+                self.playback.position_ms = position_ms;
+                self.playback.position_at = self.now();
+                if self.playback.playing {
+                    self.playback.playing = false;
+                    let actions = self.scrobbler.set_playing(false);
+                    self.apply_scrobble_actions(actions);
+                    self.save_position();
+                }
+                self.stamp();
+                self.emit_transport();
+            }
+            BackendReport::Buffering { key, buffering } => {
+                if !current(&key, self) {
+                    return;
+                }
+                self.playback.buffering = buffering;
+                self.emit_transport();
+            }
+            BackendReport::Position { key, position_ms } => {
+                if !current(&key, self) {
+                    return;
+                }
+                self.playback.position_ms = position_ms;
+                self.playback.position_at = self.now();
+                if let Some(id) = self.playback.track_id().map(str::to_string) {
+                    let actions = self.scrobbler.progress(&id, position_ms);
+                    self.apply_scrobble_actions(actions);
+                }
+                let transport = self.transport_state();
+                self.emit(Event::TransportChanged { transport });
+                self.emit_media_session();
+            }
+            BackendReport::Ended { key } => {
+                if !current(&key, self) {
+                    return;
+                }
+                let duration = self.playback.duration_ms();
+                if let Some(id) = self.playback.track_id().map(str::to_string) {
+                    let actions = self.scrobbler.track_ended(&id, Some(duration));
+                    self.apply_scrobble_actions(actions);
+                }
+                self.playback.position_ms = duration;
+                self.playback.position_at = self.now();
+                let sleep = self.sleep.track_ended();
+                let stop_now = matches!(sleep, SleepAction::Stop);
+                self.apply_sleep_action(sleep);
+                if stop_now {
+                    self.playback.want_playing = false;
+                    self.playback.playing = false;
+                    self.playback.awaiting_transition = false;
+                    let _ = self.backend.pause();
+                }
+                // The backend has (or will have) moved to the preloaded item.
+                self.playback.awaiting_transition = self.playback.next.is_some() && !stop_now;
+                if self.owns_transport() {
+                    self.local_op(SessionOp::TrackEnded);
+                }
+                if !self.playback.awaiting_transition {
+                    // Nothing followed: stay on the last item, stopped.
+                    if self.doc().and_then(|d| d.current.as_ref()).is_some_and(|c| c.key == key) {
+                        self.playback.playing = false;
+                        self.stamp();
+                        self.emit_transport();
+                    }
+                }
+            }
+            BackendReport::TransitionedToNext { key } => {
+                // The document moved first (TrackEnded); we adopted the item
+                // in `load_item`. Late arrival means the doc did not follow
+                // (repeat one, queue edited): reload what the document says.
+                if self.playback.backend_key.as_ref() == Some(&key) {
+                    self.playback.playing = true;
+                    self.playback.position_ms = 0;
+                    self.playback.position_at = self.now();
+                    self.refresh_next();
+                    self.stamp();
+                    self.emit_transport();
+                } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                    self.playback.awaiting_transition = false;
+                    self.load_item(&item, 0, true, None);
+                }
+            }
+            BackendReport::Error {
+                key,
+                message,
+                fatal,
+            } => {
+                let is_next = self.playback.next.as_ref().is_some_and(|n| n.key == key);
+                if !current(&key, self) && !is_next {
+                    return;
+                }
+                self.log("warn", format!("playback error on {key}: {message}"));
+                if !fatal {
+                    self.emit(Event::PlayerNotice {
+                        message: Some(format!("Playback problem: {message}")),
+                    });
+                    return;
+                }
+                if is_next && !current(&key, self) {
+                    // The preloaded item failed to start after the current one ended.
+                    self.playback.awaiting_transition = false;
+                    self.playback.next = None;
+                    if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                        if self.playback.doc_key.as_ref() == Some(&item.key) {
+                            self.playback.load_failures += 1;
+                            self.load_item(&item, 0, true, None);
+                        }
+                    }
+                    return;
+                }
+                if let Some(id) = self.playback.track_id().map(str::to_string) {
+                    self.scrobbler.track_failed(&id);
+                }
+                self.playback.load_failures += 1;
+                let title = self
+                    .playback
+                    .track
+                    .as_ref()
+                    .map(|t| t.title.clone())
+                    .unwrap_or_else(|| "track".into());
+                if self.playback.load_failures <= LOAD_RETRIES {
+                    // One retry: transient stream errors are common.
+                    if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                        let failures = self.playback.load_failures;
+                        let pos = self.playback.position_ms;
+                        let play = self.playback.want_playing;
+                        self.load_item(&item, pos, play, None);
+                        self.playback.load_failures = failures;
+                    }
+                    return;
+                }
+                self.playback.consecutive_skips += 1;
+                self.playback.loaded = false;
+                self.playback.playing = false;
+                let _ = self.jobs.add_problem(
+                    None,
+                    &format!("Couldn't play {title}"),
+                    Some(&message),
+                    None,
+                );
+                if self.playback.consecutive_skips >= MAX_CONSECUTIVE_SKIPS {
+                    self.emit(Event::PlayerNotice {
+                        message: Some(format!(
+                            "Couldn't play {title}; stopped after {MAX_CONSECUTIVE_SKIPS} unplayable tracks"
+                        )),
+                    });
+                    self.playback.want_playing = false;
+                    self.playback.consecutive_skips = 0;
+                    self.stamp();
+                    self.emit_transport();
+                    return;
+                }
+                self.emit(Event::PlayerNotice {
+                    message: Some(format!("Couldn't play {title}, skipped")),
+                });
+                if let Some(doc_key) = self.playback.doc_key.clone() {
+                    if self.owns_transport() {
+                        self.playback.want_playing = true;
+                        self.local_op(SessionOp::SkipUnavailable { key: doc_key });
+                    }
+                }
+            }
+            BackendReport::PreBufferReady { key } => {
+                self.engine_input(Input::PreBufferReady { key });
+            }
+            BackendReport::AudioFocusLost { transient } => {
+                if self.playback.playing {
+                    if !transient {
+                        self.playback.want_playing = false;
+                    }
+                    self.set_playing(false);
+                }
+            }
+            BackendReport::OutputDevicesChanged { devices } => {
+                self.output_devices = devices.clone();
+                self.emit(Event::OutputDevicesChanged { devices });
+            }
+        }
+    }
+
+    // -- scrobbling -------------------------------------------------------------
+
+    pub(crate) fn apply_scrobble_actions(&mut self, actions: Vec<ScrobbleAction>) {
+        for a in actions {
+            match a {
+                ScrobbleAction::NowPlaying { track_id } => {
+                    if !self.settings.get_bool(crate::settings::keys::SCROBBLE_ENABLED)
+                        || !self.settings.get_bool(crate::settings::keys::SCROBBLE_NOW_PLAYING)
+                    {
+                        continue;
+                    }
+                    let Some(server_id) = self.server_id() else { continue };
+                    if let Err(e) = self
+                        .recorder()
+                        .apply(&server_id, &ScrobbleAction::NowPlaying { track_id })
+                    {
+                        self.log("warn", format!("now playing: {e}"));
+                    }
+                    self.schedule_flush();
+                }
+                ScrobbleAction::Submit {
+                    track_id,
+                    played_ms,
+                    ..
+                } => {
+                    // The play reached its threshold: ask the session (dedupe
+                    // across a handoff) before submitting.
+                    self.playback.scrobbled = true;
+                    let started_at = self.playback.started_at;
+                    self.pending_submits
+                        .insert((track_id.clone(), started_at.to_bits()), played_ms);
+                    self.stamp();
+                    self.engine_input(Input::ScrobbleReached {
+                        track_id,
+                        started_at,
+                    });
+                }
+            }
+        }
+    }
+
+    pub(crate) fn recorder(&self) -> crate::outbox::ScrobbleRecorder {
+        crate::outbox::ScrobbleRecorder::new(
+            self.db.clone(),
+            self.outbox.clone(),
+            self.cfg.device_id.clone(),
+        )
+    }
+
+    pub(crate) fn on_scrobble_verdict(&mut self, track_id: TrackId, started_at: EpochMs, allowed: bool) {
+        let played_ms = self
+            .pending_submits
+            .remove(&(track_id.clone(), started_at.to_bits()))
+            .unwrap_or_else(|| self.scrobbler.played_ms());
+        let Some(server_id) = self.server_id() else { return };
+        let started_local = if self.playback.started_at == started_at {
+            self.playback.started_local
+        } else {
+            self.now() - f64::from(played_ms)
+        };
+        if allowed && self.settings.get_bool(crate::settings::keys::SCROBBLE_ENABLED) {
+            let action = ScrobbleAction::Submit {
+                track_id: track_id.clone(),
+                started_at: started_local,
+                played_ms,
+            };
+            if let Err(e) = self.recorder().apply(&server_id, &action) {
+                self.log("warn", format!("scrobble: {e}"));
+            }
+            self.schedule_flush();
+        } else {
+            // Already scrobbled by the device that handed over (or scrobbling
+            // is off): it still counts as a local play.
+            if let Err(e) = self.db.record_play(
+                &server_id,
+                &track_id,
+                started_local,
+                played_ms,
+                allowed,
+                &self.cfg.device_id,
+            ) {
+                self.log("warn", format!("record play: {e}"));
+            }
+        }
+        self.emit(Event::LibraryChanged {
+            server_id,
+            tables: vec!["tracks".into(), "play_history".into()],
+            ids: vec![track_id],
+        });
+    }
+
+    pub(crate) fn scrobble_command(&mut self, track_id: TrackId, played_at: EpochMs, submission: bool) {
+        let Some(server_id) = self.server_id() else { return };
+        let r = self.outbox.enqueue(
+            &server_id,
+            crate::outbox::Mutation::Scrobble {
+                track_id,
+                played_at,
+                submission,
+                history_id: None,
+            },
+            None,
+        );
+        if let Err(e) = r {
+            self.error(ErrorKind::Storage, "scrobble", Some(e.to_string()));
+        }
+        self.schedule_flush();
+    }
+
+    // -- sleep timer --------------------------------------------------------------
+
+    pub(crate) fn set_sleep_timer(&mut self, timer: Option<SleepTimer>) {
+        let action = self.sleep.set(timer);
+        self.apply_sleep_action(action);
+        self.emit(Event::SleepTimerChanged {
+            timer: self.sleep.state(),
+        });
+    }
+
+    pub(crate) fn apply_sleep_action(&mut self, action: SleepAction) {
+        match action {
+            SleepAction::None => {}
+            SleepAction::Fade { gain } => {
+                self.playback.fade_gain = if gain >= 1.0 { None } else { Some(gain) };
+                let _ = self.backend.set_volume(self.effective_volume());
+            }
+            SleepAction::Stop => {
+                self.playback.want_playing = false;
+                self.set_playing(false);
+                self.playback.fade_gain = None;
+                let _ = self.backend.set_volume(self.effective_volume());
+                self.emit(Event::SleepTimerChanged {
+                    timer: self.sleep.state(),
+                });
+            }
+        }
+    }
+
+    // -- media session -------------------------------------------------------------
+
+    pub(crate) fn media_session_state(
+        &mut self,
+        queue: &QueueView,
+        transport: &TransportState,
+    ) -> MediaSessionState {
+        let art = self.media_session_artwork(queue);
+        let actions = self.registry.media_session_actions(&self.state_view());
+        derive_media_session_state(
+            queue,
+            transport,
+            self.session_now(),
+            art,
+            self.owns_transport(),
+            Some(actions),
+        )
+    }
+
+    pub(crate) fn emit_media_session(&mut self) {
+        let queue = self.queue_view();
+        let transport = self.transport_state();
+        let state = self.media_session_state(&queue, &transport);
+        self.emit(Event::MediaSession { state });
+    }
+
+    fn media_art_size(&self) -> u32 {
+        if self.battery_saver && self.settings.get_bool(crate::settings::keys::BATTERY_SMALL_ARTWORK)
+        {
+            MEDIA_SESSION_ART_SMALL
+        } else {
+            MEDIA_SESSION_ART
+        }
+    }
+
+    /// Artwork for the current track as a `file://` path, fetching in the
+    /// background when the cache misses.
+    fn media_session_artwork(&mut self, queue: &QueueView) -> Option<String> {
+        let cover = queue.current.as_ref()?.track.cover_art.clone()?;
+        let size = self.media_art_size();
+        if let Some((id, s, path)) = &self.media_art {
+            if id == &cover && *s == size {
+                return path.clone();
+            }
+        }
+        let server_id = self.server_id()?;
+        match self.caches.artwork_cached(&server_id, &cover, size) {
+            Ok(Some(p)) => {
+                let url = crate::downloads::file_url(&p);
+                self.media_art = Some((cover, size, Some(url.clone())));
+                Some(url)
+            }
+            _ => {
+                self.fetch_artwork(cover, size);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn fetch_artwork(&mut self, id: String, size: u32) {
+        if self.media_art_pending.as_ref() == Some(&(id.clone(), size)) {
+            return;
+        }
+        let Some(api) = self.api() else { return };
+        self.media_art_pending = Some((id.clone(), size));
+        let caches = self.caches.clone();
+        let tx = self.tx.clone();
+        self.spawn(async move {
+            let path = caches
+                .artwork_path(api.as_ref(), &id, size)
+                .await
+                .ok()
+                .flatten()
+                .map(|p| crate::downloads::file_url(&p));
+            let _ = tx.send(crate::core::ActorMsg::Internal(Internal::Artwork { id, size, path }));
+        });
+    }
+
+    pub(crate) fn on_artwork(&mut self, id: String, size: u32, path: Option<String>) {
+        if self.media_art_pending.as_ref() == Some(&(id.clone(), size)) {
+            self.media_art_pending = None;
+        }
+        self.media_art = Some((id, size, path));
+        self.emit_media_session();
+    }
+
+    fn prefetch_artwork_for_current(&mut self) {
+        let Some(cover) = self.playback.track.as_ref().and_then(|t| t.cover_art.clone()) else {
+            return;
+        };
+        let size = self.media_art_size();
+        let Some(server_id) = self.server_id() else { return };
+        if matches!(self.caches.artwork_cached(&server_id, &cover, size), Ok(Some(_))) {
+            return;
+        }
+        if self.battery_saver && self.settings.get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH) {
+            return;
+        }
+        self.fetch_artwork(cover, size);
+    }
+
+    pub(crate) fn media_session_command(&mut self, action: MediaSessionAction, value: Option<f64>) {
+        let queue = self.queue_view();
+        let transport = self.transport_state();
+        let state = self.media_session_state(&queue, &transport);
+        if let Some(cmd) = command_for(action, value, &state) {
+            self.handle_command(cmd);
+        }
+    }
+
+    pub(crate) fn set_battery_saver(&mut self, enabled: bool) {
+        if self.battery_saver != enabled {
+            self.battery_saver = enabled;
+            self.media_art = None;
+            self.emit_media_session();
+        }
+    }
+}

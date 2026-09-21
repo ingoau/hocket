@@ -127,6 +127,8 @@ pub struct StateView {
     /// Ctrl+Z belongs to the field.
     pub text_field_focused: bool,
     pub saved_queue_count: u32,
+    /// User volume 0.0–1.0 (for the relative volume actions).
+    pub volume: f64,
 }
 
 /// Resolves what handlers need from the mirror. The actor implements it;
@@ -222,7 +224,11 @@ impl ActionRegistry {
         defs::all()
     }
 
+    /// Look up a definition by id. Platform-side spellings (the desktop's
+    /// `rate.3`, `transport.next`, `nav.albums`, `ms.play`, `ui.*`) resolve
+    /// through [`canonical_id`] so every surface keys on one id set.
     pub fn get(&self, id: &str) -> Option<&'static ActionDef> {
+        let id = canonical_id(id);
         defs::all().iter().find(|d| d.id == id)
     }
 
@@ -298,6 +304,7 @@ impl ActionRegistry {
         let mut seen = std::collections::HashSet::new();
         let ids: Vec<String> = ids
             .into_iter()
+            .map(|id| canonical_id(&id).to_string())
             .filter(|id| self.get(id).is_some() && seen.insert(id.clone()))
             .collect();
         if ids == self.default_order(surface) {
@@ -423,6 +430,7 @@ impl ActionRegistry {
 
     /// The effective chord: override, else default.
     pub fn shortcut_for(&self, id: &str) -> Option<String> {
+        let id = canonical_id(id);
         match self.overrides.get(id) {
             Some(o) => o.clone(),
             None => self.default_shortcut(id),
@@ -441,6 +449,7 @@ impl ActionRegistry {
     /// Rebind (`Some(chord)`) or unbind (`None`). Rejects unknown actions,
     /// unparseable chords and chords another action already uses.
     pub fn set_shortcut(&mut self, id: &str, chord: Option<&str>) -> Result<(), ActionError> {
+        let id = canonical_id(id);
         if self.get(id).is_none() {
             return Err(ActionError::UnknownAction(id.into()));
         }
@@ -468,7 +477,7 @@ impl ActionRegistry {
 
     /// Reset one action to its default chord.
     pub fn reset_shortcut(&mut self, id: &str) {
-        self.overrides.remove(id);
+        self.overrides.remove(canonical_id(id));
     }
 
     /// Every action that has a default or an override, for `Query::Shortcuts`.
@@ -531,6 +540,89 @@ impl ActionRegistry {
         self.apply_customisation(&c);
         Ok(())
     }
+}
+
+/// Alternative spellings of action ids that platform layers use, mapped to
+/// the registry's canonical ids. Every registry entry point that takes an id
+/// (`commands`, `set_shortcut`, `set_order`, `descriptor`) accepts either.
+pub const ALIASES: &[(&str, &str)] = &[
+    ("rate.0", "rate0"),
+    ("rate.1", "rate1"),
+    ("rate.2", "rate2"),
+    ("rate.3", "rate3"),
+    ("rate.4", "rate4"),
+    ("rate.5", "rate5"),
+    ("track.love", "love"),
+    ("track.unlove", "unlove"),
+    ("transport.togglePlay", "togglePlay"),
+    ("transport.play", "togglePlay"),
+    ("transport.pause", "pause"),
+    ("transport.stop", "stop"),
+    ("transport.next", "next"),
+    ("transport.previous", "previous"),
+    ("transport.seekBack", "seekBackward"),
+    ("transport.seekBackward", "seekBackward"),
+    ("transport.seekForward", "seekForward"),
+    ("transport.shuffle", "shuffle"),
+    ("transport.repeat", "repeat"),
+    ("transport.toggleAutoplay", "autoplay"),
+    ("transport.autoplay", "autoplay"),
+    ("transport.volumeUp", "volumeUp"),
+    ("transport.volumeDown", "volumeDown"),
+    ("transport.resumeHere", "resumeHere"),
+    ("ms.play", "togglePlay"),
+    ("ms.pause", "pause"),
+    ("ms.stop", "stop"),
+    ("ms.next", "next"),
+    ("ms.previous", "previous"),
+    ("ms.shuffle", "shuffle"),
+    ("ms.repeat", "repeat"),
+    ("ms.love", "love"),
+    ("nav.home", "navigateHome"),
+    ("nav.library", "navigateTracks"),
+    ("nav.songs", "navigateTracks"),
+    ("nav.tracks", "navigateTracks"),
+    ("nav.albums", "navigateAlbums"),
+    ("nav.artists", "navigateArtists"),
+    ("nav.playlists", "navigatePlaylists"),
+    ("nav.genres", "navigateGenres"),
+    ("nav.recent", "navigateRecent"),
+    ("nav.filters", "navigateFilters"),
+    ("nav.downloads", "navigateDownloads"),
+    ("nav.stats", "navigateStats"),
+    ("nav.settings", "navigateSettings"),
+    ("ui.palette", "openCommandPalette"),
+    ("ui.search", "findInList"),
+    ("ui.queue", "toggleQueuePanel"),
+    ("ui.fullscreen", "toggleFullscreen"),
+    ("ui.miniPlayer", "toggleMiniPlayer"),
+    ("ui.lyrics", "toggleLyrics"),
+    ("ui.selectAll", "selectAll"),
+    ("ui.saveQueueAsPlaylist", "saveQueueAsPlaylist"),
+    ("ui.removeFromPlaylist", "removeFromPlaylist"),
+    ("ui.removeDownload", "unpin"),
+    ("ui.delete", "remove"),
+    ("ui.goToArtist", "goToArtist"),
+    ("ui.goToAlbum", "goToAlbum"),
+    ("ui.deletePlaylist", "deletePlaylist"),
+    ("ui.addToPlaylist", "addToPlaylist"),
+    ("ui.sleepTimer", "sleepTimer"),
+    ("ui.playOn", "handoff"),
+    ("ui.settings", "navigateSettings"),
+    ("ui.openStats", "navigateStats"),
+    ("ui.openFilters", "navigateFilters"),
+    ("ui.openDownloads", "navigateDownloads"),
+    ("ui.copyDiagnostics", "copyDiagnostics"),
+    ("settings.copyDiagnostics", "copyDiagnostics"),
+];
+
+/// The registry id for an id in any accepted spelling.
+pub fn canonical_id(id: &str) -> &str {
+    ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == id)
+        .map(|(_, canonical)| *canonical)
+        .unwrap_or(id)
 }
 
 // -- helpers shared with the definitions ------------------------------------
