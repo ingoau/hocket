@@ -581,8 +581,13 @@ impl Actor {
                     self.stamp();
                     self.emit_transport();
                 } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
-                    self.playback.awaiting_transition = false;
-                    self.load_item(&item, 0, true, None);
+                    // A stale transition (we already reloaded what the document
+                    // says) is ignored; otherwise follow the document.
+                    if !(self.playback.loaded && self.playback.doc_key.as_ref() == Some(&item.key)) {
+                        self.playback.awaiting_transition = false;
+                        let play = self.playback.want_playing;
+                        self.load_item(&item, 0, play, None);
+                    }
                 }
             }
             BackendReport::Error {

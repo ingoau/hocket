@@ -232,15 +232,9 @@ async fn unplayable_items_are_skipped_with_a_notice() {
     })
     .await;
     t.run_for(500.0).await;
-    let key1 = t.queue().await.upcoming[0].item.key.clone();
-    let _ = key1;
-    // The next item fails to load however it is keyed.
-    t.run(Command::Next).await;
-    let cur = t.queue().await.current.unwrap().item.key;
-    t.backend.fail_key(cur.clone());
-    // Reload it (a retry happens first, then it is marked unavailable).
-    t.run(Command::Previous).await;
-    t.run_for(500.0).await;
+    // t1 cannot be decoded here: one retry, then it is marked unavailable
+    // and playback moves on. Nothing scrobbles for it.
+    t.backend.fail_track("t1");
     t.run(Command::Next).await;
     t.run_for(2_000.0).await;
     let q = t.queue().await;
@@ -252,6 +246,22 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         .iter()
         .any(|e| matches!(e, Event::PlayerNotice { message: Some(m) } if m.contains("skipped"))));
     assert!(t.backend.is_playing());
+    let loads = t
+        .backend
+        .log()
+        .iter()
+        .filter(|c| matches!(c, ScriptedCall::Load { .. }))
+        .count();
+    assert!(loads >= 3, "t0, t1 (+retry), t2: {loads}");
+    // Going back lands on t0 (the unavailable item is passed over) and a
+    // deliberate jump to t1 clears the flag and tries again.
+    t.run(Command::Previous).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    match t.query(Query::Problems).await {
+        QueryResult::Problems(p) => assert!(p.iter().any(|p| p.summary.contains("Track 1"))),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

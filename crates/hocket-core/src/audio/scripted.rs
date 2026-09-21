@@ -98,6 +98,8 @@ struct State {
     gapless: bool,
     device: Option<String>,
     failing: HashSet<QueueKey>,
+    /// Track ids whose loads fail (whatever key they carry).
+    failing_tracks: HashSet<String>,
     /// Extra virtual milliseconds a load takes before `Ready`.
     load_latency_ms: f64,
     load_started_ms: f64,
@@ -134,6 +136,16 @@ impl ScriptedBackend {
     /// Clear a scripted failure.
     pub fn unfail_key(&self, key: &str) {
         self.state.lock().failing.remove(key);
+    }
+
+    /// Make every future load of a track fail fatally, however it is keyed
+    /// (queue keys are re-materialised by the reducer; tracks are stable).
+    pub fn fail_track(&self, track_id: impl Into<String>) {
+        self.state.lock().failing_tracks.insert(track_id.into());
+    }
+
+    pub fn unfail_track(&self, track_id: &str) {
+        self.state.lock().failing_tracks.remove(track_id);
     }
 
     /// Virtual time a load takes before reporting `Ready` (default 0).
@@ -190,16 +202,17 @@ impl ScriptedBackend {
 
         if st.pending_ready && now >= st.load_started_ms + st.load_latency_ms {
             st.pending_ready = false;
-            let (key, duration, position) = {
+            let (key, duration, position, track_id) = {
                 let cur = st.current.as_mut().expect("pending_ready implies current");
                 cur.anchor_ms = now;
                 (
                     cur.source.key.clone(),
                     cur.source.track.duration_ms,
                     cur.position_ms as u32,
+                    cur.source.track.id.clone(),
                 )
             };
-            let failing = st.failing.contains(&key);
+            let failing = st.failing.contains(&key) || st.failing_tracks.contains(&track_id);
             if failing {
                 st.current = None;
                 st.playing = false;
@@ -243,7 +256,10 @@ impl ScriptedBackend {
             let ended_key = cur.source.key.clone();
             out.push(BackendReport::Ended { key: ended_key });
             match st.next.take() {
-                Some(next) if !st.failing.contains(&next.key) => {
+                Some(next)
+                    if !st.failing.contains(&next.key)
+                        && !st.failing_tracks.contains(&next.track.id) =>
+                {
                     let key = next.key.clone();
                     st.current = Some(Item {
                         source: next,
