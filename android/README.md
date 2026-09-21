@@ -11,7 +11,8 @@ android/
 
 ## Building
 
-Requirements: JDK 17+, Android SDK with platform 37 (AGP installs it when licences are accepted),
+Requirements: JDK 17+, Android SDK with platform 37.1 (`compileSdk` 37 + `compileSdkMinor` 1; the package is
+`platforms;android-37.1` — there is no plain `platforms;android-37`),
 NDK 27, Rust with the Android targets (`aarch64-linux-android`, `armv7-linux-androideabi`,
 `x86_64-linux-android`), `cargo-ndk`, `typeshare-cli`.
 
