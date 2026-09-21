@@ -1444,7 +1444,9 @@ mod tests {
             f.db.track("t1").unwrap().unwrap().offline,
             OfflineState::Cached
         );
-        // touching t1 makes t2 the next victim
+        // touching t1 makes t2 the next victim (the LRU clock is the wall
+        // clock in ms; make sure the touch lands after the puts)
+        std::thread::sleep(std::time::Duration::from_millis(2));
         assert!(f.dl.cache_get("srv", "t1", None).unwrap().is_some());
         let p = f.dl.cache_path("srv", "t5", None, Some("flac"));
         std::fs::write(&p, vec![0u8; 1000]).unwrap();

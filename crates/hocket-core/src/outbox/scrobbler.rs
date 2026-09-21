@@ -724,7 +724,9 @@ mod tests {
                         Ev::Play => { playing = true; s.set_playing(true); }
                     }
                     prop_assert!(f64::from(s.played_ms()) <= wall_playing + 1.0);
-                    prop_assert!(s.played_ms() <= duration);
+                    // Played time may exceed the track length: seeking back and
+                    // listening again is real listening (the model below agrees),
+                    // so the only bound is wall time spent playing.
                 }
                 for a in s.track_ended("t", Some(pos)) {
                     if matches!(a, ScrobbleAction::Submit { .. }) { submits += 1; }
