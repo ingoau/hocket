@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "@shared/strings";
+import { NAV_VIEWS } from "@shared/keymap";
+import { executeAction } from "../store/actions";
 import { useApp, type ViewName } from "../store/app";
 import { useActions, useQuery } from "../store/queries";
 import { openContextMenu } from "./ContextMenu";
@@ -30,15 +32,19 @@ export function Sidebar() {
     };
   }, [dragging, setPanels]);
 
-  const items = navActions.length ? navActions.map((a) => ({ id: a.id.replace("nav.", "") as ViewName, label: a.label, icon: a.icon })) : (["home", "albums", "artists", "playlists", "songs", "genres", "downloads", "filters", "stats"] as ViewName[]).map((v) => ({ id: v, label: t(`nav.${v}` as never), icon: v === "home" ? "home" : v === "albums" ? "album" : v === "artists" ? "artist" : v === "playlists" ? "playlist" : v === "songs" ? "song" : v === "genres" ? "genre" : v === "downloads" ? "download" : v === "filters" ? "filter" : "stats" }));
-  const isActive = (v: ViewName) => route.view === v || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter");
+  const fallback = ["navigateHome", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateTracks", "navigateGenres", "navigateDownloads", "navigateFilters", "navigateStats"];
+  const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
+  const items = (navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
+    .filter((it) => it.id !== "navigateSettings")
+    .map((it) => ({ ...it, view: NAV_VIEWS[it.id] as ViewName | undefined }));
+  const isActive = (v: ViewName | undefined) => !!v && (route.view === v || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
 
   return (
     <nav className="sidebar" aria-label={t("nav.library")} style={{ width: panels.sidebarWidth }} data-testid="sidebar">
       <div className="sidebar-scroll">
         <div className="section-title">{t("nav.library")}</div>
         {items.map((it) => (
-          <a key={it.id} href="#" className={`nav-item ${isActive(it.id) ? "active" : ""}`} aria-current={isActive(it.id) ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: it.id }); }} data-testid={`nav-${it.id}`}>
+          <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
             <Icon name={it.icon} size={15} />
             <span>{it.label}</span>
           </a>

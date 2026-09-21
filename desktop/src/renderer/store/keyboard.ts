@@ -2,7 +2,7 @@
 // layered over DEFAULT_KEYMAP. Text fields keep Ctrl+Z and typing; lists
 // handle navigation first (they stopPropagation); media keys never arrive here.
 import { useEffect, useMemo } from "react";
-import { DEFAULT_KEYMAP } from "@shared/keymap";
+import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { useApp } from "./app";
 import { Keymap, chordFromEvent, isTextInput } from "./shortcuts";
 import { executeAction } from "./actions";
@@ -12,12 +12,12 @@ export function useKeymap(): Keymap {
   return useMemo(() => {
     const merged = new Map<string, string | undefined>();
     for (const d of DEFAULT_KEYMAP) merged.set(d.actionId, d.shortcut);
-    for (const s of shortcuts) merged.set(s.actionId, s.shortcut ?? undefined);
+    for (const s of shortcuts) merged.set(canonicalActionId(s.actionId), s.shortcut ?? undefined);
     return new Keymap([...merged.entries()].map(([actionId, shortcut]) => ({ actionId, shortcut })));
   }, [shortcuts]);
 }
 
-const TEXT_ALLOWED = new Set(["ui.palette", "ui.escape", "ui.fullscreen.exit"]);
+const TEXT_ALLOWED = new Set(["openCommandPalette", "ui.escape"]);
 
 export function useGlobalKeyboard(enabled = true): void {
   const keymap = useKeymap();
@@ -36,7 +36,7 @@ export function useGlobalKeyboard(enabled = true): void {
         // A focused text field owns undo/redo, select-all, arrows, digits, space...
         const isPlainKey = !chord.mod && !chord.alt && !chord.ctrl && !chord.meta;
         if (isPlainKey && id !== "ui.escape") return;
-        if (["undo", "redo", "redo.alt", "ui.selectAll", "ui.delete", "ui.search"].includes(id)) return;
+        if (["undo", "redo", "redoAlt", "selectAll", "remove", "findInList"].includes(id)) return;
         if (!TEXT_ALLOWED.has(id) && chord.key.length === 1 && !chord.mod) return;
         if (id === "ui.escape") {
           (e.target as HTMLElement).blur();
@@ -45,10 +45,10 @@ export function useGlobalKeyboard(enabled = true): void {
       }
       e.preventDefault();
       const app = useApp.getState();
-      if (id === "redo.alt") { app.dispatch({ type: "redo" }); return; }
+      if (id === "redoAlt") { app.dispatch({ type: "redo" }); return; }
       if (id === "undo") { app.dispatch({ type: "undo" }); return; }
       if (id === "redo") { app.dispatch({ type: "redo" }); return; }
-      if (id.startsWith("rate.")) {
+      if (/^rate[0-5]$/.test(id)) {
         // Rate the current selection if any; the list handles it when focused.
         if (app.selectionScope && !app.selection.all && app.selection.ids.size) {
           app.runAction(id, { type: "tracks", data: { ids: [...app.selection.ids] } });

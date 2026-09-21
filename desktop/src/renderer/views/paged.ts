@@ -25,13 +25,23 @@ export function usePagedGrid<T>(fetchPage: (offset: number, limit: number) => Pr
       .catch((err: unknown) => console.warn("[paged] load failed", err))
       .finally(() => loading.current.delete(page));
   }, [fetchPage, pageSize]);
+  const depsKey = JSON.stringify(deps);
+  const lastDeps = useRef<string | undefined>(undefined);
   useEffect(() => {
     gen.current += 1;
     loading.current.clear();
-    setRows([]);
-    setTotal(0);
-    load(0);
-  }, [...deps, libraryVersion]);
+    const changed = lastDeps.current !== depsKey;
+    lastDeps.current = depsKey;
+    if (changed) {
+      setRows([]);
+      setTotal(0);
+      load(0);
+      return;
+    }
+    const pages = new Set<number>([0]);
+    rows.forEach((r, i) => { if (r) pages.add(Math.floor(i / pageSize)); });
+    for (const p of pages) load(p);
+  }, [depsKey, libraryVersion]);
   const onNeedRange = useCallback((start: number, end: number) => {
     for (let p = Math.floor(Math.max(0, start) / pageSize); p <= Math.floor(Math.max(0, end) / pageSize); p++) {
       if (rows[p * pageSize] === undefined && p * pageSize < Math.max(total, 1)) load(p);

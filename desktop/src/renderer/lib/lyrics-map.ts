@@ -67,7 +67,7 @@ export function mapLyrics(lyrics: Lyrics): MappedLyrics {
   }
   const lines: AmllLine[] = [];
   for (const l of lyrics.lines) {
-    if (l.startMs === undefined) continue; // synced tier but this line has no timing: skip rather than guess
+    if (l.startMs == null) continue; // synced tier but this line has no timing (null from the core): skip rather than guess
     const words = lineWords(l, lyrics.tier, offset);
     const startTime = Math.max(0, (l.startMs ?? 0) + offset);
     const endTime = Math.max(startTime, (l.endMs ?? words[words.length - 1]?.endTime ?? startTime) + (l.endMs === undefined ? 0 : offset));

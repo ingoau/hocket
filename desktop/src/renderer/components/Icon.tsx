@@ -90,8 +90,27 @@ export interface IconProps {
   title?: string;
 }
 
+/** Material Symbols names (what the registry's descriptors carry) → local glyphs. */
+const MATERIAL: Record<string, string> = {
+  play_arrow: "play", play_pause: "play", pause: "pause", stop: "stop", skip_next: "next", skip_previous: "previous",
+  forward_10: "forward", replay_10: "rewind", volume_up: "volume", volume_down: "volume", playlist_play: "playNext",
+  playlist_add: "playLater", remove_from_queue: "remove", delete: "trash", shuffle: "shuffle", shuffle_on: "shuffle",
+  repeat: "repeat", all_inclusive: "autoplay", clear_all: "trash", playlist_remove: "remove", playlist_add_check: "playlistAdd",
+  history: "restore", push_pin: "pin", keep_off: "pinOff", delete_forever: "trash", star_rate: "star", star_outline: "starOff",
+  star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "download", file_download_off: "downloadOff",
+  album: "album", artist: "artist", person: "artist", undo: "undo", redo: "redo", select_all: "selectAll",
+  keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen",
+  picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
+  play_circle: "resume", close: "close", bug_report: "bug", home: "home", music_note: "song", category: "genre",
+  insights: "stats", settings: "settings", filter_alt: "filter", info: "info",
+};
+
+export function iconName(name: string): string {
+  return PATHS[name] ? name : (MATERIAL[name] ?? "music");
+}
+
 export function Icon({ name, size = 16, className, style, title }: IconProps) {
-  const d = PATHS[name] ?? PATHS.music;
+  const d = PATHS[iconName(name)] ?? PATHS.music;
   return (
     <svg className={`icon ${className ?? ""}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" style={style} aria-hidden={title ? undefined : true} role={title ? "img" : undefined}>
       {title ? <title>{title}</title> : null}
@@ -101,5 +120,5 @@ export function Icon({ name, size = 16, className, style, title }: IconProps) {
 }
 
 export function hasIcon(name: string): boolean {
-  return name in PATHS;
+  return name in PATHS || name in MATERIAL;
 }

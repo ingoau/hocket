@@ -34,7 +34,16 @@ export interface OpenDialogRequest {
   filters?: { name: string; extensions: string[] }[];
 }
 
+/** Device-local app preferences the core registry doesn't define. */
+export interface AppPrefs {
+  closeToTray: boolean;
+}
+
 export interface HocketBridge {
+  prefs: {
+    get(): Promise<AppPrefs>;
+    set(patch: Partial<AppPrefs>): Promise<AppPrefs>;
+  };
   dispatch(command: Command): void;
   query(query: Query): Promise<QueryResult>;
   onEvent(listener: (event: Event) => void): () => void;
@@ -91,6 +100,8 @@ export const IPC = {
   fileRead: "hocket:file:read",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
+  prefsGet: "hocket:prefs:get",
+  prefsSet: "hocket:prefs:set",
   uiAction: "hocket:ui-action",
 } as const;
 

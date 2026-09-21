@@ -6,11 +6,12 @@ import { useEffect, useRef } from "react";
 import { Kawarp } from "@kawarp/core";
 import { useApp, useSetting } from "../store/app";
 import { useArtwork } from "./Artwork";
+import { SK } from "@shared/settings-keys";
 
 export function FluidBackground({ coverArt }: { coverArt: string | undefined }) {
   const perf = useApp((s) => s.perf);
   const batterySaver = useApp((s) => s.batterySaver);
-  const animatedSetting = useSetting("appearance.animatedBackground", true);
+  const animatedSetting = useSetting(SK.displayAnimatedBackground, true);
   const url = useArtwork(coverArt, 300);
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);

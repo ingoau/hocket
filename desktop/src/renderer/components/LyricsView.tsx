@@ -12,6 +12,7 @@ import { extrapolate, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
 import { Icon } from "./Icon";
+import { SK } from "@shared/settings-keys";
 
 export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyrics; variant: "compact" | "large"; showTools?: boolean }) {
   const stamp = useApp((s) => s.transport.position);
@@ -19,7 +20,8 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   const duration = useApp((s) => s.nowPlaying?.track.durationMs);
   const perf = useApp((s) => s.perf);
   const batterySaver = useApp((s) => s.batterySaver);
-  const fpsCap = useApp((s) => Number(JSON.parse(s.settings["lyrics.fpsCap"]?.value ?? "60")) || 60);
+  const fpsCap = useApp((s) => Number(JSON.parse(s.settings[SK.displayLyricsFps]?.value ?? "60")) || 60);
+  const batteryFps = useApp((s) => Number(JSON.parse(s.settings[SK.batteryLyricsFps]?.value ?? "30")) || 30);
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<DomLyricPlayer | undefined>(undefined);
   const mapped = useMemo(() => mapLyrics(lyrics), [lyrics]);
@@ -78,7 +80,7 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   // Frame loop: explicit stop when hidden; ~24 fps in the background; 30 cap in battery saver.
   useEffect(() => {
     if (!mapped.synced || perf === "stopped") return;
-    const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(30, fpsCap) : fpsCap;
+    const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(batteryFps, fpsCap) : fpsCap;
     let raf = 0;
     let last = performance.now();
     let acc = 0;
@@ -97,7 +99,7 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [mapped.synced, perf, batterySaver, fpsCap, clockOffset, duration]);
+  }, [mapped.synced, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration]);
 
   const tierLabel = lyrics.tier === "syllable" ? t("lyrics.tier.syllable") : lyrics.tier === "line" ? t("lyrics.tier.line") : t("lyrics.tier.unsynced");
   const sourceLabel = lyrics.source === "server" ? t("lyrics.source.server") : lyrics.source === "external" ? t("lyrics.source.external") : t("lyrics.source.embedded");

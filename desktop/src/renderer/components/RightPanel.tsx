@@ -9,11 +9,13 @@ import { LyricsView } from "./LyricsView";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { bridge } from "../core/bridge";
+import { SK } from "@shared/settings-keys";
 
 export function RightPanel() {
   const panels = useApp((s) => s.panels);
   const setPanels = useApp((s) => s.setPanels);
-  const [tab, setTab] = useState<"queue" | "recent">("queue");
+  const tab = useApp((s) => s.queueTab);
+  const setTab = useApp((s) => s.setQueueTab);
   const [drag, setDrag] = useState(false);
   const [widthDrag, setWidthDrag] = useState<{ x: number; w: number } | undefined>(undefined);
   const ref = useRef<HTMLDivElement>(null);
@@ -75,7 +77,7 @@ export function RightPanel() {
 export function LyricsPane({ variant = "compact" }: { variant?: "compact" | "large" }) {
   const now = useApp((s) => s.nowPlaying);
   const lyrics = useApp((s) => s.lyrics);
-  const external = useApp((s) => s.settings["lyrics.external"]?.value === "true");
+  const external = useApp((s) => s.settings[SK.lyricsExternalEnabled]?.value === "true");
   if (!now) return <EmptyState message={t("lyrics.nothingPlaying")} />;
   const current = lyrics && lyrics.trackId === now.track.id ? lyrics.lyrics : undefined;
   if (!current) return <EmptyState message={t("lyrics.none")} action={!external ? <span className="small faint">{t("lyrics.noneHint")}</span> : undefined} testId="lyrics-empty" />;

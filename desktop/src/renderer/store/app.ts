@@ -3,13 +3,14 @@
 // `dispatch`/`query` which go straight to the bridge.
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
-import type { AppMeta, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
 import { expectResult, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
+import { SK } from "@shared/settings-keys";
 
 export type ViewName = "home" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
 
@@ -67,6 +68,8 @@ export interface UiState {
   pageVisible: boolean;
   /** Renderer performance mode derived from visibility/focus/battery. */
   perf: "full" | "background" | "stopped";
+  queueTab: "queue" | "recent";
+  prefs: AppPrefs;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -92,6 +95,8 @@ export interface AppStore extends CoreState, UiState {
   setMeta(meta: AppMeta): void;
   setWindowState(state: WindowState): void;
   setPageVisible(visible: boolean): void;
+  setQueueTab(tab: "queue" | "recent"): void;
+  setPrefs(patch: Partial<AppPrefs>): void;
   setting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
   runAction(actionId: string, target?: ActionTarget): void;
@@ -118,6 +123,8 @@ export const useApp = create<AppStore>((set, get) => ({
   accent: undefined,
   pageVisible: true,
   perf: "full",
+  queueTab: "queue",
+  prefs: { closeToTray: true },
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -151,6 +158,10 @@ export const useApp = create<AppStore>((set, get) => ({
     const panels = { ...get().panels, ...patch };
     saveLocal("panels", panels);
     set({ panels });
+    // The divider ratio is also a registry setting (device-local) so the core can back it up.
+    if (patch.splitRatio !== undefined && get().ready) {
+      bridge().dispatch({ type: "setSetting", data: { key: SK.displayQueuePanelSplit, value: JSON.stringify(Math.round(patch.splitRatio * 100) / 100) } });
+    }
   },
   setFullscreen(on) {
     set({ fullscreen: on, contextMenu: undefined });
@@ -196,6 +207,12 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ pageVisible });
     recomputePerf();
   },
+  setQueueTab(queueTab) {
+    set({ queueTab });
+  },
+  setPrefs(patch) {
+    void bridge().prefs.set(patch).then((prefs) => set({ prefs }));
+  },
   setting<T>(key: string, fallback: T): T {
     return settingValue(get(), key, fallback);
   },
@@ -225,20 +242,39 @@ function recomputePerf(): void {
   // Position ticker: stopped when hidden; 24 fps in the background; capped by
   // battery saver (30 fps) and the lyrics fps setting when focused.
   ticker.setPaused(perf === "stopped");
-  const cap = s.batterySaver ? 30 : Math.max(10, Math.min(144, settingValue(s, "lyrics.fpsCap", 60)));
+  const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 60)));
   ticker.fps = perf === "background" ? Math.min(24, cap) : cap;
 }
 
 /** Wire the bridge once at startup. Returns a disposer. */
 export function connectStore(): () => void {
   const b = bridge();
+  // The core fetches lyrics only on Query.Lyrics / FetchLyrics, never on its
+  // own at a track change, so ask when the current track changes; a miss is
+  // answered later by LyricsChanged.
+  let lyricsFor: string | undefined;
+  const requestLyrics = (trackId: string | undefined) => {
+    if (!trackId || trackId === lyricsFor) return;
+    lyricsFor = trackId;
+    void b.query({ type: "lyrics", data: { track_id: trackId } }).then((r) => {
+      if (r.type === "lyricsResult" && r.data && lyricsFor === trackId) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
+    }).catch(() => undefined);
+  };
   const offEvent = b.onEvent((e) => {
     useApp.getState().applyEvent(e);
-    if (e.type === "started" || (e.type === "settingChanged" && e.data.setting.key === "lyrics.fpsCap") || e.type === "toast") recomputePerf();
-    if (e.type === "started") recomputePerf();
+    if (e.type === "nowPlayingChanged") requestLyrics(e.data.entry?.track.id);
+    if (e.type === "started") requestLyrics(e.data.snapshot.queue.current?.track.id);
+    if (e.type === "started" || (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps"))) recomputePerf();
+    if (e.type === "started") {
+      recomputePerf();
+      // Use the core's remembered split when this browser profile has none yet.
+      const split = settingValue(useApp.getState(), SK.displayQueuePanelSplit, undefined as number | undefined);
+      if (split !== undefined && loadLocal<Partial<PanelState>>("panels", {}).splitRatio === undefined) useApp.setState((st) => ({ panels: { ...st.panels, splitRatio: Math.max(0.15, Math.min(0.85, split)) } }));
+    }
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));
+  void b.prefs.get().then((prefs) => useApp.setState({ prefs }));
   void b.window.getState().then((st) => st && useApp.getState().setWindowState(st));
   const onVis = () => {
     const visible = document.visibilityState === "visible";

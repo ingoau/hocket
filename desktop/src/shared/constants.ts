@@ -16,7 +16,20 @@ export const DEV_SERVER_URL = "http://localhost:5178";
 /** Fixed artwork cache sizes, per design.md "Player features → Caching". */
 export const ARTWORK_SIZES = { thumb: 64, grid: 300, full: 1000 } as const;
 
-export function artworkUrl(path: string | undefined): string | undefined {
-  if (!path) return undefined;
-  return `${ART_SCHEME}://file/${encodeURIComponent(path)}`;
+/** Query.Artwork answers with a `file://` URL (or a bare path); both become a filesystem path. */
+export function artworkFilePath(pathOrUrl: string): string {
+  if (!pathOrUrl.startsWith("file://")) return pathOrUrl;
+  try {
+    const u = new URL(pathOrUrl);
+    let p = decodeURIComponent(u.pathname);
+    if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1); // file:///C:/x on Windows
+    return u.host && u.host !== "localhost" ? `//${u.host}${p}` : p;
+  } catch {
+    return pathOrUrl.replace(/^file:\/\//, "");
+  }
+}
+
+export function artworkUrl(pathOrUrl: string | undefined): string | undefined {
+  if (!pathOrUrl) return undefined;
+  return `${ART_SCHEME}://file/${encodeURIComponent(artworkFilePath(pathOrUrl))}`;
 }

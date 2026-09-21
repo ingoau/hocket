@@ -20,8 +20,12 @@ pnpm typecheck      # renderer (tsconfig.json) and main/preload/e2e (tsconfig.no
 pnpm lint           # eslint
 pnpm test           # vitest: reducer, position extrapolation, selection model,
                     # shortcut parser, palette ranking, lyrics mapping, accent extraction
-pnpm test:e2e       # Playwright Electron e2e against the FakeCore (needs a display:
-                    # `xvfb-run -a pnpm test:e2e` on a headless Linux box; run `pnpm build` first)
+pnpm test:e2e       # Playwright Electron e2e (needs a display: `xvfb-run -a pnpm test:e2e` on a
+                    # headless Linux box; run `pnpm build` first). e2e/*.spec.ts except native.spec.ts
+                    # run against the FakeCore; e2e/native.spec.ts runs the REAL core (native addon,
+                    # skipped when native/ isn't built) against e2e/fake-navidrome.ts, a small
+                    # Subsonic JSON server: setup → sync → play → queue → rate → undo → lyrics →
+                    # settings persistence → credential replay across a restart.
 pnpm dist           # electron-builder: AppImage + deb (Linux), dmg (macOS), nsis (Windows)
 pnpm dist:dir       # unpacked build in release/ (what CI uses to prove packaging)
 ```
@@ -127,6 +131,32 @@ Notes from `docs/design.md` "OS media session" that the host honours:
 - The crate feature `media-session` (default on) gates playwire. Without it, or when the
   OS service is unavailable, `MediaSession` reports unsupported and the app runs without
   OS integration; it never blocks the build.
+
+## Action ids and settings keys
+
+The UI keys everything on the registry's **canonical** action ids
+(`crates/hocket-core/src/actions/defs.rs`): `play`, `playShuffled`, `playNext`, `rate0`…`rate5`,
+`love`, `togglePlay`, `seekBackward`, `toggleQueuePanel`, `openCommandPalette`, `navigateAlbums`,
+… The core accepts aliases on input; `src/shared/keymap.ts` carries the same alias table
+(`ACTION_ALIASES`, `canonicalActionId`) so older ids keep working, and `NAV_VIEWS` maps
+`navigate*` ids to views. Ids with a `ui.` prefix (`ui.escape`, `ui.back`, `ui.info`,
+`ui.newPlaylist`, `ui.renamePlaylist`) have no registry equivalent and stay renderer-only.
+Descriptor icons are Material Symbols names; `components/Icon.tsx` maps them to local glyphs.
+
+Settings keys are the registry's (`crates/hocket-core/src/settings/registry.rs`), listed in
+`src/shared/settings-keys.ts`: `display.theme`, `display.accent`, `display.dynamicColour`,
+`display.animatedBackground`, `display.lyricsFps`, `display.queuePanelSplit`, `battery.autoEngage`,
+`battery.lyricsFps`, `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`,
+`storage.warnThresholdBytes`, `queue.{mode,savedCap}`, `sync.enabled`, `connect.*`,
+`actions.order.*`, `shortcuts`. Close-to-tray is not a registry key; it is a device-local
+preference in main's state file, exposed as `window.hocket.prefs`.
+
+Two real-core behaviours the renderer accounts for: `Query.Artwork` answers with a `file://` URL
+(`artworkFilePath` in `src/shared/constants.ts`), and the core only fetches lyrics on
+`Query.Lyrics`/`FetchLyrics`, so the store asks when the current track changes and
+`LyricsChanged` fills in late answers. Optional fields arrive as `null`, never `undefined`.
+A fresh undoable mutation produces only `UndoChanged`; the reducer synthesises the
+"<label> · Undo" toast from it, once per entry id.
 
 ## Panel and keyboard conventions
 

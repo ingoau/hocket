@@ -5,8 +5,9 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 
 export function Setup() {
-  const [url, setUrl] = useState("");
-  const [username, setUsername] = useState("");
+  const pending = useApp((s) => s.servers[0]);
+  const [url, setUrl] = useState(pending?.url ?? "");
+  const [username, setUsername] = useState(pending?.username ?? "");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
@@ -17,9 +18,16 @@ export function Setup() {
   useEffect(() => {
     if (lastError && lastError.at >= submittedAt && busy) {
       setBusy(false);
-      setError(t("setup.failed", { message: lastError.message }));
+      setError(t("setup.failed", { message: lastError.detail && lastError.detail !== lastError.message ? `${lastError.message}: ${lastError.detail}` : lastError.message }));
     }
   }, [lastError, submittedAt, busy]);
+  // The core reports a failed probe as ServersChanged{reachable:false} too.
+  useEffect(() => {
+    if (busy && pending && !pending.reachable && !pending.capabilities.serverVersion) {
+      setBusy(false);
+      setError((e) => e ?? t("setup.failed", { message: t("settings.serverUnreachable") }));
+    }
+  }, [pending, busy]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

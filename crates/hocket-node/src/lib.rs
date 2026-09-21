@@ -48,7 +48,8 @@ impl HocketCore {
     /// `configJson` is a serialised `CoreConfig`.
     #[napi(constructor)]
     pub fn new(config_json: String) -> Result<Self> {
-        let config = serde_json::from_str(&config_json).map_err(|e| Error::from_reason(e.to_string()))?;
+        let config =
+            serde_json::from_str(&config_json).map_err(|e| Error::from_reason(e.to_string()))?;
         let core = Core::new(config).map_err(|e| Error::from_reason(e.to_string()))?;
         Ok(Self { core })
     }
@@ -63,13 +64,18 @@ impl HocketCore {
     /// Fire-and-forget `Command`. Errors only on malformed JSON or a shut-down core.
     #[napi]
     pub fn dispatch(&self, command_json: String) -> Result<()> {
-        self.core.dispatch_json(&command_json).map_err(|e| Error::from_reason(e.to_string()))
+        self.core
+            .dispatch_json(&command_json)
+            .map_err(|e| Error::from_reason(e.to_string()))
     }
 
     /// `Query` in, `QueryResult` out, both JSON.
     #[napi]
     pub async fn query(&self, query_json: String) -> Result<String> {
-        self.core.query_json(&query_json).await.map_err(|e| Error::from_reason(e.to_string()))
+        self.core
+            .query_json(&query_json)
+            .await
+            .map_err(|e| Error::from_reason(e.to_string()))
     }
 }
 
@@ -77,7 +83,10 @@ impl HocketCore {
 /// directive such as `info` or `hocket_core=debug`. Idempotent.
 #[napi]
 pub fn init_logging(level: String) {
-    let _ = tracing_subscriber::fmt().with_env_filter(level).with_writer(std::io::stderr).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(level)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 /// Version of the addon crate (same as the workspace version).

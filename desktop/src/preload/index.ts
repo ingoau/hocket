@@ -2,7 +2,7 @@
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
 import type { Command, Event, Query, QueryResult } from "@core/api";
-import type { AppMeta, HocketBridge, OpenDialogRequest, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, HocketBridge, OpenDialogRequest, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -12,6 +12,10 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 }
 
 const bridge: HocketBridge = {
+  prefs: {
+    get: () => ipcRenderer.invoke(IPC.prefsGet) as Promise<AppPrefs>,
+    set: (patch: Partial<AppPrefs>) => ipcRenderer.invoke(IPC.prefsSet, patch) as Promise<AppPrefs>,
+  },
   dispatch(command: Command) {
     ipcRenderer.send(IPC.dispatch, command);
   },

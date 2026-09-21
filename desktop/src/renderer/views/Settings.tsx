@@ -15,6 +15,7 @@ import { chordFromEvent, chordToString, formatChord, parseChord } from "../store
 import { useKeymap } from "../store/keyboard";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
+import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -80,10 +81,13 @@ function Toggle({ settingKey, title, desc }: { settingKey: string; title: string
 
 function General() {
   const servers = useApp((s) => s.servers);
-  const cap = useSetting("queue.savedCap", 10);
+  const cap = useSetting(SK.queueSavedCap, 10);
   const set = useApp((s) => s.setSetting);
   const openDialog = useApp((s) => s.openDialog);
-  const threshold = useSetting("ratings.loveThreshold", 0);
+  const bridgeOn = useSetting(SK.ratingsLoveBridgeEnabled, false);
+  const threshold = useSetting(SK.ratingsLoveBridgeThreshold, 4);
+  const prefs = useApp((s) => s.prefs);
+  const setPrefs = useApp((s) => s.setPrefs);
   return (
     <>
       <div className="section-title">{t("settings.servers")}</div>
@@ -100,14 +104,16 @@ function General() {
           </div>
         </div>
       ))}
-      <Toggle settingKey="general.closeToTray" title={t("settings.closeToTray")} />
-      <Toggle settingKey="sync.enabled" title={t("settings.settingsSync")} />
-      <Row title={t("settings.savedQueueCap", { n: cap })} settingKey="queue.savedCap">
-        <input type="range" min={0} max={50} value={cap} onChange={(e) => { set("queue.savedCap", Number(e.target.value)); bridge().dispatch({ type: "setSavedQueueCap", data: { cap: Number(e.target.value) } }); }} aria-label={t("settings.savedQueueCap", { n: cap })} />
+      <Row title={t("settings.closeToTray")} desc={t("settings.scope.local")}>
+        <input type="checkbox" checked={prefs.closeToTray} onChange={(e) => setPrefs({ closeToTray: e.target.checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
+      </Row>
+      <Toggle settingKey={SK.syncEnabled} title={t("settings.settingsSync")} />
+      <Row title={t("settings.savedQueueCap", { n: cap })} settingKey={SK.queueSavedCap}>
+        <input type="range" min={0} max={50} value={cap} onChange={(e) => bridge().dispatch({ type: "setSavedQueueCap", data: { cap: Number(e.target.value) } })} aria-label={t("settings.savedQueueCap", { n: cap })} />
         <span className="mono small" style={{ width: 24 }}>{cap}</span>
       </Row>
-      <Row title={t("settings.ratingBridge")} settingKey="ratings.loveThreshold">
-        <select className="select" value={threshold} onChange={(e) => set("ratings.loveThreshold", Number(e.target.value))}>
+      <Row title={t("settings.ratingBridge")} settingKey={SK.ratingsLoveBridgeThreshold}>
+        <select className="select" value={bridgeOn ? threshold : 0} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
           <option value={0}>{t("settings.ratingBridgeOff")}</option>
           {[3, 4, 5].map((n) => <option key={n} value={n}>{"★".repeat(n)}</option>)}
         </select>
@@ -120,7 +126,7 @@ function General() {
 function QueueModeRow() {
   const mode = useApp((s) => s.queue.mode);
   return (
-    <Row title={t("settings.queueMode")} settingKey="queue.mode">
+    <Row title={t("settings.queueMode")} settingKey={SK.queueMode}>
       <select className="select" value={mode} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
         <option value="apple">{t("queue.mode.apple")}</option>
         <option value="youTube">{t("queue.mode.youtube")}</option>
@@ -323,11 +329,11 @@ function Connect() {
   return (
     <>
       <Row title={t("settings.deviceName")} settingKey="device.name"><span className="muted">{meta?.deviceName}</span></Row>
-      <Row title={t("settings.coordinatorUrl")} desc={connection.error ?? (connection.connected ? `${connection.tier} · ${connection.roundTripMs ?? "?"} ms` : undefined)} settingKey="connect.coordinatorUrl">
+      <Row title={t("settings.coordinatorUrl")} desc={connection.error ?? (connection.connected ? `${connection.tier} · ${connection.roundTripMs ?? "?"} ms` : undefined)} settingKey={SK.connectCoordinatorUrl}>
         <input className="input" placeholder="wss://coordinator.example.org" value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } })} style={{ width: 260 }} />
         {connection.tier === "coordinator" && connection.connected ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })}>{t("settings.coordinatorDisconnect")}</button> : <button type="button" className="btn sm" onClick={() => { bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } }); bridge().dispatch({ type: "connectCoordinator" }); }} disabled={!url.trim()}>{t("settings.coordinatorConnect")}</button>}
       </Row>
-      <Toggle settingKey="connect.lanDiscovery" title={t("settings.lanDiscovery")} />
+      <Toggle settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} />
       <div className="section-title">{t("connect.title")}</div>
       {devices.map((d) => <div key={d.id} className="setting-row"><div className="label"><div className="title">{d.name}{d.isSelf ? <span className="badge">{t("connect.thisDevice")}</span> : null}{d.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}</div><div className="desc">{d.platform} · {d.appVersion} · {fmtRelative(d.lastSeen)}</div></div><div className="control" /></div>)}
     </>
@@ -338,18 +344,18 @@ function Storage() {
   const storage = useApp((s) => s.storage);
   const { data } = useQuery(() => ({ type: "storage" }), "storage", [], { static: true });
   const s = storage ?? data;
-  const warn = useSetting<number | null>("storage.warnBytes", null);
+  const warn = useSetting<number | null>(SK.storageWarnThresholdBytes, null);
   return (
     <>
       <Row title={t("settings.storage")} settingKey="storage"><span className="muted small">{s ? t("downloads.usage", { downloads: fmtBytes(s.downloadsBytes), cache: fmtBytes(s.cacheBytes), images: fmtBytes(s.imagesBytes) }) : "–"}</span></Row>
-      <Row title={t("settings.storageWarn")} settingKey="storage.warnBytes">
-        <select className="select" value={warn ?? 0} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) || undefined } })}>
+      <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
+        <select className="select" value={warn ? Math.round(warn / 1024 ** 3) : 0} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * 1024 ** 3 : undefined } })}>
           <option value={0}>–</option>
-          {[5, 10, 20, 50, 100].map((g) => <option key={g} value={g * 1024 ** 3}>{g} GB</option>)}
+          {[2, 4, 5, 10, 20, 50, 100].map((g) => <option key={g} value={g}>{g} GB</option>)}
         </select>
       </Row>
       <Row title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button></Row>
-      <Toggle settingKey="power.batterySaverAuto" title={t("settings.batterySaverAuto")} desc={t("settings.batterySaverNow")} />
+      <Toggle settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} desc={t("settings.batterySaverNow")} />
       <BatterySaverRow />
     </>
   );
@@ -361,33 +367,37 @@ function BatterySaverRow() {
 }
 
 function LyricsSettings() {
-  const external = useSetting("lyrics.external", false);
-  const fps = useSetting("lyrics.fpsCap", 60);
+  const external = useSetting(SK.lyricsExternalEnabled, false);
+  const fps = useSetting(SK.displayLyricsFps, 60);
+  const batteryFps = useSetting(SK.batteryLyricsFps, 30);
   const set = useApp((s) => s.setSetting);
   return (
     <>
-      <Row title={t("settings.externalLyrics")} desc={t("settings.externalLyricsPrivacy")} settingKey="lyrics.external">
+      <Row title={t("settings.externalLyrics")} desc={t("settings.externalLyricsPrivacy")} settingKey={SK.lyricsExternalEnabled}>
         <input type="checkbox" checked={external} onChange={(e) => bridge().dispatch({ type: "setExternalLyricsEnabled", data: { enabled: e.target.checked } })} aria-label={t("settings.externalLyrics")} data-testid="setting-external-lyrics" />
       </Row>
-      <Row title="Lyrics frame rate cap" settingKey="lyrics.fpsCap">
-        <select className="select" value={fps} onChange={(e) => set("lyrics.fpsCap", Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+      <Row title="Lyrics frame rate cap" settingKey={SK.displayLyricsFps}>
+        <select className="select" value={fps} onChange={(e) => set(SK.displayLyricsFps, Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+      </Row>
+      <Row title="Lyrics frame rate in battery saver" settingKey={SK.batteryLyricsFps}>
+        <select className="select" value={batteryFps} onChange={(e) => set(SK.batteryLyricsFps, Number(e.target.value))}>{[15, 24, 30].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
       </Row>
     </>
   );
 }
 
 function Appearance() {
-  const theme = useSetting("appearance.theme", "system");
-  const accent = useSetting("appearance.accent", "#6f5cff");
+  const theme = useSetting(SK.displayTheme, "system");
+  const accent = useSetting<string | null>(SK.displayAccent, null) || DEFAULT_ACCENT;
   const set = useApp((s) => s.setSetting);
   return (
     <>
-      <Row title={t("settings.theme")} settingKey="appearance.theme">
-        <select className="select" value={theme} onChange={(e) => set("appearance.theme", e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</select>
+      <Row title={t("settings.theme")} settingKey={SK.displayTheme}>
+        <select className="select" value={theme} onChange={(e) => set(SK.displayTheme, e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</select>
       </Row>
-      <Row title={t("settings.accent")} settingKey="appearance.accent"><input type="color" value={accent} onChange={(e) => set("appearance.accent", e.target.value)} aria-label={t("settings.accent")} /></Row>
-      <Toggle settingKey="appearance.dynamicAccent" title={t("settings.dynamicAccent")} />
-      <Toggle settingKey="appearance.animatedBackground" title={t("settings.animatedBackground")} />
+      <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
+      <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
+      <Toggle settingKey={SK.displayAnimatedBackground} title={t("settings.animatedBackground")} />
     </>
   );
 }
@@ -448,7 +458,7 @@ function Shortcuts() {
   const { data: paletteActions } = useQuery(() => ({ type: "actions", data: { surface: "palette", target: { type: "none" } } }), "actions", [], { static: true });
   const rows = useMemo(() => {
     const ids = new Set<string>([...DEFAULT_KEYMAP.map((k) => k.actionId), ...shortcuts.map((s) => s.actionId)]);
-    return [...ids].filter((id) => id !== "redo.alt").map((id) => {
+    return [...ids].filter((id) => id !== "redoAlt").map((id) => {
       const s = shortcuts.find((x) => x.actionId === id);
       const def = s?.defaultShortcut ?? DEFAULT_KEYMAP.find((k) => k.actionId === id)?.shortcut;
       const cur = s ? s.shortcut : def;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Snapshot } from "@core/api";
-import { applySnapshot, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
+import { applySnapshot, dismissToast, initialCoreState, isEstablished, reduce, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
   servers: [],
@@ -21,6 +21,16 @@ const snapshot: Snapshot = {
   batterySaver: true,
   syncProgress: undefined,
 };
+
+describe("isEstablished", () => {
+  const base = { id: "s", url: "u", username: "a", name: "n", reachable: true, capabilities: { serverVersion: undefined, openSubsonic: false, extensions: [], transcodeOffset: false, formPost: false, songLyrics: false, sonicSimilarity: false, apiKeyAuthentication: false, transcodingExtension: false, nativeApi: false, meetsFloor: false } };
+  it("treats null optionals from the core like undefined", () => {
+    expect(isEstablished({ ...base, lastSync: null as unknown as undefined })).toBe(false);
+    expect(isEstablished({ ...base, lastSync: undefined })).toBe(false);
+    expect(isEstablished({ ...base, lastSync: 5 })).toBe(true);
+    expect(isEstablished({ ...base, capabilities: { ...base.capabilities, serverVersion: "0.63.1" } })).toBe(true);
+  });
+});
 
 describe("reducer", () => {
   it("applies a snapshot on Started", () => {
@@ -45,6 +55,20 @@ describe("reducer", () => {
     expect(s.playerNotice).toContain("skipped");
     s = reduce(s, { type: "resumeOfferChanged", data: { offer: { deviceName: "Pixel", track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" }, positionMs: 10, lastSeen: 0 } } });
     expect(s.resumeOffer?.deviceName).toBe("Pixel");
+  });
+
+  it("announces a fresh undo entry with one Undo toast, never twice, and not on undo/redo", () => {
+    const entry = (id: string, label: string) => ({ id, label, deviceId: "me", at: 1, note: undefined });
+    let s = reduce(initialCoreState, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Rate ★★★★", canRedo: false, redoLabel: undefined, history: [entry("u1", "Rate ★★★★")] } } });
+    expect(s.toasts.map((t) => [t.message, t.actionLabel])).toEqual([["Rate ★★★★", "Undo"]]);
+    // Undo pops it: no new toast (the core sends its own "Undid …").
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: false, undoLabel: undefined, canRedo: true, redoLabel: "Rate ★★★★", history: [] } } });
+    expect(s.toasts).toHaveLength(1);
+    // Redo pushes the same id back: already announced, no toast.
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Rate ★★★★", canRedo: false, redoLabel: undefined, history: [entry("u1", "Rate ★★★★")] } } });
+    expect(s.toasts).toHaveLength(1);
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Shuffle on", canRedo: false, redoLabel: undefined, history: [entry("u2", "Shuffle on"), entry("u1", "Rate ★★★★")] } } });
+    expect(s.toasts.map((t) => t.message)).toEqual(["Rate ★★★★", "Shuffle on"]);
   });
 
   it("keeps at most four toasts and can dismiss one", () => {

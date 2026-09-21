@@ -1,11 +1,13 @@
-// Executes an action id against a target. `ui.*` ids are renderer-side
-// (navigation, dialogs, windows); everything else goes to the core through
+// Executes an action id against a target. Ids are the registry's canonical
+// ids (aliases are normalised first). Actions that need UI — a dialog, a
+// navigation, a window — run here; everything else goes to the core through
 // Command.RunAction so the registry stays the single source of truth.
 import type { ActionTarget } from "@core/api";
-import { bridge } from "../core/bridge";
-import { useApp } from "./app";
-import { explicitIds } from "./selection";
+import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
+import { bridge } from "../core/bridge";
+import { useApp, type ViewName } from "./app";
+import { explicitIds } from "./selection";
 
 export interface ActionContext {
   playlistId?: string;
@@ -14,54 +16,49 @@ export interface ActionContext {
   savedQueueId?: string;
 }
 
-export function targetTrackIds(target: ActionTarget): string[] {
-  return target.type === "tracks" ? target.data.ids : [];
-}
+/** Ids the renderer executes itself (they need UI); everything else is RunAction. */
+const RENDERER_HANDLED = new Set([
+  "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
+  "navigateRecent", "ui.back", "ui.forward", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
+  "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
+  "deletePlaylist", "unpin", "saveQueueAsPlaylist",
+]);
 
-export async function executeAction(actionId: string, target: ActionTarget = { type: "none" }, ctx: ActionContext = {}): Promise<void> {
+export async function executeAction(rawId: string, target: ActionTarget = { type: "none" }, ctx: ActionContext = {}): Promise<void> {
+  const actionId = canonicalActionId(rawId);
   const app = useApp.getState();
   const b = bridge();
-  if (!actionId.startsWith("ui.")) {
-    if (actionId.startsWith("nav.")) {
-      app.navigate({ view: actionId.slice(4) as never });
-      return;
-    }
+  const view = NAV_VIEWS[actionId];
+  if (view) {
+    app.navigate({ view: view as ViewName });
+    return;
+  }
+  if (!RENDERER_HANDLED.has(actionId)) {
     app.runAction(actionId, target);
     return;
   }
   switch (actionId) {
-    case "ui.palette":
+    case "openCommandPalette":
       app.setPaletteOpen(!app.paletteOpen);
       return;
-    case "ui.search":
+    case "findInList":
       app.focusSearch();
       return;
-    case "ui.queue":
+    case "toggleQueuePanel":
       app.setPanels(app.panels.rightOpen && !app.panels.queueCollapsed ? { queueCollapsed: true } : { rightOpen: true, queueCollapsed: false });
       return;
-    case "ui.lyrics":
+    case "toggleLyrics":
       app.setPanels(app.panels.rightOpen && !app.panels.lyricsCollapsed ? { lyricsCollapsed: true } : { rightOpen: true, lyricsCollapsed: false });
       return;
-    case "ui.fullscreen":
+    case "toggleFullscreen":
       app.setFullscreen(!app.fullscreen);
       return;
-    case "ui.miniPlayer":
+    case "toggleMiniPlayer":
       b.window.openMiniPlayer();
       return;
-    case "ui.settings":
-      app.navigate({ view: "settings" });
-      return;
-    case "ui.openDownloads":
-      app.navigate({ view: "downloads" });
-      return;
-    case "ui.openStats":
-      app.navigate({ view: "stats" });
-      return;
-    case "ui.openFilters":
-      app.navigate({ view: "filters" });
-      return;
-    case "ui.newFilter":
-      app.navigate({ view: "filter", id: "new" });
+    case "navigateRecent":
+      app.setPanels({ rightOpen: true, queueCollapsed: false });
+      app.setQueueTab("recent");
       return;
     case "ui.back":
       app.back();
@@ -76,19 +73,18 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       else if (app.fullscreen) app.setFullscreen(false);
       else app.clearSelection();
       return;
-    case "ui.selectAll":
-      // Handled by the focused list (it knows the count); nothing global.
+    case "selectAll":
+    case "remove":
+      // Handled by the focused list (it knows the count / the containing list).
       return;
-    case "ui.delete":
-      return;
-    case "ui.playOn":
+    case "handoff":
       b.dispatch({ type: "openHandoffPicker" });
       app.openDialog({ kind: "connect" });
       return;
-    case "ui.sleepTimer":
+    case "sleepTimer":
       app.openDialog({ kind: "sleepTimer" });
       return;
-    case "ui.copyDiagnostics": {
+    case "copyDiagnostics": {
       const r = await b.query({ type: "diagnostics" });
       if (r.type === "text") {
         b.clipboard.writeText(r.data);
@@ -96,12 +92,16 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       }
       return;
     }
-    case "ui.goToAlbum": {
-      const id = await firstTrackField(target, "albumId");
+    case "goToAlbum": {
+      const id = target.type === "none" ? app.nowPlaying?.track.albumId : await firstTrackField(target, "albumId");
       if (id) app.navigate({ view: "album", id });
       return;
     }
-    case "ui.goToArtist": {
+    case "goToArtist": {
+      if (target.type === "none") {
+        if (app.nowPlaying?.track.artistId) app.navigate({ view: "artist", id: app.nowPlaying.track.artistId });
+        return;
+      }
       if (target.type === "albums" && target.data.ids[0]) {
         const r = await b.query({ type: "album", data: { id: target.data.ids[0] } });
         if (r.type === "albumDetail" && r.data?.artistId) app.navigate({ view: "artist", id: r.data.artistId });
@@ -116,8 +116,8 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       if (ids[0]) app.openDialog({ kind: "trackInfo", trackId: ids[0] });
       return;
     }
-    case "ui.addToPlaylist": {
-      const ids = await resolveTrackIds(target);
+    case "addToPlaylist": {
+      const ids = target.type === "none" && app.nowPlaying ? [app.nowPlaying.track.id] : await resolveTrackIds(target);
       if (ids.length) app.openDialog({ kind: "addToPlaylist", trackIds: ids });
       return;
     }
@@ -133,7 +133,7 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       });
       return;
     }
-    case "ui.removeFromPlaylist": {
+    case "removeFromPlaylist": {
       if (!ctx.playlistId || !ctx.indices?.length) return;
       b.dispatch({ type: "playlistRemove", data: { playlist_id: ctx.playlistId, indices: ctx.indices } });
       return;
@@ -146,7 +146,7 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       app.openDialog({ kind: "prompt", title: t("dialog.renamePlaylist"), label: t("dialog.playlistName"), initial: current, onConfirm: (name) => b.dispatch({ type: "renamePlaylist", data: { playlist_id: id, name, comment: undefined, public: undefined } }) });
       return;
     }
-    case "ui.deletePlaylist": {
+    case "deletePlaylist": {
       if (target.type !== "playlists") return;
       for (const id of target.data.ids) {
         const r = await b.query({ type: "playlist", data: { id } });
@@ -155,13 +155,13 @@ export async function executeAction(actionId: string, target: ActionTarget = { t
       }
       return;
     }
-    case "ui.removeDownload": {
+    case "unpin": {
       const pinTarget = target.type === "albums" && target.data.ids[0] ? { type: "album" as const, data: { id: target.data.ids[0] } } : target.type === "playlists" && target.data.ids[0] ? { type: "playlist" as const, data: { id: target.data.ids[0] } } : target.type === "tracks" && target.data.ids[0] ? { type: "track" as const, data: { id: target.data.ids[0] } } : undefined;
       if (!pinTarget) return;
       app.openDialog({ kind: "confirm", title: t("action.removeDownload"), message: t("dialog.deleteDownload", { name: pinTarget.data.id }), confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => b.dispatch({ type: "unpin", data: { target: pinTarget } }) });
       return;
     }
-    case "ui.saveQueueAsPlaylist": {
+    case "saveQueueAsPlaylist": {
       const sq = ctx.savedQueueId ?? (target.type === "savedQueue" ? target.data.id : undefined);
       app.openDialog({ kind: "prompt", title: t("dialog.saveQueueAsPlaylist"), label: t("dialog.playlistName"), onConfirm: (name) => b.dispatch({ type: "saveQueueAsPlaylist", data: { saved_queue_id: sq, name } }) });
       return;

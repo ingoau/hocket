@@ -122,14 +122,7 @@ async function main(): Promise<void> {
     }),
     onCommand: (command: Command) => {
       credentials.intercept(command);
-      if (command.type === "setSetting" && command.data.key === "general.closeToTray") {
-        try {
-          store.set("closeToTray", JSON.parse(command.data.value) !== false);
-        } catch {
-          /* ignore */
-        }
-      }
-      if (command.type === "setSetting" && command.data.key === "power.batterySaverAuto") {
+      if (command.type === "setSetting" && command.data.key === "battery.autoEngage") {
         try {
           store.set("batterySaverAuto", JSON.parse(command.data.value) !== false);
           applyBattery();
@@ -137,6 +130,13 @@ async function main(): Promise<void> {
           /* ignore */
         }
       }
+    },
+    prefs: {
+      get: () => ({ closeToTray: store.get("closeToTray") ?? true }),
+      set: (patch) => {
+        if (patch.closeToTray !== undefined) store.set("closeToTray", patch.closeToTray);
+        return { closeToTray: store.get("closeToTray") ?? true };
+      },
     },
     onVisibilityReport: (visible) => {
       pageVisible = visible;
@@ -170,11 +170,11 @@ async function main(): Promise<void> {
   let lastPlaying = false;
   let lastNowPlaying: string | undefined;
 
+  // battery.autoEngage is a registry setting; mirror it so the power monitor can act before the UI attaches.
   const applySettingsFromSnapshot = (settings: { key: string; value: string }[]) => {
     for (const s of settings) {
       try {
-        if (s.key === "general.closeToTray") store.set("closeToTray", JSON.parse(s.value) !== false);
-        if (s.key === "power.batterySaverAuto") store.set("batterySaverAuto", JSON.parse(s.value) !== false);
+        if (s.key === "battery.autoEngage") store.set("batterySaverAuto", JSON.parse(s.value) !== false);
       } catch {
         /* ignore */
       }

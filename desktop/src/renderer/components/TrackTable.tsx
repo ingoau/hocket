@@ -303,13 +303,25 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
       })
       .finally(() => loading.current.delete(page));
   }, [fetchPage, pageSize]);
+  // A new list (deps) starts empty; a library refresh keeps the rows on screen
+  // and reloads the pages that were loaded, so nothing flashes or loses focus.
+  const depsKey = JSON.stringify(deps);
+  const lastDeps = useRef<string | undefined>(undefined);
   useEffect(() => {
     generation.current += 1;
     loading.current.clear();
-    setRows([]);
-    setTotal(0);
-    load(0);
-  }, [...deps, libraryVersion]);
+    const changed = lastDeps.current !== depsKey;
+    lastDeps.current = depsKey;
+    if (changed) {
+      setRows([]);
+      setTotal(0);
+      load(0);
+      return;
+    }
+    const pages = new Set<number>([0]);
+    rows.forEach((r, i) => { if (r) pages.add(Math.floor(i / pageSize)); });
+    for (const p of pages) load(p);
+  }, [depsKey, libraryVersion]);
   const onNeedRange = useCallback((start: number, end: number) => {
     for (let p = Math.floor(start / pageSize); p <= Math.floor(end / pageSize); p++) {
       if (rows[p * pageSize] === undefined) load(p);

@@ -14,7 +14,7 @@ import type {
   ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import { DEFAULT_KEYMAP } from "@shared/keymap";
+import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { coverPng } from "../png";
 import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
 import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library";
@@ -22,6 +22,7 @@ import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
 
 const ARTWORK_SIZES = [64, 300, 1000];
+const SEEK_STEP_MS = 10_000;
 const HISTORY_CAP = 200;
 const UPCOMING_VIEW_CAP = 400;
 
@@ -148,6 +149,7 @@ export class FakeCore implements CoreHandle {
     mkdirSync(config.dataDir, { recursive: true });
     const stateFile = join(config.dataDir, "fake-core-state.json");
     // Remember only whether a server was added, so restarts skip setup.
+    void SEEK_STEP_MS;
     if (existsSync(stateFile) && process.env.HOCKET_FAKE_CORE_FRESH !== "1") {
       try {
         const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { server?: { url: string; username: string; name: string } };
@@ -311,6 +313,7 @@ export class FakeCore implements CoreHandle {
         return;
       case "setQueueMode":
         this.session.mode = cmd.data.mode;
+        this.setSettingValue("queue.mode", JSON.stringify(cmd.data.mode));
         this.emitQueue();
         return;
       case "skipUnavailable":
@@ -336,8 +339,7 @@ export class FakeCore implements CoreHandle {
         this.saveQueueAsPlaylist(cmd.data.saved_queue_id, cmd.data.name);
         return;
       case "setSavedQueueCap":
-        this.savedQueueCap = cmd.data.cap;
-        this.evictSavedQueues();
+        this.setSettingValue("queue.savedCap", JSON.stringify(cmd.data.cap));
         return;
       case "undo":
         this.undo();
@@ -431,7 +433,7 @@ export class FakeCore implements CoreHandle {
         this.libraryChanged("tracks", []);
         return;
       case "setStorageWarnThreshold":
-        this.setSettingValue("storage.warnBytes", JSON.stringify(cmd.data.bytes ?? null));
+        this.setSettingValue("storage.warnThresholdBytes", JSON.stringify(cmd.data.bytes ?? 4 * 1024 ** 3));
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         return;
       case "cancelJob":
@@ -499,7 +501,7 @@ export class FakeCore implements CoreHandle {
         return;
       case "setExternalLyricsEnabled":
         this.externalLyrics = cmd.data.enabled;
-        this.setSettingValue("lyrics.external", JSON.stringify(cmd.data.enabled));
+        this.setSettingValue("lyrics.external.enabled", JSON.stringify(cmd.data.enabled));
         if (this.session.current) this.emitLyrics(this.session.current.trackId);
         return;
       case "fetchLyrics":
@@ -589,7 +591,8 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
         return;
       case "setActionOrder":
-        this.actionOrders.set(cmd.data.surface, cmd.data.action_ids);
+        this.actionOrders.set(cmd.data.surface, cmd.data.action_ids.map(canonicalActionId));
+        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(cmd.data.action_ids.map(canonicalActionId)));
         this.emit({ type: "actionsChanged", data: { surface: cmd.data.surface } });
         return;
       case "setSelection":
@@ -1282,7 +1285,6 @@ export class FakeCore implements CoreHandle {
     }
     this.redoStack = [];
     this.emitUndo();
-    this.toast(label, true);
   }
 
   private undo(): void {
@@ -1342,8 +1344,9 @@ export class FakeCore implements CoreHandle {
       this.emitNowPlaying();
     };
     apply(() => rating);
-    const threshold = this.settingNumber("ratings.loveThreshold");
-    if (threshold > 0 && rating >= threshold) for (const t of tracks) t.loved = true;
+    const bridgeOn = this.settings.get("ratings.loveBridge.enabled")?.value === "true";
+    const threshold = this.settingNumber("ratings.loveBridge.threshold");
+    if (bridgeOn && threshold > 0 && rating >= threshold) for (const t of tracks) t.loved = true;
     const n = tracks.length + albums.length;
     if (n > 20) this.runBulkJob("bulkRating", `Rate ${n} items`, n);
     this.pushUndo(n === 1 ? `Rate ${rating ? "★".repeat(rating) : "cleared"}` : `Rate ${n} items`, () => {
@@ -1560,29 +1563,51 @@ export class FakeCore implements CoreHandle {
   private storage(): StorageSummary {
     const dl = this.lib?.tracks.filter((t) => t.offline === "downloaded").reduce((s, t) => s + (t.sizeBytes ?? 0), 0) ?? 0;
     const cache = this.lib?.tracks.filter((t) => t.offline === "cached").reduce((s, t) => s + (t.sizeBytes ?? 0), 0) ?? 0;
-    const warn = this.settingNumber("storage.warnBytes");
+    const warn = this.settingNumber("storage.warnThresholdBytes");
     return { downloadsBytes: dl, cacheBytes: cache, imagesBytes: 48 * 1024 * 1024, warnThresholdBytes: warn > 0 ? warn : undefined, freeBytes: 120 * 1024 ** 3 };
   }
 
   // ---- Settings --------------------------------------------------------
   private seedSettings(onlyKey?: string): void {
+    // Mirrors crates/hocket-core/src/settings/registry.rs (keys, scopes, defaults).
     const defaults: [string, unknown, Setting["scope"]][] = [
-      ["general.closeToTray", true, "deviceLocal"],
-      ["appearance.theme", "system", "deviceLocal"],
-      ["appearance.accent", "#6f5cff", "accountSynced"],
-      ["appearance.dynamicAccent", true, "accountSynced"],
-      ["appearance.animatedBackground", true, "deviceLocal"],
-      ["power.batterySaverAuto", true, "deviceLocal"],
-      ["lyrics.external", false, "accountSynced"],
+      ["queue.mode", "apple", "accountSynced"],
       ["queue.savedCap", 10, "accountSynced"],
-      ["ratings.loveThreshold", 0, "accountSynced"],
+      ["queue.historyCap", 200, "accountSynced"],
+      ["lyrics.external.enabled", false, "accountSynced"],
+      ["lyrics.external.provider", "lrclib", "accountSynced"],
+      ["lyrics.defaultOffsetMs", 0, "accountSynced"],
+      ["lyrics.showTranslations", true, "accountSynced"],
+      ["ratings.loveBridge.enabled", false, "accountSynced"],
+      ["ratings.loveBridge.threshold", 4, "accountSynced"],
+      ["battery.autoEngage", true, "deviceLocal"],
+      ["battery.lyricsFps", 30, "deviceLocal"],
+      ["battery.smallArtwork", true, "deviceLocal"],
+      ["battery.pausePrefetch", true, "deviceLocal"],
+      ["display.animatedBackground", true, "deviceLocal"],
+      ["display.lyricsFps", 60, "deviceLocal"],
+      ["display.theme", "system", "deviceLocal"],
+      ["display.accent", null, "deviceLocal"],
+      ["display.dynamicColour", true, "deviceLocal"],
+      ["display.queuePanelSplit", 0.5, "deviceLocal"],
+      ["actions.order.contextMenu", [], "accountSynced"],
+      ["actions.order.sidebar", [], "accountSynced"],
+      ["actions.order.mediaSession", [], "accountSynced"],
+      ["shortcuts", {}, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
-      ["connect.lanDiscovery", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],
-      ["storage.warnBytes", null, "deviceLocal"],
-      ["player.seekStepMs", 10000, "accountSynced"],
-      ["player.volumeStep", 0.05, "deviceLocal"],
-      ["lyrics.fpsCap", 60, "deviceLocal"],
+      ["connect.lanDiscovery", true, "deviceLocal"],
+      ["storage.warnThresholdBytes", 4 * 1024 ** 3, "deviceLocal"],
+      ["storage.cacheMaxBytes", 2 * 1024 ** 3, "deviceLocal"],
+      ["downloads.transcode", false, "deviceLocal"],
+      ["downloads.wifiOnly", true, "deviceLocal"],
+      ["sleep.defaultMinutes", 30, "accountSynced"],
+      ["sleep.stopAtEndOfTrack", true, "accountSynced"],
+      ["scrobble.enabled", true, "accountSynced"],
+      ["scrobble.nowPlaying", true, "accountSynced"],
+      ["library.syncIntervalMinutes", 60, "deviceLocal"],
+      ["library.fullReconcileDays", 7, "deviceLocal"],
+      ["search.includeServer", true, "deviceLocal"],
     ];
     for (const [key, value, scope] of defaults) {
       if (onlyKey && key !== onlyKey) continue;
@@ -1726,8 +1751,9 @@ export class FakeCore implements CoreHandle {
   private mediaSessionState(): MediaSessionState {
     const t = this.currentTrack();
     const order = this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [];
-    const actions = order.map((id) => id.replace("ms.", "")).filter((a): a is MediaSessionAction => ["play", "pause", "next", "previous", "seek", "stop", "shuffle", "repeat", "love", "rate"].includes(a));
-    if (actions.includes("play") && !actions.includes("pause")) actions.push("pause");
+    const map: Record<string, MediaSessionAction[]> = { togglePlay: ["play", "pause"], pause: ["pause"], stop: ["stop"], next: ["next"], previous: ["previous"], shuffle: ["shuffle"], repeat: ["repeat"], love: ["love"], rate: ["rate"] };
+    const actions = [...new Set(order.flatMap((id) => map[canonicalActionId(id)] ?? []))];
+    actions.push("seek");
     return {
       metadata: t ? { title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, artworkPath: t.coverArt ? this.artworkPath(t.coverArt, 300) : undefined, trackId: t.id, loved: t.loved, rating: t.rating } : undefined,
       isPlaying: this.transport.position.isPlaying,
@@ -1740,7 +1766,8 @@ export class FakeCore implements CoreHandle {
     };
   }
 
-  private runAction(actionId: string, target: ActionTarget): void {
+  private runAction(rawId: string, target: ActionTarget): void {
+    const actionId = canonicalActionId(rawId);
     const trackIds = this.targetTrackIds(target);
     const sid = this.lib?.serverId ?? "";
     const ratingTargets = target.type === "albums" ? target.data.ids.map((id) => ({ type: "album" as const, data: { id } })) : trackIds.map((id) => ({ type: "track" as const, data: { id } }));
@@ -1759,7 +1786,7 @@ export class FakeCore implements CoreHandle {
           this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: trackIds }, 0, false, true);
         }
         return;
-      case "shuffle":
+      case "playShuffled":
         if (trackIds.length) this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: this.targetLabel(target), sort: "default", tracks: trackIds }, undefined, true, true);
         return;
       case "playNext":
@@ -1777,13 +1804,15 @@ export class FakeCore implements CoreHandle {
         this.insert(trackIds, false);
         return;
       case "love":
-        if (target.type === "artists") for (const id of target.data.ids) this.handle({ type: "setArtistLoved", data: { artist_id: id, loved: true } });
-        else this.setLoved(ratingTargets, true);
+      case "unlove": {
+        const loved = actionId === "love";
+        if (target.type === "none") {
+          const t = this.currentTrack();
+          if (t) this.setLoved([{ type: "track", data: { id: t.id } }], loved);
+        } else if (target.type === "artists") for (const id of target.data.ids) this.handle({ type: "setArtistLoved", data: { artist_id: id, loved } });
+        else this.setLoved(ratingTargets, loved);
         return;
-      case "unlove":
-        if (target.type === "artists") for (const id of target.data.ids) this.handle({ type: "setArtistLoved", data: { artist_id: id, loved: false } });
-        else this.setLoved(ratingTargets, false);
-        return;
+      }
       case "download":
         if (target.type === "albums") for (const id of target.data.ids) this.pin({ type: "album", data: { id } }, false);
         else if (target.type === "playlists") for (const id of target.data.ids) this.pin({ type: "playlist", data: { id } }, false);
@@ -1802,45 +1831,46 @@ export class FakeCore implements CoreHandle {
       case "deleteSavedQueue":
         if (target.type === "savedQueue") this.handle({ type: "deleteSavedQueue", data: { id: target.data.id } });
         return;
-      case "transport.togglePlay":
+      case "togglePlay":
         this.handle({ type: "togglePlay" });
         return;
-      case "transport.next":
+      case "pause":
+        this.setPlaying(false);
+        return;
+      case "stop":
+        this.stop();
+        return;
+      case "next":
         this.next(true);
         return;
-      case "transport.previous":
+      case "previous":
         this.previous();
         return;
-      case "transport.seekBack":
-        this.seek(this.positionNow() - this.settingNumber("player.seekStepMs"));
+      case "seekBackward":
+        this.seek(this.positionNow() - SEEK_STEP_MS);
         return;
-      case "transport.seekForward":
-        this.seek(this.positionNow() + this.settingNumber("player.seekStepMs"));
+      case "seekForward":
+        this.seek(this.positionNow() + SEEK_STEP_MS);
         return;
-      case "transport.shuffle":
+      case "shuffle":
         this.setShuffle(!this.session.shuffle);
         return;
-      case "transport.repeat":
+      case "repeat":
         this.mediaSessionCommand("repeat", undefined);
         return;
-      case "transport.toggleAutoplay":
+      case "autoplay":
         this.session.autoplay = !this.session.autoplay;
         this.emitQueue();
         return;
-      case "transport.volumeUp":
+      case "volumeUp":
         this.handle({ type: "setVolume", data: { volume: this.transport.volume + 0.05 } });
         return;
-      case "transport.volumeDown":
+      case "volumeDown":
         this.handle({ type: "setVolume", data: { volume: this.transport.volume - 0.05 } });
         return;
-      case "transport.resumeHere":
+      case "resumeHere":
         this.resumeHere();
         return;
-      case "track.love": {
-        const t = this.currentTrack();
-        if (t) this.setLoved([{ type: "track", data: { id: t.id } }], !t.loved);
-        return;
-      }
       case "clearQueue":
         this.handle({ type: "clearQueue" });
         return;
@@ -1851,12 +1881,13 @@ export class FakeCore implements CoreHandle {
         this.redo();
         return;
       default:
-        if (actionId.startsWith("rate.")) {
-          const r = Number(actionId.slice(5));
-          if (!Number.isNaN(r) && ratingTargets.length) this.setRating(ratingTargets, r);
+        if (/^rate[0-5]$/.test(actionId)) {
+          const r = Number(actionId.slice(4));
+          const targets = ratingTargets.length ? ratingTargets : this.currentTrack() ? [{ type: "track" as const, data: { id: this.currentTrack()!.id } }] : [];
+          if (targets.length) this.setRating(targets, r);
           return;
         }
-        if (actionId.startsWith("ui.") || actionId.startsWith("nav.") || actionId.startsWith("ms.")) return;
+        if (actionId.startsWith("ui.") || actionId.startsWith("navigate") || ["selectAll", "remove", "findInList", "openCommandPalette", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer", "handoff", "sleepTimer", "copyDiagnostics", "goToAlbum", "goToArtist", "addToPlaylist", "removeFromPlaylist", "deletePlaylist", "unpin", "saveQueueAsPlaylist"].includes(actionId)) return;
         this.emit({ type: "error", data: { kind: "internal", message: `Unknown action ${actionId}`, detail: undefined } });
     }
   }
@@ -2096,6 +2127,7 @@ export class FakeCore implements CoreHandle {
     const sq = target.type === "savedQueue" ? this.savedQueues.find((s) => s.id === target.data.id) : undefined;
     return describeActions(surface, target, this.actionOrders.get(surface), {
       hasCurrent: !!this.session.current,
+      currentLoved: this.currentTrack()?.loved,
       canUndo: this.undoStack.length > 0,
       canRedo: this.redoStack.length > 0,
       hasResumeOffer: !!this.resumeOffer,
@@ -2116,7 +2148,7 @@ export class FakeCore implements CoreHandle {
         return undefined;
       }
     }
-    return file;
+    return `file://${file}`;
   }
 
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {

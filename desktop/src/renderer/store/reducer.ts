@@ -42,6 +42,8 @@ export interface CoreState {
   actionsVersion: number;
   lastServerSearch: SearchResults | undefined;
   lastError: { kind: string; message: string; detail?: string; at: number } | undefined;
+  /** Undo entry ids already announced with a toast (the core only emits UndoChanged for a fresh mutation). */
+  announcedUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
 }
 
@@ -85,7 +87,16 @@ export const initialCoreState: CoreState = {
   lastServerSearch: undefined,
   lastError: undefined,
   exported: undefined,
+  announcedUndo: [],
 };
+
+/**
+ * A server counts as established once a probe succeeded (version known) or a
+ * sync ran. Optional fields arrive from the core as `null`, never `undefined`.
+ */
+export function isEstablished(s: ServerInfo): boolean {
+  return !!s.capabilities.serverVersion || s.lastSync != null;
+}
 
 export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
   return {
@@ -135,8 +146,16 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
-    case "undoChanged":
-      return { ...state, undo: e.data.state };
+    case "undoChanged": {
+      // design.md "Global undo": a fresh mutation gets one toast with the single
+      // Undo action. The core emits only UndoChanged for it (its own toasts are
+      // "Undid …/Redid …"), so announce the newest entry here, once per id.
+      const top = e.data.state.history[0];
+      const fresh = top && e.data.state.canUndo && !state.announcedUndo.includes(top.id) && e.data.state.history.length > state.undo.history.length;
+      const toasts = fresh ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
+      const announced = fresh ? [...state.announcedUndo, top.id].slice(-500) : state.announcedUndo;
+      return { ...state, undo: e.data.state, toasts, announcedUndo: announced };
+    }
     case "toast":
       return { ...state, toasts: [...state.toasts.filter((t) => t.id !== e.data.toast.id), e.data.toast].slice(-4) };
     case "playerNotice":

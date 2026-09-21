@@ -75,14 +75,17 @@ impl MediaSession {
     #[napi(constructor)]
     pub fn new(options: MediaSessionOptions, callback: JsonCallback) -> Result<Self> {
         let inner = backend::attach(&options, callback)?;
-        Ok(Self { inner: Some(inner), last: MediaSessionState::default() })
+        Ok(Self {
+            inner: Some(inner),
+            last: MediaSessionState::default(),
+        })
     }
 
     /// Publish a full `MediaSessionState` (JSON). Idempotent; playwire diffs.
     #[napi]
     pub fn set_state(&mut self, state_json: String) -> Result<()> {
-        let state: MediaSessionState =
-            serde_json::from_str(&state_json).map_err(|e| Error::from_reason(format!("bad MediaSessionState: {e}")))?;
+        let state: MediaSessionState = serde_json::from_str(&state_json)
+            .map_err(|e| Error::from_reason(format!("bad MediaSessionState: {e}")))?;
         self.last = state;
         self.publish(None)
     }
@@ -110,7 +113,9 @@ impl MediaSession {
     }
 
     fn publish(&mut self, position_override: Option<u32>) -> Result<()> {
-        let Some(inner) = self.inner.as_mut() else { return Ok(()) };
+        let Some(inner) = self.inner.as_mut() else {
+            return Ok(());
+        };
         inner.publish(&self.last, position_override)
     }
 }
@@ -120,11 +125,22 @@ impl MediaSession {
 #[cfg(feature = "media-session")]
 fn translate(event: &playwire::Event, snapshot: &Snapshot) -> Option<Outgoing> {
     use playwire::Event as E;
-    let cmd = |action: MediaSessionAction, value: Option<f64>| Some(Outgoing::Command { command: Command::MediaSessionCommand { action, value } });
+    let cmd = |action: MediaSessionAction, value: Option<f64>| {
+        Some(Outgoing::Command {
+            command: Command::MediaSessionCommand { action, value },
+        })
+    };
     match event {
         E::Play => cmd(MediaSessionAction::Play, None),
         E::Pause => cmd(MediaSessionAction::Pause, None),
-        E::PlayPause => cmd(if snapshot.playing { MediaSessionAction::Pause } else { MediaSessionAction::Play }, None),
+        E::PlayPause => cmd(
+            if snapshot.playing {
+                MediaSessionAction::Pause
+            } else {
+                MediaSessionAction::Play
+            },
+            None,
+        ),
         E::Stop => cmd(MediaSessionAction::Stop, None),
         E::Next => cmd(MediaSessionAction::Next, None),
         E::Previous => cmd(MediaSessionAction::Previous, None),
@@ -133,8 +149,15 @@ fn translate(event: &playwire::Event, snapshot: &Snapshot) -> Option<Outgoing> {
             let target = (snapshot.position_ms as f64 + secs * 1000.0).max(0.0);
             cmd(MediaSessionAction::Seek, Some(target))
         }
-        E::SetVolume(v) => Some(Outgoing::Command { command: Command::SetVolume { volume: v.clamp(0.0, 1.0) } }),
-        E::SetShuffle(on) => cmd(MediaSessionAction::Shuffle, Some(if *on { 1.0 } else { 0.0 })),
+        E::SetVolume(v) => Some(Outgoing::Command {
+            command: Command::SetVolume {
+                volume: v.clamp(0.0, 1.0),
+            },
+        }),
+        E::SetShuffle(on) => cmd(
+            MediaSessionAction::Shuffle,
+            Some(if *on { 1.0 } else { 0.0 }),
+        ),
         E::SetRepeat(r) => cmd(
             MediaSessionAction::Repeat,
             Some(match r {
@@ -191,10 +214,22 @@ mod backend {
         snapshot: Arc<Mutex<Snapshot>>,
     }
 
-    pub(super) fn attach(options: &MediaSessionOptions, callback: crate::JsonCallback) -> Result<Inner> {
+    pub(super) fn attach(
+        options: &MediaSessionOptions,
+        callback: crate::JsonCallback,
+    ) -> Result<Inner> {
         let mut config = playwire::PlayerConfig::new(options.name.clone())
-            .track_id_prefix(options.track_id_prefix.clone().unwrap_or_else(|| "/app/hocket/track".to_string()))
-            .supported_uri_schemes(vec!["hocket".to_string(), "http".to_string(), "https".to_string()]);
+            .track_id_prefix(
+                options
+                    .track_id_prefix
+                    .clone()
+                    .unwrap_or_else(|| "/app/hocket/track".to_string()),
+            )
+            .supported_uri_schemes(vec![
+                "hocket".to_string(),
+                "http".to_string(),
+                "https".to_string(),
+            ]);
         if let Some(entry) = &options.desktop_entry {
             config = config.desktop_entry(entry.clone());
         }
@@ -221,27 +256,45 @@ mod backend {
     }
 
     impl Inner {
-        pub(super) fn publish(&mut self, state: &MediaSessionState, position_override: Option<u32>) -> Result<()> {
+        pub(super) fn publish(
+            &mut self,
+            state: &MediaSessionState,
+            position_override: Option<u32>,
+        ) -> Result<()> {
             let position_ms = position_override.unwrap_or(state.position.position_ms);
             if let Ok(mut s) = self.snapshot.lock() {
-                *s = Snapshot { playing: state.is_playing, position_ms };
+                *s = Snapshot {
+                    playing: state.is_playing,
+                    position_ms,
+                };
             }
             let track = state.metadata.as_ref().map(|m| playwire::Track {
                 id: m.track_id.clone().unwrap_or_else(|| "none".to_string()),
                 title: m.title.clone(),
                 artists: m.artist.iter().cloned().collect(),
                 album: m.album.clone().unwrap_or_default(),
-                artwork_url: m.artwork_path.as_deref().map(artwork_url).unwrap_or_default(),
+                artwork_url: m
+                    .artwork_path
+                    .as_deref()
+                    .map(artwork_url)
+                    .unwrap_or_default(),
                 url: String::new(),
             });
-            let duration = state.metadata.as_ref().map(|m| Duration::from_millis(u64::from(m.duration_ms)));
+            let duration = state
+                .metadata
+                .as_ref()
+                .map(|m| Duration::from_millis(u64::from(m.duration_ms)));
             let has = |a: MediaSessionAction| state.actions.contains(&a);
             let playback = playwire::PlaybackState {
                 track,
                 playing: state.is_playing,
                 position: Duration::from_millis(u64::from(position_ms)),
                 duration,
-                volume: if state.volume.is_finite() { state.volume.clamp(0.0, 1.0) } else { 1.0 },
+                volume: if state.volume.is_finite() {
+                    state.volume.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                },
                 repeat: match state.repeat {
                     RepeatMode::Off => playwire::Repeat::Off,
                     RepeatMode::All => playwire::Repeat::All,
@@ -254,7 +307,9 @@ mod backend {
                     can_seek: has(MediaSessionAction::Seek),
                 },
             };
-            self.controls.set_state(&playback).map_err(|e| Error::from_reason(format!("media session publish: {e}")))
+            self.controls
+                .set_state(&playback)
+                .map_err(|e| Error::from_reason(format!("media session publish: {e}")))
         }
 
         pub(super) fn detach(&mut self) {
@@ -272,12 +327,21 @@ mod backend {
 
     pub(super) struct Inner;
 
-    pub(super) fn attach(_options: &MediaSessionOptions, _callback: crate::JsonCallback) -> Result<Inner> {
-        Err(Error::from_reason("media session unavailable: addon built without the `media-session` feature"))
+    pub(super) fn attach(
+        _options: &MediaSessionOptions,
+        _callback: crate::JsonCallback,
+    ) -> Result<Inner> {
+        Err(Error::from_reason(
+            "media session unavailable: addon built without the `media-session` feature",
+        ))
     }
 
     impl Inner {
-        pub(super) fn publish(&mut self, _state: &MediaSessionState, _position: Option<u32>) -> Result<()> {
+        pub(super) fn publish(
+            &mut self,
+            _state: &MediaSessionState,
+            _position: Option<u32>,
+        ) -> Result<()> {
             Ok(())
         }
         pub(super) fn detach(&mut self) {}
@@ -299,19 +363,30 @@ mod tests {
     #[cfg(feature = "media-session")]
     #[test]
     fn play_pause_resolves_from_last_state() {
-        let playing = Snapshot { playing: true, position_ms: 10_000 };
+        let playing = Snapshot {
+            playing: true,
+            position_ms: 10_000,
+        };
         match translate(&playwire::Event::PlayPause, &playing) {
-            Some(Outgoing::Command { command: Command::MediaSessionCommand { action, .. } }) => assert_eq!(action, MediaSessionAction::Pause),
+            Some(Outgoing::Command {
+                command: Command::MediaSessionCommand { action, .. },
+            }) => assert_eq!(action, MediaSessionAction::Pause),
             other => panic!("unexpected {other:?}"),
         }
         match translate(&playwire::Event::SeekBy(-15.0), &playing) {
-            Some(Outgoing::Command { command: Command::MediaSessionCommand { action, value } }) => {
+            Some(Outgoing::Command {
+                command: Command::MediaSessionCommand { action, value },
+            }) => {
                 assert_eq!(action, MediaSessionAction::Seek);
                 assert_eq!(value, Some(0.0));
             }
             other => panic!("unexpected {other:?}"),
         }
-        let json = serde_json::to_string(&translate(&playwire::Event::Next, &playing).unwrap()).unwrap();
-        assert_eq!(json, r#"{"kind":"command","command":{"type":"mediaSessionCommand","data":{"action":"next","value":null}}}"#);
+        let json =
+            serde_json::to_string(&translate(&playwire::Event::Next, &playing).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"command","command":{"type":"mediaSessionCommand","data":{"action":"next","value":null}}}"#
+        );
     }
 }

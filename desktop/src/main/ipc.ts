@@ -4,7 +4,7 @@ import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import type { Command, Query } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, OpenDialogRequest, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, OpenDialogRequest, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 import type { Windows } from "./windows";
 
@@ -15,6 +15,7 @@ export interface IpcDeps {
   onCommand: (command: Command) => void;
   onVisibilityReport: (visible: boolean) => void;
   onNetworkReport: (online: boolean) => void;
+  prefs: { get(): AppPrefs; set(patch: Partial<AppPrefs>): AppPrefs };
 }
 
 function isOurs(windows: Windows, sender: Electron.WebContents): boolean {
@@ -125,6 +126,14 @@ export function installIpc(deps: IpcDeps): void {
   ipcMain.handle(IPC.fileRead, async (e, path: string) => {
     if (!isOurs(windows, e.sender) || typeof path !== "string") throw new Error("rejected");
     return readFile(path, "utf8");
+  });
+
+  ipcMain.handle(IPC.prefsGet, (e) => (isOurs(windows, e.sender) ? deps.prefs.get() : undefined));
+  ipcMain.handle(IPC.prefsSet, (e, patch: Partial<AppPrefs>) => {
+    if (!isOurs(windows, e.sender) || !patch || typeof patch !== "object") throw new Error("rejected");
+    const clean: Partial<AppPrefs> = {};
+    if (typeof patch.closeToTray === "boolean") clean.closeToTray = patch.closeToTray;
+    return deps.prefs.set(clean);
   });
 
   ipcMain.on(IPC.clipboardWrite, (e, text: string) => {
