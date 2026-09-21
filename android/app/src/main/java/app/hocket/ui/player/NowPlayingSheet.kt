@@ -48,6 +48,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -147,6 +152,25 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             Box(Modifier.fillMaxSize().alpha(progress * 0.6f).background(Color.Black).let { if (progress > 0.5f) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it })
         }
 
+        // Content inside the sheet scrolls; whatever it does not consume (dragging down at the top,
+        // or up while the sheet is still opening) moves the sheet, and flings settle it.
+        val nested = remember(state) {
+            object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    val d = available.y
+                    return if (d < 0 && source == NestedScrollSource.UserInput && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
+                }
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                    if (source == NestedScrollSource.UserInput) Offset(0f, state.draggable.dispatchRawDelta(available.y)) else Offset.Zero
+                override suspend fun onPreFling(available: Velocity): Velocity {
+                    return if (available.y < 0 && state.progress < 1f) { state.draggable.settle(available.y); available } else Velocity.Zero
+                }
+                override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                    state.draggable.settle(available.y)
+                    return available
+                }
+            }
+        }
         val corner = lerp(22.dp, 0.dp, progress)
         val sidePad = lerp(10.dp, 0.dp, progress)
         val seedState = LocalArtworkSeedState.current
@@ -162,6 +186,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 .padding(horizontal = sidePad)
                 .height(with(density) { maxHeightPx.toDp() })
                 .clip(RoundedCornerShape(topStart = corner, topEnd = corner))
+                .nestedScroll(nested)
                 .anchoredDraggable(state.draggable, Orientation.Vertical, flingBehavior = fling)
                 .semantics { contentDescription = expandedDesc }
                 .testTag("nowPlaying.sheet"),

@@ -19,7 +19,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], application = android.app.Application::class)
+@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class QueueScreenTest {
     @get:Rule

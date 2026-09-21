@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.nav.AppRoot
@@ -15,7 +16,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], application = android.app.Application::class)
+@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ServerSetupFlowTest {
     @get:Rule
@@ -28,11 +29,11 @@ class ServerSetupFlowTest {
         core.start()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").assertIsDisplayed()
-        compose.onNodeWithTag("setup.connect").assertIsDisplayed()
+        compose.onNodeWithTag("setup.connect").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
-        compose.onNodeWithTag("setup.connect").performClick()
+        compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         // A server that meets the floor takes us into the shell: the Home title appears.
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
         compose.onNodeWithText("Your music").assertIsDisplayed()
@@ -47,11 +48,11 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.url").performTextInput("https://old.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
-        compose.onNodeWithTag("setup.connect").performClick()
+        compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.tooOld") == 1 }
-        compose.onNodeWithTag("setup.tooOld").assertIsDisplayed()
+        compose.onNodeWithTag("setup.tooOld").performScrollTo().assertIsDisplayed()
         // Still on setup: the URL field is there, not the shell.
-        compose.onNodeWithTag("setup.url").assertIsDisplayed()
+        compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -63,9 +64,9 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("wrong")
-        compose.onNodeWithTag("setup.connect").performClick()
+        compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.error") == 1 }
-        compose.onNodeWithTag("setup.url").assertIsDisplayed()
+        compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
     }
 }
 
