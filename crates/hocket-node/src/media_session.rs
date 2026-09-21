@@ -26,7 +26,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::Serialize;
 
-use hocket_core::api::{Command, MediaSessionAction, MediaSessionState, RepeatMode};
+use hocket_core::api::{Command, MediaSessionAction, MediaSessionState};
 
 use crate::JsonCallback;
 
@@ -283,11 +283,6 @@ mod backend {
         pub(super) fn detach(&mut self) {}
     }
 }
-
-// Keep the unused-import lint honest when the feature is off.
-#[cfg(not(feature = "media-session"))]
-#[allow(dead_code)]
-fn _unused(_: RepeatMode, _: MediaSessionAction) {}
 
 #[cfg(test)]
 mod tests {

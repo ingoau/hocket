@@ -309,7 +309,6 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
     setRows([]);
     setTotal(0);
     load(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, libraryVersion]);
   const onNeedRange = useCallback((start: number, end: number) => {
     for (let p = Math.floor(start / pageSize); p <= Math.floor(end / pageSize); p++) {

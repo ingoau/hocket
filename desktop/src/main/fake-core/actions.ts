@@ -20,8 +20,6 @@ export interface RegistryEntry {
   defaultShortcut?: string;
 }
 
-const T_ITEMS: TargetKind[] = ["tracks", "albums", "artists", "playlists", "queueItems"];
-
 export const REGISTRY: RegistryEntry[] = [
   // Item actions
   { id: "play", label: "Play", icon: "play", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },

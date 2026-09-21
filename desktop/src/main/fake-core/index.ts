@@ -8,7 +8,7 @@
 // insertions, shuffle permutation), undo is snapshot-based, jobs progress on
 // timers, and there is one fake remote device ("Pixel 8") so Connect UI has
 // something to show.
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
@@ -150,7 +150,7 @@ export class FakeCore implements CoreHandle {
     // Remember only whether a server was added, so restarts skip setup.
     if (existsSync(stateFile) && process.env.HOCKET_FAKE_CORE_FRESH !== "1") {
       try {
-        const saved = JSON.parse(require("node:fs").readFileSync(stateFile, "utf8")) as { server?: { url: string; username: string; name: string } };
+        const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { server?: { url: string; username: string; name: string } };
         if (saved.server) this.addServer(saved.server.url, saved.server.username, saved.server.name, true);
       } catch {
         /* ignore corrupt state */

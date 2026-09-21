@@ -55,7 +55,7 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     let alive = true;
     fetch(url)
       .then((r) => r.blob())
-      .then((b) => alive && k.loadBlob(b))
+      .then((b) => { if (alive) return k.loadBlob(b); })
       .catch(() => alive && k.loadGradient(["#1c1c28", "#2a2540"], 30));
     return () => {
       alive = false;

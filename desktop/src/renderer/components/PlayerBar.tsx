@@ -125,7 +125,7 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  }, [drag !== undefined, commit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [drag !== undefined, commit]);
   const shown = drag !== undefined ? drag * dur : pos;
   const pct = dur ? (shown / dur) * 100 : 0;
   return (

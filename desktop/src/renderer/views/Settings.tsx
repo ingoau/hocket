@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting } from "@core/api";
+import type { ActionDescriptor, AudioSettings, EqBand, QueueMode, ReplayGainMode, Setting } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -121,9 +121,9 @@ function QueueModeRow() {
   const mode = useApp((s) => s.queue.mode);
   return (
     <Row title={t("settings.queueMode")} settingKey="queue.mode">
-      <select className="select" value={mode} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as "apple" | "youtube" } })}>
+      <select className="select" value={mode} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
         <option value="apple">{t("queue.mode.apple")}</option>
-        <option value="youtube">{t("queue.mode.youtube")}</option>
+        <option value="youTube">{t("queue.mode.youtube")}</option>
       </select>
     </Row>
   );

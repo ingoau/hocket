@@ -48,7 +48,6 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
       p.dispose();
       player.current = undefined;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapped.synced, variant]);
 
   useEffect(() => {
@@ -58,7 +57,6 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     p.setLyricLines(mapped.lines as never, extrapolate(stampRef.current, Date.now(), clockOffset, duration));
     p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration), true);
     p.update(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapped, batterySaver]);
 
   // Seek detection: a jump in the stamp means isSeek=true so AMLL relayouts.

@@ -31,7 +31,6 @@ export function usePagedGrid<T>(fetchPage: (offset: number, limit: number) => Pr
     setRows([]);
     setTotal(0);
     load(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, libraryVersion]);
   const onNeedRange = useCallback((start: number, end: number) => {
     for (let p = Math.floor(Math.max(0, start) / pageSize); p <= Math.floor(Math.max(0, end) / pageSize); p++) {

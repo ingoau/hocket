@@ -39,7 +39,7 @@ export function useQuery<K extends Keys>(make: () => Query | null, result: K, de
       .query(q)
       .then((r) => {
         if (mine !== seq.current) return;
-        setData(expectResult(r, result));
+        setData(expectResult(r, result) as never);
         setError(undefined);
       })
       .catch((err: unknown) => {
@@ -50,7 +50,6 @@ export function useQuery<K extends Keys>(make: () => Query | null, result: K, de
       .finally(() => {
         if (mine === seq.current) setLoading(false);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, libraryVersion, nonce]);
   return { data, loading, error, refetch };
 }
