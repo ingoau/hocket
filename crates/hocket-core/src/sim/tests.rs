@@ -64,7 +64,8 @@ fn two_people_pressing_next_produce_one_skip() {
 #[test]
 fn handoff_moves_transport_with_position_and_played_ms() {
     let mut w = coordinator_world(3, 3);
-    let t = tracks(&w, 3);
+    // long tracks (t4 is ~172 s) so the position is still inside the first one
+    let t = vec!["t4".to_string(), "t3".to_string(), "t2".to_string()];
     w.perform(Action::PlayTracks { device: 0, tracks: t.clone() });
     w.perform(Action::ClaimTransport { device: 0, takeover: false });
     w.run_for(30_000.0);
@@ -80,7 +81,7 @@ fn handoff_moves_transport_with_position_and_played_ms() {
     assert!(!w.devices[0].playback.playing);
     assert!(w.devices[1].playback.playing);
     let pos = w.devices[1].position_ms();
-    assert!((30_000..36_000).contains(&pos), "target continues near the source position: {pos}");
+    assert!((30_000..36_000).contains(&pos), "target continues near the source position: {pos}\n{}\n{}", w.devices[0].log.join("\n"), w.devices[1].log.join("\n"));
     assert!(w.devices[1].playback.played_ms >= 30_000);
     assert!(!w.devices[0].picker_open);
     // the third device discarded its pre-buffer (takeover went elsewhere)
@@ -156,10 +157,11 @@ fn offline_edits_fast_forward_when_nobody_else_moved() {
     w.run_for(2_000.0);
     w.perform(Action::PlayNext { device: 0, tracks: vec!["t20".into()] });
     w.perform(Action::Next { device: 0 });
-    w.run_for(45_000.0);
+    // heal at +40 s; reconnect backoff may take a few more tens of seconds
+    w.run_for(90_000.0);
     // a's two ops replayed; nobody filed anything
-    assert_eq!(w.devices[0].filed_count, 0);
-    assert_eq!(w.devices[1].engine.document().current.as_ref().unwrap().track_id, "t20");
+    assert_eq!(w.devices[0].filed_count, 0, "{}", w.devices[0].log.join("\n"));
+    assert_eq!(w.devices[1].engine.document().current.as_ref().unwrap().track_id, "t20", "{}\n{}", w.devices[0].log.join("\n"), w.devices[1].log.join("\n"));
     w.finish();
     w.assert_ok();
 }
@@ -280,6 +282,23 @@ fn random_scenarios_coordinator_batch_3() {
 #[test]
 fn random_scenarios_lan() {
     run_seeds(1000..1060, Topology::Lan, 30);
+}
+
+/// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1] cargo test ... random_single_seed -- --nocapture`.
+#[test]
+fn random_single_seed_from_env() {
+    let Ok(seed) = std::env::var("HOCKET_SIM_SEED") else { return };
+    let seed: u64 = seed.parse().expect("HOCKET_SIM_SEED must be a number");
+    let topology = if std::env::var("HOCKET_SIM_LAN").is_ok() { Topology::Lan } else { Topology::Coordinator };
+    let mut cfg = WorldConfig::new(seed);
+    cfg.devices = 2 + (seed % 3) as usize;
+    cfg.topology = topology;
+    cfg.keep_logs = true;
+    if seed % 4 == 0 {
+        cfg.conditions = Conditions { delay_ms: 60.0, jitter_ms: 90.0, drop: 0.05 };
+    }
+    let w = World::run_random(cfg, 40);
+    w.assert_ok();
 }
 
 mod props {

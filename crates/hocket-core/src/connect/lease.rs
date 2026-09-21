@@ -205,21 +205,20 @@ pub const OWNER_LAPSE_MARGIN_MS: f64 = 2_000.0;
 /// on reconnect.
 ///
 /// `last_ack_at` is the *send* time of the heartbeat (or claim) the room
-/// answered, not the arrival time of the answer: the room's window starts
-/// when it received the heartbeat, which is after we sent it, so measuring
-/// from the send keeps our window strictly inside the room's.
+/// answered (the room echoes it as `ackOf`), not the arrival time of the
+/// answer: the room's window starts when it received the heartbeat, which is
+/// after we sent it, so measuring from the send keeps our window strictly
+/// inside the room's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldLease {
     pub epoch: u32,
     pub last_ack_at: EpochMs,
     pub last_heartbeat_at: EpochMs,
-    /// Send times of heartbeats/claims not yet answered, oldest first.
-    pub outstanding: std::collections::VecDeque<EpochMs>,
 }
 
 impl HeldLease {
     pub fn new(epoch: u32, now: EpochMs) -> Self {
-        HeldLease { epoch, last_ack_at: now, last_heartbeat_at: now, outstanding: Default::default() }
+        HeldLease { epoch, last_ack_at: now, last_heartbeat_at: now }
     }
 
     /// Whether a heartbeat is due.
@@ -230,17 +229,12 @@ impl HeldLease {
     /// Record a heartbeat or claim being sent.
     pub fn sent(&mut self, now: EpochMs) {
         self.last_heartbeat_at = now;
-        self.outstanding.push_back(now);
-        while self.outstanding.len() > 8 {
-            self.outstanding.pop_front();
-        }
     }
 
-    /// The room confirmed us: credit the oldest outstanding send.
-    pub fn acked(&mut self, now: EpochMs) {
-        let at = self.outstanding.pop_front().unwrap_or(now);
-        if at > self.last_ack_at {
-            self.last_ack_at = at;
+    /// The room answered the heartbeat/claim we sent at `sent_at`.
+    pub fn acked(&mut self, sent_at: EpochMs) {
+        if sent_at > self.last_ack_at {
+            self.last_ack_at = sent_at;
         }
     }
 
@@ -446,11 +440,13 @@ mod tests {
         assert!(h.lapsed(18_000.0));
         h.sent(5000.0);
         h.sent(10_000.0);
-        h.acked(10_400.0); // answers the 5000 send
+        h.acked(5000.0); // late answer to the first
         assert_eq!(h.last_ack_at, 5000.0);
-        h.acked(10_500.0); // answers the 10_000 send
+        h.acked(10_000.0);
         assert_eq!(h.last_ack_at, 10_000.0);
-        h.acked(30_000.0); // nothing outstanding: credit now
-        assert_eq!(h.last_ack_at, 30_000.0);
+        h.acked(7000.0); // out of order: never goes backwards
+        assert_eq!(h.last_ack_at, 10_000.0);
+        assert!(!h.lapsed(27_999.0));
+        assert!(h.lapsed(28_000.0));
     }
 }

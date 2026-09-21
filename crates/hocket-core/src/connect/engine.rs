@@ -38,8 +38,8 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, Msg, RefuseReason, RejectReason, ReplicaState, TransportCommand,
-    WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
+    TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
     apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp, SyncPoint, LOOPBACK,
@@ -55,6 +55,8 @@ pub const DEFAULT_PREBUFFER_TIMEOUT_MS: f64 = 60_000.0;
 pub const DEFAULT_SCROBBLE_GRACE_MS: f64 = 600_000.0;
 /// An attached upstream that says nothing for this long is dead.
 pub const DEFAULT_UPSTREAM_IDLE_MS: f64 = 30_000.0;
+/// A scrobble dedupe query without an answer is asked again after this long.
+pub const SCROBBLE_QUERY_RETRY_MS: f64 = 10_000.0;
 /// Clock ping cadence once synced.
 const PING_INTERVAL_MS: f64 = 5_000.0;
 /// Pings sent quickly after joining to converge the offset.
@@ -257,7 +259,10 @@ pub enum Output {
 struct PendingOp {
     op_id: String,
     op: SessionOp,
-    base_revision: u32,
+    /// Session time and playback position the op was made with; replicas
+    /// apply it with the same values.
+    at: EpochMs,
+    position_ms: Ms,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,7 +337,7 @@ pub struct Engine {
     doc: SessionDocument,
     confirmed: SessionDocument,
     pending: VecDeque<PendingOp>,
-    unsynced: Vec<(String, SessionOp)>,
+    unsynced: Vec<PendingOp>,
     unsynced_overflow: bool,
     sync_base: Option<SyncBase>,
     op_counter: u32,
@@ -352,10 +357,15 @@ pub struct Engine {
 
     lease: TransportLease,
     held: Option<HeldLease>,
+    /// Whether the lease we hold was granted by a remote room (as opposed to
+    /// our own, while alone or cut off).
+    held_from_remote: bool,
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
     remote_transport: TransportState,
+    /// The last stamp another device sent (for resume offers when its lease lapses).
+    last_remote_stamp: Option<LastStamp>,
     pending_take: Option<TakeInfo>,
 
     devices: Vec<DeviceInfo>,
@@ -364,7 +374,9 @@ pub struct Engine {
     resume: Option<ResumeOfferDraft>,
 
     deferred_scrobbles: Vec<DeferredScrobble>,
-    scrobble_queries: HashMap<String, (TrackId, EpochMs)>,
+    /// Outstanding dedupe queries: id → (track, startedAt, sent at). Re-sent
+    /// after [`SCROBBLE_QUERY_RETRY_MS`] without an answer.
+    scrobble_queries: HashMap<String, (TrackId, EpochMs, EpochMs)>,
     /// Scrobbles decided locally while cut off; told to the room on rejoin.
     unreported_scrobbles: Vec<(TrackId, EpochMs)>,
     saved_queues: Vec<SavedQueue>,
@@ -435,10 +447,12 @@ impl Engine {
             coordinator_retry_at: 0.0,
             lease: TransportLease::default(),
             held: None,
+            held_from_remote: false,
             detached: false,
             held_remote_epoch: None,
             stamp: None,
             remote_transport: TransportState::default(),
+            last_remote_stamp: None,
             pending_take: None,
             devices: vec![],
             picker: None,
@@ -490,6 +504,12 @@ impl Engine {
     /// The epoch this device believes it holds, if any.
     pub fn held_epoch(&self) -> Option<u32> {
         self.held.as_ref().map(|h| h.epoch)
+    }
+
+    /// The lease we hold was granted by the remote room we are attached to
+    /// (false while it came from our own room: alone, serving, or cut off).
+    pub fn held_from_remote(&self) -> bool {
+        self.held.is_some() && self.held_from_remote
     }
 
     /// Owning transport but unable to reach the room it took it from.
@@ -692,7 +712,7 @@ impl Engine {
             }
             Input::ClaimTransport { takeover } => {
                 if self.held.is_none() || takeover {
-                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover });
+                    self.claim(None, takeover);
                 }
             }
             Input::ReleaseTransport => {
@@ -725,7 +745,7 @@ impl Engine {
                         started_at: r.started_at,
                         scrobbled: r.scrobbled,
                     });
-                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+                    self.claim(None, true);
                 }
             }
             Input::DismissResume => {
@@ -922,6 +942,7 @@ impl Engine {
             (None, None) => {}
             (None, Some(_)) => {
                 self.drop_remote(None);
+                self.on_became_local();
                 self.emit_connection();
             }
             (Some((tier, candidates, leader)), Some(r)) if r.tier == tier && r.leader == leader => {
@@ -945,6 +966,26 @@ impl Engine {
             }
         }
         self.maybe_advertise(false);
+    }
+
+    /// Our own room is now the authority (alone by choice, or elected LAN
+    /// coordinator): nothing is "detached" from anywhere any more, and
+    /// scrobbles waiting for a remote verdict get ours.
+    fn on_became_local(&mut self) {
+        if self.remote.is_some() {
+            return;
+        }
+        if self.detached || self.held_remote_epoch.is_some() {
+            self.detached = false;
+            self.held_remote_epoch = None;
+            if self.held.is_some() {
+                self.emit_lease();
+            }
+        }
+        let deferred = std::mem::take(&mut self.deferred_scrobbles);
+        for d in deferred {
+            self.query_scrobble(d.track_id, d.started_at);
+        }
     }
 
     /// Leave the remote (if any) and return to our own room.
@@ -973,6 +1014,7 @@ impl Engine {
         if let Some(h) = &self.held {
             self.held_remote_epoch = Some(h.epoch);
             self.detached = true;
+            self.held_from_remote = false;
         }
         self.offset.reset();
         self.devices.clear();
@@ -983,7 +1025,11 @@ impl Engine {
         if self.prebuffer.take().is_some() {
             self.out.push(Output::DiscardPreBuffer);
         }
-        self.scrobble_queries.clear();
+        // Queries the vanished room never answered are asked again on rejoin.
+        let now = self.now_local_ms();
+        for (_, (track_id, started_at, _)) in self.scrobble_queries.drain() {
+            self.deferred_scrobbles.push(DeferredScrobble { track_id, started_at, since: now });
+        }
         // Pending ops will never be acked by the room that's gone: confirm them
         // through our own room instead (same ids, same keys).
         let pending: Vec<PendingOp> = self.pending.drain(..).collect();
@@ -991,10 +1037,10 @@ impl Engine {
         self.attach_loopback();
         self.drain_loops();
         for p in pending {
-            self.resubmit(p.op_id, p.op);
+            self.resubmit(p);
         }
         if self.held.is_some() {
-            self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+            self.claim(None, true);
         }
         self.emit_lease();
         self.emit_connection();
@@ -1172,14 +1218,31 @@ impl Engine {
             }
             Msg::OpAck { op_id, revision } => self.on_op_ack(op_id, revision),
             Msg::OpReject { op_id, current_revision, reason, document } => self.on_op_reject(op_id, current_revision, reason, document),
-            Msg::OpCommitted { op, revision, device_id, op_id } => self.on_op_committed(op, revision, device_id, op_id),
+            Msg::OpCommitted { op, revision, device_id, op_id, at, position_ms } => {
+                self.on_op_committed(op, revision, device_id, op_id, at, position_ms)
+            }
             Msg::Document { document } => self.adopt(document, DocChange::Sync),
             Msg::TransportStamp { device_id, key, position, played_ms, started_at, scrobbled, .. } => {
                 if device_id == self.cfg.device.id {
                     return;
                 }
-                self.remote_transport.position = position;
+                self.remote_transport.position = position.clone();
                 self.remote_transport.played_ms = played_ms;
+                let device_name = self
+                    .devices
+                    .iter()
+                    .find(|d| d.id == device_id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| device_id.clone());
+                self.last_remote_stamp = Some(LastStamp {
+                    device_id: device_id.clone(),
+                    device_name,
+                    key: key.clone(),
+                    position: position.clone(),
+                    played_ms,
+                    started_at,
+                    scrobbled,
+                });
                 if let Some(r) = &mut self.resume {
                     if r.device_id == device_id {
                         // The device that was playing is back: no longer dormant.
@@ -1187,7 +1250,6 @@ impl Engine {
                         self.out.push(Output::ResumeOffer(None));
                     }
                 }
-                let _ = (key, started_at, scrobbled);
                 let t = self.transport();
                 self.out.push(Output::TransportChanged { transport: t });
             }
@@ -1196,20 +1258,20 @@ impl Engine {
                     self.out.push(Output::TransportCommand(command));
                 }
             }
-            Msg::LeaseGranted { lease } => {
+            Msg::LeaseGranted { lease, ack_of } => {
                 if from_loopback && lease.owner.is_none() && self.held.is_some() {
                     // Our own room lapsed us (a long suspend); it holds nothing
                     // authoritative, so just take it back.
-                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+                    self.claim(None, true);
                 } else {
-                    self.on_lease_granted(lease)
+                    self.on_lease_granted(lease, ack_of, from_loopback)
                 }
             }
             Msg::LeaseFenced { lease, .. } => {
                 if from_loopback && self.remote.is_some() && self.held.is_some() {
                     // Detached: our own room only stands in for the remote one;
                     // it cannot fence a lease it never granted.
-                    self.upstream_send(Msg::LeaseClaim { epoch_expected: None, takeover: true });
+                    self.claim(None, true);
                 } else {
                     self.on_lease_fenced(lease)
                 }
@@ -1270,6 +1332,7 @@ impl Engine {
                 self.lease = lease.clone();
                 let now = self.now_local_ms();
                 self.held = Some(HeldLease::new(lease.epoch, now));
+                self.held_from_remote = !from_loopback;
                 self.detached = false;
                 self.stamp = Some(CurrentStamp {
                     key: Some(key.clone()),
@@ -1286,7 +1349,7 @@ impl Engine {
                 }
             }
             Msg::ScrobbleDedupeAnswer { query_id, duplicate } => {
-                if let Some((track_id, started_at)) = self.scrobble_queries.remove(&query_id) {
+                if let Some((track_id, started_at, _)) = self.scrobble_queries.remove(&query_id) {
                     self.out.push(Output::Scrobble { track_id, started_at, allowed: !duplicate });
                 }
             }
@@ -1368,7 +1431,7 @@ impl Engine {
                 let doc = self.doc.clone();
                 self.confirmed = self.doc.clone();
                 let base = room_rev;
-                self.submit_at(SessionOp::Replace { document: doc }, base, false);
+                self.submit_at(SessionOp::Replace { document: doc }, base);
             } else if let Some(rd) = &room_doc {
                 self.adopt(rd.clone(), DocChange::Sync);
             }
@@ -1391,13 +1454,13 @@ impl Engine {
                     let doc = self.doc.clone();
                     self.confirmed = rd.clone();
                     self.doc = rd.clone();
-                    self.submit_at(SessionOp::Replace { document: doc }, rd.revision, false);
+                    self.submit_at(SessionOp::Replace { document: doc }, rd.revision);
                 } else {
-                    let ops: Vec<(String, SessionOp)> = std::mem::take(&mut self.unsynced);
+                    let ops: Vec<PendingOp> = std::mem::take(&mut self.unsynced);
                     self.confirmed = rd.clone();
                     self.doc = rd.clone();
-                    for (id, op) in ops {
-                        self.resubmit(id, op);
+                    for p in ops {
+                        self.resubmit(p);
                     }
                 }
                 self.unsynced.clear();
@@ -1428,29 +1491,13 @@ impl Engine {
             self.lease = rep.transport_lease.clone();
             self.remote_transport = rep.document.transport.clone();
             self.remote_transport.lease = self.lease.clone();
-            let live_owner = if self.lease.expires_at > self.now_session_ms() { self.lease.owner.clone() } else { None };
-            if let (Some(stamp), Some(current)) = (&rep.last_stamp, &self.doc.current) {
-                if live_owner.is_none()
-                    && stamp.device_id != self.cfg.device.id
-                    && stamp.key.as_deref() == Some(current.key.as_str())
-                    && self.held.is_none()
-                {
-                    let last_seen = rep.device_last_seen(&stamp.device_id).unwrap_or(stamp.position.taken_at);
-                    let draft = ResumeOfferDraft {
-                        device_id: stamp.device_id.clone(),
-                        device_name: stamp.device_name.clone(),
-                        key: current.key.clone(),
-                        track_id: current.track_id.clone(),
-                        position_ms: resume_position(&stamp.position, self.now_session_ms()),
-                        played_ms: stamp.played_ms,
-                        started_at: stamp.started_at,
-                        scrobbled: stamp.scrobbled,
-                        last_seen,
-                    };
-                    self.resume = Some(draft.clone());
-                    self.out.push(Output::ResumeOffer(Some(draft)));
+            if let Some(stamp) = &rep.last_stamp {
+                if stamp.device_id != self.cfg.device.id {
+                    self.last_remote_stamp = Some(stamp.clone());
                 }
             }
+            let last_seen = rep.last_stamp.as_ref().and_then(|s| rep.device_last_seen(&s.device_id));
+            self.maybe_offer_resume(last_seen);
             let (merged, changed) = merge_saved_queues(&self.saved_queues, &rep.saved_queues);
             if changed {
                 self.saved_queues = merged.clone();
@@ -1480,10 +1527,7 @@ impl Engine {
         }
         if self.held.is_some() {
             let expected = if remote { self.held_remote_epoch } else { None };
-            if let Some(h) = &mut self.held {
-                h.sent(now);
-            }
-            self.upstream_send(Msg::LeaseClaim { epoch_expected: expected, takeover: !remote });
+            self.claim(expected, !remote);
         }
         if remote {
             let unreported = std::mem::take(&mut self.unreported_scrobbles);
@@ -1511,13 +1555,15 @@ impl Engine {
     fn on_local_op(&mut self, op: SessionOp) {
         let base = self.doc.revision;
         let op_id = self.next_op_id();
-        let ctx = op_context(&op_id, self.now_session_ms(), self.local_position());
+        let at = self.now_session_ms();
+        let position_ms = self.local_position();
+        let ctx = op_context(&op_id, at, position_ms);
         match apply_op(self.reducer.as_ref(), &self.doc, &op, &ctx, base.saturating_add(1)) {
             Ok(next) => {
                 self.doc = next;
                 let d = self.doc.clone();
                 self.out.push(Output::DocumentChanged { document: d, cause: DocChange::Local });
-                self.submit_at(op, base, true);
+                self.send_op(PendingOp { op_id, op, at, position_ms }, base);
             }
             Err(e) => self.log("debug", format!("local op not applicable: {e}")),
         }
@@ -1530,51 +1576,53 @@ impl Engine {
         }
     }
 
-    /// Queue `op` against `base` and send it upstream. `applied` says the
-    /// caller already applied it to `doc`.
-    fn submit_at(&mut self, op: SessionOp, base: u32, applied: bool) {
-        let op_id = if applied { self.pending_id_for_last() } else { self.next_op_id() };
-        if !applied {
-            let ctx = op_context(&op_id, self.now_session_ms(), self.local_position());
-            match apply_op(self.reducer.as_ref(), &self.doc, &op, &ctx, base.saturating_add(1)) {
-                Ok(next) => self.doc = next,
-                Err(e) => {
-                    self.log("debug", format!("op not applicable: {e}"));
-                    return;
-                }
-            }
-        }
-        self.pending.push_back(PendingOp { op_id: op_id.clone(), op: op.clone(), base_revision: base });
-        let epoch = if op.is_owner_op() { self.held.as_ref().map(|h| h.epoch) } else { None };
-        let device_id = self.cfg.device.id.clone();
-        self.upstream_send(Msg::Op { base_revision: base, op, device_id, op_id, epoch });
+    /// Apply `op` to the live document at the next revision and send it.
+    fn submit_at(&mut self, op: SessionOp, base: u32) {
+        let op_id = self.next_op_id();
+        let at = self.now_session_ms();
+        let position_ms = self.local_position();
+        self.resubmit_at(PendingOp { op_id, op, at, position_ms }, base);
     }
 
-    fn pending_id_for_last(&self) -> String {
-        format!("{}-{}", self.cfg.device.id, self.op_counter)
-    }
-
-    /// Re-send an op with its original id (keys stay stable).
-    fn resubmit(&mut self, op_id: String, op: SessionOp) {
+    /// Re-send a pending op with its original id, time and position (keys
+    /// and timestamps stay stable) against the current revision.
+    fn resubmit(&mut self, p: PendingOp) {
         let base = self.doc.revision;
-        let ctx = op_context(&op_id, self.now_session_ms(), self.local_position());
-        match apply_op(self.reducer.as_ref(), &self.doc, &op, &ctx, base.saturating_add(1)) {
+        self.resubmit_at(p, base);
+    }
+
+    fn resubmit_at(&mut self, p: PendingOp, base: u32) {
+        let ctx = op_context(&p.op_id, p.at, p.position_ms);
+        match apply_op(self.reducer.as_ref(), &self.doc, &p.op, &ctx, base.saturating_add(1)) {
             Ok(next) => self.doc = next,
             Err(e) => {
-                self.log("debug", format!("replayed op not applicable: {e}"));
+                self.log("debug", format!("op not applicable: {e}"));
                 return;
             }
         }
-        self.pending.push_back(PendingOp { op_id: op_id.clone(), op: op.clone(), base_revision: base });
-        let epoch = if op.is_owner_op() { self.held.as_ref().map(|h| h.epoch) } else { None };
+        self.send_op(p, base);
+    }
+
+    fn send_op(&mut self, p: PendingOp, base: u32) {
+        let epoch = if p.op.is_owner_op() { self.held.as_ref().map(|h| h.epoch) } else { None };
         let device_id = self.cfg.device.id.clone();
-        self.upstream_send(Msg::Op { base_revision: base, op, device_id, op_id, epoch });
+        let msg = Msg::Op {
+            base_revision: base,
+            op: p.op.clone(),
+            device_id,
+            op_id: p.op_id.clone(),
+            epoch,
+            at: p.at,
+            position_ms: p.position_ms,
+        };
+        self.pending.push_back(p);
+        self.upstream_send(msg);
     }
 
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
         let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else { return };
         let p = self.pending.remove(pos).expect("position exists");
-        let ctx = op_context(&p.op_id, self.now_session_ms(), self.local_position());
+        let ctx = op_context(&p.op_id, p.at, p.position_ms);
         match apply_op(self.reducer.as_ref(), &self.confirmed, &p.op, &ctx, revision) {
             Ok(next) => self.confirmed = next,
             Err(_) => {
@@ -1593,7 +1641,7 @@ impl Engine {
                 self.unsynced_overflow = true;
                 self.unsynced.clear();
             } else if !self.unsynced_overflow {
-                self.unsynced.push((p.op_id, p.op));
+                self.unsynced.push(p);
             }
         }
         self.maybe_advertise(false);
@@ -1628,8 +1676,18 @@ impl Engine {
         }
     }
 
-    fn on_op_committed(&mut self, op: SessionOp, revision: u32, device_id: DeviceId, op_id: String) {
+    fn on_op_committed(&mut self, op: SessionOp, revision: u32, device_id: DeviceId, op_id: String, at: EpochMs, position_ms: Ms) {
         if device_id == self.cfg.device.id && self.pending.iter().any(|p| p.op_id == op_id) {
+            return;
+        }
+        if revision <= self.confirmed.revision {
+            // Already incorporated (a full document arrived first). Revisions
+            // are monotonic, so this can only be a duplicate or a late frame.
+            return;
+        }
+        if revision > self.confirmed.revision.saturating_add(1) {
+            self.log("warn", format!("commit gap: at {} got {revision}; resyncing", self.confirmed.revision));
+            self.upstream_send(Msg::SyncRequest);
             return;
         }
         if !self.pending.is_empty() {
@@ -1637,7 +1695,8 @@ impl Engine {
             self.pending.clear();
             self.doc = self.confirmed.clone();
         }
-        let ctx = op_context(&op_id, self.now_session_ms(), self.local_position());
+        let at = if at > 0.0 { at } else { self.now_session_ms() };
+        let ctx = op_context(&op_id, at, position_ms);
         match apply_op(self.reducer.as_ref(), &self.confirmed, &op, &ctx, revision) {
             Ok(next) => {
                 self.confirmed = next;
@@ -1673,18 +1732,61 @@ impl Engine {
 
     // -- lease ----------------------------------------------------------------
 
-    fn on_lease_granted(&mut self, lease: TransportLease) {
+    /// "X was playing Y · Resume here": dormant, only when nobody holds the
+    /// lease and the last stamp came from someone else for what is current.
+    fn maybe_offer_resume(&mut self, last_seen: Option<EpochMs>) {
+        let live_owner = if self.lease.expires_at > self.now_session_ms() { self.lease.owner.clone() } else { None };
+        if live_owner.is_some() || self.held.is_some() {
+            return;
+        }
+        let (Some(stamp), Some(current)) = (self.last_remote_stamp.clone(), self.doc.current.clone()) else { return };
+        if stamp.device_id == self.cfg.device.id || stamp.key.as_deref() != Some(current.key.as_str()) {
+            return;
+        }
+        let draft = ResumeOfferDraft {
+            device_id: stamp.device_id.clone(),
+            device_name: stamp.device_name.clone(),
+            key: current.key.clone(),
+            track_id: current.track_id.clone(),
+            position_ms: resume_position(&stamp.position, self.now_session_ms()),
+            played_ms: stamp.played_ms,
+            started_at: stamp.started_at,
+            scrobbled: stamp.scrobbled,
+            last_seen: last_seen.unwrap_or(stamp.position.taken_at),
+        };
+        if self.resume.as_ref() != Some(&draft) {
+            self.resume = Some(draft.clone());
+            self.out.push(Output::ResumeOffer(Some(draft)));
+        }
+    }
+
+    /// Send a lease claim, stamping it so the answer can be credited.
+    fn claim(&mut self, epoch_expected: Option<u32>, takeover: bool) {
+        let now = self.now_local_ms();
+        if let Some(h) = &mut self.held {
+            h.sent(now);
+        }
+        self.upstream_send(Msg::LeaseClaim { epoch_expected, takeover, sent_at: now });
+    }
+
+    fn on_lease_granted(&mut self, lease: TransportLease, ack_of: Option<EpochMs>, from_loopback: bool) {
         let now = self.now_local_ms();
         let mine = lease.owner.as_deref() == Some(self.cfg.device.id.as_str());
         self.lease = lease.clone();
         self.remote_transport.lease = lease.clone();
         if mine {
+            self.held_from_remote = !from_loopback;
             match &mut self.held {
                 Some(h) => {
-                    h.epoch = lease.epoch;
-                    h.acked(now);
+                    if h.epoch != lease.epoch {
+                        // A fresh grant (takeover, reclaim): the room vouched for us just now.
+                        h.epoch = lease.epoch;
+                        h.acked(ack_of.unwrap_or(now));
+                    } else if let Some(t) = ack_of {
+                        h.acked(t);
+                    }
                 }
-                None => self.held = Some(HeldLease::new(lease.epoch, now)),
+                None => self.held = Some(HeldLease::new(lease.epoch, ack_of.unwrap_or(now))),
             }
             if self.is_connected() {
                 // Only the remote room's word ends detachment; our own room
@@ -1719,6 +1821,10 @@ impl Engine {
         }
         if lease.owner.is_some() && self.resume.take().is_some() {
             self.out.push(Output::ResumeOffer(None));
+        }
+        if lease.owner.is_none() && self.is_connected() {
+            // The player went quiet and its lease lapsed: offer, never auto-resume.
+            self.maybe_offer_resume(None);
         }
         self.emit_devices();
     }
@@ -1918,9 +2024,28 @@ impl Engine {
 
     fn query_scrobble(&mut self, track_id: TrackId, started_at: EpochMs) {
         let query_id = self.next_op_id();
-        self.scrobble_queries.insert(query_id.clone(), (track_id.clone(), started_at));
+        let now = self.now_local_ms();
+        self.scrobble_queries.insert(query_id.clone(), (track_id.clone(), started_at, now));
         let device_id = self.cfg.device.id.clone();
         self.upstream_send(Msg::ScrobbleDedupeQuery { query_id, track_id, started_at, device_id });
+    }
+
+    /// Re-ask queries a lossy link swallowed. Same id: a late first answer
+    /// settles it and the second is ignored.
+    fn retry_scrobble_queries(&mut self, now: EpochMs) {
+        let due: Vec<(String, TrackId, EpochMs)> = self
+            .scrobble_queries
+            .iter()
+            .filter(|(_, (_, _, sent))| now - sent >= SCROBBLE_QUERY_RETRY_MS)
+            .map(|(id, (t, s, _))| (id.clone(), t.clone(), *s))
+            .collect();
+        for (query_id, track_id, started_at) in due {
+            if let Some(e) = self.scrobble_queries.get_mut(&query_id) {
+                e.2 = now;
+            }
+            let device_id = self.cfg.device.id.clone();
+            self.upstream_send(Msg::ScrobbleDedupeQuery { query_id, track_id, started_at, device_id });
+        }
     }
 
     fn send_ping(&mut self) {
@@ -1991,7 +2116,7 @@ impl Engine {
                 if let Some(h) = &mut self.held {
                     h.sent(now);
                 }
-                self.upstream_send(Msg::LeaseHeartbeat { epoch: h.epoch });
+                self.upstream_send(Msg::LeaseHeartbeat { epoch: h.epoch, sent_at: now });
             }
             if h.lapsed(now) && !self.detached && self.remote.is_some() {
                 self.detached = true;
@@ -2008,6 +2133,10 @@ impl Engine {
                 let target = self.cfg.device.id.clone();
                 self.upstream_send(Msg::HandoffReady { from: p.from, target, key: p.key, ready: false });
             }
+        }
+
+        if self.upstream_authoritative() {
+            self.retry_scrobble_queries(now);
         }
 
         // Deferred scrobbles past the grace period: local judgement.
@@ -2265,7 +2394,7 @@ mod tests {
         attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted { op: play_op(), revision: 2, device_id: "b".into(), op_id: "b-1".into() }),
+            msg: WireMessage::new(Msg::OpCommitted { op: play_op(), revision: 2, device_id: "b".into(), op_id: "b-1".into(), at: 1.0, position_ms: 0 }),
         });
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
         e.handle(Input::LocalOp { op: SessionOp::Next });
@@ -2274,7 +2403,7 @@ mod tests {
         // b's next commits at revision 3 before ours is answered
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted { op: SessionOp::Next, revision: 3, device_id: "b".into(), op_id: "b-2".into() }),
+            msg: WireMessage::new(Msg::OpCommitted { op: SessionOp::Next, revision: 3, device_id: "b".into(), op_id: "b-2".into(), at: 2.0, position_ms: 0 }),
         });
         assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Remote, .. })));
         assert!(e.pending.is_empty());
@@ -2304,7 +2433,7 @@ mod tests {
         e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::OpAck { op_id: "a-2".into(), revision: 2 }) });
         e.handle(Input::ClaimTransport { takeover: false });
         let lease = TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 30_000.0 };
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::LeaseGranted { lease }) });
+        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::LeaseGranted { lease, ack_of: None }) });
         assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
         // network dies; we keep playing detached and make an offline change
         e.handle(Input::Disconnected { peer: "up".into() });
@@ -2325,7 +2454,7 @@ mod tests {
             msg: WireMessage::new(Msg::Welcome { session_clock_ms: 200_000.0, accepted_protocol: 1, replica: Some(rep), members: vec![dev("b")], extra: Default::default() }),
         });
         assert!(outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseClaim { epoch_expected: Some(1), takeover: false })));
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseClaim { epoch_expected: Some(1), takeover: false, .. })));
         let outs = e.handle(Input::WireIn {
             peer: "up2".into(),
             msg: WireMessage::new(Msg::LeaseFenced { current_epoch: 3, lease: TransportLease { owner: Some("b".into()), epoch: 3, expires_at: 999_999.0 } }),
@@ -2344,7 +2473,7 @@ mod tests {
         src.handle(Input::ClaimTransport { takeover: false });
         src.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
         });
         src.handle(Input::LocalStamp {
             key: Some("k".into()),
@@ -2444,7 +2573,7 @@ mod tests {
         assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { lease: TransportLease { owner: Some("a".into()), epoch: 4, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 4, expires_at: 99_999.0 } }),
         });
         assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { position_ms: 31_000, played_ms: 30_000, .. })));
         assert!(outs.iter().any(|o| matches!(o, Output::ResumeOffer(None))));
@@ -2505,11 +2634,11 @@ mod tests {
         e.handle(Input::ClaimTransport { takeover: false });
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
         });
         clock.0.store(15_100, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseHeartbeat { epoch: 1 })));
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseHeartbeat { epoch: 1, .. })));
         // no acks: after 20 s we're detached but still playing
         clock.0.store(29_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);

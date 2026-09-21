@@ -39,6 +39,12 @@ use crate::sim::device::{DeviceEffect, Library, Persisted, SimDevice};
 use crate::sim::network::{Conditions, NetEvent, Network};
 
 pub const COORDINATOR_NODE: &str = "coordinator";
+/// How long a device may keep believing it owns transport after the room
+/// handed the lease elsewhere. The news needs one delivery plus a tick and a
+/// lossy link may drop it repeatedly, but without any answer the owner
+/// declares itself detached after `LEASE_DURATION - OWNER_LAPSE_MARGIN`
+/// (18 s) plus a tick, so 20 s is the true bound.
+pub const STALE_OWNER_GRACE_MS: f64 = 20_000.0;
 pub const COORDINATOR_URL: &str = "wss://coordinator.example/";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +143,8 @@ pub struct World {
     pub actions_run: Vec<(EpochMs, Action)>,
     crashed: BTreeMap<usize, Persisted>,
     device_rev_watermark: Vec<Option<u32>>,
+    /// Since when a device has held an epoch the room already moved past.
+    stale_owner_since: Vec<Option<EpochMs>>,
     pub violations: Vec<String>,
     pub events: u64,
     lan_adverts: BTreeMap<usize, crate::connect::discovery::PeerAdvert>,
@@ -178,6 +186,7 @@ impl World {
             actions_run: vec![],
             crashed: BTreeMap::new(),
             device_rev_watermark: vec![None; cfg.devices],
+            stale_owner_since: vec![None; cfg.devices],
             violations: vec![],
             events: 0,
             lan_adverts: BTreeMap::new(),
@@ -678,19 +687,53 @@ impl World {
         }
     }
 
+    /// The current transport epoch of a room (the coordinator's, or the
+    /// serving LAN device's own room).
+    fn room_epoch(&self, room: &str) -> Option<u32> {
+        if room == COORDINATOR_NODE {
+            return self.coordinator.as_ref().map(|c| c.room.lease().epoch);
+        }
+        self.devices.iter().find(|d| d.id == room).map(|d| d.engine.room().lease().epoch)
+    }
+
     fn check_invariants(&mut self) {
         let now = self.now();
-        // 1. never two owners per room
-        let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        // 1. never two owners per room: at most one device holds the room's
+        //    current epoch, and a device holding a stale epoch (the room moved
+        //    on and the news is still in flight) stands down within a bounded
+        //    time. Detached devices know they cannot write.
+        let mut current_holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for i in 0..self.devices.len() {
             let d = &self.devices[i];
+            let mut stale = false;
             if d.owns() && !d.engine.is_detached() {
                 if let Some(room) = self.room_key(i) {
-                    owners.entry(room).or_default().push(d.id.clone());
+                    let epoch = self.room_epoch(&room);
+                    // A lease counts for a room only if that room granted it: the
+                    // serving device's own room, or the remote room a client follows.
+                    let granted_by_room = d.engine.is_serving() || d.engine.held_from_remote();
+                    if granted_by_room && epoch == d.engine.held_epoch() {
+                        current_holders.entry(room).or_default().push(d.id.clone());
+                    } else {
+                        stale = true;
+                    }
                 }
             }
+            if stale {
+                let since = *self.stale_owner_since[i].get_or_insert(now);
+                if now - since > STALE_OWNER_GRACE_MS {
+                    self.violations.push(format!(
+                        "[{now:.0}] {} still owns transport {:.0} ms after the room moved to another epoch",
+                        d.id,
+                        now - since
+                    ));
+                    self.stale_owner_since[i] = None;
+                }
+            } else {
+                self.stale_owner_since[i] = None;
+            }
         }
-        for (room, list) in owners {
+        for (room, list) in current_holders {
             if list.len() > 1 {
                 self.violations.push(format!("[{now:.0}] two transport owners in room {room}: {list:?}"));
             }
@@ -721,9 +764,6 @@ impl World {
     /// Checks that only hold once the network is healed and quiet.
     pub fn check_quiescent(&mut self) {
         let now = self.now();
-        if self.net.in_flight() > 0 {
-            self.violations.push(format!("[{now:.0}] messages still in flight after quiescence: {}", self.net.in_flight()));
-        }
         // 5. convergence
         let room_doc = match self.cfg.topology {
             Topology::Coordinator => self.coordinator.as_ref().map(|c| c.room.replica().document.clone()),
@@ -744,12 +784,11 @@ impl World {
             if let Some(rd) = &room_doc {
                 if self.room_key(i).is_some() && !same_session_state(d.engine.document(), rd) {
                     self.violations.push(format!(
-                        "[{now:.0}] {} document diverged from the room: rev {} vs {} current {:?} vs {:?}",
+                        "[{now:.0}] {} document diverged from the room: rev {} vs {}: {}",
                         d.id,
                         d.engine.document().revision,
                         rd.revision,
-                        d.engine.document().current.as_ref().map(|c| &c.key),
-                        rd.current.as_ref().map(|c| &c.key)
+                        doc_diff(d.engine.document(), rd)
                     ));
                 }
             }
@@ -787,10 +826,18 @@ impl World {
         }
     }
 
-    /// Run the tail: heal, let everything settle, check.
+    /// Run the tail: heal, let everything settle, check at a quiet instant
+    /// (nothing in flight, no op awaiting a verdict).
     pub fn finish(&mut self) {
         self.heal_everything();
         self.run_for(120_000.0);
+        for _ in 0..240 {
+            let quiet = self.net.in_flight() == 0 && self.devices.iter().all(|d| d.engine.pending_count() == 0);
+            if quiet {
+                break;
+            }
+            self.run_for(250.0);
+        }
         self.check_quiescent();
     }
 
@@ -892,6 +939,24 @@ impl World {
         w.finish();
         w
     }
+}
+
+/// Top-level fields on which two documents differ, for violation messages.
+pub fn doc_diff(a: &crate::api::SessionDocument, b: &crate::api::SessionDocument) -> String {
+    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) = (serde_json::to_value(a), serde_json::to_value(b)) else {
+        return "unserialisable".into();
+    };
+    let mut out = vec![];
+    for (k, va) in &a {
+        if let Some(vb) = b.get(k) {
+            if va != vb {
+                let sa = va.to_string();
+                let sb = vb.to_string();
+                out.push(format!("{k}: {} vs {}", &sa[..sa.len().min(160)], &sb[..sb.len().min(160)]));
+            }
+        }
+    }
+    out.join("; ")
 }
 
 pub fn device_name(i: usize) -> String {

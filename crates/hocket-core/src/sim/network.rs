@@ -42,15 +42,29 @@ struct Link {
     a_peer: PeerId,
     b: NodeId,
     b_peer: PeerId,
+    /// Last scheduled delivery time in each direction: a stream never
+    /// reorders (jitter delays, it does not overtake), like TCP.
+    last_a_to_b: f64,
+    last_b_to_a: f64,
 }
 
 /// Link-level conditions between two nodes.
+///
+/// `drop` is the probability that a frame hits packet loss. The protocol runs
+/// over TCP, which never loses or reorders a frame on a live connection: loss
+/// shows up as a retransmission delay ([`RETRANSMIT_MIN_MS`]..[`RETRANSMIT_MAX_MS`])
+/// that also holds back everything queued behind it on that stream. Real
+/// breakage is modelled explicitly by `cut`, `partition` and `node_down`.
 #[derive(Debug, Clone, Copy)]
 pub struct Conditions {
     pub delay_ms: f64,
     pub jitter_ms: f64,
     pub drop: f64,
 }
+
+/// Retransmission delay range for a frame that hit packet loss.
+pub const RETRANSMIT_MIN_MS: f64 = 200.0;
+pub const RETRANSMIT_MAX_MS: f64 = 1_500.0;
 
 impl Default for Conditions {
     fn default() -> Self {
@@ -72,6 +86,7 @@ pub struct Network {
     per_pair: HashMap<(NodeId, NodeId), Conditions>,
     pub stats_dropped: u64,
     pub stats_delivered: u64,
+    pub stats_retransmitted: u64,
 }
 
 fn pair(a: &str, b: &str) -> (NodeId, NodeId) {
@@ -96,6 +111,7 @@ impl Network {
             per_pair: HashMap::new(),
             stats_dropped: 0,
             stats_delivered: 0,
+            stats_retransmitted: 0,
         }
     }
 
@@ -197,7 +213,14 @@ impl Network {
             let c = self.conditions(from, &target);
             let a_peer = self.next_peer("out");
             let b_peer = self.next_peer("in");
-            self.links.push(Link { a: from.to_string(), a_peer: a_peer.clone(), b: target.clone(), b_peer: b_peer.clone() });
+            self.links.push(Link {
+                a: from.to_string(),
+                a_peer: a_peer.clone(),
+                b: target.clone(),
+                b_peer: b_peer.clone(),
+                last_a_to_b: 0.0,
+                last_b_to_a: 0.0,
+            });
             let rtt = c.delay_ms * 2.0 + rng.random_range(0.0..=c.jitter_ms);
             self.enqueue(now + rtt, from, NetEvent::Connected { peer: a_peer, url: url.clone() });
             self.enqueue(now + rtt / 2.0, &target, NetEvent::Accepted { peer: b_peer });
@@ -222,17 +245,24 @@ impl Network {
     /// Send a frame from `node` on `peer`. Applies partition, drop, delay and
     /// jitter (which reorders).
     pub fn send(&mut self, now: f64, rng: &mut ChaCha8Rng, node: &str, peer: &str, msg: WireMessage) {
-        let Some((_, other, other_peer)) = self.link_for(node, peer) else { return };
+        let Some((idx, other, other_peer)) = self.link_for(node, peer) else { return };
         if self.is_partitioned(node, &other) {
             self.stats_dropped += 1;
             return;
         }
         let c = self.conditions(node, &other);
+        let mut at = now + c.delay_ms + rng.random_range(0.0..=c.jitter_ms);
         if c.drop > 0.0 && rng.random::<f64>() < c.drop {
-            self.stats_dropped += 1;
-            return;
+            // Packet loss on a TCP stream: retransmitted, later, still in order.
+            self.stats_retransmitted += 1;
+            at += rng.random_range(RETRANSMIT_MIN_MS..=RETRANSMIT_MAX_MS);
         }
-        let at = now + c.delay_ms + rng.random_range(0.0..=c.jitter_ms);
+        let link = &mut self.links[idx];
+        let last = if link.a == node { &mut link.last_a_to_b } else { &mut link.last_b_to_a };
+        if at < *last {
+            at = *last;
+        }
+        *last = at;
         self.enqueue(at, &other, NetEvent::Message { peer: other_peer, msg });
     }
 
@@ -330,10 +360,20 @@ mod tests {
         assert_eq!(n.in_flight(), 0);
         assert_eq!(n.stats_dropped, 1);
         n.heal("a", "c");
-        // jitter reorders
+        // jitter delays but a stream stays in order (TCP); across streams it reorders
         n.set_default_conditions(Conditions { delay_ms: 10.0, jitter_ms: 50.0, drop: 0.0 });
+        n.connect(150.0, &mut rng, "b", &["wss://c/".into()]);
+        let b_peer = n
+            .due(200.0)
+            .into_iter()
+            .find_map(|(to, e)| match e {
+                NetEvent::Connected { peer, .. } if to == "b" => Some(peer),
+                _ => None,
+            })
+            .unwrap();
         for i in 0..20 {
             n.send(200.0, &mut rng, "a", &a_peer, WireMessage::new(Msg::ClockPing { t0: i as f64 }));
+            n.send(200.0, &mut rng, "b", &b_peer, WireMessage::new(Msg::ClockPing { t0: 100.0 + i as f64 }));
         }
         let evs = n.due(300.0);
         let order: Vec<f64> = evs
@@ -346,14 +386,18 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect();
+        let from_a: Vec<f64> = order.iter().copied().filter(|t| *t < 100.0).collect();
+        let mut sorted_a = from_a.clone();
+        sorted_a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        assert_eq!(from_a, sorted_a, "one stream never reorders");
         let mut sorted = order.clone();
         sorted.sort_by(|x, y| x.partial_cmp(y).unwrap());
-        assert_ne!(order, sorted, "jitter should reorder");
+        assert_ne!(order, sorted, "streams interleave under jitter");
         // close notifies the other end
         n.close(300.0, "a", &a_peer);
         let evs = n.due(400.0);
         assert!(matches!(&evs[0], (to, NetEvent::Closed { peer }) if to == "c" && peer == &c_peer));
-        assert_eq!(n.link_count(), 0);
+        assert_eq!(n.link_count(), 1); // b's stream is still up
         // unreachable url fails
         n.connect(400.0, &mut rng, "a", &["wss://nope/".into()]);
         let evs = n.due(500.0);

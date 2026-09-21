@@ -265,7 +265,7 @@ impl Room {
         let now = self.now();
         self.replica.set_lease(lease.clone(), now);
         self.dirty = true;
-        self.broadcast(Msg::LeaseGranted { lease }, None);
+        self.broadcast(Msg::LeaseGranted { lease, ack_of: None }, None);
         self.broadcast_presence();
     }
 
@@ -382,11 +382,9 @@ impl Room {
             ready_key: None,
             picker_open: false,
         });
-        let replica = if doc_is_trivial(&self.replica.document) && self.replica.document.revision == 0 {
-            None
-        } else {
-            Some(self.replica.clone())
-        };
+        // Always sent, even when empty: the joiner adopts the room's session
+        // identity from it (or pushes its own document into a trivial one).
+        let replica = Some(self.replica.clone());
         self.send(
             peer,
             Msg::Welcome {
@@ -430,7 +428,7 @@ impl Room {
                 self.out.push(RoomOutput::Close(peer.to_string()));
                 self.on_disconnected(peer);
             }
-            Msg::Op { base_revision, op, device_id: op_device, op_id, epoch } => {
+            Msg::Op { base_revision, op, device_id: op_device, op_id, epoch, at, position_ms } => {
                 if let Some(e) = epoch {
                     if let Err(LeaseError::Fenced { current } | LeaseError::Held { current }) =
                         self.lease.check(&device_id, e, now)
@@ -460,8 +458,9 @@ impl Room {
                     );
                     return;
                 }
-                let position = self.replica.last_stamp.as_ref().map(|s| s.position.position_ms).unwrap_or(0);
-                let ctx = op_context(&op_id, now, position);
+                // Apply with the originator's time and position, exactly as every replica will.
+                let at = if at > 0.0 { at } else { now };
+                let ctx = op_context(&op_id, at, position_ms);
                 let target = base_revision.saturating_add(1);
                 let mut doc = self.replica.document.clone();
                 let adopt_identity = matches!(op, SessionOp::Replace { .. }) && doc_is_trivial(&doc);
@@ -476,7 +475,7 @@ impl Room {
                         self.replica.set_document(doc, now);
                         self.dirty = true;
                         self.send(peer, Msg::OpAck { op_id: op_id.clone(), revision: target });
-                        let committed = Msg::OpCommitted { op, revision: target, device_id: op_device, op_id };
+                        let committed = Msg::OpCommitted { op, revision: target, device_id: op_device, op_id, at, position_ms };
                         self.broadcast(committed, Some(peer));
                     }
                     Err(e) => {
@@ -543,25 +542,32 @@ impl Room {
                     }
                 }
             }
-            Msg::LeaseHeartbeat { epoch } => match self.lease.heartbeat(&device_id, epoch, now) {
+            Msg::LeaseHeartbeat { epoch, sent_at } => match self.lease.heartbeat(&device_id, epoch, now) {
                 Ok(LeaseEvent::Renewed { lease }) | Ok(LeaseEvent::Changed { lease, .. }) => {
                     let now = self.now();
                     self.replica.set_lease(lease.clone(), now);
                     self.dirty = true;
-                    self.send(peer, Msg::LeaseGranted { lease });
+                    self.send(peer, Msg::LeaseGranted { lease, ack_of: Some(sent_at) });
                 }
                 Err(LeaseError::Fenced { current } | LeaseError::Held { current }) => self.fenced(peer, current),
             },
-            Msg::LeaseClaim { epoch_expected, takeover } => match self.lease.claim(&device_id, epoch_expected, takeover, now) {
-                Ok(LeaseEvent::Changed { .. }) => self.broadcast_lease(),
-                Ok(LeaseEvent::Renewed { lease }) => {
-                    let now = self.now();
-                    self.replica.set_lease(lease.clone(), now);
-                    self.dirty = true;
-                    self.send(peer, Msg::LeaseGranted { lease });
+            Msg::LeaseClaim { epoch_expected, takeover, sent_at } => {
+                match self.lease.claim(&device_id, epoch_expected, takeover, now) {
+                    Ok(LeaseEvent::Changed { .. }) => {
+                        // The claimant gets its echo first, then everyone the change.
+                        let lease = self.lease.lease().clone();
+                        self.send(peer, Msg::LeaseGranted { lease, ack_of: Some(sent_at) });
+                        self.broadcast_lease();
+                    }
+                    Ok(LeaseEvent::Renewed { lease }) => {
+                        let now = self.now();
+                        self.replica.set_lease(lease.clone(), now);
+                        self.dirty = true;
+                        self.send(peer, Msg::LeaseGranted { lease, ack_of: Some(sent_at) });
+                    }
+                    Err(LeaseError::Fenced { current } | LeaseError::Held { current }) => self.fenced(peer, current),
                 }
-                Err(LeaseError::Fenced { current } | LeaseError::Held { current }) => self.fenced(peer, current),
-            },
+            }
             Msg::LeaseRelease { epoch } | Msg::HandoffRelease { epoch } => match self.lease.release(&device_id, epoch, now) {
                 Ok(_) => self.broadcast_lease(),
                 Err(LeaseError::Fenced { current } | LeaseError::Held { current }) => {
@@ -782,7 +788,7 @@ mod tests {
         let (mut r, _) = room();
         let outs = join(&mut r, "p1", "a");
         let msgs = sent(&outs, "p1");
-        assert!(matches!(msgs[0], Msg::Welcome { replica: None, members, .. } if members.is_empty()));
+        assert!(matches!(msgs[0], Msg::Welcome { replica: Some(r), members, .. } if members.is_empty() && r.document.revision == 0));
         assert!(msgs.iter().any(|m| matches!(m, Msg::Presence { devices } if devices.len() == 1)));
         assert!(outs.contains(&RoomOutput::ReplicaChanged));
         let outs = join(&mut r, "p2", "b");
@@ -857,7 +863,7 @@ mod tests {
     }
 
     fn op(base: u32, op: SessionOp, dev: &str, id: &str, epoch: Option<u32>) -> WireMessage {
-        WireMessage::new(Msg::Op { base_revision: base, op, device_id: dev.into(), op_id: id.into(), epoch })
+        WireMessage::new(Msg::Op { base_revision: base, op, device_id: dev.into(), op_id: id.into(), epoch, at: 5.0, position_ms: 0 })
     }
 
     fn play_op() -> SessionOp {
@@ -926,25 +932,25 @@ mod tests {
         join(&mut r, "p2", "b");
         let outs = r.handle(RoomInput::Message(
             "p1".into(),
-            WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false }),
+            WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false, sent_at: 0.0 }),
         ));
-        assert!(sent(&outs, "p1").iter().any(|m| matches!(m, Msg::LeaseGranted { lease } if lease.owner.as_deref() == Some("a") && lease.epoch == 1)));
+        assert!(sent(&outs, "p1").iter().any(|m| matches!(m, Msg::LeaseGranted { lease, .. } if lease.owner.as_deref() == Some("a") && lease.epoch == 1)));
         assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::LeaseGranted { .. })));
         assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::Presence { devices } if devices.iter().any(|d| d.id == "a" && d.playing))));
         // b cannot claim without takeover
         let outs = r.handle(RoomInput::Message(
             "p2".into(),
-            WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false }),
+            WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false, sent_at: 0.0 }),
         ));
         assert!(matches!(sent(&outs, "p2")[0], Msg::LeaseFenced { current_epoch: 1, .. }));
         // heartbeat renews
         clock.0.store(6_000, Ordering::SeqCst);
-        let outs = r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseHeartbeat { epoch: 1 })));
-        assert!(matches!(sent(&outs, "p1")[0], Msg::LeaseGranted { lease } if lease.expires_at == 26_000.0));
+        let outs = r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseHeartbeat { epoch: 1, sent_at: 6000.0 })));
+        assert!(matches!(sent(&outs, "p1")[0], Msg::LeaseGranted { lease, ack_of: Some(t) } if lease.expires_at == 26_000.0 && *t == 6000.0));
         // silence: lapse at 26 s
         clock.0.store(26_000, Ordering::SeqCst);
         let outs = r.handle(RoomInput::Tick);
-        assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::LeaseGranted { lease } if lease.owner.is_none() && lease.epoch == 2)));
+        assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::LeaseGranted { lease, .. } if lease.owner.is_none() && lease.epoch == 2)));
         // a's stamp with the old epoch is fenced and not relayed
         let outs = r.handle(RoomInput::Message(
             "p1".into(),
@@ -971,7 +977,7 @@ mod tests {
         let (mut r, _) = room();
         join(&mut r, "p1", "a");
         join(&mut r, "p2", "b");
-        r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false })));
+        r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false, sent_at: 0.0 })));
         let stamp = |pos: u32, playing: bool| {
             WireMessage::new(Msg::TransportStamp {
                 device_id: "a".into(),
@@ -1000,7 +1006,7 @@ mod tests {
         join(&mut r, "p1", "a");
         join(&mut r, "p2", "b");
         join(&mut r, "p3", "c");
-        r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false })));
+        r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::LeaseClaim { epoch_expected: None, takeover: false, sent_at: 0.0 })));
         let outs = r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::HandoffPickerOpen { from: "a".into() })));
         assert!(matches!(sent(&outs, "p2")[0], Msg::HandoffPickerOpen { .. }));
         assert!(matches!(sent(&outs, "p3")[0], Msg::HandoffPickerOpen { .. }));
@@ -1032,7 +1038,7 @@ mod tests {
             }),
         ));
         assert!(matches!(sent(&outs, "p2")[0], Msg::HandoffTakeover { lease: Some(l), played_ms: 90_000, .. } if l.owner.as_deref() == Some("b") && l.epoch == 2));
-        assert!(sent(&outs, "p1").iter().any(|m| matches!(m, Msg::LeaseGranted { lease } if lease.owner.as_deref() == Some("b"))));
+        assert!(sent(&outs, "p1").iter().any(|m| matches!(m, Msg::LeaseGranted { lease, .. } if lease.owner.as_deref() == Some("b"))));
         assert_eq!(r.live_owner().as_deref(), Some("b"));
         // the source's late release is silently ignored
         let outs = r.handle(RoomInput::Message("p1".into(), WireMessage::new(Msg::HandoffRelease { epoch: 1 })));

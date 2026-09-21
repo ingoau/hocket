@@ -432,14 +432,35 @@ pub enum Msg {
 
     // -- session ops ----------------------------------------------------
     /// → room. Targets `baseRevision`; `epoch` is set for ops the transport owner issues
-    /// (auto-advance) so a fenced device cannot push them.
-    Op { base_revision: u32, op: SessionOp, device_id: DeviceId, op_id: String, epoch: Option<u32> },
+    /// (auto-advance) so a fenced device cannot push them. `at` (session clock) and
+    /// `positionMs` are the originator's, and every replica applies the op with
+    /// them so time-derived fields come out identical everywhere.
+    Op {
+        base_revision: u32,
+        op: SessionOp,
+        device_id: DeviceId,
+        op_id: String,
+        epoch: Option<u32>,
+        #[serde(default)]
+        at: EpochMs,
+        #[serde(default)]
+        position_ms: Ms,
+    },
     /// → client (the originator).
     OpAck { op_id: String, revision: u32 },
     /// → client (the originator). Carries the current document for rollback.
     OpReject { op_id: String, current_revision: u32, reason: RejectReason, document: SessionDocument },
     /// → client (everyone but the originator). An op the room accepted.
-    OpCommitted { op: SessionOp, revision: u32, device_id: DeviceId, op_id: String },
+    OpCommitted {
+        op: SessionOp,
+        revision: u32,
+        device_id: DeviceId,
+        op_id: String,
+        #[serde(default)]
+        at: EpochMs,
+        #[serde(default)]
+        position_ms: Ms,
+    },
     /// → client. Full document (join, resync).
     Document { document: SessionDocument },
     /// → room. Ask for a full document.
@@ -458,15 +479,31 @@ pub enum Msg {
     },
     /// → room, relayed to the owner: a non-owner's remote control.
     TransportRequest { command: TransportCommand, from: DeviceId },
-    /// → room. Every 5 s while owning transport.
-    LeaseHeartbeat { epoch: u32 },
+    /// → room. Every 5 s while owning transport. `sentAt` (sender's clock) is
+    /// echoed back as `ackOf` so the owner knows exactly which heartbeat was
+    /// answered.
+    LeaseHeartbeat {
+        epoch: u32,
+        #[serde(default)]
+        sent_at: EpochMs,
+    },
     /// → room. `epochExpected` is the epoch a reconnecting device believes it holds.
     /// `takeover` is a deliberate pick from the picker and always wins.
-    LeaseClaim { epoch_expected: Option<u32>, takeover: bool },
+    LeaseClaim {
+        epoch_expected: Option<u32>,
+        takeover: bool,
+        #[serde(default)]
+        sent_at: EpochMs,
+    },
     /// → room. Owner gives transport up.
     LeaseRelease { epoch: u32 },
     /// → client (broadcast on every change, and to the owner on renewal).
-    LeaseGranted { lease: TransportLease },
+    /// `ackOf` echoes the `sentAt` of the heartbeat/claim this answers.
+    LeaseGranted {
+        lease: TransportLease,
+        #[serde(default)]
+        ack_of: Option<EpochMs>,
+    },
     /// → client. A stamp, heartbeat or op carried a stale epoch.
     LeaseFenced { current_epoch: u32, lease: TransportLease },
 
@@ -697,10 +734,11 @@ mod tests {
 
     #[test]
     fn envelope_round_trips_and_is_adjacently_tagged() {
-        let m = WireMessage::new(Msg::LeaseHeartbeat { epoch: 4 });
+        let m = WireMessage::new(Msg::LeaseHeartbeat { epoch: 4, sent_at: 1.0 });
         let text = m.encode().unwrap();
         assert!(text.contains("\"type\":\"leaseHeartbeat\""));
-        assert!(text.contains("\"data\":{\"epoch\":4}"));
+        // Struct-variant fields keep serde's default names, as in `api.rs`.
+        assert!(text.contains("\"data\":{\"epoch\":4,\"sent_at\":1"), "{text}");
         assert!(text.contains("\"protocolVersion\":1"));
         let back = WireMessage::decode(&text).unwrap();
         assert_eq!(back, m);
@@ -727,7 +765,7 @@ mod tests {
             Msg::SyncRequest,
             Msg::Bye { reason: "x".into() },
             Msg::ClockPing { t0: 0.0 },
-            Msg::LeaseHeartbeat { epoch: 0 },
+            Msg::LeaseHeartbeat { epoch: 0, sent_at: 0.0 },
             Msg::HandoffPickerOpen { from: "a".into() },
             Msg::ScrobbleDedupeAnswer { query_id: "q".into(), duplicate: false },
             Msg::SavedQueuesSync { queues: vec![] },
@@ -904,6 +942,8 @@ mod tests {
             device_id: "d".into(),
             op_id: "o".into(),
             epoch: Some(2),
+            at: 1.0,
+            position_ms: 0,
         })
         .unwrap();
         assert!(text.contains("\"type\":\"replace\""));
