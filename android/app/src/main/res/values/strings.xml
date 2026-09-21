@@ -414,7 +414,7 @@
     <string name="settings_db">%1$+.1f dB</string>
     <string name="settings_section_transcoding">Transcoding</string>
     <string name="settings_transcoding_body">Per network. The server’s player profile should stay permissive.</string>
-    <string name="settings_transcoding_wifi">On Wi‑Fi</string>
+    <string name="settings_transcoding_wifi">Default (Wi‑Fi and other networks)</string>
     <string name="settings_transcoding_cellular">On cellular</string>
     <string name="settings_transcoding_current">On this network</string>
     <string name="settings_format">Format</string>

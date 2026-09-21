@@ -48,7 +48,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.HocketApp
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
+import app.hocket.core.SettingKeys
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.MapSerializer
 import app.hocket.core.HocketJson
 import app.hocket.core.NativeCore
 import app.hocket.core.api.Command
@@ -139,18 +146,22 @@ fun TranscodingSettingsScreen(nav: NavHostController) {
     val network by client.network.collectAsStateWithLifecycle()
     SubScreen(nav, stringResource(R.string.settings_section_transcoding)) {
         Text(stringResource(R.string.settings_transcoding_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-        ProfileEditor(stringResource(R.string.settings_transcoding_wifi), "wifi")
+        ProfileEditor(stringResource(R.string.settings_transcoding_wifi), "default")
         ProfileEditor(stringResource(R.string.settings_transcoding_cellular), "cellular")
-        network?.networkId?.takeIf { it != "wifi" && it != "cellular" }?.let { id -> ProfileEditor(stringResource(R.string.settings_transcoding_current), id) }
+        network?.networkId?.takeIf { it != "default" && it != "cellular" }?.let { id -> ProfileEditor(stringResource(R.string.settings_transcoding_current), id) }
     }
 }
 
+/** One entry of the `transcoding.profiles` map (keys: `default`, `cellular`, `<networkId>`). */
 @Composable
 private fun ProfileEditor(title: String, networkId: String) {
     val client = LocalCoreClient.current
-    val handle = setting("transcoding.$networkId")
-    val profile = remember(handle.raw) { handle.raw?.let { runCatching { HocketJson.json.decodeFromString(TranscodingProfile.serializer(), it) }.getOrNull() } ?: TranscodingProfile(null, null, emptyList()) }
-    fun push(p: TranscodingProfile) = client.dispatch(Commands.setTranscodingProfile(networkId, p))
+    val handle = setting(SettingKeys.TRANSCODING_PROFILES)
+    val profile = remember(handle.raw, networkId) {
+        handle.raw?.let { runCatching { HocketJson.json.decodeFromString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), it) }.getOrNull() }?.get(networkId)
+            ?: TranscodingProfile(null, null, emptyList())
+    }
+    fun push(p: TranscodingProfile) = client.dispatch(Commands.setTranscodingProfile(networkId.takeIf { it != "default" }, p))
     SettingsSection(title)
     val originalLabel = stringResource(R.string.settings_format_original)
     SettingRow(stringResource(R.string.settings_format)) {
@@ -175,7 +186,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val connection by client.connection.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
-    val lan = setting("connect.lanDiscovery")
+    val lan = setting(SettingKeys.CONNECT_LAN_DISCOVERY)
     var url by remember(connection.coordinatorUrl) { mutableStateOf(connection.coordinatorUrl ?: "") }
     SubScreen(nav, stringResource(R.string.settings_section_connect)) {
         OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.settings_coordinator_url)) }, placeholder = { Text(stringResource(R.string.settings_coordinator_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
@@ -198,32 +209,29 @@ fun ConnectSettingsScreen(nav: NavHostController) {
 @Composable
 fun CustomiseSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val navSetting = setting("ui.navItems")
-    val menuSetting = setting("ui.contextMenuOrder")
-    val mediaSetting = setting("ui.mediaButtons")
+    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as? HocketApp
+    val scope = rememberCoroutineScope()
+    val menuSetting = setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU)
+    val mediaSetting = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION)
     SubScreen(nav, stringResource(R.string.settings_section_customise)) {
         Text(stringResource(R.string.settings_reorder_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         SettingsSection(stringResource(R.string.settings_sidebar))
+        // Navigation items are an app-local preference; the core's `sidebar` surface is kept in step.
         val allNav = NavItem.entries.map { it.id }
-        val navIds = navSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() } ?: NavItem.DEFAULT.map { it.id }
-        ChooseAndOrder(allNav, navIds, minEnabled = 2) { ids ->
-            navSetting.setRaw(HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
-            client.dispatch(Commands.setActionOrder("sidebar", ids))
+        val navIds by (app?.prefs?.navItems ?: flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
+        ChooseAndOrder(allNav, navIds.ifEmpty { NavItem.DEFAULT.map { it.id } }, minEnabled = 2) { ids ->
+            scope.launch { app?.prefs?.setNavItems(ids) }
+            client.dispatch(Commands.setActionOrder("sidebar", ids.map { NavItem.fromIds(listOf(it)).first().canonicalActionId }))
         }
         SettingsSection(stringResource(R.string.settings_context_menu))
-        val allMenu = listOf("play", "shuffle", "playNext", "playLater", "addToPlaylist", "love", "unlove", "rate5", "clearRating", "download")
-        val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() } ?: allMenu
-        ChooseAndOrder(allMenu, menuIds, minEnabled = 1) { ids ->
-            menuSetting.setRaw(HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
-            client.dispatch(Commands.setActionOrder("contextMenu", ids))
-        }
+        // Canonical registry ids for the contextMenu surface; an empty stored list means the registry default.
+        val allMenu = ActionIds.CONTEXT_MENU
+        val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu
+        ChooseAndOrder(allMenu, menuIds, minEnabled = 1) { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
         SettingsSection(stringResource(R.string.settings_media_buttons))
-        val allMedia = listOf("love", "shuffle", "repeat", "rate")
-        val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() } ?: listOf("love", "shuffle", "repeat")
-        ChooseAndOrder(allMedia, mediaIds, minEnabled = 0) { ids ->
-            mediaSetting.setRaw(HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
-            client.dispatch(Commands.setActionOrder("mediaSession", ids))
-        }
+        val allMedia = ActionIds.MEDIA_SESSION
+        val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMedia
+        ChooseAndOrder(allMedia, mediaIds, minEnabled = 0) { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
     }
 }
 

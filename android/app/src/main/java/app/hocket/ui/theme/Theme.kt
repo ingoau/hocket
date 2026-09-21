@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.core.SettingKeys
 import app.hocket.core.client.CoreClient
 
 /** The accent colour taken from the playing artwork, provided by the now-playing sheet while it is open. */
@@ -40,18 +41,20 @@ val LocalArtworkSeedState = compositionLocalOf { ArtworkSeedState() }
 @Composable
 fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     val settings = client?.settings?.collectAsStateWithLifecycle()?.value ?: emptyMap()
-    val themeSetting = settings["ui.theme"]?.value?.trim('"') ?: "system"
-    val accentSetting = settings["ui.accent"]?.value?.trim('"') ?: "dynamic"
+    // Registry keys: display.theme (system|light|dark), display.accent (null or #RRGGBB), display.dynamicColour (bool).
+    val themeSetting = settings[SettingKeys.DISPLAY_THEME]?.value?.trim()?.trim('"') ?: "system"
+    val accentSetting = settings[SettingKeys.DISPLAY_ACCENT]?.value?.trim()?.trim('"')?.takeIf { it.isNotEmpty() && it != "null" }
+    val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
     val dark = when (themeSetting) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
     val context = LocalContext.current
     val seedState = remember { ArtworkSeedState() }
     val artworkSeed = seedState.seed
-    val scheme: ColorScheme = remember(dark, accentSetting, artworkSeed) {
+    val scheme: ColorScheme = remember(dark, accentSetting, dynamicColour, artworkSeed) {
         when {
-            artworkSeed != null && accentSetting != "static" -> ArtworkColors.scheme(artworkSeed, dark)
-            accentSetting.startsWith("#") -> runCatching { Color(android.graphics.Color.parseColor(accentSetting)) }.getOrNull()?.let { ArtworkColors.scheme(it, dark) }
-                ?: baseScheme(dark, context)
-            else -> baseScheme(dark, context)
+            artworkSeed != null && dynamicColour -> ArtworkColors.scheme(artworkSeed, dark)
+            accentSetting != null -> runCatching { Color(android.graphics.Color.parseColor(if (accentSetting.startsWith("#")) accentSetting else "#$accentSetting")) }.getOrNull()?.let { ArtworkColors.scheme(it, dark) }
+                ?: baseScheme(dark, context, dynamicColour)
+            else -> baseScheme(dark, context, dynamicColour)
         }
     }
     CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed) {
@@ -64,8 +67,8 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     }
 }
 
-private fun baseScheme(dark: Boolean, context: android.content.Context): ColorScheme =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+private fun baseScheme(dark: Boolean, context: android.content.Context, dynamic: Boolean): ColorScheme =
+    if (dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
         if (dark) darkColorScheme() else expressiveLightColorScheme()

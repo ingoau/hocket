@@ -36,6 +36,7 @@ androidx-lifecycle-service = { module = "androidx.lifecycle:lifecycle-service", 
 androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
 androidx-window = { module = "androidx.window:window", version.ref = "window" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version = "1.2.1" }
 androidx-palette = { module = "androidx.palette:palette-ktx", version.ref = "palette" }
 androidx-graphics-shapes = { module = "androidx.graphics:graphics-shapes", version.ref = "graphicsShapes" }
 compose-ui = { module = "androidx.compose.ui:ui", version.ref = "compose" }
@@ -58,6 +59,7 @@ media3-common = { module = "androidx.media3:media3-common", version.ref = "media
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jnaJvm = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }

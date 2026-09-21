@@ -33,7 +33,12 @@ mod tests {
 
     fn entry(key: &str, source: QueueSource) -> QueueEntry {
         QueueEntry {
-            item: QueueItem { key: key.into(), track_id: format!("t-{key}"), source, unavailable: false },
+            item: QueueItem {
+                key: key.into(),
+                track_id: format!("t-{key}"),
+                source,
+                unavailable: false,
+            },
             track: summary(&format!("t-{key}")),
         }
     }
@@ -45,11 +50,22 @@ mod tests {
         // -- commands ------------------------------------------------------
         push("command.play", json!(Command::Play));
         push("command.start", json!(Command::Start));
-        push("command.seekTo", json!(Command::SeekTo { position_ms: 12_345 }));
-        push("command.seekBy", json!(Command::SeekBy { delta_ms: -10_000 }));
+        push(
+            "command.seekTo",
+            json!(Command::SeekTo {
+                position_ms: 12_345
+            }),
+        );
+        push(
+            "command.seekBy",
+            json!(Command::SeekBy { delta_ms: -10_000 }),
+        );
         push(
             "command.playNext",
-            json!(Command::PlayNext { server_id: "srv".into(), track_ids: vec!["a".into(), "b".into()] }),
+            json!(Command::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["a".into(), "b".into()]
+            }),
         );
         push(
             "command.playTracks",
@@ -81,51 +97,96 @@ mod tests {
         push(
             "command.setRating",
             json!(Command::SetRating {
-                targets: vec![RatingTarget::Track { id: "t1".into() }, RatingTarget::Album { id: "al1".into() }],
+                targets: vec![
+                    RatingTarget::Track { id: "t1".into() },
+                    RatingTarget::Album { id: "al1".into() }
+                ],
                 rating: 4
             }),
         );
-        push("command.setRepeat", json!(Command::SetRepeat { mode: RepeatMode::One }));
+        push(
+            "command.setRepeat",
+            json!(Command::SetRepeat {
+                mode: RepeatMode::One
+            }),
+        );
         push(
             "command.setNetworkState",
             json!(Command::SetNetworkState {
-                state: NetworkState { kind: NetworkKind::Wifi, metered: false, network_id: Some("abc".into()) }
+                state: NetworkState {
+                    kind: NetworkKind::Wifi,
+                    metered: false,
+                    network_id: Some("abc".into())
+                }
             }),
         );
         push(
             "command.backendReport.position",
-            json!(Command::BackendReport { report: BackendReport::Position { key: "k1".into(), position_ms: 5000 } }),
+            json!(Command::BackendReport {
+                report: BackendReport::Position {
+                    key: "k1".into(),
+                    position_ms: 5000
+                }
+            }),
         );
         push(
             "command.backendReport.error",
             json!(Command::BackendReport {
-                report: BackendReport::Error { key: "k1".into(), message: "boom".into(), fatal: false }
+                report: BackendReport::Error {
+                    key: "k1".into(),
+                    message: "boom".into(),
+                    fatal: false
+                }
             }),
         );
         push(
             "command.backendReport.focus",
-            json!(Command::BackendReport { report: BackendReport::AudioFocusLost { transient: true } }),
+            json!(Command::BackendReport {
+                report: BackendReport::AudioFocusLost { transient: true }
+            }),
         );
         push(
             "command.mediaSessionCommand",
-            json!(Command::MediaSessionCommand { action: MediaSessionAction::Seek, value: Some(1500.0) }),
+            json!(Command::MediaSessionCommand {
+                action: MediaSessionAction::Seek,
+                value: Some(1500.0)
+            }),
         );
         push(
             "command.runAction",
             json!(Command::RunAction {
                 action_id: "track.love".into(),
-                target: ActionTarget::Tracks { ids: vec!["t1".into()] }
+                target: ActionTarget::Tracks {
+                    ids: vec!["t1".into()]
+                }
             }),
         );
-        push("command.setSelection.none", json!(Command::SetSelection { target: ActionTarget::None }));
-        push("command.pin", json!(Command::Pin { target: PinTarget::Album { id: "al1".into() }, transcode: false }));
+        push(
+            "command.setSelection.none",
+            json!(Command::SetSelection {
+                target: ActionTarget::None
+            }),
+        );
+        push(
+            "command.pin",
+            json!(Command::Pin {
+                target: PinTarget::Album { id: "al1".into() },
+                transcode: false
+            }),
+        );
         push(
             "command.setSleepTimer",
             json!(Command::SetSleepTimer {
-                timer: Some(SleepTimer { ends_at: Some(1_700_000_000_000.0), stop_at_end_of_track: false })
+                timer: Some(SleepTimer {
+                    ends_at: Some(1_700_000_000_000.0),
+                    stop_at_end_of_track: false
+                })
             }),
         );
-        push("command.setSleepTimer.none", json!(Command::SetSleepTimer { timer: None }));
+        push(
+            "command.setSleepTimer.none",
+            json!(Command::SetSleepTimer { timer: None }),
+        );
         push(
             "command.saveFilter",
             json!(Command::SaveFilter {
@@ -141,7 +202,10 @@ mod tests {
                         FilterNode::Any(vec![FilterNode::Rule(FilterRule {
                             field: FilterField::Year,
                             op: FilterOp::InTheRange,
-                            value: FilterValue::Range { low: 2020.0, high: 2029.0 }
+                            value: FilterValue::Range {
+                                low: 2020.0,
+                                high: 2029.0
+                            }
                         })]),
                     ]),
                     sort: SortOrder::DateAdded,
@@ -160,7 +224,11 @@ mod tests {
                     eq: EqSettings {
                         enabled: true,
                         preamp_db: -2.0,
-                        bands: vec![EqBand { frequency_hz: 60.0, gain_db: 3.0, q: 1.0 }],
+                        bands: vec![EqBand {
+                            frequency_hz: 60.0,
+                            gain_db: 3.0,
+                            q: 1.0
+                        }],
                         preset: Some("Bass".into()),
                     },
                     gapless: true,
@@ -179,7 +247,10 @@ mod tests {
                 filter: None,
                 sort: SortOrder::Title,
                 descending: false,
-                page: Page { offset: 40, limit: 40 }
+                page: Page {
+                    offset: 40,
+                    limit: 40
+                }
             }),
         );
         push(
@@ -190,10 +261,19 @@ mod tests {
                 genre: None,
                 sort: SortOrder::Year,
                 descending: true,
-                page: Page { offset: 0, limit: 60 }
+                page: Page {
+                    offset: 0,
+                    limit: 60
+                }
             }),
         );
-        push("query.artwork", json!(Query::Artwork { id: "al1".into(), size: 160 }));
+        push(
+            "query.artwork",
+            json!(Query::Artwork {
+                id: "al1".into(),
+                size: 160
+            }),
+        );
         push(
             "query.search",
             json!(Query::Search {
@@ -206,14 +286,25 @@ mod tests {
         );
         push(
             "query.actions",
-            json!(Query::Actions { surface: "contextMenu".into(), target: ActionTarget::QueueItems { keys: vec!["k1".into()] } }),
+            json!(Query::Actions {
+                surface: "contextMenu".into(),
+                target: ActionTarget::QueueItems {
+                    keys: vec!["k1".into()]
+                }
+            }),
         );
 
         // -- results -------------------------------------------------------
         push("result.count", json!(QueryResult::Count(42)));
         push("result.path.none", json!(QueryResult::Path(None)));
-        push("result.path.some", json!(QueryResult::Path(Some("/data/x.jpg".into()))));
-        push("result.trackDetail.none", json!(QueryResult::TrackDetail(None)));
+        push(
+            "result.path.some",
+            json!(QueryResult::Path(Some("/data/x.jpg".into()))),
+        );
+        push(
+            "result.trackDetail.none",
+            json!(QueryResult::TrackDetail(None)),
+        );
         push(
             "result.tracks",
             json!(QueryResult::Tracks(TrackPage {
@@ -242,7 +333,11 @@ mod tests {
                 playing_next: vec![entry("n1", QueueSource::Inserted)],
                 upcoming: vec![entry(
                     "u1",
-                    QueueSource::Autoplay { provider: AutoplayProvider::SonicSimilarity, reason: "Similar to X".into(), score: Some(0.91) }
+                    QueueSource::Autoplay {
+                        provider: AutoplayProvider::SonicSimilarity,
+                        reason: "Similar to X".into(),
+                        score: Some(0.91)
+                    }
                 )],
                 shuffle: false,
                 repeat: RepeatMode::All,
@@ -259,14 +354,35 @@ mod tests {
                 lang: Some("en".into()),
                 display_artist: None,
                 display_title: None,
-                agents: vec![LyricsAgent { id: "v1".into(), name: None, side: 0 }, LyricsAgent { id: "v2".into(), name: Some("B".into()), side: 1 }],
+                agents: vec![
+                    LyricsAgent {
+                        id: "v1".into(),
+                        name: None,
+                        side: 0
+                    },
+                    LyricsAgent {
+                        id: "v2".into(),
+                        name: Some("B".into()),
+                        side: 1
+                    }
+                ],
                 lines: vec![LyricLine {
                     start_ms: Some(1000),
                     end_ms: Some(3000),
                     text: "Hel lo".into(),
                     syllables: vec![
-                        LyricSyllable { text: "Hel".into(), start_ms: 1000, end_ms: 1500, joined: true },
-                        LyricSyllable { text: "lo".into(), start_ms: 1500, end_ms: 3000, joined: false },
+                        LyricSyllable {
+                            text: "Hel".into(),
+                            start_ms: 1000,
+                            end_ms: 1500,
+                            joined: true
+                        },
+                        LyricSyllable {
+                            text: "lo".into(),
+                            start_ms: 1500,
+                            end_ms: 3000,
+                            joined: false
+                        },
                     ],
                     agent: Some("v1".into()),
                     background: false,
@@ -297,7 +413,12 @@ mod tests {
                 }
             }),
         );
-        push("event.backend.play", json!(Event::Backend { command: BackendCommand::Play }));
+        push(
+            "event.backend.play",
+            json!(Event::Backend {
+                command: BackendCommand::Play
+            }),
+        );
         push(
             "event.mediaSession",
             json!(Event::MediaSession {
@@ -313,11 +434,20 @@ mod tests {
                         rating: 0,
                     }),
                     is_playing: true,
-                    position: PositionStamp { position_ms: 1000, taken_at: 1_700_000_000_000.0, rate: 1.0, is_playing: true },
+                    position: PositionStamp {
+                        position_ms: 1000,
+                        taken_at: 1_700_000_000_000.0,
+                        rate: 1.0,
+                        is_playing: true
+                    },
                     shuffle: false,
                     repeat: RepeatMode::Off,
                     volume: 1.0,
-                    actions: vec![MediaSessionAction::Play, MediaSessionAction::Love, MediaSessionAction::Rate],
+                    actions: vec![
+                        MediaSessionAction::Play,
+                        MediaSessionAction::Love,
+                        MediaSessionAction::Rate
+                    ],
                     owns_transport: true,
                 }
             }),
@@ -334,12 +464,22 @@ mod tests {
                 }
             }),
         );
-        push("event.playerNotice.none", json!(Event::PlayerNotice { message: None }));
+        push(
+            "event.playerNotice.none",
+            json!(Event::PlayerNotice { message: None }),
+        );
         push(
             "event.libraryChanged",
-            json!(Event::LibraryChanged { server_id: "srv".into(), tables: vec!["tracks".into()], ids: vec![] }),
+            json!(Event::LibraryChanged {
+                server_id: "srv".into(),
+                tables: vec!["tracks".into()],
+                ids: vec![]
+            }),
         );
-        push("event.nowPlaying.none", json!(Event::NowPlayingChanged { entry: None }));
+        push(
+            "event.nowPlaying.none",
+            json!(Event::NowPlayingChanged { entry: None }),
+        );
         push(
             "event.handoffPicker",
             json!(Event::HandoffPickerChanged {
@@ -358,7 +498,11 @@ mod tests {
         );
         push(
             "event.error",
-            json!(Event::Error { kind: ErrorKind::Auth, message: "bad password".into(), detail: None }),
+            json!(Event::Error {
+                kind: ErrorKind::Auth,
+                message: "bad password".into(),
+                detail: None
+            }),
         );
         push(
             "event.sessionChanged",
@@ -404,13 +548,17 @@ mod tests {
     /// android tree isn't present (e.g. a packaged crate).
     #[test]
     fn write_json_fixtures() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../android/core/src/test/resources");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../android/core/src/test/resources");
         if !root.parent().map(|p| p.exists()).unwrap_or(false) {
             eprintln!("android tree not present, skipping fixture write");
             return;
         }
         std::fs::create_dir_all(&root).expect("create fixtures dir");
-        let map: serde_json::Map<String, Value> = fixtures().into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let map: serde_json::Map<String, Value> = fixtures()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
         let text = serde_json::to_string_pretty(&Value::Object(map)).expect("serialise fixtures");
         std::fs::write(root.join("json-fixtures.json"), text + "\n").expect("write fixtures");
     }
@@ -420,14 +568,29 @@ mod tests {
     fn wire_conventions() {
         assert_eq!(json!(Command::Play), json!({"type": "play"}));
         assert_eq!(
-            json!(Command::PlayNext { server_id: "s".into(), track_ids: vec![] }),
+            json!(Command::PlayNext {
+                server_id: "s".into(),
+                track_ids: vec![]
+            }),
             json!({"type": "playNext", "data": {"server_id": "s", "track_ids": []}})
         );
-        assert_eq!(json!(QueryResult::Count(1)), json!({"type": "count", "data": 1}));
-        // Named structs are camelCase; anonymous variant payloads keep snake_case.
-        assert_eq!(json!(Page { offset: 1, limit: 2 }), json!({"offset": 1, "limit": 2}));
         assert_eq!(
-            json!(Query::Artwork { id: "x".into(), size: 64 }),
+            json!(QueryResult::Count(1)),
+            json!({"type": "count", "data": 1})
+        );
+        // Named structs are camelCase; anonymous variant payloads keep snake_case.
+        assert_eq!(
+            json!(Page {
+                offset: 1,
+                limit: 2
+            }),
+            json!({"offset": 1, "limit": 2})
+        );
+        assert_eq!(
+            json!(Query::Artwork {
+                id: "x".into(),
+                size: 64
+            }),
             json!({"type": "artwork", "data": {"id": "x", "size": 64}})
         );
     }

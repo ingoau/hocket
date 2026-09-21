@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import app.hocket.core.CoreHandle
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
 import kotlinx.coroutines.CoroutineScope
@@ -83,9 +84,9 @@ class PlaybackService : MediaSessionService() {
             is Event.Started -> {
                 clockOffsetMs = event.data.snapshot.connection.clockOffsetMs
                 bridge.apply(event.data.snapshot.mediaSession, clockOffsetMs)
-                battery.automatic = event.data.snapshot.settings.firstOrNull { it.key == "battery.autoSaver" }?.value?.trim() != "false"
+                battery.automatic = event.data.snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
             }
-            is Event.SettingChanged -> if (event.data.setting.key == "battery.autoSaver") battery.automatic = event.data.setting.value.trim() != "false"
+            is Event.SettingChanged -> if (event.data.setting.key == SettingKeys.BATTERY_AUTO_ENGAGE) battery.automatic = event.data.setting.value.trim() != "false"
             else -> Unit
         }
     }

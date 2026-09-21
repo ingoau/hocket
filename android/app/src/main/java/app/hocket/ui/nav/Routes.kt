@@ -25,8 +25,9 @@ sealed interface Route {
 }
 
 /** Navigation items the user can choose and order (setting `ui.navItems`). */
-enum class NavItem(val id: String) {
-    Home("home"), Library("library"), Search("search"), Downloads("downloads"), Filters("filters"), Stats("stats"), Settings("settings");
+enum class NavItem(val id: String, val canonicalActionId: String) {
+    Home("home", "navigateHome"), Library("library", "navigateAlbums"), Search("search", "findInList"), Downloads("downloads", "navigateDownloads"),
+    Filters("filters", "navigateFilters"), Stats("stats", "navigateStats"), Settings("settings", "navigateSettings");
 
     companion object {
         val DEFAULT = listOf(Home, Library, Search, Settings)

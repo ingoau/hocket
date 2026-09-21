@@ -12,21 +12,39 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.AllInclusive
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lyrics
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistAddCheck
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.PlaylistRemove
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -50,6 +68,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.hocket.R
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
@@ -58,29 +77,49 @@ import app.hocket.core.api.Playlist
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
 
-/** Icon names the core's action registry emits, mapped to Material symbols. */
+/** Material Symbols names the core's action registry emits (`actions/defs.rs`), mapped to icons. */
 fun actionIcon(name: String): ImageVector = when (name) {
     "play_arrow" -> Icons.Filled.PlayArrow
-    "shuffle" -> Icons.Filled.Shuffle
+    "play_pause" -> Icons.Filled.PlayArrow
+    "pause" -> Icons.Filled.Pause
+    "stop" -> Icons.Filled.Stop
+    "skip_next" -> Icons.Filled.SkipNext
+    "skip_previous" -> Icons.Filled.SkipPrevious
+    "shuffle", "shuffle_on" -> Icons.Filled.Shuffle
+    "repeat" -> Icons.Filled.Repeat
+    "all_inclusive" -> Icons.Filled.AllInclusive
     "playlist_play" -> Icons.Filled.PlaylistPlay
     "playlist_add" -> Icons.Filled.PlaylistAdd
     "playlist_add_check" -> Icons.Filled.PlaylistAddCheck
+    "playlist_remove", "remove_from_queue" -> Icons.Filled.PlaylistRemove
+    "queue_music" -> Icons.Filled.QueueMusic
     "favorite" -> Icons.Filled.Favorite
-    "heart_broken" -> Icons.Filled.FavoriteBorder
-    "star" -> Icons.Filled.Star
+    "heart_minus", "heart_broken" -> Icons.Filled.FavoriteBorder
+    "star", "star_rate" -> Icons.Filled.Star
     "star_outline" -> Icons.Filled.StarOutline
     "download" -> Icons.Filled.Download
-    "delete" -> Icons.Filled.Delete
+    "download_done" -> Icons.Filled.DownloadDone
+    "delete", "delete_forever" -> Icons.Filled.Delete
     "remove" -> Icons.Filled.Remove
+    "clear_all" -> Icons.Filled.ClearAll
     "album" -> Icons.Filled.Album
-    "person" -> Icons.Filled.Person
+    "artist", "person" -> Icons.Filled.Person
+    "history" -> Icons.Filled.History
+    "push_pin" -> Icons.Filled.PushPin
+    "keep_off" -> Icons.Outlined.PushPin
+    "bedtime" -> Icons.Filled.Bedtime
+    "cast" -> Icons.Filled.Cast
+    "lyrics" -> Icons.Filled.Lyrics
+    "undo" -> Icons.AutoMirrored.Filled.Undo
+    "redo" -> Icons.AutoMirrored.Filled.Redo
     else -> Icons.Filled.Add
 }
 
 /**
- * The context menu: actions come from `Query.Actions(surface = "contextMenu", target)`, ordered by the
- * user's customisation, and run through `Command.RunAction`. Only "add to playlist" (which needs a
- * picker) and the go-to navigation items are handled here.
+ * The context menu: actions come from `Query.Actions(surface = "contextMenu", target)` with the
+ * registry's canonical ids, ordered by the user's customisation, and run through `Command.RunAction`.
+ * The registry's ui-handled ids (`addToPlaylist`, `goToAlbum`, `goToArtist`, `rate`) produce no core
+ * command, so the sheet performs them: the playlist picker, navigation, a rating dialog.
  */
 @Composable
 fun ActionSheet(
@@ -96,6 +135,7 @@ fun ActionSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val actions by produceState<List<ActionDescriptor>?>(initialValue = null, target) { value = client.actions("contextMenu", target) }
     var playlistPicker by remember { mutableStateOf(false) }
+    var rating by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.navigationBarsPadding()) {
             Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp))
@@ -104,25 +144,43 @@ fun ActionSheet(
             extraTop?.invoke()
             HorizontalDivider()
             LazyColumn {
-                items(actions ?: emptyList(), key = { it.id }) { a ->
+                // Individual rateN entries collapse into one "Rate" row (the dialog picks the stars).
+                val visible = (actions ?: emptyList()).filter { a -> !(a.id.matches(Regex("rate[0-5]")) && a.id != ActionIds.rate(0)) || a.id == ActionIds.rate(5) }
+                items(visible, key = { it.id }) { a ->
+                    val isRateEntry = a.id == ActionIds.rate(5) || a.id == ActionIds.RATE
+                    val goAlbum = a.id == ActionIds.GO_TO_ALBUM
+                    val goArtist = a.id == ActionIds.GO_TO_ARTIST
+                    if ((goAlbum && onGoToAlbum == null) || (goArtist && onGoToArtist == null)) return@items
                     ListItem(
-                        headlineContent = { Text(a.label, color = if (a.destructive) MaterialTheme.colorScheme.error else Color.Unspecified) },
-                        leadingContent = { Icon(actionIcon(a.icon), null, tint = if (a.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) },
+                        headlineContent = { Text(if (isRateEntry) stringResource(R.string.action_rate) else a.label, color = if (a.destructive) MaterialTheme.colorScheme.error else Color.Unspecified) },
+                        leadingContent = { Icon(actionIcon(if (isRateEntry) "star_rate" else a.icon), null, tint = if (a.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.clickable(enabled = a.enabled) {
-                            if (a.id == "addToPlaylist") playlistPicker = true
-                            else { client.dispatch(Commands.runAction(a.id, target)); onDismiss() }
+                            when {
+                                a.id == ActionIds.ADD_TO_PLAYLIST -> playlistPicker = true
+                                isRateEntry -> rating = true
+                                goAlbum -> { onDismiss(); onGoToAlbum?.invoke() }
+                                goArtist -> { onDismiss(); onGoToArtist?.invoke() }
+                                a.id in ActionIds.UI_HANDLED -> onDismiss()
+                                else -> { client.dispatch(Commands.runAction(a.id, target)); onDismiss() }
+                            }
                         },
                     )
                 }
-                if (onGoToAlbum != null) item { ListItem(headlineContent = { Text(stringResource(R.string.action_go_to_album)) }, leadingContent = { Icon(Icons.Filled.Album, null) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent), modifier = Modifier.clickable { onDismiss(); onGoToAlbum() }) }
-                if (onGoToArtist != null) item { ListItem(headlineContent = { Text(stringResource(R.string.action_go_to_artist)) }, leadingContent = { Icon(Icons.Filled.Person, null) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent), modifier = Modifier.clickable { onDismiss(); onGoToArtist() }) }
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
     }
     if (playlistPicker) {
         PlaylistPicker(target = target, onDismiss = { playlistPicker = false; onDismiss() })
+    }
+    if (rating) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { rating = false },
+            title = { Text(stringResource(R.string.action_rate)) },
+            text = { RatingStars(rating = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false; onDismiss() }) },
+            confirmButton = { TextButton(onClick = { rating = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
     }
 }
 

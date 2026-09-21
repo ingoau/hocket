@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.hocket.R
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.ui.LocalCoreClient
@@ -59,6 +60,8 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
     if (selection.active) {
         PredictiveBackHandler { progress -> try { progress.collect { } ; client.clearSelection() } catch (e: kotlinx.coroutines.CancellationException) { } }
     }
+    // Bulk toolbar: navigation and per-item ui-handled entries make no sense for a selection.
+    val toolbarActions = actions.filter { it.id !in ActionIds.UI_HANDLED || it.id == ActionIds.ADD_TO_PLAYLIST }.filter { !it.id.matches(Regex("rate[0-4]")) }
     AnimatedVisibility(visible = selection.active, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut(), modifier = modifier) {
         Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.BottomCenter) {
             val count = stringResource(R.string.selected_count, selection.count)
@@ -75,19 +78,19 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            actions.drop(4).forEach { a ->
+                            toolbarActions.drop(4).forEach { a ->
                                 DropdownMenuItem(text = { Text(a.label) }, leadingIcon = { Icon(actionIcon(a.icon), null) }, enabled = a.enabled, onClick = {
                                     menu = false
-                                    if (a.id == "addToPlaylist") playlistPicker = true else { client.dispatch(Commands.runAction(a.id, client.selectionTarget())); client.clearSelection() }
+                                    if (a.id == ActionIds.ADD_TO_PLAYLIST) playlistPicker = true else { client.dispatch(Commands.runAction(a.id, client.selectionTarget())); client.clearSelection() }
                                 })
                             }
                         }
                     }
                 },
             ) {
-                actions.take(4).forEach { a ->
+                toolbarActions.take(4).forEach { a ->
                     IconButton(onClick = {
-                        if (a.id == "addToPlaylist") playlistPicker = true else { client.dispatch(Commands.runAction(a.id, client.selectionTarget())); client.clearSelection() }
+                        if (a.id == ActionIds.ADD_TO_PLAYLIST) playlistPicker = true else { client.dispatch(Commands.runAction(a.id, client.selectionTarget())); client.clearSelection() }
                     }, enabled = a.enabled) { Icon(actionIcon(a.icon), a.label) }
                 }
             }

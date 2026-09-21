@@ -2,7 +2,9 @@ package app.hocket.core.fake
 
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
+import app.hocket.core.ActionIds
 import app.hocket.core.HocketJson
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.*
 import app.hocket.core.toSummary
 import kotlinx.coroutines.CoroutineDispatcher
@@ -16,6 +18,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlin.random.Random
 
 /**
@@ -81,6 +86,7 @@ class FakeCore(
     private val pins = ArrayList<Pin>()
     private val filters = ArrayList<Filter>()
     private val settings = LinkedHashMap<String, Setting>()
+    private val defaults = HashMap<String, String>()
     private var audio = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, defaultBands(), null), true, null, false)
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
@@ -108,18 +114,45 @@ class FakeCore(
         devices += DeviceInfo(deviceId, "This phone", Platform.Android, "0.1.0", true, false, now(), true)
         devices += DeviceInfo("laptop", "Laptop", Platform.Linux, "0.1.0", false, false, now() - 20_000, false)
         devices += DeviceInfo("living-room", "Living room", Platform.MacOs, "0.1.0", false, false, now() - 60_000, false)
-        settings["ui.accent"] = Setting("ui.accent", "\"dynamic\"", SettingScope.AccountSynced, now())
-        settings["ui.theme"] = Setting("ui.theme", "\"system\"", SettingScope.DeviceLocal, now())
-        settings["ui.animatedBackground"] = Setting("ui.animatedBackground", "true", SettingScope.DeviceLocal, now())
-        settings["battery.autoSaver"] = Setting("battery.autoSaver", "true", SettingScope.DeviceLocal, now())
-        settings["settings.sync"] = Setting("settings.sync", "true", SettingScope.DeviceLocal, now())
-        settings["lyrics.external"] = Setting("lyrics.external", "false", SettingScope.AccountSynced, now())
-        settings["queue.savedCap"] = Setting("queue.savedCap", "10", SettingScope.AccountSynced, now())
-        settings["ratings.loveThreshold"] = Setting("ratings.loveThreshold", "0", SettingScope.AccountSynced, now())
-        settings["connect.coordinatorUrl"] = Setting("connect.coordinatorUrl", "null", SettingScope.DeviceLocal, now())
-        settings["connect.lanDiscovery"] = Setting("connect.lanDiscovery", "true", SettingScope.DeviceLocal, now())
-        settings["transcoding.wifi"] = Setting("transcoding.wifi", "{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[\"ape\",\"dsf\"]}", SettingScope.DeviceLocal, now())
-        settings["transcoding.cellular"] = Setting("transcoding.cellular", "{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[\"ape\",\"dsf\"]}", SettingScope.DeviceLocal, now())
+        // The registry's keys, scopes and defaults (settings/registry.rs).
+        fun def(key: String, value: String, scope: SettingScope) { settings[key] = Setting(key, value, scope, now()) }
+        def(SettingKeys.QUEUE_MODE, "\"apple\"", SettingScope.AccountSynced)
+        def(SettingKeys.QUEUE_SAVED_CAP, "10", SettingScope.AccountSynced)
+        def(SettingKeys.QUEUE_HISTORY_CAP, "200", SettingScope.AccountSynced)
+        def(SettingKeys.TRANSCODING_PROFILES, "{\"default\":{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[]},\"cellular\":{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[]}}", SettingScope.DeviceLocal)
+        def(SettingKeys.LYRICS_EXTERNAL_ENABLED, "false", SettingScope.AccountSynced)
+        def(SettingKeys.LYRICS_EXTERNAL_PROVIDER, "\"lrclib\"", SettingScope.AccountSynced)
+        def(SettingKeys.LYRICS_DEFAULT_OFFSET_MS, "0", SettingScope.DeviceLocal)
+        def(SettingKeys.LYRICS_SHOW_TRANSLATIONS, "true", SettingScope.AccountSynced)
+        def(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED, "false", SettingScope.AccountSynced)
+        def(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD, "4", SettingScope.AccountSynced)
+        def(SettingKeys.BATTERY_AUTO_ENGAGE, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_SMALL_ARTWORK, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_PAUSE_PREFETCH, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_ANIMATED_BACKGROUND, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_LYRICS_FPS, "60", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.ACTIONS_ORDER_SIDEBAR, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
+        def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
+        def(SettingKeys.STORAGE_CACHE_MAX_BYTES, "2147483648.0", SettingScope.DeviceLocal)
+        def(SettingKeys.DOWNLOADS_TRANSCODE, "false", SettingScope.DeviceLocal)
+        def(SettingKeys.DOWNLOADS_WIFI_ONLY, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.SLEEP_DEFAULT_MINUTES, "30", SettingScope.AccountSynced)
+        def(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK, "true", SettingScope.AccountSynced)
+        def(SettingKeys.SCROBBLE_ENABLED, "true", SettingScope.AccountSynced)
+        def(SettingKeys.SCROBBLE_NOW_PLAYING, "true", SettingScope.AccountSynced)
+        def(SettingKeys.LIBRARY_SYNC_INTERVAL_MINUTES, "60", SettingScope.DeviceLocal)
+        def(SettingKeys.LIBRARY_FULL_RECONCILE_DAYS, "7", SettingScope.DeviceLocal)
+        def(SettingKeys.SEARCH_INCLUDE_SERVER, "true", SettingScope.AccountSynced)
+        settings.forEach { (k, v) -> defaults[k] = v.value }
         filters += Filter("f-loved", "Loved, not played lately", FilterNode.All(listOf(
             FilterNode.Rule(FilterRule(FilterField.Loved, FilterOp.IsTrue, FilterValue.Bool(true))),
             FilterNode.Rule(FilterRule(FilterField.LastPlayed, FilterOp.NotInTheLast, FilterValue.Days(30u))),
@@ -221,8 +254,8 @@ class FakeCore(
 
     private fun orderedMediaActions(): List<MediaSessionAction> {
         val base = listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek, MediaSessionAction.Stop)
-        val custom = (actionOrders["mediaSession"] ?: listOf("love", "shuffle", "repeat")).mapNotNull {
-            when (it) { "love" -> MediaSessionAction.Love; "shuffle" -> MediaSessionAction.Shuffle; "repeat" -> MediaSessionAction.Repeat; "rate" -> MediaSessionAction.Rate; else -> null }
+        val custom = (actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION).mapNotNull {
+            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; else -> null }
         }
         return base + custom
     }
@@ -490,9 +523,10 @@ class FakeCore(
             is Command.ProbeServer -> emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
             is Command.SyncLibrary -> startSync(c.data.full)
             is Command.SetTranscodingProfile -> {
-                val key = "transcoding.${c.data.network_id ?: "default"}"
-                settings[key] = Setting(key, HocketJson.json.encodeToString(TranscodingProfile.serializer(), c.data.profile), SettingScope.DeviceLocal, now())
-                emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
+                // Like the core: one JSON map keyed by network id, "default" when none.
+                val map = settings[SettingKeys.TRANSCODING_PROFILES]?.value?.let { runCatching { HocketJson.json.decodeFromString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), it) }.getOrNull() }?.toMutableMap() ?: mutableMapOf()
+                map[c.data.network_id ?: "default"] = c.data.profile
+                setSetting(SettingKeys.TRANSCODING_PROFILES, HocketJson.json.encodeToString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), map))
             }
 
             Command.Play -> if (current != null && !stamp.isPlaying) { startPlayback(positionNow(), true); emitTransport() }
@@ -591,7 +625,7 @@ class FakeCore(
                 createPlaylist(c.data.name, ids)
                 toast("Saved as playlist “${c.data.name}”")
             }
-            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); settings["queue.savedCap"] = Setting("queue.savedCap", savedQueueCap.toString(), SettingScope.AccountSynced, now()); emit(Event.SettingChanged(EventSettingChangedInner(settings["queue.savedCap"]!!))) }
+            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()) }
 
             Command.Undo -> undo()
             Command.Redo -> redo()
@@ -664,12 +698,12 @@ class FakeCore(
                 lyricsOffsets[c.data.track_id] = c.data.offset_ms
                 emit(Event.LyricsChanged(EventLyricsChangedInner(c.data.track_id, lyricsFor(c.data.track_id))))
             }
-            is Command.SetExternalLyricsEnabled -> { externalLyrics = c.data.enabled; setSetting("lyrics.external", c.data.enabled.toString()) }
+            is Command.SetExternalLyricsEnabled -> { externalLyrics = c.data.enabled; setSetting(SettingKeys.LYRICS_EXTERNAL_ENABLED, c.data.enabled.toString()) }
             is Command.FetchLyrics -> emit(Event.LyricsChanged(EventLyricsChangedInner(c.data.track_id, lyricsFor(c.data.track_id))))
 
             is Command.SetSetting -> setSetting(c.data.key, c.data.value)
-            is Command.ResetSetting -> settings.remove(c.data.key)?.let { emit(Event.SettingChanged(EventSettingChangedInner(it.copy(value = "null", updatedAt = now())))) }
-            is Command.SetSettingsSync -> setSetting("settings.sync", c.data.enabled.toString())
+            is Command.ResetSetting -> settings[c.data.key]?.let { setSetting(c.data.key, defaults[c.data.key] ?: it.value) }
+            is Command.SetSettingsSync -> setSetting(SettingKeys.SYNC_ENABLED, c.data.enabled.toString())
             is Command.ExportConfig -> emit(Event.ConfigExported(EventConfigExportedInner(configDocument(c.data.include_secrets))))
             is Command.ImportConfig -> toast("Configuration restored")
             is Command.SetAudioSettings -> { audio = c.data.settings; emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
@@ -677,13 +711,13 @@ class FakeCore(
             Command.RefreshOutputDevices -> emit(Event.OutputDevicesChanged(EventOutputDevicesChangedInner(listOf(OutputDevice("default", "Phone speaker", true), OutputDevice("bt", "Headphones", false)))))
 
             is Command.SetCoordinatorUrl -> {
-                setSetting("connect.coordinatorUrl", c.data.url?.let { "\"$it\"" } ?: "null")
+                setSetting(SettingKeys.CONNECT_COORDINATOR_URL, c.data.url?.let { "\"$it\"" } ?: "null")
                 connection = connection.copy(coordinatorUrl = c.data.url, tier = if (c.data.url != null) ConnectionTier.Coordinator else ConnectionTier.Lan)
                 emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
             }
             Command.ConnectCoordinator -> { connection = connection.copy(connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
             Command.DisconnectCoordinator -> { connection = connection.copy(connected = false, tier = ConnectionTier.Local, peerCount = 0u); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
-            is Command.SetLanDiscovery -> setSetting("connect.lanDiscovery", c.data.enabled.toString())
+            is Command.SetLanDiscovery -> setSetting(SettingKeys.CONNECT_LAN_DISCOVERY, c.data.enabled.toString())
             Command.OpenHandoffPicker -> {
                 pickerOpen = true
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(true, devices.filter { !it.isSelf })))
@@ -746,7 +780,11 @@ class FakeCore(
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
-            is Command.SetActionOrder -> { actionOrders[c.data.surface] = c.data.action_ids; emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia() }
+            is Command.SetActionOrder -> {
+                actionOrders[c.data.surface] = c.data.action_ids
+                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), c.data.action_ids))
+                emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
+            }
             is Command.SetSelection -> { selection = c.data.target }
             is Command.Touch -> Unit
         }
@@ -1006,11 +1044,16 @@ class FakeCore(
         if (!timers) { updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }; syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks")); emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!))) }
     }
 
+    /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
     private fun setSetting(key: String, value: String) {
-        val scope = settings[key]?.scope ?: if (key.startsWith("ui.") || key.startsWith("lyrics.") || key.startsWith("queue.") || key.startsWith("ratings.") || key.startsWith("autoplay.")) SettingScope.AccountSynced else SettingScope.DeviceLocal
-        settings[key] = Setting(key, value, scope, now())
+        val existing = settings[key]
+        if (existing == null) {
+            emit(Event.Error(EventErrorInner(ErrorKind.Internal, "unknown setting '$key'", null)))
+            return
+        }
+        settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
-        if (key == "queue.savedCap") value.toIntOrNull()?.let { savedQueueCap = it }
+        if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
     }
 
     private fun lyricsFor(id: TrackId): Lyrics? = library.lyricsByTrack[id]?.let { it.copy(offsetMs = lyricsOffsets[id] ?: 0) }
@@ -1019,6 +1062,8 @@ class FakeCore(
         if (secrets) hashMapOf("fake-server.password" to "••••") else null, audio, autoplaySettings, null))
 
     private fun runAction(actionId: String, target: ActionTarget) {
+        val id = canonical(actionId)
+        if (id in ActionIds.UI_HANDLED) return // the platform performs these; the core yields no command
         val trackIds: List<TrackId> = when (target) {
             is ActionTarget.Tracks -> target.data.ids
             is ActionTarget.Albums -> target.data.ids.flatMap { library.albumTracks(it) }.map { it.id }
@@ -1029,43 +1074,83 @@ class FakeCore(
             ActionTarget.None -> emptyList()
         }
         val label = when (target) { is ActionTarget.Albums -> library.album(target.data.ids.first())?.name; is ActionTarget.Artists -> library.artist(target.data.ids.first())?.name; is ActionTarget.Playlists -> library.playlist(target.data.ids.first())?.name; else -> null } ?: "${trackIds.size} tracks"
-        when (actionId) {
-            "play" -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, false)))
-            "shuffle" -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
-            "playNext" -> handle(Command.PlayNext(CommandPlayNextInner(serverId, trackIds)))
-            "playLater" -> handle(Command.PlayLater(CommandPlayLaterInner(serverId, trackIds)))
-            "love" -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
-            "unlove" -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, false)
-            "rate5" -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, 5)
-            "clearRating" -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, 0)
-            "download" -> when (target) {
+        val rateMatch = Regex("rate([0-5])").matchEntire(id)
+        when {
+            rateMatch != null -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, rateMatch.groupValues[1].toInt())
+            id == ActionIds.PLAY -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, false)))
+            id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
+            id == ActionIds.PLAY_NEXT -> handle(Command.PlayNext(CommandPlayNextInner(serverId, trackIds)))
+            id == ActionIds.PLAY_LATER -> handle(Command.PlayLater(CommandPlayLaterInner(serverId, trackIds)))
+            id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
+            id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, false)
+            id == ActionIds.DOWNLOAD -> when (target) {
                 is ActionTarget.Albums -> target.data.ids.forEach { pin(PinTarget.Album(PinTargetAlbumInner(it)), false) }
                 is ActionTarget.Playlists -> target.data.ids.forEach { pin(PinTarget.Playlist(PinTargetPlaylistInner(it)), false) }
                 else -> trackIds.forEach { pin(PinTarget.Track(PinTargetTrackInner(it)), false) }
             }
-            "removeFromQueue" -> (target as? ActionTarget.QueueItems)?.let { handle(Command.RemoveQueueItems(CommandRemoveQueueItemsInner(it.data.keys))) }
-            "addToPlaylist" -> toast("Choose a playlist") // the UI opens the picker itself; this is the fallback
-            "deletePlaylist" -> (target as? ActionTarget.Playlists)?.data?.ids?.forEach { handle(Command.DeletePlaylist(CommandDeletePlaylistInner(it))) }
-            "deleteSavedQueue" -> (target as? ActionTarget.SavedQueue)?.let { handle(Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(it.data.id))) }
-            else -> toast("Action “$actionId” isn't available here")
+            id == ActionIds.UNPIN -> when (target) {
+                is ActionTarget.Albums -> target.data.ids.forEach { handle(Command.Unpin(CommandUnpinInner(PinTarget.Album(PinTargetAlbumInner(it))))) }
+                is ActionTarget.Playlists -> target.data.ids.forEach { handle(Command.Unpin(CommandUnpinInner(PinTarget.Playlist(PinTargetPlaylistInner(it))))) }
+                else -> trackIds.forEach { handle(Command.Unpin(CommandUnpinInner(PinTarget.Track(PinTargetTrackInner(it))))) }
+            }
+            id == ActionIds.REMOVE_FROM_QUEUE -> (target as? ActionTarget.QueueItems)?.let { handle(Command.RemoveQueueItems(CommandRemoveQueueItemsInner(it.data.keys))) }
+            id == ActionIds.DELETE_PLAYLIST -> (target as? ActionTarget.Playlists)?.data?.ids?.forEach { handle(Command.DeletePlaylist(CommandDeletePlaylistInner(it))) }
+            id == ActionIds.DELETE_SAVED_QUEUE -> (target as? ActionTarget.SavedQueue)?.let { handle(Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(it.data.id))) }
+            id == ActionIds.RESTORE_SAVED_QUEUE -> (target as? ActionTarget.SavedQueue)?.let { handle(Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(it.data.id))) }
+            id == ActionIds.PIN_SAVED_QUEUE -> (target as? ActionTarget.SavedQueue)?.let { handle(Command.PinSavedQueue(CommandPinSavedQueueInner(it.data.id, true))) }
+            id == ActionIds.UNPIN_SAVED_QUEUE -> (target as? ActionTarget.SavedQueue)?.let { handle(Command.PinSavedQueue(CommandPinSavedQueueInner(it.data.id, false))) }
+            id == ActionIds.SAVE_QUEUE_AS_PLAYLIST -> handle(Command.SaveQueueAsPlaylist(CommandSaveQueueAsPlaylistInner((target as? ActionTarget.SavedQueue)?.data?.id, context?.label ?: "Queue")))
+            id == ActionIds.TOGGLE_PLAY -> handle(Command.TogglePlay)
+            id == ActionIds.NEXT -> handle(Command.Next)
+            id == ActionIds.PREVIOUS -> handle(Command.Previous)
+            id == ActionIds.SHUFFLE -> handle(Command.SetShuffle(CommandSetShuffleInner(shuffle == null)))
+            id == ActionIds.REPEAT -> handle(Command.MediaSessionCommand(CommandMediaSessionCommandInner(MediaSessionAction.Repeat, null)))
+            id == ActionIds.AUTOPLAY -> handle(Command.SetAutoplay(CommandSetAutoplayInner(!autoplay)))
+            id == ActionIds.HANDOFF -> handle(Command.OpenHandoffPicker)
+            else -> emit(Event.Error(EventErrorInner(ErrorKind.Internal, "unknown action '$actionId'", null)))
         }
+    }
+
+    /** The core's alias table, so desktop-style ids still work on input. */
+    private fun canonical(id: String): String = when {
+        id.startsWith("rate.") -> "rate" + id.removePrefix("rate.")
+        id == "track.love" || id == "ms.love" -> ActionIds.LOVE
+        id == "track.unlove" -> ActionIds.UNLOVE
+        id == "transport.play" || id == "transport.togglePlay" || id == "ms.play" -> ActionIds.TOGGLE_PLAY
+        id.startsWith("transport.") -> id.removePrefix("transport.").let { if (it == "seekBack") "seekBackward" else if (it == "toggleAutoplay") "autoplay" else it }
+        id.startsWith("ms.") -> id.removePrefix("ms.")
+        id == "ui.removeDownload" -> ActionIds.UNPIN
+        id == "ui.delete" -> "remove"
+        id == "ui.playOn" -> ActionIds.HANDOFF
+        id.startsWith("ui.") -> id.removePrefix("ui.")
+        else -> id
     }
 
     private fun actionsFor(surface: String, target: ActionTarget): List<ActionDescriptor> {
         fun d(id: String, label: String, icon: String, category: String, undoable: Boolean = true, destructive: Boolean = false, enabled: Boolean = true) =
             ActionDescriptor(id, label, icon, category, enabled, null, undoable, destructive)
+        val library = listOf(
+            d(ActionIds.PLAY, "Play", "play_arrow", "playback"), d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"),
+            d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
+            d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),
+            d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
+            d(ActionIds.rate(5), "Rate 5", "star", "library"), d(ActionIds.rate(4), "Rate 4", "star", "library"), d(ActionIds.rate(3), "Rate 3", "star", "library"),
+            d(ActionIds.rate(2), "Rate 2", "star", "library"), d(ActionIds.rate(1), "Rate 1", "star", "library"), d(ActionIds.rate(0), "Clear rating", "star_outline", "library"),
+            d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false), d(ActionIds.UNPIN, "Remove download", "download_done", "offline", undoable = false, destructive = true),
+        )
         val base: List<ActionDescriptor> = when (target) {
-            is ActionTarget.Tracks, is ActionTarget.Albums, is ActionTarget.Artists, is ActionTarget.Playlists -> listOf(
-                d("play", "Play", "play_arrow", "playback", undoable = true), d("shuffle", "Shuffle", "shuffle", "playback"), d("playNext", "Play next", "playlist_play", "queue"),
-                d("playLater", "Play later", "playlist_add", "queue"), d("addToPlaylist", "Add to playlist", "playlist_add_check", "library"),
-                d("love", "Love", "favorite", "library"), d("unlove", "Remove love", "heart_broken", "library"), d("rate5", "Rate 5 stars", "star", "library"),
-                d("clearRating", "Clear rating", "star_outline", "library"), d("download", "Download", "download", "offline", undoable = false),
-            ) + if (target is ActionTarget.Playlists) listOf(d("deletePlaylist", "Delete playlist", "delete", "library", undoable = false, destructive = true)) else emptyList()
-            is ActionTarget.QueueItems -> listOf(d("removeFromQueue", "Remove from queue", "remove", "queue"), d("playNext", "Play next", "playlist_play", "queue"), d("addToPlaylist", "Add to playlist", "playlist_add_check", "library"), d("love", "Love", "favorite", "library"), d("download", "Download", "download", "offline", undoable = false))
-            is ActionTarget.SavedQueue -> listOf(d("deleteSavedQueue", "Delete", "delete", "queue", undoable = false, destructive = true))
+            is ActionTarget.Tracks -> library + listOf(d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
+            is ActionTarget.Albums -> library + listOf(d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
+            is ActionTarget.Artists -> library
+            is ActionTarget.Playlists -> library + listOf(d(ActionIds.DELETE_PLAYLIST, "Delete playlist", "delete_forever", "library", undoable = false, destructive = true))
+            is ActionTarget.QueueItems -> listOf(d(ActionIds.REMOVE_FROM_QUEUE, "Remove from queue", "remove_from_queue", "queue"), d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"),
+                d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
+                d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
+            is ActionTarget.SavedQueue -> listOf(d(ActionIds.RESTORE_SAVED_QUEUE, "Restore", "history", "queue"), d(ActionIds.PIN_SAVED_QUEUE, "Pin", "push_pin", "queue"), d(ActionIds.UNPIN_SAVED_QUEUE, "Unpin", "keep_off", "queue"),
+                d(ActionIds.SAVE_QUEUE_AS_PLAYLIST, "Save as playlist", "playlist_add_check", "queue", undoable = false), d(ActionIds.DELETE_SAVED_QUEUE, "Delete", "delete_forever", "queue", undoable = false, destructive = true))
             ActionTarget.None -> emptyList()
         }
-        val order = actionOrders[surface] ?: return base
+        val order = actionOrders[surface]?.takeIf { it.isNotEmpty() } ?: if (surface == "contextMenu") ActionIds.CONTEXT_MENU else return base
         return base.sortedBy { order.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     }
 

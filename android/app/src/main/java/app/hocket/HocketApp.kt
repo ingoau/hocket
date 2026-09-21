@@ -26,6 +26,7 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     lateinit var connection: PlaybackServiceConnection
         private set
+    val prefs: AppPrefs by lazy { AppPrefs(this) }
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()

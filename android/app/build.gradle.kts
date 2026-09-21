@@ -82,6 +82,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.window)
     implementation(libs.androidx.palette)
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.graphics.shapes)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
@@ -107,4 +108,6 @@ dependencies {
     testImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    // Plain JNA jar (with the linux-x86-64 dispatcher) so the real core .so can be loaded on the JVM.
+    testImplementation(libs.jnaJvm)
 }

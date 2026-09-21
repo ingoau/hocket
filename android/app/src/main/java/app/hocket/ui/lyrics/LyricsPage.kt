@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.Queries
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.LyricLine
 import app.hocket.core.api.Lyrics
 import app.hocket.core.api.LyricsSource
@@ -72,7 +73,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
     val lyricsMap by client.lyrics.collectAsStateWithLifecycle()
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
     val settings by client.settings.collectAsStateWithLifecycle()
-    val animatedSetting = settings["ui.animatedBackground"]?.value?.trim() != "false"
+    val animatedSetting = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false"
     val trackId = entry?.track?.id
     var fetched by remember { mutableStateOf<Lyrics?>(null) }
     var fetchedFor by remember { mutableStateOf<String?>(null) }
@@ -98,7 +99,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
         if (fetchedFor == trackId && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 EmptyState(stringResource(R.string.empty_lyrics_title), stringResource(R.string.empty_lyrics_body))
-                val external = settings["lyrics.external"]?.value?.trim() == "true"
+                val external = settings[SettingKeys.LYRICS_EXTERNAL_ENABLED]?.value?.trim() == "true"
                 if (external) TextButton(onClick = { client.dispatch(Commands.fetchLyrics(trackId)) }) { Text(stringResource(R.string.lyrics_fetch)) }
                 else Text(stringResource(R.string.empty_lyrics_external_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

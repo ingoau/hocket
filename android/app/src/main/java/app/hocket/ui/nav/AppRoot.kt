@@ -70,9 +70,13 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import app.hocket.BuildConfig
+import app.hocket.HocketApp
+import androidx.compose.ui.platform.LocalContext
 import app.hocket.R
 import app.hocket.core.CoreKind
 import app.hocket.core.HocketJson
+import app.hocket.playback.CoreHost
+import kotlinx.coroutines.flow.StateFlow
 import app.hocket.core.api.ErrorKind
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
@@ -100,22 +104,28 @@ import app.hocket.ui.screens.setup.ServerSetupScreen
 import app.hocket.ui.screens.stats.StatsScreen
 import app.hocket.ui.queue.SavedQueuesScreen
 import kotlinx.coroutines.launch
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
 
-/** Root: waits for the core, shows setup until a server meets the floor, then the shell. */
+/**
+ * Root: waits for the core and for the credential replay, shows setup only when there is no stored
+ * server login (or the server is below the floor), then the shell.
+ */
 @Composable
-fun AppRoot(client: CoreClient?) {
+fun AppRoot(client: CoreClient?, credentialsReady: StateFlow<Boolean> = CoreHost.credentialsReplayed) {
     if (client == null) { LoadingScreen(); return }
     CompositionLocalProvider(LocalCoreClient provides client) {
         val started by client.started.collectAsStateWithLifecycle()
         val servers by client.servers.collectAsStateWithLifecycle()
+        // The fake core has nothing to replay; the native core waits for the keystore replay first.
+        val replayed by credentialsReady.collectAsStateWithLifecycle()
+        val ready = replayed || client.kind == CoreKind.Fake
         val snackbar = remember { SnackbarHostState() }
         ToastCollector(snackbar)
+        val server = servers.firstOrNull()
+        val hasLogin = server != null && (CoreHost.credentials?.get(server.url, server.username) != null || client.kind == CoreKind.Fake)
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             when {
-                !started -> LoadingScreen()
-                servers.isEmpty() || !servers[0].capabilities.meetsFloor -> ServerSetupScreen(existing = servers.firstOrNull())
+                !started || !ready -> LoadingScreen()
+                server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server)
                 else -> MainShell()
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) { data -> Snackbar(data) }
@@ -198,15 +208,12 @@ private fun NavItem.matches(routeName: String?): Boolean = routeName != null && 
     },
 )
 
-/** The user's ordered navigation items from the `ui.navItems` setting (JSON array of ids). */
+/** The user's ordered navigation items: an app-local preference (not a core setting). */
 @Composable
 fun navItems(): List<NavItem> {
-    val client = LocalCoreClient.current
-    val settings by client.settings.collectAsStateWithLifecycle()
-    val raw = settings["ui.navItems"]?.value
-    return remember(raw) {
-        raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.let { NavItem.fromIds(it) } ?: NavItem.DEFAULT
-    }
+    val app = LocalContext.current.applicationContext as? HocketApp
+    val ids by (app?.prefs?.navItems ?: kotlinx.coroutines.flow.flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
+    return remember(ids) { if (ids.isEmpty()) NavItem.DEFAULT else NavItem.fromIds(ids) }
 }
 
 /** Bottom content inset for scrolling screens: the mini player floats over the last rows. */

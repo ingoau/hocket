@@ -41,6 +41,7 @@ import app.hocket.R
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
 import app.hocket.core.api.QueryResult
@@ -63,14 +64,16 @@ fun SettingsScreen(nav: NavHostController) {
     val storage by client.storage.collectAsStateWithLifecycle()
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
     val queue by client.queue.collectAsStateWithLifecycle()
-    val sync = setting("settings.sync")
-    val theme = setting("ui.theme")
-    val accent = setting("ui.accent")
-    val animated = setting("ui.animatedBackground")
-    val autoSaver = setting("battery.autoSaver")
-    val externalLyrics = setting("lyrics.external")
-    val loveThreshold = setting("ratings.loveThreshold")
-    val savedCap = setting("queue.savedCap")
+    val sync = setting(SettingKeys.SYNC_ENABLED)
+    val theme = setting(SettingKeys.DISPLAY_THEME)
+    val accent = setting(SettingKeys.DISPLAY_ACCENT)
+    val dynamicColour = setting(SettingKeys.DISPLAY_DYNAMIC_COLOUR)
+    val animated = setting(SettingKeys.DISPLAY_ANIMATED_BACKGROUND)
+    val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
+    val externalLyrics = setting(SettingKeys.LYRICS_EXTERNAL_ENABLED)
+    val loveBridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED)
+    val loveThreshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD)
+    val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
     var signOut by remember { mutableStateOf(false) }
     var importConfirm by remember { mutableStateOf<String?>(null) }
     var includeSecrets by remember { mutableStateOf(false) }
@@ -107,14 +110,16 @@ fun SettingsScreen(nav: NavHostController) {
                     themeOptions.forEach { (v, label) -> toggleableItem(checked = (theme.string ?: "system") == v, label = label, onCheckedChange = { theme.setString(v) }) }
                 }
             }
-            val accentValue = accent.string ?: "dynamic"
+            // display.accent: null = follow the wallpaper (dynamic) / the artwork; a #RRGGBB overrides it.
+            val accentValue = accent.string
             val dynamicLabel = stringResource(R.string.settings_accent_dynamic)
             SettingRow(stringResource(R.string.settings_accent), scope = accent.scope) {
                 ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                    toggleableItem(checked = accentValue == "dynamic", label = dynamicLabel, onCheckedChange = { accent.setString("dynamic") })
+                    toggleableItem(checked = accentValue == null, label = dynamicLabel, onCheckedChange = { accent.setRaw("null") })
                     listOf("#6750A4", "#1B6B5E", "#B3261E").forEach { hex -> toggleableItem(checked = accentValue.equals(hex, true), label = "●", onCheckedChange = { accent.setString(hex) }) }
                 }
             }
+            SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope)
             SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope)
 
             SettingsSection(stringResource(R.string.settings_section_audio))
@@ -151,11 +156,14 @@ fun SettingsScreen(nav: NavHostController) {
             SwitchRow(stringResource(R.string.settings_external_lyrics), externalLyrics.bool ?: false, { client.dispatch(Commands.setExternalLyricsEnabled(it)) }, stringResource(R.string.settings_external_lyrics_privacy), externalLyrics.scope)
 
             SettingsSection(stringResource(R.string.settings_section_ratings))
-            val threshold = loveThreshold.int ?: 0
-            SettingRow(stringResource(R.string.settings_love_threshold), if (threshold == 0) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope)
+            // ratings.loveBridge.enabled + threshold (1..5): "off" is the bridge disabled.
+            val bridgeOn = loveBridge.bool ?: false
+            val threshold = loveThreshold.int ?: 4
+            SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope)
             val offLabel = stringResource(R.string.settings_love_threshold_off)
             ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                (0..5).forEach { n -> toggleableItem(checked = threshold == n, label = if (n == 0) offLabel else "$n★", onCheckedChange = { loveThreshold.setInt(n) }) }
+                toggleableItem(checked = !bridgeOn, label = offLabel, onCheckedChange = { loveBridge.setBool(false) })
+                (1..5).forEach { n -> toggleableItem(checked = bridgeOn && threshold == n, label = "$n★", onCheckedChange = { loveThreshold.setInt(n); loveBridge.setBool(true) }) }
             }
 
             SettingsSection(stringResource(R.string.settings_section_customise))

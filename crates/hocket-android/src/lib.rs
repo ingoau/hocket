@@ -18,7 +18,9 @@ pub enum HocketError {
 
 impl From<CoreError> for HocketError {
     fn from(e: CoreError) -> Self {
-        HocketError::Failed { reason: e.to_string() }
+        HocketError::Failed {
+            reason: e.to_string(),
+        }
     }
 }
 
@@ -48,7 +50,9 @@ impl HocketCore {
     /// `config_json` is a serialised `CoreConfig`.
     #[uniffi::constructor]
     pub fn new(config_json: String) -> Result<Arc<Self>, HocketError> {
-        let config = serde_json::from_str(&config_json).map_err(|e| HocketError::Failed { reason: e.to_string() })?;
+        let config = serde_json::from_str(&config_json).map_err(|e| HocketError::Failed {
+            reason: e.to_string(),
+        })?;
         let core = Core::new(config)?;
         Ok(Arc::new(Self { core }))
     }
@@ -71,7 +75,10 @@ impl HocketCore {
 /// Installs a tracing subscriber that forwards to logcat-friendly stderr. Call once.
 #[uniffi::export]
 pub fn init_logging(level: String) {
-    let _ = tracing_subscriber::fmt().with_env_filter(level).with_ansi(false).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(level)
+        .with_ansi(false)
+        .try_init();
 }
 
 #[uniffi::export]

@@ -51,6 +51,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.api.ServerInfo
+import app.hocket.playback.CoreHost
+import app.hocket.playback.ServerCredential
 import app.hocket.ui.LocalCoreClient
 
 /**
@@ -79,7 +81,10 @@ fun ServerSetupScreen(existing: ServerInfo?) {
         if (!valid || username.isBlank()) return
         error = null
         connecting = true
-        client.dispatch(Commands.addServer(url.trim().trimEnd('/'), username.trim(), password))
+        val cleanUrl = url.trim().trimEnd('/')
+        // The core never keeps the password: it lives in the platform keystore and is replayed on every start.
+        CoreHost.credentials?.save(ServerCredential(cleanUrl, username.trim(), password, null))
+        client.dispatch(Commands.addServer(cleanUrl, username.trim(), password))
     }
 
     Surface(Modifier.fillMaxSize()) {
@@ -143,7 +148,7 @@ fun ServerSetupScreen(existing: ServerInfo?) {
                         else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = { client.dispatch(Commands.removeServer(server.id)) }) { Text(stringResource(R.string.setup_remove_server)) }
+                    TextButton(onClick = { CoreHost.credentials?.remove(server.url, server.username); client.dispatch(Commands.removeServer(server.id)) }) { Text(stringResource(R.string.setup_remove_server)) }
                 }
             }
         }

@@ -7,12 +7,22 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.NativeCore
 import app.hocket.core.api.AudioMode
+import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.CoreConfig
+import app.hocket.core.api.Event
 import app.hocket.core.api.Platform
 import app.hocket.core.fake.FakeCore
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * The single core instance for the process.
@@ -35,6 +45,19 @@ object CoreHost {
     @Volatile
     var forceFake: Boolean = false
 
+    /** Where passwords live; installed before [acquire] (tests may set an in-memory one). */
+    @Volatile
+    var credentials: ServerCredentialStore? = null
+
+    /**
+     * True once credentials have been replayed for this core start (or there were none to replay).
+     * The UI waits for this before deciding between the setup screen and the shell.
+     */
+    private val _credentialsReplayed = MutableStateFlow(false)
+    val credentialsReplayed: StateFlow<Boolean> = _credentialsReplayed.asStateFlow()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var replayJob: Job? = null
+
     val current: CoreHandle? get() = handle
     val kind: CoreKind? get() = handle?.kind
 
@@ -54,9 +77,42 @@ object CoreHost {
             Log.w(TAG, "libhocket_android not built for this ABI; using the fake core")
             FakeCore(startWithServer = false, startPlaying = false)
         }
+        val store = credentials ?: KeystoreCredentialStore(app).also { credentials = it }
+        _credentialsReplayed.value = false
+        replayJob?.cancel()
+        replayJob = scope.launch { replayCredentials(core, store) }
         core.dispatch(Command.Start)
         handle = core
         return core
+    }
+
+    /**
+     * The core never persists passwords: on every start, once `Started` arrives, replay `AddServer`
+     * for each stored login that matches a persisted server (or, when the core has no server yet,
+     * every stored login). `ServersChanged` prunes logins for servers that were removed.
+     */
+    suspend fun replayCredentials(core: CoreHandle, store: ServerCredentialStore) {
+        core.events.collect { event ->
+            when (event) {
+                is Event.Started -> {
+                    val known = event.data.snapshot.servers
+                    val stored = store.all()
+                    val toReplay = if (known.isEmpty()) stored else stored.filter { c -> known.any { it.url.trimEnd('/') == c.url.trimEnd('/') && it.username == c.username } }
+                    toReplay.forEach { c ->
+                        Log.i(TAG, "replaying credentials for ${c.username}@${c.url}")
+                        core.dispatch(Commands.addServer(c.url, c.username, c.password, c.name))
+                    }
+                    _credentialsReplayed.value = true
+                }
+                is Event.ServersChanged -> {
+                    val keep = event.data.servers.map { it.url.trimEnd('/') to it.username }
+                    if (_credentialsReplayed.value && keep.isNotEmpty()) store.retainOnly(keep)
+                    // An emptied server list (RemoveServer) drops everything.
+                    if (_credentialsReplayed.value && keep.isEmpty()) store.retainOnly(emptyList())
+                }
+                else -> Unit
+            }
+        }
     }
 
     /** Replaces the running core (tests). Shuts down the previous one. */
@@ -68,6 +124,7 @@ object CoreHost {
 
     @Synchronized
     fun shutdown() {
+        replayJob?.cancel()
         handle?.close()
         handle = null
     }
