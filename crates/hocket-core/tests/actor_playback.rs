@@ -1,6 +1,8 @@
 //! Full-core playback scenarios on the scripted backend and a fake server:
 //! play an album, next/previous, undo, saved-queue restore, scrobbling.
 
+#![cfg(feature = "sim")]
+
 use hocket_core::api::*;
 use hocket_core::audio::scripted::ScriptedCall;
 use hocket_core::core::test_support::{seeded_server, TestCore};

@@ -3,6 +3,8 @@
 //! invariants checked after every step (never two transport owners,
 //! revisions monotonic, no scrobble lost or duplicated, documents converge).
 
+#![cfg(feature = "sim")]
+
 use std::collections::BTreeMap;
 
 use hocket_core::api::*;

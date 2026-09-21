@@ -1,6 +1,8 @@
 //! Two full cores on the in-memory Connect network (LAN tier): shared
 //! queue, handoff end to end, resume offers, settings sync.
 
+#![cfg(feature = "sim")]
+
 use hocket_core::api::*;
 use hocket_core::core::io::memory::MemoryNet;
 use hocket_core::core::test_support::{seeded_server, TestCore};

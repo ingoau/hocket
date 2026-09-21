@@ -1,6 +1,8 @@
 //! Library scenarios: sync, search, mutations through the outbox, undo tier
 //! 2, downloads, filters, lyrics and settings.
 
+#![cfg(feature = "sim")]
+
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
