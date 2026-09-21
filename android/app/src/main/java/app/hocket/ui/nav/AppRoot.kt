@@ -48,7 +48,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -131,7 +130,8 @@ fun LoadingScreen() {
 @Composable
 private fun ToastCollector(host: SnackbarHostState) {
     val client = LocalCoreClient.current
-    val context = LocalContext.current
+    val authPrefix = stringResource(R.string.error_auth)
+    val networkPrefix = stringResource(R.string.error_network)
     LaunchedEffect(client) {
         launch {
             client.toasts.collect { toast ->
@@ -141,7 +141,7 @@ private fun ToastCollector(host: SnackbarHostState) {
         }
         launch {
             client.errors.collect { e ->
-                val prefix = when (e.kind) { ErrorKind.Auth -> context.getString(R.string.error_auth); ErrorKind.Network -> context.getString(R.string.error_network); else -> "" }
+                val prefix = when (e.kind) { ErrorKind.Auth -> authPrefix; ErrorKind.Network -> networkPrefix; else -> "" }
                 host.showSnackbar(if (prefix.isNotEmpty() && prefix != e.message) "$prefix: ${e.message}" else e.message, duration = SnackbarDuration.Long)
             }
         }
