@@ -74,6 +74,8 @@ pub struct Playback {
     pub played_ms: Ms,
     pub started_at: EpochMs,
     pub scrobbled: bool,
+    /// Reached the end and reported it; stays true until something else loads.
+    pub ended: bool,
 }
 
 /// State the real app persists; survives a simulated crash.
@@ -259,8 +261,9 @@ impl SimDevice {
                 if self.owns() {
                     let key = document.current.as_ref().map(|c| c.key.clone());
                     if key != self.playback.key {
+                        let keep_playing = self.playback.playing || self.playback.ended;
                         match document.current.clone() {
-                            Some(item) => self.load(item.key, item.track_id, 0, 0, self.engine.now_session_ms(), false, self.playback.playing),
+                            Some(item) => self.load(item.key, item.track_id, 0, 0, self.engine.now_session_ms(), false, keep_playing),
                             None => {
                                 self.playback = Playback::default();
                                 self.stamp();
@@ -329,8 +332,8 @@ impl SimDevice {
             | Output::TransportChanged { .. }
             | Output::SettingsMerged(_)
             | Output::UndoEntryReceived { .. }
-            | Output::ReplicaChanged(_)
-            | Output::Log { .. } => {}
+            | Output::ReplicaChanged(_) => {}
+            Output::Log { level, message } => self.note(format!("{level}: {message}")),
         }
     }
 
@@ -347,6 +350,7 @@ impl SimDevice {
             played_ms,
             started_at,
             scrobbled,
+            ended: false,
         };
         self.stamp();
     }
@@ -420,12 +424,14 @@ impl SimDevice {
             self.queued.push(Input::ScrobbleReached { track_id: t, started_at: s });
             self.stamp();
         }
-        if self.playback.position_ms >= self.playback.duration_ms {
+        if self.playback.position_ms >= self.playback.duration_ms && !self.playback.ended {
+            // Natural end: report it once. If the document changes we load the
+            // next item (`DocumentChanged`); if the queue ran out we stay
+            // stopped on the last item, as the real backend would.
             self.playback.position_ms = self.playback.duration_ms;
+            self.playback.ended = true;
             self.playback.playing = false;
             self.queued.push(Input::LocalOp { op: SessionOp::TrackEnded });
-            // If the document did not change (queue ran out) we stay stopped on the last item.
-            self.playback.playing = true;
         }
     }
 

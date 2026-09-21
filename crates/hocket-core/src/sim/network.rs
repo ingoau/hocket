@@ -273,6 +273,19 @@ impl Network {
         self.queue.len()
     }
 
+    /// Message-type histogram of what is queued (for diagnosing storms).
+    pub fn pending_summary(&self) -> String {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for d in self.queue.values() {
+            let name = match &d.event {
+                NetEvent::Message { msg, .. } => format!("{}->{}", msg.msg.name(), d.to),
+                other => format!("{other:?}").chars().take(12).collect(),
+            };
+            *counts.entry(name).or_default() += 1;
+        }
+        format!("{counts:?}")
+    }
+
     pub fn link_count(&self) -> usize {
         self.links.len()
     }

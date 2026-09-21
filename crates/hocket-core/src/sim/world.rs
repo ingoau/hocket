@@ -242,12 +242,13 @@ impl World {
             let next = self.next_event_at();
             if trace {
                 eprintln!(
-                    "TRACE now={:.0} next={:.0} inflight={} links={} events={}",
+                    "TRACE now={:.0} next={:.0} inflight={} links={} events={} {}",
                     self.now(),
                     next,
                     self.net.in_flight(),
                     self.net.link_count(),
-                    self.events
+                    self.events,
+                    if self.net.in_flight() > 2000 { self.net.pending_summary() } else { String::new() }
                 );
             }
             if next > until || next == f64::MAX {
@@ -293,6 +294,10 @@ impl World {
         }
         self.events += 1;
         self.check_invariants();
+        if self.net.in_flight() > 20_000 {
+            self.violations.push(format!("[{now:.0}] message storm: {}", self.net.pending_summary()));
+            self.assert_ok();
+        }
     }
 
     fn deliver(&mut self, node: &str, ev: NetEvent) {

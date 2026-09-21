@@ -1604,6 +1604,7 @@ impl Engine {
             return;
         }
         let previous = self.doc.clone();
+        self.log("info", format!("op {op_id} rejected: {reason:?} at room revision {current_revision} (ours {})", previous.revision));
         self.pending.clear();
         let had_unsynced = !self.unsynced.is_empty() || self.unsynced_overflow;
         self.confirmed = document.clone();

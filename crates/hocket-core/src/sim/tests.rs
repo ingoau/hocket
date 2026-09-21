@@ -188,6 +188,11 @@ fn track_end_advances_only_on_the_owner_and_everyone_follows() {
     w.perform(Action::PlayTracks { device: 2, tracks: t });
     w.perform(Action::ClaimTransport { device: 2, takeover: false });
     w.run_for(25_000.0);
+    if std::env::var("HOCKET_SIM_TRACE").is_ok() {
+        for l in &w.devices[2].log {
+            eprintln!("{l}");
+        }
+    }
     for d in &w.devices {
         assert_eq!(d.engine.document().current.as_ref().unwrap().track_id, "t1", "{}", d.id);
     }
