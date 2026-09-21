@@ -363,13 +363,25 @@ pub struct NetworkState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum ContextKind {
-    Album { id: AlbumId },
-    Artist { id: ArtistId },
-    Playlist { id: PlaylistId },
-    Genre { name: String },
-    Filter { filter: Filter },
+    Album {
+        id: AlbumId,
+    },
+    Artist {
+        id: ArtistId,
+    },
+    Playlist {
+        id: PlaylistId,
+    },
+    Genre {
+        name: String,
+    },
+    Filter {
+        filter: Filter,
+    },
     /// Search results, an arbitrary selection, "all songs". Stores its track list.
-    AdHoc { label: String },
+    AdHoc {
+        label: String,
+    },
     Autoplay,
 }
 
@@ -418,7 +430,11 @@ pub enum QueueSource {
     Context { index: u32 },
     /// Play next / play later.
     Inserted,
-    Autoplay { provider: AutoplayProvider, reason: String, score: Option<f64> },
+    Autoplay {
+        provider: AutoplayProvider,
+        reason: String,
+        score: Option<f64>,
+    },
 }
 
 #[typeshare]
@@ -1007,18 +1023,34 @@ pub struct MediaSource {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum BackendCommand {
     /// Replace what is loaded. `next` is the gapless follow-up to preload.
-    Load { source: MediaSource, next: Option<MediaSource>, position_ms: Ms, play: bool },
+    Load {
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: Ms,
+        play: bool,
+    },
     /// Update only the preloaded follow-up.
-    SetNext { next: Option<MediaSource> },
+    SetNext {
+        next: Option<MediaSource>,
+    },
     Play,
     Pause,
     Stop,
-    Seek { position_ms: Ms },
-    SetVolume { volume: f64 },
+    Seek {
+        position_ms: Ms,
+    },
+    SetVolume {
+        volume: f64,
+    },
     /// Handoff pre-buffering: fetch but don't play; discarded on timeout.
-    PreBuffer { source: MediaSource, position_ms: Ms },
+    PreBuffer {
+        source: MediaSource,
+        position_ms: Ms,
+    },
     DiscardPreBuffer,
-    SetGapless { enabled: bool },
+    SetGapless {
+        enabled: bool,
+    },
 }
 
 /// What an external backend reports back.
@@ -1026,20 +1058,49 @@ pub enum BackendCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum BackendReport {
-    Ready { key: QueueKey, duration_ms: Option<Ms> },
-    Playing { key: QueueKey, position_ms: Ms },
-    Paused { key: QueueKey, position_ms: Ms },
-    Buffering { key: QueueKey, buffering: bool },
+    Ready {
+        key: QueueKey,
+        duration_ms: Option<Ms>,
+    },
+    Playing {
+        key: QueueKey,
+        position_ms: Ms,
+    },
+    Paused {
+        key: QueueKey,
+        position_ms: Ms,
+    },
+    Buffering {
+        key: QueueKey,
+        buffering: bool,
+    },
     /// Called at least every 1000 ms while playing and on every discontinuity.
-    Position { key: QueueKey, position_ms: Ms },
+    Position {
+        key: QueueKey,
+        position_ms: Ms,
+    },
     /// Natural end; the backend has already transitioned to `next` if given.
-    Ended { key: QueueKey },
+    Ended {
+        key: QueueKey,
+    },
     /// Transitioned to the preloaded item (gapless).
-    TransitionedToNext { key: QueueKey },
-    Error { key: QueueKey, message: String, fatal: bool },
-    PreBufferReady { key: QueueKey },
-    AudioFocusLost { transient: bool },
-    OutputDevicesChanged { devices: Vec<OutputDevice> },
+    TransitionedToNext {
+        key: QueueKey,
+    },
+    Error {
+        key: QueueKey,
+        message: String,
+        fatal: bool,
+    },
+    PreBufferReady {
+        key: QueueKey,
+    },
+    AudioFocusLost {
+        transient: bool,
+    },
+    OutputDevicesChanged {
+        devices: Vec<OutputDevice>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,18 +1366,40 @@ pub enum Command {
     Shutdown,
     /// Re-emit every `*Changed` event with current state (UI (re)attach).
     RequestSnapshot,
-    SetNetworkState { state: NetworkState },
+    SetNetworkState {
+        state: NetworkState,
+    },
     /// App visibility for renderer throttling and prefetch pausing.
-    SetVisibility { visible: bool, focused: bool },
-    SetBatterySaver { enabled: bool },
+    SetVisibility {
+        visible: bool,
+        focused: bool,
+    },
+    SetBatterySaver {
+        enabled: bool,
+    },
 
     // -- servers ----------------------------------------------------------
-    AddServer { url: String, username: String, password: String, name: Option<String> },
-    RemoveServer { server_id: ServerId },
-    ProbeServer { server_id: ServerId },
+    AddServer {
+        url: String,
+        username: String,
+        password: String,
+        name: Option<String>,
+    },
+    RemoveServer {
+        server_id: ServerId,
+    },
+    ProbeServer {
+        server_id: ServerId,
+    },
     /// `full` forces a reconcile that catches deletions.
-    SyncLibrary { server_id: ServerId, full: bool },
-    SetTranscodingProfile { network_id: Option<String>, profile: TranscodingProfile },
+    SyncLibrary {
+        server_id: ServerId,
+        full: bool,
+    },
+    SetTranscodingProfile {
+        network_id: Option<String>,
+        profile: TranscodingProfile,
+    },
 
     // -- transport --------------------------------------------------------
     Play,
@@ -1325,132 +1408,302 @@ pub enum Command {
     Stop,
     Next,
     Previous,
-    SeekTo { position_ms: Ms },
-    SeekBy { delta_ms: i32 },
-    SetVolume { volume: f64 },
+    SeekTo {
+        position_ms: Ms,
+    },
+    SeekBy {
+        delta_ms: i32,
+    },
+    SetVolume {
+        volume: f64,
+    },
 
     // -- queue ------------------------------------------------------------
-    PlayContext { args: PlayContextArgs },
+    PlayContext {
+        args: PlayContextArgs,
+    },
     /// Play an ad-hoc list (search results, a selection).
-    PlayTracks { server_id: ServerId, track_ids: Vec<TrackId>, start_index: u32, label: String, shuffle: bool },
-    PlayNext { server_id: ServerId, track_ids: Vec<TrackId> },
-    PlayLater { server_id: ServerId, track_ids: Vec<TrackId> },
-    JumpToQueueItem { key: QueueKey },
-    RemoveQueueItems { keys: Vec<QueueKey> },
+    PlayTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        start_index: u32,
+        label: String,
+        shuffle: bool,
+    },
+    PlayNext {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+    },
+    PlayLater {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+    },
+    JumpToQueueItem {
+        key: QueueKey,
+    },
+    RemoveQueueItems {
+        keys: Vec<QueueKey>,
+    },
     /// `to_index` is within the combined playing-next + upcoming list.
-    MoveQueueItem { key: QueueKey, to_index: u32 },
+    MoveQueueItem {
+        key: QueueKey,
+        to_index: u32,
+    },
     ClearQueue,
     /// Clears playing-next only.
     ClearInsertions,
-    SetShuffle { enabled: bool },
-    SetRepeat { mode: RepeatMode },
-    SetAutoplay { enabled: bool },
-    SetQueueMode { mode: QueueMode },
+    SetShuffle {
+        enabled: bool,
+    },
+    SetRepeat {
+        mode: RepeatMode,
+    },
+    SetAutoplay {
+        enabled: bool,
+    },
+    SetQueueMode {
+        mode: QueueMode,
+    },
     /// Mark the current item unplayable on this device and move on.
-    SkipUnavailable { key: QueueKey },
+    SkipUnavailable {
+        key: QueueKey,
+    },
 
     // -- saved queues -----------------------------------------------------
-    RestoreSavedQueue { id: String },
-    PinSavedQueue { id: String, pinned: bool },
-    DeleteSavedQueue { id: String },
-    SaveQueueAsPlaylist { saved_queue_id: Option<String>, name: String },
-    SetSavedQueueCap { cap: u32 },
+    RestoreSavedQueue {
+        id: String,
+    },
+    PinSavedQueue {
+        id: String,
+        pinned: bool,
+    },
+    DeleteSavedQueue {
+        id: String,
+    },
+    SaveQueueAsPlaylist {
+        saved_queue_id: Option<String>,
+        name: String,
+    },
+    SetSavedQueueCap {
+        cap: u32,
+    },
 
     // -- undo -------------------------------------------------------------
     Undo,
     Redo,
     /// Undo a specific entry from the history sheet.
-    UndoEntry { id: String },
+    UndoEntry {
+        id: String,
+    },
     RestoreSelection,
 
     // -- library mutations (all through the outbox, all undoable) ---------
-    SetRating { targets: Vec<RatingTarget>, rating: u32 },
-    SetLoved { targets: Vec<RatingTarget>, loved: bool },
-    SetArtistLoved { artist_id: ArtistId, loved: bool },
-    CreatePlaylist { server_id: ServerId, name: String, track_ids: Vec<TrackId> },
-    DeletePlaylist { playlist_id: PlaylistId },
-    RenamePlaylist { playlist_id: PlaylistId, name: String, comment: Option<String>, public: Option<bool> },
-    PlaylistAdd { playlist_id: PlaylistId, track_ids: Vec<TrackId>, at_index: Option<u32> },
+    SetRating {
+        targets: Vec<RatingTarget>,
+        rating: u32,
+    },
+    SetLoved {
+        targets: Vec<RatingTarget>,
+        loved: bool,
+    },
+    SetArtistLoved {
+        artist_id: ArtistId,
+        loved: bool,
+    },
+    CreatePlaylist {
+        server_id: ServerId,
+        name: String,
+        track_ids: Vec<TrackId>,
+    },
+    DeletePlaylist {
+        playlist_id: PlaylistId,
+    },
+    RenamePlaylist {
+        playlist_id: PlaylistId,
+        name: String,
+        comment: Option<String>,
+        public: Option<bool>,
+    },
+    PlaylistAdd {
+        playlist_id: PlaylistId,
+        track_ids: Vec<TrackId>,
+        at_index: Option<u32>,
+    },
     /// Indices into the playlist's current order.
-    PlaylistRemove { playlist_id: PlaylistId, indices: Vec<u32> },
-    PlaylistMove { playlist_id: PlaylistId, from_index: u32, to_index: u32 },
+    PlaylistRemove {
+        playlist_id: PlaylistId,
+        indices: Vec<u32>,
+    },
+    PlaylistMove {
+        playlist_id: PlaylistId,
+        from_index: u32,
+        to_index: u32,
+    },
     /// Marks a played track on the server (`scrobble submission=true`) — used only by the
     /// core's own scrobbler; exposed for tests.
-    Scrobble { track_id: TrackId, played_at: EpochMs, submission: bool },
+    Scrobble {
+        track_id: TrackId,
+        played_at: EpochMs,
+        submission: bool,
+    },
 
     // -- downloads --------------------------------------------------------
-    Pin { target: PinTarget, transcode: bool },
-    Unpin { target: PinTarget },
+    Pin {
+        target: PinTarget,
+        transcode: bool,
+    },
+    Unpin {
+        target: PinTarget,
+    },
     ClearStreamCache,
-    SetStorageWarnThreshold { bytes: Option<f64> },
+    SetStorageWarnThreshold {
+        bytes: Option<f64>,
+    },
 
     // -- jobs and problems ------------------------------------------------
-    CancelJob { id: JobId },
-    RetryJob { id: JobId },
-    PauseJob { id: JobId },
-    ResumeJob { id: JobId },
-    RetryProblem { id: String },
-    DismissProblem { id: String },
+    CancelJob {
+        id: JobId,
+    },
+    RetryJob {
+        id: JobId,
+    },
+    PauseJob {
+        id: JobId,
+    },
+    ResumeJob {
+        id: JobId,
+    },
+    RetryProblem {
+        id: String,
+    },
+    DismissProblem {
+        id: String,
+    },
     DismissAllProblems,
 
     // -- filters and autoplay --------------------------------------------
-    SaveFilter { filter: Filter },
-    DeleteFilter { id: FilterId },
+    SaveFilter {
+        filter: Filter,
+    },
+    DeleteFilter {
+        id: FilterId,
+    },
     /// Native API, behind the capability flag.
-    CreateSmartPlaylist { server_id: ServerId, filter: Filter, name: String },
-    CreateStaticPlaylistFromFilter { server_id: ServerId, filter: Filter, name: String },
+    CreateSmartPlaylist {
+        server_id: ServerId,
+        filter: Filter,
+        name: String,
+    },
+    CreateStaticPlaylistFromFilter {
+        server_id: ServerId,
+        filter: Filter,
+        name: String,
+    },
     /// Writes the NSP document to `path` (or returns it via [`Event::NspExported`]).
-    ExportNsp { filter: Filter, path: Option<String> },
-    SetAutoplaySettings { settings: AutoplaySettings },
+    ExportNsp {
+        filter: Filter,
+        path: Option<String>,
+    },
+    SetAutoplaySettings {
+        settings: AutoplaySettings,
+    },
 
     // -- lyrics -----------------------------------------------------------
-    SetLyricsOffset { track_id: TrackId, offset_ms: i32 },
-    SetExternalLyricsEnabled { enabled: bool },
-    FetchLyrics { track_id: TrackId },
+    SetLyricsOffset {
+        track_id: TrackId,
+        offset_ms: i32,
+    },
+    SetExternalLyricsEnabled {
+        enabled: bool,
+    },
+    FetchLyrics {
+        track_id: TrackId,
+    },
 
     // -- settings ---------------------------------------------------------
-    SetSetting { key: String, value: String },
-    ResetSetting { key: String },
-    SetSettingsSync { enabled: bool },
-    ExportConfig { include_secrets: bool },
-    ImportConfig { document: String },
+    SetSetting {
+        key: String,
+        value: String,
+    },
+    ResetSetting {
+        key: String,
+    },
+    SetSettingsSync {
+        enabled: bool,
+    },
+    ExportConfig {
+        include_secrets: bool,
+    },
+    ImportConfig {
+        document: String,
+    },
 
     // -- audio ------------------------------------------------------------
-    SetAudioSettings { settings: AudioSettings },
-    SetOutputDevice { id: Option<String> },
+    SetAudioSettings {
+        settings: AudioSettings,
+    },
+    SetOutputDevice {
+        id: Option<String>,
+    },
     RefreshOutputDevices,
 
     // -- connect ----------------------------------------------------------
-    SetCoordinatorUrl { url: Option<String> },
+    SetCoordinatorUrl {
+        url: Option<String>,
+    },
     ConnectCoordinator,
     DisconnectCoordinator,
-    SetLanDiscovery { enabled: bool },
+    SetLanDiscovery {
+        enabled: bool,
+    },
     /// Opens the picker: targets start pre-buffering.
     OpenHandoffPicker,
     CloseHandoffPicker,
-    HandoffTo { device_id: DeviceId },
+    HandoffTo {
+        device_id: DeviceId,
+    },
     /// Accept the dormant resume offer and take transport here.
     ResumeHere,
     DismissResumeOffer,
 
     // -- sleep timer ------------------------------------------------------
-    SetSleepTimer { timer: Option<SleepTimer> },
+    SetSleepTimer {
+        timer: Option<SleepTimer>,
+    },
 
     // -- from the platform ------------------------------------------------
     /// Reports from an external playback backend.
-    BackendReport { report: BackendReport },
+    BackendReport {
+        report: BackendReport,
+    },
     /// OS media session button/command (headset, lockscreen, MPRIS, SMTC).
-    MediaSessionCommand { action: MediaSessionAction, value: Option<f64> },
+    MediaSessionCommand {
+        action: MediaSessionAction,
+        value: Option<f64>,
+    },
     /// Run a registry action against a target. The core validates applicability.
-    RunAction { action_id: String, target: ActionTarget },
+    RunAction {
+        action_id: String,
+        target: ActionTarget,
+    },
     /// Custom shortcut binding (desktop). `shortcut` is a normalised chord string.
-    SetShortcut { action_id: String, shortcut: Option<String> },
+    SetShortcut {
+        action_id: String,
+        shortcut: Option<String>,
+    },
     /// Choose-and-order customisation for a surface (`contextMenu`, `sidebar`, `mediaSession`).
-    SetActionOrder { surface: String, action_ids: Vec<String> },
+    SetActionOrder {
+        surface: String,
+        action_ids: Vec<String>,
+    },
     /// The UI's current multi-selection, so commands can snapshot it.
-    SetSelection { target: ActionTarget },
+    SetSelection {
+        target: ActionTarget,
+    },
     /// Marks a saved queue / track as interacted with (for LRU).
-    Touch { target: ActionTarget },
+    Touch {
+        target: ActionTarget,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,54 +1725,128 @@ pub enum Query {
     /// Everything a freshly attached UI needs, in one round trip.
     Snapshot,
     Servers,
-    Tracks { server_id: ServerId, filter: Option<FilterNode>, sort: SortOrder, descending: bool, page: Page },
-    TrackCount { server_id: ServerId, filter: Option<FilterNode> },
-    Track { id: TrackId },
-    TracksByIds { ids: Vec<TrackId> },
-    Albums { server_id: ServerId, artist_id: Option<ArtistId>, genre: Option<String>, sort: SortOrder, descending: bool, page: Page },
-    AlbumCount { server_id: ServerId, artist_id: Option<ArtistId>, genre: Option<String> },
-    Album { id: AlbumId },
-    AlbumTracks { id: AlbumId },
-    Artists { server_id: ServerId, page: Page },
-    Artist { id: ArtistId },
-    ArtistTopSongs { id: ArtistId, count: u32 },
-    Genres { server_id: ServerId },
-    Playlists { server_id: ServerId },
-    Playlist { id: PlaylistId },
-    PlaylistTracks { id: PlaylistId, page: Page },
+    Tracks {
+        server_id: ServerId,
+        filter: Option<FilterNode>,
+        sort: SortOrder,
+        descending: bool,
+        page: Page,
+    },
+    TrackCount {
+        server_id: ServerId,
+        filter: Option<FilterNode>,
+    },
+    Track {
+        id: TrackId,
+    },
+    TracksByIds {
+        ids: Vec<TrackId>,
+    },
+    Albums {
+        server_id: ServerId,
+        artist_id: Option<ArtistId>,
+        genre: Option<String>,
+        sort: SortOrder,
+        descending: bool,
+        page: Page,
+    },
+    AlbumCount {
+        server_id: ServerId,
+        artist_id: Option<ArtistId>,
+        genre: Option<String>,
+    },
+    Album {
+        id: AlbumId,
+    },
+    AlbumTracks {
+        id: AlbumId,
+    },
+    Artists {
+        server_id: ServerId,
+        page: Page,
+    },
+    Artist {
+        id: ArtistId,
+    },
+    ArtistTopSongs {
+        id: ArtistId,
+        count: u32,
+    },
+    Genres {
+        server_id: ServerId,
+    },
+    Playlists {
+        server_id: ServerId,
+    },
+    Playlist {
+        id: PlaylistId,
+    },
+    PlaylistTracks {
+        id: PlaylistId,
+        page: Page,
+    },
     /// Local-first; server results, when requested, arrive in a second [`Event::SearchResults`].
-    Search { server_id: ServerId, query: String, limit: u32, include_server: bool, request_id: String },
+    Search {
+        server_id: ServerId,
+        query: String,
+        limit: u32,
+        include_server: bool,
+        request_id: String,
+    },
     Queue,
     SavedQueues,
-    Lyrics { track_id: TrackId },
-    Related { track_id: TrackId, count: u32 },
-    Stats { period_days: u32 },
-    RecentlyPlayed { limit: u32 },
+    Lyrics {
+        track_id: TrackId,
+    },
+    Related {
+        track_id: TrackId,
+        count: u32,
+    },
+    Stats {
+        period_days: u32,
+    },
+    RecentlyPlayed {
+        limit: u32,
+    },
     Jobs,
     Problems,
     Pins,
     Storage,
     Filters,
     /// Evaluate a filter locally: matching count and server-expressibility.
-    FilterPreview { filter: Filter },
+    FilterPreview {
+        filter: Filter,
+    },
     Settings,
-    Setting { key: String },
+    Setting {
+        key: String,
+    },
     AudioSettings,
     OutputDevices,
     Connection,
     Devices,
     UndoState,
     /// Applicable actions for a target, ordered per the user's customisation of `surface`.
-    Actions { surface: String, target: ActionTarget },
+    Actions {
+        surface: String,
+        target: ActionTarget,
+    },
     Shortcuts,
     /// Resolve artwork to a local file path at one of the fixed cache sizes (fetching if needed).
-    Artwork { id: String, size: u32 },
+    Artwork {
+        id: String,
+        size: u32,
+    },
     /// Direct stream/file URL for a track (what the backend would be given).
-    MediaSource { track_id: TrackId },
+    MediaSource {
+        track_id: TrackId,
+    },
     /// Diagnostics bundle (crash logs, versions) as text for copy-to-clipboard.
     Diagnostics,
     /// Export a config document.
-    ConfigDocument { include_secrets: bool },
+    ConfigDocument {
+        include_secrets: bool,
+    },
 }
 
 #[typeshare]
@@ -1695,52 +2022,132 @@ pub enum ErrorKind {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Event {
     /// Emitted once `Start` completes.
-    Started { snapshot: Snapshot },
-    ServersChanged { servers: Vec<ServerInfo> },
-    SyncProgress { progress: SyncProgress },
+    Started {
+        snapshot: Snapshot,
+    },
+    ServersChanged {
+        servers: Vec<ServerInfo>,
+    },
+    SyncProgress {
+        progress: SyncProgress,
+    },
     /// Mirror tables changed; UIs should refetch visible queries. Empty = everything.
-    LibraryChanged { server_id: ServerId, tables: Vec<String>, ids: Vec<String> },
-    SearchResults { results: SearchResults },
+    LibraryChanged {
+        server_id: ServerId,
+        tables: Vec<String>,
+        ids: Vec<String>,
+    },
+    SearchResults {
+        results: SearchResults,
+    },
 
-    SessionChanged { document: SessionDocument },
-    QueueChanged { queue: QueueView },
-    TransportChanged { transport: TransportState },
+    SessionChanged {
+        document: SessionDocument,
+    },
+    QueueChanged {
+        queue: QueueView,
+    },
+    TransportChanged {
+        transport: TransportState,
+    },
     /// The item now playing (or `None` when stopped), with a resolved track.
-    NowPlayingChanged { entry: Option<QueueEntry> },
-    SavedQueuesChanged { queues: Vec<SavedQueue> },
-    UndoChanged { state: UndoState },
-    Toast { toast: Toast },
+    NowPlayingChanged {
+        entry: Option<QueueEntry>,
+    },
+    SavedQueuesChanged {
+        queues: Vec<SavedQueue>,
+    },
+    UndoChanged {
+        state: UndoState,
+    },
+    Toast {
+        toast: Toast,
+    },
     /// Inline player-bar line for a non-fatal playback issue ("Couldn't play X, skipped").
-    PlayerNotice { message: Option<String> },
+    PlayerNotice {
+        message: Option<String>,
+    },
 
-    JobsChanged { jobs: Vec<Job> },
-    ProblemsChanged { problems: Vec<Problem> },
+    JobsChanged {
+        jobs: Vec<Job>,
+    },
+    ProblemsChanged {
+        problems: Vec<Problem>,
+    },
 
-    ConnectionChanged { state: ConnectionState },
-    DevicesChanged { devices: Vec<DeviceInfo> },
-    HandoffPickerChanged { open: bool, targets: Vec<DeviceInfo> },
-    ResumeOfferChanged { offer: Option<ResumeOffer> },
+    ConnectionChanged {
+        state: ConnectionState,
+    },
+    DevicesChanged {
+        devices: Vec<DeviceInfo>,
+    },
+    HandoffPickerChanged {
+        open: bool,
+        targets: Vec<DeviceInfo>,
+    },
+    ResumeOfferChanged {
+        offer: Option<ResumeOffer>,
+    },
 
-    LyricsChanged { track_id: TrackId, lyrics: Option<Lyrics> },
-    PinsChanged { pins: Vec<Pin> },
-    StorageChanged { storage: StorageSummary },
-    FiltersChanged { filters: Vec<Filter> },
-    SettingChanged { setting: Setting },
-    AudioSettingsChanged { settings: AudioSettings },
-    OutputDevicesChanged { devices: Vec<OutputDevice> },
-    SleepTimerChanged { timer: Option<SleepTimer> },
-    ShortcutsChanged { shortcuts: Vec<Shortcut> },
-    ActionsChanged { surface: String },
-    NspExported { filter_id: FilterId, document: String, path: Option<String> },
-    ConfigExported { document: String },
+    LyricsChanged {
+        track_id: TrackId,
+        lyrics: Option<Lyrics>,
+    },
+    PinsChanged {
+        pins: Vec<Pin>,
+    },
+    StorageChanged {
+        storage: StorageSummary,
+    },
+    FiltersChanged {
+        filters: Vec<Filter>,
+    },
+    SettingChanged {
+        setting: Setting,
+    },
+    AudioSettingsChanged {
+        settings: AudioSettings,
+    },
+    OutputDevicesChanged {
+        devices: Vec<OutputDevice>,
+    },
+    SleepTimerChanged {
+        timer: Option<SleepTimer>,
+    },
+    ShortcutsChanged {
+        shortcuts: Vec<Shortcut>,
+    },
+    ActionsChanged {
+        surface: String,
+    },
+    NspExported {
+        filter_id: FilterId,
+        document: String,
+        path: Option<String>,
+    },
+    ConfigExported {
+        document: String,
+    },
 
     /// Drive an external backend (Android). Not emitted in native mode.
-    Backend { command: BackendCommand },
+    Backend {
+        command: BackendCommand,
+    },
     /// Drive the OS media session (both platforms).
-    MediaSession { state: MediaSessionState },
+    MediaSession {
+        state: MediaSessionState,
+    },
 
-    Error { kind: ErrorKind, message: String, detail: Option<String> },
-    Log { level: String, target: String, message: String },
+    Error {
+        kind: ErrorKind,
+        message: String,
+        detail: Option<String>,
+    },
+    Log {
+        level: String,
+        target: String,
+        message: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

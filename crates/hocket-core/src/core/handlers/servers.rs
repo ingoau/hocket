@@ -79,7 +79,12 @@ impl Actor {
             },
         };
         let credential = wire_credential(&url, &username, &password);
-        self.install_server(info, client.clone() as Arc<dyn SubsonicApi>, Some(client), credential);
+        self.install_server(
+            info,
+            client.clone() as Arc<dyn SubsonicApi>,
+            Some(client),
+            credential,
+        );
         self.probe_server(&id);
     }
 
@@ -110,10 +115,7 @@ impl Actor {
         client: Option<Arc<Client>>,
         credential: WireCredential,
     ) {
-        let replaced = self
-            .server
-            .as_ref()
-            .is_some_and(|s| s.info.id != info.id);
+        let replaced = self.server.as_ref().is_some_and(|s| s.info.id != info.id);
         if replaced {
             // One server for now: switching identity closes the old session.
             self.unload();
@@ -232,7 +234,11 @@ impl Actor {
         });
     }
 
-    pub(crate) fn on_probed(&mut self, server_id: ServerId, result: Result<ServerCapabilities, String>) {
+    pub(crate) fn on_probed(
+        &mut self,
+        server_id: ServerId,
+        result: Result<ServerCapabilities, String>,
+    ) {
         let Some(s) = &mut self.server else { return };
         if s.info.id != server_id {
             return;
@@ -326,16 +332,18 @@ impl Actor {
         if let Some(s) = &mut self.server {
             if let Some(id) = s.sync_job.clone() {
                 if let Some(j) = jobs.iter().find(|j| j.id == id) {
-                    if matches!(j.state, JobState::Done | JobState::Failed | JobState::Cancelled) {
+                    if matches!(
+                        j.state,
+                        JobState::Done | JobState::Failed | JobState::Cancelled
+                    ) {
                         s.sync_job = None;
                     }
                 }
             }
         }
-        if jobs
-            .iter()
-            .any(|j| j.kind == JobKind::Download && matches!(j.state, JobState::Done | JobState::Failed))
-        {
+        if jobs.iter().any(|j| {
+            j.kind == JobKind::Download && matches!(j.state, JobState::Done | JobState::Failed)
+        }) {
             let pins = self.pins();
             self.emit(Event::PinsChanged { pins });
             let storage = self.storage_summary();
@@ -369,10 +377,12 @@ impl Actor {
             .flatten()
             .unwrap_or_default();
         let interval_ms =
-            self.settings.get_i64(crate::settings::keys::LIBRARY_SYNC_INTERVAL_MINUTES) as f64
+            self.settings
+                .get_i64(crate::settings::keys::LIBRARY_SYNC_INTERVAL_MINUTES) as f64
                 * 60_000.0;
         let reconcile_ms =
-            self.settings.get_i64(crate::settings::keys::LIBRARY_FULL_RECONCILE_DAYS) as f64
+            self.settings
+                .get_i64(crate::settings::keys::LIBRARY_FULL_RECONCILE_DAYS) as f64
                 * 86_400_000.0;
         let last = cursor
             .last_incremental_at
@@ -386,7 +396,11 @@ impl Actor {
         if !due {
             return;
         }
-        if self.network.as_ref().is_some_and(|n| n.kind == NetworkKind::Offline) {
+        if self
+            .network
+            .as_ref()
+            .is_some_and(|n| n.kind == NetworkKind::Offline)
+        {
             return;
         }
         let full = full || full_due;
@@ -488,7 +502,11 @@ impl Actor {
             return;
         }
         let Some(api) = self.api() else { return };
-        if self.network.as_ref().is_some_and(|n| n.kind == NetworkKind::Offline) {
+        if self
+            .network
+            .as_ref()
+            .is_some_and(|n| n.kind == NetworkKind::Offline)
+        {
             return;
         }
         if self.outbox.pending_count().unwrap_or(0) == 0 {
@@ -522,7 +540,10 @@ impl Actor {
                 );
             }
         }
-        if report.applied > 0 || !report.conflicts.is_empty() || !report.created_playlists.is_empty() {
+        if report.applied > 0
+            || !report.conflicts.is_empty()
+            || !report.created_playlists.is_empty()
+        {
             let mut tables = vec!["tracks".into(), "albums".into()];
             if !report.created_playlists.is_empty() {
                 tables.push("playlists".into());

@@ -50,16 +50,29 @@ async fn play_album_then_next_previous_and_undo() {
     assert!(t.backend.is_playing(), "the owner drives audio");
     let snap = t.snapshot().await;
     assert!(snap.transport.position.is_playing);
-    assert_eq!(snap.transport.lease.owner.as_deref(), Some(t.device_id.as_str()));
+    assert_eq!(
+        snap.transport.lease.owner.as_deref(),
+        Some(t.device_id.as_str())
+    );
     assert!(snap.media_session.is_playing);
-    assert_eq!(snap.media_session.metadata.as_ref().unwrap().title, "Track 0");
+    assert_eq!(
+        snap.media_session.metadata.as_ref().unwrap().title,
+        "Track 0"
+    );
     // Gapless: the follow-up was preloaded.
-    assert!(t.backend.log().iter().any(|c| matches!(c, ScriptedCall::Load { next: Some(_), .. })));
+    assert!(t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { next: Some(_), .. })));
 
     t.run(Command::Next).await;
     t.run_for(500.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
-    assert_eq!(t.backend.current().unwrap().0, t.queue().await.current.unwrap().item.key);
+    assert_eq!(
+        t.backend.current().unwrap().0,
+        t.queue().await.current.unwrap().item.key
+    );
 
     // Previous within 3 s goes back; nothing was consumed.
     t.run(Command::Previous).await;
@@ -84,7 +97,11 @@ async fn play_album_then_next_previous_and_undo() {
     t.run(Command::Undo).await;
     t.run_for(500.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
-    assert!(t.events.all().iter().any(|e| matches!(e, Event::Toast { toast } if toast.message.starts_with("Undid"))));
+    assert!(t
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::Toast { toast } if toast.message.starts_with("Undid"))));
     assert!(t.snapshot().await.undo.can_redo);
     t.run(Command::Redo).await;
     t.run_for(500.0).await;
@@ -115,12 +132,20 @@ async fn playing_something_new_saves_the_outgoing_queue_and_restore_lands_mid_tr
     assert_eq!(saved.len(), 1, "the outgoing album was kept");
     let sq = &saved[0];
     assert_eq!(sq.label, "Album al0");
-    assert!(sq.context.tracks.is_empty(), "ID-referenced snapshots omit the track list");
+    assert!(
+        sq.context.tracks.is_empty(),
+        "ID-referenced snapshots omit the track list"
+    );
     assert_eq!(sq.history.len(), 1);
     assert!(sq.position_ms >= 40_000);
-    assert!(t.events.all().iter().any(|e| matches!(e, Event::SavedQueuesChanged { queues } if queues.len() == 1)));
+    assert!(t
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::SavedQueuesChanged { queues } if queues.len() == 1)));
 
-    t.run(Command::RestoreSavedQueue { id: sq.id.clone() }).await;
+    t.run(Command::RestoreSavedQueue { id: sq.id.clone() })
+        .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t1");
@@ -170,19 +195,36 @@ async fn a_play_scrobbles_exactly_once_and_lands_in_history() {
     .await;
     // 200 s track: threshold is 100 s. Now playing goes out at start.
     t.run_for(2_000.0).await;
-    let now_playing = t.server.scrobbles().iter().filter(|s| !s.submission).count();
+    let now_playing = t
+        .server
+        .scrobbles()
+        .iter()
+        .filter(|s| !s.submission)
+        .count();
     assert_eq!(now_playing, 1);
     t.run_for(90_000.0).await;
-    assert_eq!(t.server.scrobbles().iter().filter(|s| s.submission).count(), 0);
+    assert_eq!(
+        t.server.scrobbles().iter().filter(|s| s.submission).count(),
+        0
+    );
     t.run_for(15_000.0).await;
-    let submitted: Vec<_> = t.server.scrobbles().into_iter().filter(|s| s.submission).collect();
+    let submitted: Vec<_> = t
+        .server
+        .scrobbles()
+        .into_iter()
+        .filter(|s| s.submission)
+        .collect();
     assert_eq!(submitted.len(), 1, "exactly one submission");
     assert_eq!(submitted[0].id, "t0");
     // Keep playing past the end: no second submission for t0, and t1 starts.
     t.run_for(100_000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
     assert_eq!(
-        t.server.scrobbles().iter().filter(|s| s.submission && s.id == "t0").count(),
+        t.server
+            .scrobbles()
+            .iter()
+            .filter(|s| s.submission && s.id == "t0")
+            .count(),
         1
     );
     match t.query(Query::RecentlyPlayed { limit: 10 }).await {
@@ -212,9 +254,15 @@ async fn seeking_does_not_count_as_listening() {
     })
     .await;
     t.run_for(10_000.0).await;
-    t.run(Command::SeekTo { position_ms: 150_000 }).await;
+    t.run(Command::SeekTo {
+        position_ms: 150_000,
+    })
+    .await;
     t.run_for(20_000.0).await;
-    assert_eq!(t.server.scrobbles().iter().filter(|s| s.submission).count(), 0);
+    assert_eq!(
+        t.server.scrobbles().iter().filter(|s| s.submission).count(),
+        0
+    );
     let played = t.snapshot().await.transport.played_ms;
     assert!(played < 40_000, "played {played}");
 }
@@ -238,8 +286,15 @@ async fn unplayable_items_are_skipped_with_a_notice() {
     t.run(Command::Next).await;
     t.run_for(2_000.0).await;
     let q = t.queue().await;
-    assert_eq!(q.current.as_ref().unwrap().track.id, "t2", "skipped to the next playable item");
-    assert!(q.history.iter().any(|e| e.item.track_id == "t1" && e.item.unavailable));
+    assert_eq!(
+        q.current.as_ref().unwrap().track.id,
+        "t2",
+        "skipped to the next playable item"
+    );
+    assert!(q
+        .history
+        .iter()
+        .any(|e| e.item.track_id == "t1" && e.item.unavailable));
     assert!(t
         .events
         .all()

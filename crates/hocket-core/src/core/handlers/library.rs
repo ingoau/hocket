@@ -17,7 +17,9 @@ use crate::lyrics::{ExternalLyricsProvider, LyricsRequest};
 use crate::outbox::{CancelOutcome, CasTarget, LoveTarget, Mutation, Prior};
 use crate::subsonic::convert::{album_from_id3, artist_from_id3, summary_of, track_from_child};
 use crate::subsonic::SubsonicApi;
-use crate::undo::{CasMutation, CasOutcome, CasResult, RemoteItem, RemoteTarget, RemoteUndo, RemoteValue};
+use crate::undo::{
+    CasMutation, CasOutcome, CasResult, RemoteItem, RemoteTarget, RemoteUndo, RemoteValue,
+};
 
 impl Actor {
     // -- ratings and loves -----------------------------------------------------------
@@ -69,9 +71,9 @@ impl Actor {
         let mut items = vec![];
         let mut ids = vec![];
         let mut love_targets = vec![];
-        let threshold = self
-            .settings
-            .get_i64(crate::settings::keys::RATINGS_LOVE_BRIDGE_THRESHOLD) as u32;
+        let threshold =
+            self.settings
+                .get_i64(crate::settings::keys::RATINGS_LOVE_BRIDGE_THRESHOLD) as u32;
         let bridge = self
             .settings
             .get_bool(crate::settings::keys::RATINGS_LOVE_BRIDGE_ENABLED);
@@ -130,11 +132,21 @@ impl Actor {
         for t in targets {
             let (prior, target) = match &t {
                 RatingTarget::Track { id } => (
-                    self.db.track(id).ok().flatten().map(|t| t.loved).unwrap_or(false),
+                    self.db
+                        .track(id)
+                        .ok()
+                        .flatten()
+                        .map(|t| t.loved)
+                        .unwrap_or(false),
                     RemoteTarget::Track { id: id.clone() },
                 ),
                 RatingTarget::Album { id } => (
-                    self.db.album(id).ok().flatten().map(|a| a.loved).unwrap_or(false),
+                    self.db
+                        .album(id)
+                        .ok()
+                        .flatten()
+                        .map(|a| a.loved)
+                        .unwrap_or(false),
                     RemoteTarget::Album { id: id.clone() },
                 ),
             };
@@ -187,9 +199,16 @@ impl Actor {
         );
         self.push_remote_undo(
             "loveArtist",
-            if loved { "Love artist" } else { "Unlove artist" }.to_string(),
+            if loved {
+                "Love artist"
+            } else {
+                "Unlove artist"
+            }
+            .to_string(),
             vec![RemoteItem {
-                target: RemoteTarget::Artist { id: artist_id.clone() },
+                target: RemoteTarget::Artist {
+                    id: artist_id.clone(),
+                },
                 prior: RemoteValue::Loved(prior),
                 set: RemoteValue::Loved(loved),
             }],
@@ -199,7 +218,12 @@ impl Actor {
 
     // -- playlists ---------------------------------------------------------------------
 
-    pub(crate) fn create_playlist(&mut self, server_id: ServerId, name: String, track_ids: Vec<TrackId>) {
+    pub(crate) fn create_playlist(
+        &mut self,
+        server_id: ServerId,
+        name: String,
+        track_ids: Vec<TrackId>,
+    ) {
         if self.server_id().as_deref() != Some(server_id.as_str()) {
             self.toast("Unknown server", None);
             return;
@@ -285,7 +309,12 @@ impl Actor {
             .unwrap_or(false)
     }
 
-    pub(crate) fn playlist_add(&mut self, playlist_id: PlaylistId, track_ids: Vec<TrackId>, at_index: Option<u32>) {
+    pub(crate) fn playlist_add(
+        &mut self,
+        playlist_id: PlaylistId,
+        track_ids: Vec<TrackId>,
+        at_index: Option<u32>,
+    ) {
         if self.playlist_is_smart(&playlist_id) {
             self.toast("Smart playlists are read-only", None);
             return;
@@ -372,7 +401,12 @@ impl Actor {
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
-    pub(crate) fn playlist_move(&mut self, playlist_id: PlaylistId, from_index: u32, to_index: u32) {
+    pub(crate) fn playlist_move(
+        &mut self,
+        playlist_id: PlaylistId,
+        from_index: u32,
+        to_index: u32,
+    ) {
         if self.playlist_is_smart(&playlist_id) {
             self.toast("Smart playlists are read-only", None);
             return;
@@ -407,7 +441,13 @@ impl Actor {
 
     // -- undo tier 2: compare-and-swap ---------------------------------------------------
 
-    pub(crate) fn run_cas(&mut self, entry_id: &str, label: &str, mutations: Vec<CasMutation>, redo: bool) {
+    pub(crate) fn run_cas(
+        &mut self,
+        entry_id: &str,
+        label: &str,
+        mutations: Vec<CasMutation>,
+        redo: bool,
+    ) {
         let total = mutations.len();
         self.pending_cas.insert(
             entry_id.to_string(),
@@ -425,7 +465,10 @@ impl Actor {
         for m in mutations {
             // Still in the outbox: cancel is the exact inverse.
             let key = cas_target_key(&m);
-            if let Some(id) = key.as_ref().and_then(|k| self.outbox_entries.get(k).cloned()) {
+            if let Some(id) = key
+                .as_ref()
+                .and_then(|k| self.outbox_entries.get(k).cloned())
+            {
                 match self.outbox.cancel_if_unsent(&id) {
                     Ok(CancelOutcome::Cancelled) => {
                         self.outbox_entries.remove(key.as_ref().unwrap());
@@ -438,7 +481,13 @@ impl Actor {
             }
             match (cas_target(&m), &m.expect, cas_new(&m), api.clone()) {
                 (Some(target), RemoteValue::Rating(exp), Some(Prior::Rating(new)), Some(api)) => {
-                    self.spawn_cas(entry_id, api, target, Prior::Rating(*exp), Prior::Rating(new));
+                    self.spawn_cas(
+                        entry_id,
+                        api,
+                        target,
+                        Prior::Rating(*exp),
+                        Prior::Rating(new),
+                    );
                 }
                 (Some(target), RemoteValue::Loved(exp), Some(Prior::Loved(new)), Some(api)) => {
                     self.spawn_cas(entry_id, api, target, Prior::Loved(*exp), Prior::Loved(new));
@@ -454,7 +503,14 @@ impl Actor {
         self.finish_cas(entry_id);
     }
 
-    fn spawn_cas(&mut self, entry_id: &str, api: Arc<dyn SubsonicApi>, target: CasTarget, expected: Prior, new: Prior) {
+    fn spawn_cas(
+        &mut self,
+        entry_id: &str,
+        api: Arc<dyn SubsonicApi>,
+        target: CasTarget,
+        expected: Prior,
+        new: Prior,
+    ) {
         let outbox = self.outbox.clone();
         let tx = self.tx.clone();
         let entry_id = entry_id.to_string();
@@ -462,7 +518,10 @@ impl Actor {
         let local_target = target.clone();
         let local_new = new.clone();
         self.spawn(async move {
-            let result = match outbox.execute_cas(api.as_ref(), target, expected, new).await {
+            let result = match outbox
+                .execute_cas(api.as_ref(), target, expected, new)
+                .await
+            {
                 Ok(crate::outbox::CasOutcome::Applied) => {
                     apply_cas_locally(&db, &local_target, &local_new);
                     CasResult::Applied
@@ -504,7 +563,9 @@ impl Actor {
         if !done {
             return;
         }
-        let Some(p) = self.pending_cas.remove(entry_id) else { return };
+        let Some(p) = self.pending_cas.remove(entry_id) else {
+            return;
+        };
         let note = p.outcome.note();
         self.undo.set_note(entry_id, note.clone());
         let verb = if p.redo { "Redid" } else { "Undid" };
@@ -541,7 +602,10 @@ impl Actor {
             self.toast("Add a server first", None);
             return;
         };
-        let transcode = transcode || self.settings.get_bool(crate::settings::keys::DOWNLOADS_TRANSCODE);
+        let transcode = transcode
+            || self
+                .settings
+                .get_bool(crate::settings::keys::DOWNLOADS_TRANSCODE);
         match self.downloads.pin(&sid, &target, transcode) {
             Ok(Some(spec)) => {
                 if let Err(e) = self.jobs.submit(spec) {
@@ -595,7 +659,8 @@ impl Actor {
         let saved: Vec<Filter> = self
             .db
             .with_conn(|c| {
-                let mut st = c.prepare_cached("SELECT json FROM filters ORDER BY created_at ASC")?;
+                let mut st =
+                    c.prepare_cached("SELECT json FROM filters ORDER BY created_at ASC")?;
                 let rows = st.query_map([], |r| r.get::<_, String>(0))?;
                 Ok(rows
                     .collect::<Result<Vec<_>, _>>()?
@@ -687,19 +752,22 @@ impl Actor {
         let capability = filters::capability(filter, self.server_caps());
         let server_id = self.server_id().unwrap_or_default();
         let now = self.now();
-        let count: u32 = filters::count_for_node(Some(&filter.root), &server_id, now)
-            .ok()
-            .and_then(|q| {
-                self.db
-                    .with_conn(|c| {
-                        Ok(c.query_row(&q.sql, rusqlite::params_from_iter(q.params.iter()), |r| {
-                            r.get::<_, i64>(0)
-                        })?)
-                    })
-                    .ok()
-            })
-            .unwrap_or(0)
-            .max(0) as u32;
+        let count: u32 =
+            filters::count_for_node(Some(&filter.root), &server_id, now)
+                .ok()
+                .and_then(|q| {
+                    self.db
+                        .with_conn(|c| {
+                            Ok(c.query_row(
+                                &q.sql,
+                                rusqlite::params_from_iter(q.params.iter()),
+                                |r| r.get::<_, i64>(0),
+                            )?)
+                        })
+                        .ok()
+                })
+                .unwrap_or(0)
+                .max(0) as u32;
         let sample = filters::select_for_node(
             Some(&filter.root),
             filter.sort,
@@ -734,7 +802,12 @@ impl Actor {
         }
     }
 
-    pub(crate) fn create_static_playlist(&mut self, server_id: ServerId, filter: Filter, name: String) {
+    pub(crate) fn create_static_playlist(
+        &mut self,
+        server_id: ServerId,
+        filter: Filter,
+        name: String,
+    ) {
         let ids = self.filter_track_ids(&filter, &server_id);
         if ids.is_empty() {
             self.toast("The filter matches nothing right now", None);
@@ -743,13 +816,21 @@ impl Actor {
         self.create_playlist(server_id, name, ids);
     }
 
-    pub(crate) fn create_smart_playlist(&mut self, server_id: ServerId, filter: Filter, name: String) {
+    pub(crate) fn create_smart_playlist(
+        &mut self,
+        server_id: ServerId,
+        filter: Filter,
+        name: String,
+    ) {
         let Some(api) = self.api() else {
             self.toast("Add a server first", None);
             return;
         };
         if !self.server_caps().native_api {
-            self.toast("This server doesn't expose the native API needed for smart playlists", None);
+            self.toast(
+                "This server doesn't expose the native API needed for smart playlists",
+                None,
+            );
             return;
         }
         let nsp = match filters::to_nsp(&filter, self.server_caps()) {
@@ -957,7 +1038,12 @@ impl Actor {
         });
     }
 
-    pub(crate) fn on_lyrics_fetched(&mut self, _server_id: ServerId, track_id: TrackId, lyrics: Option<Lyrics>) {
+    pub(crate) fn on_lyrics_fetched(
+        &mut self,
+        _server_id: ServerId,
+        track_id: TrackId,
+        lyrics: Option<Lyrics>,
+    ) {
         let lyrics = lyrics.map(|mut l| {
             crate::lyrics::set_user_offset(&mut l, self.lyrics_offset(&track_id));
             l
@@ -991,7 +1077,9 @@ impl Actor {
         });
         let thin = (local.tracks.len() as u32) < limit;
         let wanted = include_server
-            && self.settings.get_bool(crate::settings::keys::SEARCH_INCLUDE_SERVER)
+            && self
+                .settings
+                .get_bool(crate::settings::keys::SEARCH_INCLUDE_SERVER)
             && !query.trim().is_empty()
             && thin
             && !self
@@ -1005,7 +1093,9 @@ impl Actor {
                 let username = self.server.as_ref().map(|s| s.info.username.clone());
                 self.spawn(async move {
                     let page = crate::subsonic::Search3Page::all(limit.clamp(1, 100));
-                    let Ok(r) = api.search3(&query, page).await else { return };
+                    let Ok(r) = api.search3(&query, page).await else {
+                        return;
+                    };
                     let results = SearchResults {
                         request_id,
                         query,
@@ -1057,7 +1147,10 @@ impl Actor {
             .map(|t| (t.id.clone(), t))
             .collect();
         let album_ids: Vec<String> = tracks.values().filter_map(|t| t.album_id.clone()).collect();
-        let artist_ids: Vec<String> = tracks.values().filter_map(|t| t.artist_id.clone()).collect();
+        let artist_ids: Vec<String> = tracks
+            .values()
+            .filter_map(|t| t.artist_id.clone())
+            .collect();
         let albums: HashMap<String, Album> = self
             .db
             .albums_by_ids(&album_ids)
@@ -1160,11 +1253,17 @@ fn cas_new(m: &CasMutation) -> Option<Prior> {
 
 fn apply_cas_locally(db: &Db, target: &CasTarget, new: &Prior) {
     let _ = match (target, new) {
-        (CasTarget::Rating(RatingTarget::Track { id }), Prior::Rating(r)) => db.set_track_rating(id, *r),
-        (CasTarget::Rating(RatingTarget::Album { id }), Prior::Rating(r)) => db.set_album_rating(id, *r),
+        (CasTarget::Rating(RatingTarget::Track { id }), Prior::Rating(r)) => {
+            db.set_track_rating(id, *r)
+        }
+        (CasTarget::Rating(RatingTarget::Album { id }), Prior::Rating(r)) => {
+            db.set_album_rating(id, *r)
+        }
         (CasTarget::Loved(LoveTarget::Track { id }), Prior::Loved(l)) => db.set_track_loved(id, *l),
         (CasTarget::Loved(LoveTarget::Album { id }), Prior::Loved(l)) => db.set_album_loved(id, *l),
-        (CasTarget::Loved(LoveTarget::Artist { id }), Prior::Loved(l)) => db.set_artist_loved(id, *l),
+        (CasTarget::Loved(LoveTarget::Artist { id }), Prior::Loved(l)) => {
+            db.set_artist_loved(id, *l)
+        }
         _ => Ok(false),
     };
 }
@@ -1181,9 +1280,8 @@ pub(crate) struct DbAutoplaySource {
 
 fn net_err(e: crate::subsonic::SubsonicError) -> AutoplayError {
     match e {
-        crate::subsonic::SubsonicError::Unsupported(_) | crate::subsonic::SubsonicError::NotFound(_) => {
-            AutoplayError::Unsupported
-        }
+        crate::subsonic::SubsonicError::Unsupported(_)
+        | crate::subsonic::SubsonicError::NotFound(_) => AutoplayError::Unsupported,
         crate::subsonic::SubsonicError::Network(m) => AutoplayError::Network(m),
         other => AutoplayError::Server(other.to_string()),
     }
@@ -1199,7 +1297,11 @@ impl AutoplaySource for DbAutoplaySource {
             if !self.api.capabilities().sonic_similarity {
                 return Err(AutoplayError::Unsupported);
             }
-            let list = self.api.sonic_similar_tracks(track_id, count).await.map_err(net_err)?;
+            let list = self
+                .api
+                .sonic_similar_tracks(track_id, count)
+                .await
+                .map_err(net_err)?;
             Ok(list
                 .into_iter()
                 .map(|m| ScoredTrack {
@@ -1216,7 +1318,11 @@ impl AutoplaySource for DbAutoplaySource {
         count: u32,
     ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
-            let list = self.api.similar_songs2(track_id, count).await.map_err(net_err)?;
+            let list = self
+                .api
+                .similar_songs2(track_id, count)
+                .await
+                .map_err(net_err)?;
             Ok(list
                 .iter()
                 .map(|c| summary_of(&track_from_child(&self.server_id, c)))
@@ -1231,7 +1337,11 @@ impl AutoplaySource for DbAutoplaySource {
         count: u32,
     ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
-            let list = self.api.top_songs(artist_name, count).await.map_err(net_err)?;
+            let list = self
+                .api
+                .top_songs(artist_name, count)
+                .await
+                .map_err(net_err)?;
             Ok(list
                 .iter()
                 .map(|c| summary_of(&track_from_child(&self.server_id, c)))
@@ -1239,7 +1349,10 @@ impl AutoplaySource for DbAutoplaySource {
         })
     }
 
-    fn random_songs<'a>(&'a self, count: u32) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
+    fn random_songs<'a>(
+        &'a self,
+        count: u32,
+    ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
             let list = self
                 .api

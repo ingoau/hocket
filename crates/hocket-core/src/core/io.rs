@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use tokio::sync::mpsc;
 
 use crate::api::CoreConfig;
 use crate::connect::discovery::{Discovery, NoDiscovery};
@@ -31,10 +30,16 @@ pub trait Listener: Send {
 /// The I/O the actor performs on the engine's behalf.
 pub trait ConnectIo: Send + Sync {
     /// Try the candidate URLs in order and return the first connection.
-    fn connect(&self, peer: PeerId, candidates: Vec<String>)
-        -> BoxFuture<'static, Result<Connection, TransportError>>;
+    fn connect(
+        &self,
+        peer: PeerId,
+        candidates: Vec<String>,
+    ) -> BoxFuture<'static, Result<Connection, TransportError>>;
     /// Bind the LAN listener.
-    fn listen(&self, ids: Arc<PeerIds>) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>>;
+    fn listen(
+        &self,
+        ids: Arc<PeerIds>,
+    ) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>>;
     /// A fresh discovery instance (started by the actor).
     fn discovery(&self) -> Box<dyn Discovery>;
     /// Proxy a Subsonic `ping` with the credential; `true` when the server accepts it.
@@ -85,7 +90,10 @@ impl ConnectIo for RealIo {
         Box::pin(async move { connect_first(&WsTransport, peer, &candidates).await })
     }
 
-    fn listen(&self, ids: Arc<PeerIds>) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>> {
+    fn listen(
+        &self,
+        ids: Arc<PeerIds>,
+    ) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>> {
         Box::pin(async move {
             let l = LanListener::bind(0, ids).await?;
             Ok(Box::new(l) as Box<dyn Listener>)
@@ -136,6 +144,7 @@ pub mod memory {
     use crate::connect::wire::WireMessage;
     use parking_lot::Mutex;
     use std::collections::HashMap;
+    use tokio::sync::mpsc;
 
     #[derive(Default)]
     struct Hub {

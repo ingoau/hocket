@@ -8,7 +8,9 @@ use std::collections::HashMap;
 
 use crate::actions::{Resolver, StateView};
 use crate::api::*;
-use crate::connect::engine::{DocChange, Engine, EngineConfig, Input, Output, PersistedConnectState};
+use crate::connect::engine::{
+    DocChange, Engine, EngineConfig, Input, Output, PersistedConnectState,
+};
 use crate::connect::session_adapter::TunableReducer;
 use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
@@ -60,10 +62,7 @@ impl Actor {
         let Some(server) = &self.server else { return };
         let scope = scope_key(&server.info.url, &server.info.username);
         let credential = server.credential.clone();
-        let doc = match self
-            .db
-            .saved_state_get_raw(&format!("session:{scope}"))
-        {
+        let doc = match self.db.saved_state_get_raw(&format!("session:{scope}")) {
             Ok(Some(json)) => match crate::session::load(&json) {
                 Ok(d) if crate::session::validate(&d).is_ok() && d.scope == scope => d,
                 Ok(_) => {
@@ -209,7 +208,9 @@ impl Actor {
 
     /// A public queue command: undo snapshot around the op.
     pub(crate) fn queue_command(&mut self, cmd: Command) {
-        let Some(op) = SessionOp::from_command(&cmd) else { return };
+        let Some(op) = SessionOp::from_command(&cmd) else {
+            return;
+        };
         let label = command_label(&cmd);
         self.undoable_op(op, &label, command_kind(&cmd));
     }
@@ -243,7 +244,12 @@ impl Actor {
         }
         let now = self.now();
         let id = self.undo.push(
-            Box::new(SessionUndo::new(kind, label, before_snapshot.clone(), after)),
+            Box::new(SessionUndo::new(
+                kind,
+                label,
+                before_snapshot.clone(),
+                after,
+            )),
             self.selection.clone(),
             now,
         );
@@ -277,7 +283,9 @@ impl Actor {
             Output::StopListener => self.io_stop_listener(),
             Output::Advertise(a) => self.io_advertise(a),
             Output::VerifyCredential { peer, credential } => self.io_verify(peer, credential),
-            Output::DocumentChanged { document, cause } => self.on_document_changed(document, cause),
+            Output::DocumentChanged { document, cause } => {
+                self.on_document_changed(document, cause)
+            }
             Output::TransportChanged { transport } => {
                 self.last_transport = transport;
                 self.emit_transport();
@@ -306,10 +314,15 @@ impl Actor {
                 });
             }
             Output::FilePreviousStateAsSavedQueue { document, reason } => {
-                self.log("info", format!("filing diverged state as a saved queue: {reason}"));
+                self.log(
+                    "info",
+                    format!("filing diverged state as a saved queue: {reason}"),
+                );
                 let now = self.now();
                 let position = document.transport.position.position_ms;
-                if let Some(mut sq) = saved::snapshot(&document, position, now, crate::util::new_id()) {
+                if let Some(mut sq) =
+                    saved::snapshot(&document, position, now, crate::util::new_id())
+                {
                     sq.updated_at = self.session_now();
                     sq.label = format!("{} (from {})", sq.label, self.cfg.device_name);
                     sq.cover_art = self.context_cover(&sq.context);
@@ -334,7 +347,15 @@ impl Actor {
                 started_at,
                 scrobbled,
                 play,
-            } => self.take_transport(key, track_id, position_ms, played_ms, started_at, scrobbled, play),
+            } => self.take_transport(
+                key,
+                track_id,
+                position_ms,
+                played_ms,
+                started_at,
+                scrobbled,
+                play,
+            ),
             Output::ReleaseTransport => self.release_transport(),
             Output::TransportCommand(cmd) => self.apply_transport_command(cmd),
             Output::Scrobble {
@@ -343,7 +364,10 @@ impl Actor {
                 allowed,
             } => self.on_scrobble_verdict(track_id, started_at, allowed),
             Output::SavedQueuesMerged(list) => {
-                let ours = self.doc().map(|d| d.saved_queues.clone()).unwrap_or_default();
+                let ours = self
+                    .doc()
+                    .map(|d| d.saved_queues.clone())
+                    .unwrap_or_default();
                 if !same_saved_set(&ours, &list) {
                     self.local_op(SessionOp::MergeSavedQueues { remote: list });
                 }
@@ -381,7 +405,9 @@ impl Actor {
             DocChange::Local => self.pending_effects.take().unwrap_or_default(),
             _ => vec![],
         };
-        let old_key = old.as_ref().and_then(|d| d.current.as_ref().map(|c| c.key.clone()));
+        let old_key = old
+            .as_ref()
+            .and_then(|d| d.current.as_ref().map(|c| c.key.clone()));
         let new_key = document.current.as_ref().map(|c| c.key.clone());
         let owns = self.owns_transport();
         let nobody_owns = self
@@ -434,7 +460,8 @@ impl Actor {
                             _ => self.playback.playing || self.playback.awaiting_transition,
                         };
                         self.load_item(&item, position, keep_playing, None);
-                    } else if nobody_owns && cause == DocChange::Local && self.playback.want_playing {
+                    } else if nobody_owns && cause == DocChange::Local && self.playback.want_playing
+                    {
                         // Nobody is playing and the user pressed play here.
                         self.playback.doc_key = Some(item.key.clone());
                         self.playback.track = self.track_or_bare(&item.track_id);
@@ -536,7 +563,10 @@ impl Actor {
         exclude.extend(recent_ids);
         let seeds = crate::autoplay::SeedInput {
             recent,
-            context: doc.context.as_ref().map(|c| crate::autoplay::ContextClass::of(&c.kind)),
+            context: doc
+                .context
+                .as_ref()
+                .map(|c| crate::autoplay::ContextClass::of(&c.kind)),
             exclude,
         };
         let source = crate::core::handlers::library::DbAutoplaySource {
@@ -550,11 +580,13 @@ impl Actor {
         self.spawn(async move {
             let mut engine = engine;
             let picks = engine.next_batch(&source, &seeds, AUTOPLAY_BATCH).await;
-            let _ = tx.send(crate::core::ActorMsg::Internal(crate::core::Internal::Autoplay {
-                engine,
-                picks,
-                generation,
-            }));
+            let _ = tx.send(crate::core::ActorMsg::Internal(
+                crate::core::Internal::Autoplay {
+                    engine,
+                    picks,
+                    generation,
+                },
+            ));
         });
     }
 
@@ -566,9 +598,11 @@ impl Actor {
     ) {
         self.autoplay = Some(engine);
         if let Some(a) = &self.autoplay {
-            let _ = self
-                .db
-                .saved_state_set("autoplay:exclusion", &a.exclusion_ids(), self.clock.as_ref());
+            let _ = self.db.saved_state_set(
+                "autoplay:exclusion",
+                &a.exclusion_ids(),
+                self.clock.as_ref(),
+            );
         }
         if generation != self.autoplay_generation {
             return;
@@ -647,7 +681,11 @@ impl Actor {
             None
         };
         let label = format!("Restore {}", sq.label);
-        self.undoable_op(SessionOp::RestoreSavedQueue { id, tracks }, &label, "restoreSavedQueue");
+        self.undoable_op(
+            SessionOp::RestoreSavedQueue { id, tracks },
+            &label,
+            "restoreSavedQueue",
+        );
     }
 
     pub(crate) fn previous(&mut self) {
@@ -671,8 +709,12 @@ impl Actor {
     }
 
     pub(crate) fn save_queue_as_playlist(&mut self, saved_queue_id: Option<String>, name: String) {
-        let Some(doc) = self.doc().cloned() else { return };
-        let Some(server_id) = self.server_id() else { return };
+        let Some(doc) = self.doc().cloned() else {
+            return;
+        };
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
         let ids: Vec<TrackId> = match saved_queue_id {
             Some(id) => {
                 let Some(sq) = doc.saved_queues.iter().find(|q| q.id == id) else {
@@ -802,9 +844,7 @@ impl Actor {
             }
         }
         let map = self.summaries(&ids);
-        derived.into_view(|id| {
-            map.get(id).cloned().unwrap_or_else(|| bare_summary(id))
-        })
+        derived.into_view(|id| map.get(id).cloned().unwrap_or_else(|| bare_summary(id)))
     }
 
     pub(crate) fn summaries(&self, ids: &[TrackId]) -> HashMap<TrackId, TrackSummary> {
@@ -903,7 +943,8 @@ impl Actor {
             server_id: self.server_id(),
             has_session: doc.is_some_and(|d| d.context.is_some()),
             has_current: current.is_some(),
-            is_playing: self.playback.playing || self.last_transport.position.is_playing && !self.owns_transport(),
+            is_playing: self.playback.playing
+                || self.last_transport.position.is_playing && !self.owns_transport(),
             can_undo: self.undo.can_undo(),
             can_redo: self.undo.can_redo(),
             shuffle: doc.is_some_and(|d| d.shuffle.is_some()),
@@ -932,7 +973,11 @@ impl Actor {
 
     // -- context resolution -----------------------------------------------------
 
-    pub(crate) fn resolve_context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
+    pub(crate) fn resolve_context_tracks(
+        &self,
+        server_id: &str,
+        kind: &ContextKind,
+    ) -> Vec<TrackId> {
         let ids = |r: Result<Vec<Track>, crate::db::DbError>| -> Vec<TrackId> {
             r.map(|v| v.into_iter().map(|t| t.id).collect())
                 .unwrap_or_default()
@@ -980,9 +1025,12 @@ impl Actor {
     pub(crate) fn context_cover(&self, ctx: &QueueContext) -> Option<String> {
         match &ctx.kind {
             ContextKind::Album { id } => self.db.album(id).ok().flatten().and_then(|a| a.cover_art),
-            ContextKind::Playlist { id } => {
-                self.db.playlist(id).ok().flatten().and_then(|p| p.cover_art)
-            }
+            ContextKind::Playlist { id } => self
+                .db
+                .playlist(id)
+                .ok()
+                .flatten()
+                .and_then(|p| p.cover_art),
             _ => ctx
                 .tracks
                 .first()

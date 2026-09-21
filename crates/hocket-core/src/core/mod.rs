@@ -186,6 +186,7 @@ pub(crate) enum BackendChoice {
     Auto,
     /// A backend the caller built (tests). Its report sink is wired to the
     /// actor through `sink`; `poll` is called on every tick.
+    #[cfg_attr(not(any(feature = "sim", test)), allow(dead_code))]
     Provided {
         backend: Arc<dyn PlaybackBackend>,
         sink: LateSink,
@@ -304,7 +305,10 @@ impl Core {
     }
 
     /// Construct a core on an existing runtime (napi, tests, coordinator).
-    pub fn on_runtime(config: CoreConfig, handle: tokio::runtime::Handle) -> Result<Core, CoreError> {
+    pub fn on_runtime(
+        config: CoreConfig,
+        handle: tokio::runtime::Handle,
+    ) -> Result<Core, CoreError> {
         let deps = Deps::production(&config);
         Self::with_runtime(config, handle, None, deps)
     }

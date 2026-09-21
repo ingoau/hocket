@@ -136,15 +136,19 @@ impl ConnectIo for NoNet {
         &self,
         _peer: crate::connect::PeerId,
         _candidates: Vec<String>,
-    ) -> futures::future::BoxFuture<'static, Result<crate::connect::transport::Connection, crate::connect::transport::TransportError>>
-    {
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<crate::connect::transport::Connection, crate::connect::transport::TransportError>,
+    > {
         Box::pin(async { Err(crate::connect::transport::TransportError::NoCandidate) })
     }
     fn listen(
         &self,
         _ids: Arc<crate::connect::transport::PeerIds>,
-    ) -> futures::future::BoxFuture<'static, Result<Box<dyn super::io::Listener>, crate::connect::transport::TransportError>>
-    {
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<Box<dyn super::io::Listener>, crate::connect::transport::TransportError>,
+    > {
         Box::pin(async {
             Err(crate::connect::transport::TransportError::Bind {
                 addr: "none".into(),
@@ -155,7 +159,10 @@ impl ConnectIo for NoNet {
     fn discovery(&self) -> Box<dyn crate::connect::discovery::Discovery> {
         Box::new(crate::connect::discovery::NoDiscovery)
     }
-    fn verify(&self, _credential: crate::connect::wire::Credential) -> futures::future::BoxFuture<'static, bool> {
+    fn verify(
+        &self,
+        _credential: crate::connect::wire::Credential,
+    ) -> futures::future::BoxFuture<'static, bool> {
         Box::pin(async { true })
     }
 }
@@ -193,7 +200,7 @@ pub struct TestCore {
     pub events: Arc<EventLog>,
     pub device_id: String,
     pub server_id: String,
-    _dir: tempfile::TempDir,
+    pub dir: tempfile::TempDir,
 }
 
 impl TestCore {
@@ -259,7 +266,7 @@ impl TestCore {
             events,
             device_id: format!("dev-{name}"),
             server_id,
-            _dir: dir,
+            dir,
         }
     }
 

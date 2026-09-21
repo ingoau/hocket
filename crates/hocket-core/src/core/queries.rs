@@ -84,15 +84,15 @@ impl Actor {
             Query::AlbumTracks { id } => {
                 QueryResult::TrackList(self.db.album_tracks(&id).unwrap_or_default())
             }
-            Query::Artists { server_id, page } => QueryResult::Artists(
-                self.db
-                    .artist_page(&server_id, page.clone())
-                    .unwrap_or(ArtistPage {
+            Query::Artists { server_id, page } => {
+                QueryResult::Artists(self.db.artist_page(&server_id, page.clone()).unwrap_or(
+                    ArtistPage {
                         items: vec![],
                         offset: page.offset,
                         total: 0,
-                    }),
-            ),
+                    },
+                ))
+            }
             Query::Artist { id } => QueryResult::ArtistDetail(self.db.artist(&id).ok().flatten()),
             Query::ArtistTopSongs { id, count } => {
                 self.artist_top_songs(id, count, reply);
@@ -107,22 +107,28 @@ impl Actor {
             Query::Playlist { id } => {
                 QueryResult::PlaylistDetail(self.db.playlist(&id).ok().flatten())
             }
-            Query::PlaylistTracks { id, page } => QueryResult::Tracks(
-                self.db
-                    .playlist_track_page(&id, page.clone())
-                    .unwrap_or(TrackPage {
+            Query::PlaylistTracks { id, page } => {
+                QueryResult::Tracks(self.db.playlist_track_page(&id, page.clone()).unwrap_or(
+                    TrackPage {
                         items: vec![],
                         offset: page.offset,
                         total: 0,
-                    }),
-            ),
+                    },
+                ))
+            }
             Query::Search {
                 server_id,
                 query,
                 limit,
                 include_server,
                 request_id,
-            } => QueryResult::Search(self.search(server_id, query, limit, include_server, request_id)),
+            } => QueryResult::Search(self.search(
+                server_id,
+                query,
+                limit,
+                include_server,
+                request_id,
+            )),
             Query::Queue => QueryResult::Queue(self.queue_view()),
             Query::SavedQueues => QueryResult::SavedQueues(
                 self.doc()
@@ -165,7 +171,10 @@ impl Actor {
             Query::OutputDevices => QueryResult::OutputDevices(self.output_devices.clone()),
             Query::Connection => QueryResult::Connection(self.connection_state()),
             Query::Devices => QueryResult::Devices(
-                self.engine.as_ref().map(|e| e.devices()).unwrap_or_default(),
+                self.engine
+                    .as_ref()
+                    .map(|e| e.devices())
+                    .unwrap_or_default(),
             ),
             Query::UndoState => QueryResult::Undo(self.undo.state()),
             Query::Actions { surface, target } => {

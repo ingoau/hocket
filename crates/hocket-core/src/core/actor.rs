@@ -210,9 +210,7 @@ impl Actor {
             cfg.platform,
         );
         let caches = Caches::new(db.clone(), clock.clone(), &cache_dir);
-        let seed = deps
-            .seed
-            .unwrap_or_else(|| db.random_seed().unsigned_abs());
+        let seed = deps.seed.unwrap_or_else(|| db.random_seed().unsigned_abs());
         let entropy: Arc<dyn Entropy> = match deps.seed {
             Some(s) => Arc::new(DeterministicEntropy::new(s)),
             None => Arc::new(SystemEntropy),
@@ -566,9 +564,11 @@ impl Actor {
             tracing::warn!(error = %e, "settings save on shutdown");
         }
         if let Some(a) = &self.autoplay {
-            let _ = self
-                .db
-                .saved_state_set("autoplay:exclusion", &a.exclusion_ids(), self.clock.as_ref());
+            let _ = self.db.saved_state_set(
+                "autoplay:exclusion",
+                &a.exclusion_ids(),
+                self.clock.as_ref(),
+            );
         }
         if let Some(d) = &mut self.discovery {
             d.stop();
@@ -731,7 +731,9 @@ impl Actor {
         }
         self.doc_dirty_since = None;
         let Some(engine) = &self.engine else { return };
-        let Some(scope) = self.scope.clone() else { return };
+        let Some(scope) = self.scope.clone() else {
+            return;
+        };
         let sync_base = engine.sync_base().cloned();
         let saved = crate::session::save(engine.document());
         match saved {
@@ -744,27 +746,37 @@ impl Actor {
                     self.error(ErrorKind::Storage, "save session", Some(e.to_string()));
                 }
             }
-            Err(e) => self.error(ErrorKind::Internal, "serialise session", Some(e.to_string())),
+            Err(e) => self.error(
+                ErrorKind::Internal,
+                "serialise session",
+                Some(e.to_string()),
+            ),
         }
         let state = PersistedConnectState { sync_base };
         if let Err(e) =
             self.db
                 .saved_state_set(&format!("connect:{scope}"), &state, self.clock.as_ref())
         {
-            self.error(ErrorKind::Storage, "save connect state", Some(e.to_string()));
+            self.error(
+                ErrorKind::Storage,
+                "save connect state",
+                Some(e.to_string()),
+            );
         }
     }
 
     pub(crate) fn save_position(&mut self) {
         self.position_saved_at = self.now();
-        let Some(scope) = self.scope.clone() else { return };
+        let Some(scope) = self.scope.clone() else {
+            return;
+        };
         let pos = SavedPosition {
             key: self.playback.doc_key.clone(),
             position_ms: self.playback.position_now(self.now()),
         };
-        if let Err(e) = self
-            .db
-            .saved_state_set(&format!("position:{scope}"), &pos, self.clock.as_ref())
+        if let Err(e) =
+            self.db
+                .saved_state_set(&format!("position:{scope}"), &pos, self.clock.as_ref())
         {
             self.log("warn", format!("save position: {e}"));
         }
@@ -819,7 +831,10 @@ impl Actor {
     }
 
     pub(crate) fn error(&mut self, kind: ErrorKind, message: &str, detail: Option<String>) {
-        self.log("error", format!("{message}: {}", detail.clone().unwrap_or_default()));
+        self.log(
+            "error",
+            format!("{message}: {}", detail.clone().unwrap_or_default()),
+        );
         self.emit(Event::Error {
             kind,
             message: message.into(),
@@ -947,6 +962,8 @@ fn native_backend(
     _audio: &AudioSettings,
     _sink: crate::audio::backend::ReportSink,
 ) -> Arc<dyn PlaybackBackend> {
-    tracing::error!("AudioMode::Native requested but the native-audio feature is off; playback disabled");
+    tracing::error!(
+        "AudioMode::Native requested but the native-audio feature is off; playback disabled"
+    );
     Arc::new(NullBackend::new())
 }

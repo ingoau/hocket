@@ -200,7 +200,11 @@ impl Actor {
         self.downloads.set_transcoding_policy(policy);
     }
 
-    pub(crate) fn set_transcoding_profile(&mut self, network_id: Option<String>, profile: TranscodingProfile) {
+    pub(crate) fn set_transcoding_profile(
+        &mut self,
+        network_id: Option<String>,
+        profile: TranscodingProfile,
+    ) {
         let mut map = self
             .settings
             .get(keys::TRANSCODING_PROFILES)
@@ -233,7 +237,10 @@ impl Actor {
         if let Err(e) = self.backend.set_gapless(self.audio.gapless) {
             self.log("debug", format!("set_gapless: {e}"));
         }
-        if let Err(e) = self.backend.set_output_device(self.audio.output_device.clone()) {
+        if let Err(e) = self
+            .backend
+            .set_output_device(self.audio.output_device.clone())
+        {
             self.log("debug", format!("set_output_device: {e}"));
         }
         if let Err(e) = self.backend.set_exclusive(self.audio.exclusive) {
@@ -284,7 +291,9 @@ impl Actor {
             self.save_filter(f.clone());
         }
         for s in &doc.shortcuts {
-            let _ = self.registry.set_shortcut(&s.action_id, s.shortcut.as_deref());
+            let _ = self
+                .registry
+                .set_shortcut(&s.action_id, s.shortcut.as_deref());
         }
         self.persist_registry();
         if let Ok(v) = serde_json::to_value(&doc.audio) {
@@ -336,11 +345,7 @@ impl Actor {
             .set_value(keys::SHORTCUTS, serde_json::Value::Object(shortcuts), now);
         for surface in crate::actions::Surface::ALL {
             let key = keys::action_order(surface.as_str());
-            let ids = c
-                .orders
-                .get(surface.as_str())
-                .cloned()
-                .unwrap_or_default();
+            let ids = c.orders.get(surface.as_str()).cloned().unwrap_or_default();
             if crate::settings::lookup(&key).is_some() {
                 let _ = self.settings.set_value(&key, serde_json::json!(ids), now);
             }

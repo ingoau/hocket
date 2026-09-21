@@ -170,12 +170,14 @@ impl Actor {
                 name,
             } => self.create_static_playlist(server_id, filter, name),
             Command::ExportNsp { filter, path } => self.export_nsp(filter, path),
-            Command::SetAutoplaySettings { settings } => {
-                match serde_json::to_value(&settings) {
-                    Ok(v) => self.set_setting_value(crate::settings::keys::AUTOPLAY_SETTINGS, v),
-                    Err(e) => self.error(ErrorKind::Internal, "autoplay settings", Some(e.to_string())),
-                }
-            }
+            Command::SetAutoplaySettings { settings } => match serde_json::to_value(&settings) {
+                Ok(v) => self.set_setting_value(crate::settings::keys::AUTOPLAY_SETTINGS, v),
+                Err(e) => self.error(
+                    ErrorKind::Internal,
+                    "autoplay settings",
+                    Some(e.to_string()),
+                ),
+            },
 
             // -- lyrics --
             Command::SetLyricsOffset {
@@ -252,7 +254,9 @@ impl Actor {
                 Some(ext) => ext.report(report),
                 None => self.on_backend_report(report),
             },
-            Command::MediaSessionCommand { action, value } => self.media_session_command(action, value),
+            Command::MediaSessionCommand { action, value } => {
+                self.media_session_command(action, value)
+            }
             Command::RunAction { action_id, target } => self.run_action(&action_id, target),
             Command::SetShortcut {
                 action_id,

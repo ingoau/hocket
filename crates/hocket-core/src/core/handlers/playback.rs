@@ -97,12 +97,18 @@ impl Actor {
         play: bool,
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
-        let Some(track) = self.track_or_bare(&item.track_id) else { return };
+        let Some(track) = self.track_or_bare(&item.track_id) else {
+            return;
+        };
         let now = self.now();
         // Gapless: the backend already moved on to this track.
         let transitioned = carried.is_none()
             && position_ms == 0
-            && self.playback.next.as_ref().is_some_and(|n| n.track.id == item.track_id)
+            && self
+                .playback
+                .next
+                .as_ref()
+                .is_some_and(|n| n.track.id == item.track_id)
             && self.playback.awaiting_transition;
         let (played_ms, started_at, scrobbled) = match carried {
             Some((p, s, sc)) => (p, s, sc),
@@ -193,7 +199,9 @@ impl Actor {
     }
 
     pub(crate) fn restart_current(&mut self) {
-        let Some(track) = self.playback.track.clone() else { return };
+        let Some(track) = self.playback.track.clone() else {
+            return;
+        };
         if !self.playback.loaded {
             if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                 self.load_item(&item, 0, true, None);
@@ -288,12 +296,19 @@ impl Actor {
                 unavailable: false,
             });
         self.playback.want_playing = play;
-        self.load_item(&item, position_ms, play, Some((played_ms, started_at, scrobbled)));
+        self.load_item(
+            &item,
+            position_ms,
+            play,
+            Some((played_ms, started_at, scrobbled)),
+        );
         self.emit(Event::PlayerNotice { message: None });
     }
 
     pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms) {
-        let Some(track) = self.track_or_bare(&track_id) else { return };
+        let Some(track) = self.track_or_bare(&track_id) else {
+            return;
+        };
         match self.media_source_for(&key, &track) {
             Some(source) => {
                 if let Err(e) = self.backend.pre_buffer(source, position_ms) {
@@ -360,7 +375,11 @@ impl Actor {
             TransportCommand::SeekBy { delta_ms } => {
                 let pos = self.playback.position_now(self.now()) as i64 + delta_ms as i64;
                 let cap = self.playback.duration_ms() as i64;
-                let pos = if cap > 0 { pos.clamp(0, cap) } else { pos.max(0) };
+                let pos = if cap > 0 {
+                    pos.clamp(0, cap)
+                } else {
+                    pos.max(0)
+                };
                 self.seek_to(pos as Ms);
             }
             TransportCommand::SetVolume { volume } => self.set_volume(volume, false),
@@ -413,7 +432,11 @@ impl Actor {
             return;
         }
         let cap = self.playback.duration_ms();
-        let position_ms = if cap > 0 { position_ms.min(cap) } else { position_ms };
+        let position_ms = if cap > 0 {
+            position_ms.min(cap)
+        } else {
+            position_ms
+        };
         self.playback.position_ms = position_ms;
         self.playback.position_at = self.now();
         if let Err(e) = self.backend.seek(position_ms) {
@@ -562,7 +585,11 @@ impl Actor {
                 }
                 if !self.playback.awaiting_transition {
                     // Nothing followed: stay on the last item, stopped.
-                    if self.doc().and_then(|d| d.current.as_ref()).is_some_and(|c| c.key == key) {
+                    if self
+                        .doc()
+                        .and_then(|d| d.current.as_ref())
+                        .is_some_and(|c| c.key == key)
+                    {
                         self.playback.playing = false;
                         self.stamp();
                         self.emit_transport();
@@ -583,7 +610,8 @@ impl Actor {
                 } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                     // A stale transition (we already reloaded what the document
                     // says) is ignored; otherwise follow the document.
-                    if !(self.playback.loaded && self.playback.doc_key.as_ref() == Some(&item.key)) {
+                    if !(self.playback.loaded && self.playback.doc_key.as_ref() == Some(&item.key))
+                    {
                         self.playback.awaiting_transition = false;
                         let play = self.playback.want_playing;
                         self.load_item(&item, 0, play, None);
@@ -694,12 +722,18 @@ impl Actor {
         for a in actions {
             match a {
                 ScrobbleAction::NowPlaying { track_id } => {
-                    if !self.settings.get_bool(crate::settings::keys::SCROBBLE_ENABLED)
-                        || !self.settings.get_bool(crate::settings::keys::SCROBBLE_NOW_PLAYING)
+                    if !self
+                        .settings
+                        .get_bool(crate::settings::keys::SCROBBLE_ENABLED)
+                        || !self
+                            .settings
+                            .get_bool(crate::settings::keys::SCROBBLE_NOW_PLAYING)
                     {
                         continue;
                     }
-                    let Some(server_id) = self.server_id() else { continue };
+                    let Some(server_id) = self.server_id() else {
+                        continue;
+                    };
                     if let Err(e) = self
                         .recorder()
                         .apply(&server_id, &ScrobbleAction::NowPlaying { track_id })
@@ -737,18 +771,29 @@ impl Actor {
         )
     }
 
-    pub(crate) fn on_scrobble_verdict(&mut self, track_id: TrackId, started_at: EpochMs, allowed: bool) {
+    pub(crate) fn on_scrobble_verdict(
+        &mut self,
+        track_id: TrackId,
+        started_at: EpochMs,
+        allowed: bool,
+    ) {
         let played_ms = self
             .pending_submits
             .remove(&(track_id.clone(), started_at.to_bits()))
             .unwrap_or_else(|| self.scrobbler.played_ms());
-        let Some(server_id) = self.server_id() else { return };
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
         let started_local = if self.playback.started_at == started_at {
             self.playback.started_local
         } else {
             self.now() - f64::from(played_ms)
         };
-        if allowed && self.settings.get_bool(crate::settings::keys::SCROBBLE_ENABLED) {
+        if allowed
+            && self
+                .settings
+                .get_bool(crate::settings::keys::SCROBBLE_ENABLED)
+        {
             let action = ScrobbleAction::Submit {
                 track_id: track_id.clone(),
                 started_at: started_local,
@@ -779,8 +824,15 @@ impl Actor {
         });
     }
 
-    pub(crate) fn scrobble_command(&mut self, track_id: TrackId, played_at: EpochMs, submission: bool) {
-        let Some(server_id) = self.server_id() else { return };
+    pub(crate) fn scrobble_command(
+        &mut self,
+        track_id: TrackId,
+        played_at: EpochMs,
+        submission: bool,
+    ) {
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
         let r = self.outbox.enqueue(
             &server_id,
             crate::outbox::Mutation::Scrobble {
@@ -853,7 +905,10 @@ impl Actor {
     }
 
     fn media_art_size(&self) -> u32 {
-        if self.battery_saver && self.settings.get_bool(crate::settings::keys::BATTERY_SMALL_ARTWORK)
+        if self.battery_saver
+            && self
+                .settings
+                .get_bool(crate::settings::keys::BATTERY_SMALL_ARTWORK)
         {
             MEDIA_SESSION_ART_SMALL
         } else {
@@ -900,7 +955,11 @@ impl Actor {
                 .ok()
                 .flatten()
                 .map(|p| crate::downloads::file_url(&p));
-            let _ = tx.send(crate::core::ActorMsg::Internal(Internal::Artwork { id, size, path }));
+            let _ = tx.send(crate::core::ActorMsg::Internal(Internal::Artwork {
+                id,
+                size,
+                path,
+            }));
         });
     }
 
@@ -913,15 +972,29 @@ impl Actor {
     }
 
     fn prefetch_artwork_for_current(&mut self) {
-        let Some(cover) = self.playback.track.as_ref().and_then(|t| t.cover_art.clone()) else {
+        let Some(cover) = self
+            .playback
+            .track
+            .as_ref()
+            .and_then(|t| t.cover_art.clone())
+        else {
             return;
         };
         let size = self.media_art_size();
-        let Some(server_id) = self.server_id() else { return };
-        if matches!(self.caches.artwork_cached(&server_id, &cover, size), Ok(Some(_))) {
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
+        if matches!(
+            self.caches.artwork_cached(&server_id, &cover, size),
+            Ok(Some(_))
+        ) {
             return;
         }
-        if self.battery_saver && self.settings.get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH) {
+        if self.battery_saver
+            && self
+                .settings
+                .get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH)
+        {
             return;
         }
         self.fetch_artwork(cover, size);

@@ -13,8 +13,13 @@ use crate::core::{ActorMsg, Internal};
 
 impl Actor {
     /// Pump a connection's receive side into the actor until it closes.
-    fn pump_connection(&self, conn: Connection) -> mpsc::UnboundedSender<crate::connect::wire::WireMessage> {
-        let Connection { peer, tx, mut rx, .. } = conn;
+    fn pump_connection(
+        &self,
+        conn: Connection,
+    ) -> mpsc::UnboundedSender<crate::connect::wire::WireMessage> {
+        let Connection {
+            peer, tx, mut rx, ..
+        } = conn;
         let actor_tx = self.tx.clone();
         self.rt.spawn(async move {
             while let Some(msg) = rx.recv().await {
@@ -132,7 +137,10 @@ impl Actor {
                                 }));
                             });
                             if accept_tx
-                                .send(ActorMsg::Internal(Internal::PeerAccepted { peer, tx: send }))
+                                .send(ActorMsg::Internal(Internal::PeerAccepted {
+                                    peer,
+                                    tx: send,
+                                }))
                                 .is_err()
                             {
                                 break;
@@ -193,7 +201,10 @@ impl Actor {
         let tx = self.tx.clone();
         self.spawn(async move {
             let ok = io.verify(credential).await;
-            let _ = tx.send(ActorMsg::Internal(Internal::CredentialVerified { peer, ok }));
+            let _ = tx.send(ActorMsg::Internal(Internal::CredentialVerified {
+                peer,
+                ok,
+            }));
         });
     }
 
