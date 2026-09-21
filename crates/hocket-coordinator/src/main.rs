@@ -8,7 +8,10 @@ use hocket_coordinator::{serve, App, Args};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tower_http=warn".into()),
+        )
         .with_target(false)
         .init();
     let args = Args::parse();
@@ -17,7 +20,9 @@ async fn main() -> anyhow::Result<()> {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal");
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("signal");
             tokio::select! {
                 _ = ctrl_c => {},
                 _ = term.recv() => {},

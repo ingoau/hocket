@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::routing::get;
 use axum::Router;
 
+use hocket_coordinator::{serve, App, Args};
 use hocket_core::api::{DeviceInfo, Platform, PositionStamp};
 use hocket_core::connect::engine::{Engine, EngineConfig, Input, Output};
 use hocket_core::connect::session_adapter::RealReducer;
@@ -16,19 +17,25 @@ use hocket_core::connect::transport::{connect_first, Connection, PeerIds, WsTran
 use hocket_core::connect::wire::{scope_key, Credential};
 use hocket_core::connect::SessionOp;
 use hocket_core::util::WallClock;
-use hocket_coordinator::{serve, App, Args};
 
 /// A Subsonic that accepts exactly one token.
 async fn fake_subsonic() -> SocketAddr {
-    async fn ping(q: axum::extract::Query<std::collections::HashMap<String, String>>) -> axum::Json<serde_json::Value> {
-        let ok = q.get("u").map(|u| u == "alice").unwrap_or(false) && q.get("t").map(|t| t == "good-token").unwrap_or(false);
+    async fn ping(
+        q: axum::extract::Query<std::collections::HashMap<String, String>>,
+    ) -> axum::Json<serde_json::Value> {
+        let ok = q.get("u").map(|u| u == "alice").unwrap_or(false)
+            && q.get("t").map(|t| t == "good-token").unwrap_or(false);
         let status = if ok { "ok" } else { "failed" };
-        axum::Json(serde_json::json!({ "subsonic-response": { "status": status, "version": "1.16.1" } }))
+        axum::Json(
+            serde_json::json!({ "subsonic-response": { "status": status, "version": "1.16.1" } }),
+        )
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/rest/ping.view", get(ping))).await.unwrap();
+        axum::serve(listener, Router::new().route("/rest/ping.view", get(ping)))
+            .await
+            .unwrap();
     });
     addr
 }
@@ -72,7 +79,13 @@ impl Host {
         cfg.lan_enabled = false;
         let doc = hocket_core::session::new_document(scope, format!("session-{id}"), 0.0);
         let engine = Engine::new(cfg, Arc::new(WallClock), RealReducer::shared(), doc, None);
-        Host { engine, conn: None, transport: WsTransport, ids: Arc::new(PeerIds::default()), outputs: vec![] }
+        Host {
+            engine,
+            conn: None,
+            transport: WsTransport,
+            ids: Arc::new(PeerIds::default()),
+            outputs: vec![],
+        }
     }
 
     async fn handle(&mut self, input: Input) {
@@ -92,7 +105,9 @@ impl Host {
                             }
                         }
                         Err(e) => {
-                            let outs = self.engine.handle(Input::ConnectFailed { error: e.to_string() });
+                            let outs = self.engine.handle(Input::ConnectFailed {
+                                error: e.to_string(),
+                            });
                             self.outputs.extend(outs);
                         }
                     }
@@ -153,7 +168,11 @@ impl Host {
 
     fn took(&self) -> Option<(String, u32)> {
         self.outputs.iter().rev().find_map(|o| match o {
-            Output::TakeTransport { track_id, position_ms, .. } => Some((track_id.clone(), *position_ms)),
+            Output::TakeTransport {
+                track_id,
+                position_ms,
+                ..
+            } => Some((track_id.clone(), *position_ms)),
             _ => None,
         })
     }
@@ -161,13 +180,21 @@ impl Host {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_engines_hand_off_through_the_coordinator() {
-    let _ = tracing_subscriber::fmt().with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
+        .try_init();
     // The proxied ping must reach the loopback fake directly, whatever proxy the environment sets.
     std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
     std::env::set_var("no_proxy", "127.0.0.1,localhost");
     let subsonic = fake_subsonic().await;
     let dir = tempfile::tempdir().unwrap();
-    let args = Args { listen: "127.0.0.1:0".parse().unwrap(), data_dir: Some(dir.path().to_path_buf()), verify_url: None, no_verify: false, max_members: 8 };
+    let args = Args {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        data_dir: Some(dir.path().to_path_buf()),
+        verify_url: None,
+        no_verify: false,
+        max_members: 8,
+    };
     let app = App::new(args).unwrap();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (addr, server) = serve(app.clone(), "127.0.0.1:0".parse().unwrap(), async {
@@ -179,7 +206,12 @@ async fn two_engines_hand_off_through_the_coordinator() {
     let scope = scope_key(&format!("http://{subsonic}"), "alice");
 
     // health
-    let health: serde_json::Value = reqwest::get(format!("http://{addr}/health")).await.unwrap().json().await.unwrap();
+    let health: serde_json::Value = reqwest::get(format!("http://{addr}/health"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(health["status"], "ok");
 
     // a bad credential is refused by the proxied ping
@@ -189,7 +221,12 @@ async fn two_engines_hand_off_through_the_coordinator() {
     assert!(!bad.engine.is_connected(), "bad token must not be admitted");
     assert!(!app.has_member(&scope, "bad"));
 
-    let mut a = Host::new("laptop", &scope, credential(subsonic, "good-token"), &ws_url);
+    let mut a = Host::new(
+        "laptop",
+        &scope,
+        credential(subsonic, "good-token"),
+        &ws_url,
+    );
     let mut b = Host::new("phone", &scope, credential(subsonic, "good-token"), &ws_url);
     a.handle(Input::Tick).await;
     b.handle(Input::Tick).await;
@@ -215,13 +252,25 @@ async fn two_engines_hand_off_through_the_coordinator() {
     a.run(400).await;
     b.run(400).await;
     assert!(a.engine.owns_transport());
-    assert_eq!(b.engine.document().current.as_ref().map(|c| c.track_id.as_str()), Some("t1"));
+    assert_eq!(
+        b.engine
+            .document()
+            .current
+            .as_ref()
+            .map(|c| c.track_id.as_str()),
+        Some("t1")
+    );
     assert_eq!(app.live_owner(&scope).as_deref(), Some("laptop"));
     let started_at = a.engine.now_session_ms();
     a.handle(Input::LocalStamp {
         key: a.engine.document().current.as_ref().map(|c| c.key.clone()),
         track_id: Some("t1".into()),
-        position: PositionStamp { position_ms: 30_000, taken_at: a.engine.now_local_ms(), rate: 1.0, is_playing: true },
+        position: PositionStamp {
+            position_ms: 30_000,
+            taken_at: a.engine.now_local_ms(),
+            rate: 1.0,
+            is_playing: true,
+        },
         played_ms: 30_000,
         started_at,
         scrobbled: false,
@@ -229,16 +278,38 @@ async fn two_engines_hand_off_through_the_coordinator() {
     .await;
 
     // phone presses next: one skip everywhere
-    b.handle(Input::LocalOp { op: SessionOp::Next }).await;
+    b.handle(Input::LocalOp {
+        op: SessionOp::Next,
+    })
+    .await;
     b.run(400).await;
     a.run(400).await;
-    assert_eq!(a.engine.document().current.as_ref().map(|c| c.track_id.as_str()), Some("t2"));
-    assert_eq!(b.engine.document().current.as_ref().map(|c| c.track_id.as_str()), Some("t2"));
+    assert_eq!(
+        a.engine
+            .document()
+            .current
+            .as_ref()
+            .map(|c| c.track_id.as_str()),
+        Some("t2")
+    );
+    assert_eq!(
+        b.engine
+            .document()
+            .current
+            .as_ref()
+            .map(|c| c.track_id.as_str()),
+        Some("t2")
+    );
     let key = a.engine.document().current.as_ref().unwrap().key.clone();
     a.handle(Input::LocalStamp {
         key: Some(key.clone()),
         track_id: Some("t2".into()),
-        position: PositionStamp { position_ms: 5_000, taken_at: a.engine.now_local_ms(), rate: 1.0, is_playing: true },
+        position: PositionStamp {
+            position_ms: 5_000,
+            taken_at: a.engine.now_local_ms(),
+            rate: 1.0,
+            is_playing: true,
+        },
         played_ms: 5_000,
         started_at: a.engine.now_session_ms(),
         scrobbled: false,
@@ -253,12 +324,19 @@ async fn two_engines_hand_off_through_the_coordinator() {
         Output::PreBuffer { key, track_id, .. } => Some((key.clone(), track_id.clone())),
         _ => None,
     });
-    assert_eq!(prepared, Some((key.clone(), "t2".to_string())), "phone asked to pre-buffer");
+    assert_eq!(
+        prepared,
+        Some((key.clone(), "t2".to_string())),
+        "phone asked to pre-buffer"
+    );
     b.handle(Input::PreBufferReady { key: key.clone() }).await;
     b.run(300).await;
     a.run(300).await;
     assert!(a.outputs.iter().any(|o| matches!(o, Output::PickerChanged { open: true, targets } if targets.iter().any(|d| d.id == "phone" && d.ready))));
-    a.handle(Input::HandoffTo { device_id: "phone".into() }).await;
+    a.handle(Input::HandoffTo {
+        device_id: "phone".into(),
+    })
+    .await;
     a.run(400).await;
     b.run(400).await;
     assert!(!a.engine.owns_transport(), "laptop released");
@@ -270,11 +348,25 @@ async fn two_engines_hand_off_through_the_coordinator() {
 
     // the replica survived on disk
     app.flush_all();
-    let replica = app.store().load(&scope).unwrap().expect("replica persisted");
+    let replica = app
+        .store()
+        .load(&scope)
+        .unwrap()
+        .expect("replica persisted");
     assert_eq!(replica.transport_lease.owner.as_deref(), Some("phone"));
-    assert_eq!(replica.document.current.as_ref().map(|c| c.track_id.as_str()), Some("t2"));
+    assert_eq!(
+        replica
+            .document
+            .current
+            .as_ref()
+            .map(|c| c.track_id.as_str()),
+        Some("t2")
+    );
     let json = serde_json::to_string(&replica).unwrap();
-    assert!(!json.contains("good-token"), "credentials never reach the replica");
+    assert!(
+        !json.contains("good-token"),
+        "credentials never reach the replica"
+    );
 
     let _ = stop_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(5), server).await;

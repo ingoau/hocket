@@ -280,6 +280,7 @@ pub struct AutoplayOpItem {
 /// needs to apply an op *deterministically* (queue keys, shuffle seeds) is
 /// derived from the op id every replica sees, never from local randomness.
 #[typeshare]
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum SessionOp {
@@ -393,6 +394,7 @@ impl SessionOp {
 
 /// Everything that crosses the wire. Struct variants keep the JSON readable.
 #[typeshare]
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Msg {

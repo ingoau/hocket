@@ -52,6 +52,9 @@ impl RoomConfig {
     }
 }
 
+/// Variants carry whole frames/documents on purpose: boxing would only move the
+/// allocation, and these are handled once each.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum RoomInput {
     /// A socket was accepted. Nothing is known until its `Hello`.
@@ -63,6 +66,7 @@ pub enum RoomInput {
     Tick,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoomOutput {
     Send(PeerId, WireMessage),
@@ -185,6 +189,15 @@ impl Room {
         self.dirty = true;
     }
 
+    /// Pre-load the dedupe log with pairs the host already knows were
+    /// scrobbled (the log follows the session when the LAN role moves).
+    pub fn seed_scrobbles(&mut self, pairs: &[(crate::api::TrackId, EpochMs, DeviceId)]) {
+        let now = self.now();
+        for (track_id, started_at, device_id) in pairs {
+            self.replica.claim_scrobble(track_id, *started_at, device_id, now);
+        }
+    }
+
     /// Live transport owner, if any.
     pub fn live_owner(&self) -> Option<DeviceId> {
         self.lease.live_owner(self.now()).cloned()
@@ -225,6 +238,11 @@ impl Room {
         for p in peers {
             self.send(&p, msg.clone());
         }
+    }
+
+    /// Negotiated protocol of a member (for diagnostics).
+    pub fn member_protocol(&self, device_id: &str) -> Option<u32> {
+        self.members.iter().find(|m| m.device.id == device_id).map(|m| m.protocol)
     }
 
     fn member_by_peer(&self, peer: &str) -> Option<&Member> {
@@ -397,7 +415,7 @@ impl Room {
         );
         self.dirty = true;
         self.broadcast_presence();
-        tracing::info!(scope = %self.cfg.scope, peer, members = self.members.len(), "member joined");
+        tracing::info!(scope = %self.cfg.scope, peer, protocol, members = self.members.len(), "member joined");
     }
 
     fn on_disconnected(&mut self, peer: &str) {

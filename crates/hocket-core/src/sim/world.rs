@@ -34,7 +34,7 @@ use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::session_adapter::RealReducer;
 use crate::connect::wire::{scope_key, TransportCommand};
 use crate::connect::{same_session_state, SessionOp};
-use crate::sim::clock::{to_micros, DeviceClock, SimTime};
+use crate::sim::clock::{quantize, to_micros, DeviceClock, SimTime};
 use crate::sim::device::{DeviceEffect, Library, Persisted, SimDevice};
 use crate::sim::network::{Conditions, NetEvent, Network};
 
@@ -86,7 +86,9 @@ pub struct SimCoordinator {
     pub room: Room,
     pub store: MemoryReplicaStore,
     next_tick_at: EpochMs,
-    last_stamp_key: Option<(DeviceId, Option<String>, u32)>,
+    /// (device, key) of the last stored stamp: a position-only stamp is not
+    /// persisted and must not look like a new writer later.
+    last_stamp_key: Option<(DeviceId, Option<String>)>,
     pub max_revision: u32,
 }
 
@@ -250,14 +252,21 @@ impl World {
         loop {
             let next = self.next_event_at();
             if trace {
+                let devs: Vec<String> = self
+                    .devices
+                    .iter()
+                    .map(|d| format!("{}:{}{}", d.id, d.next_tick_at(), if d.asleep { "(asleep)" } else { "" }))
+                    .collect();
                 eprintln!(
-                    "TRACE now={:.0} next={:.0} inflight={} links={} events={} {}",
+                    "TRACE now={:.3} next={:.3} inflight={} net_next={:?} sched={:?} coord={:?} devs={:?} events={}",
                     self.now(),
                     next,
                     self.net.in_flight(),
-                    self.net.link_count(),
+                    self.net.next_at(),
+                    self.schedule.keys().next(),
+                    self.coordinator.as_ref().map(|c| c.next_tick_at),
+                    devs,
                     self.events,
-                    if self.net.in_flight() > 2000 { self.net.pending_summary() } else { String::new() }
                 );
             }
             if next > until || next == f64::MAX {
@@ -296,7 +305,7 @@ impl World {
         // coordinator tick
         if let Some(c) = &mut self.coordinator {
             if now >= c.next_tick_at {
-                c.next_tick_at = now + 1000.0;
+                c.next_tick_at = quantize(now + 1000.0);
                 let outs = c.room.handle(RoomInput::Tick);
                 self.coordinator_outputs(outs);
             }
@@ -357,9 +366,9 @@ impl World {
                     if let Some(c) = &mut self.coordinator {
                         let _ = c.store.save(c.room.scope(), c.room.replica());
                         // Invariant 6: the stored stamp came from the live owner.
-                        let stamp = c.room.replica().last_stamp.as_ref().map(|s| (s.device_id.clone(), s.key.clone(), s.position.position_ms));
+                        let stamp = c.room.replica().last_stamp.as_ref().map(|s| (s.device_id.clone(), s.key.clone()));
                         if stamp != c.last_stamp_key {
-                            if let Some((dev, _, _)) = &stamp {
+                            if let Some((dev, _)) = &stamp {
                                 let owner = c.room.live_owner();
                                 if owner.as_deref() != Some(dev.as_str()) {
                                     self.violations.push(format!(
@@ -764,12 +773,22 @@ impl World {
     /// Checks that only hold once the network is healed and quiet.
     pub fn check_quiescent(&mut self) {
         let now = self.now();
-        // 5. convergence
-        let room_doc = match self.cfg.topology {
-            Topology::Coordinator => self.coordinator.as_ref().map(|c| c.room.replica().document.clone()),
-            Topology::Lan => self.devices.iter().find(|d| d.engine.is_serving()).map(|d| d.engine.document().clone()),
-        };
+        // 5. convergence: every attached device holds its room's document,
+        //    and (LAN) the healed network has settled on one room.
+        if self.cfg.topology == Topology::Lan {
+            let rooms: BTreeSet<String> = (0..self.devices.len()).filter_map(|i| self.room_key(i)).collect();
+            if rooms.len() > 1 {
+                self.violations.push(format!("[{now:.0}] LAN did not settle on one room after heal: {rooms:?}"));
+            }
+        }
         for i in 0..self.devices.len() {
+            let room_doc = match self.cfg.topology {
+                Topology::Coordinator => self.coordinator.as_ref().map(|c| c.room.replica().document.clone()),
+                Topology::Lan => self
+                    .room_key(i)
+                    .and_then(|leader| self.devices.iter().find(|d| d.id == leader))
+                    .map(|d| d.engine.room().replica().document.clone()),
+            };
             let d = &self.devices[i];
             if d.asleep {
                 continue;

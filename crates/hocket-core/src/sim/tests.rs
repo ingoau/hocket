@@ -256,7 +256,7 @@ fn run_seeds(range: std::ops::Range<u64>, topology: Topology, actions: usize) {
         cfg.devices = 2 + (seed % 3) as usize;
         cfg.topology = topology;
         cfg.keep_logs = true;
-        if seed % 4 == 0 {
+        if seed.is_multiple_of(4) {
             cfg.conditions = Conditions { delay_ms: 60.0, jitter_ms: 90.0, drop: 0.05 };
         }
         let w = World::run_random(cfg, actions);
@@ -294,7 +294,7 @@ fn random_single_seed_from_env() {
     cfg.devices = 2 + (seed % 3) as usize;
     cfg.topology = topology;
     cfg.keep_logs = true;
-    if seed % 4 == 0 {
+    if seed.is_multiple_of(4) {
         cfg.conditions = Conditions { delay_ms: 60.0, jitter_ms: 90.0, drop: 0.05 };
     }
     let w = World::run_random(cfg, 40);

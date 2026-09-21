@@ -12,7 +12,7 @@ use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDra
 use crate::connect::session_adapter::RealReducer;
 use crate::connect::wire::{Credential, TransportCommand, WireMessage};
 use crate::connect::{PeerId, SessionOp, SyncPoint};
-use crate::sim::clock::DeviceClock;
+use crate::sim::clock::{quantize, DeviceClock};
 use crate::util::Clock;
 
 /// Scrobble rule: 50% or 4 minutes, whichever first (Last.fm).
@@ -49,6 +49,7 @@ impl Library {
 }
 
 /// What the world must do for a device.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeviceEffect {
     Connect { candidates: Vec<String> },
@@ -144,6 +145,9 @@ impl SimDevice {
         let mut cfg = EngineConfig::new(device_info(id), scope);
         cfg.coordinator_url = coordinator_url;
         cfg.lan_enabled = lan;
+        // Short enough that a device cut off for good settles its scrobbles
+        // inside the world's quiescent tail.
+        cfg.scrobble_grace_ms = 60_000.0;
         cfg.credential = Some(Credential {
             server_url: "https://music.example".into(),
             username: "user".into(),
@@ -233,6 +237,11 @@ impl SimDevice {
     /// reactions generate).
     pub fn handle(&mut self, input: Input) {
         self.queued.push(input);
+        self.drain();
+    }
+
+    /// Process everything queued, in order, including what the reactions queue.
+    fn drain(&mut self) {
         let mut guard = 0;
         while !self.queued.is_empty() {
             let batch: Vec<Input> = std::mem::take(&mut self.queued);
@@ -296,7 +305,7 @@ impl SimDevice {
             }
             Output::TransportCommand(cmd) => self.transport_command(cmd),
             Output::PreBuffer { key, .. } => {
-                self.prebuffer_ready_at = Some((self.world_now() + 500.0, key));
+                self.prebuffer_ready_at = Some((quantize(self.world_now() + 500.0), key));
             }
             Output::DiscardPreBuffer => self.prebuffer_ready_at = None,
             Output::Scrobble { track_id, started_at, allowed } => {
@@ -449,13 +458,10 @@ impl SimDevice {
             }
         }
         if now >= self.next_tick_at {
-            self.next_tick_at = now + 1000.0;
+            self.next_tick_at = quantize(now + 1000.0);
             self.queued.push(Input::Tick);
         }
-        if !self.queued.is_empty() {
-            let first = self.queued.remove(0);
-            self.handle(first);
-        }
+        self.drain();
         // Playback may have run into the end of the queue: nothing to play.
         if self.owns() && self.engine.document().current.is_none() && self.playback.key.is_some() {
             self.playback = Playback::default();

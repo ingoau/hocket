@@ -439,7 +439,7 @@ mod tests {
     fn lww_merges_bump_updated_at_only_on_change() {
         let mut r = new_replica(doc(), 0.0);
         let s = Setting { key: "k".into(), value: "1".into(), scope: SettingScope::AccountSynced, updated_at: 5.0 };
-        assert!(r.merge_settings(&[s.clone()], 1.0));
+        assert!(r.merge_settings(std::slice::from_ref(&s), 1.0));
         assert_eq!(r.updated_at, 1.0);
         assert!(!r.merge_settings(&[s], 2.0));
         assert_eq!(r.updated_at, 1.0);

@@ -18,6 +18,12 @@ pub fn to_micros(ms: f64) -> i64 {
     (ms * 1000.0).round() as i64
 }
 
+/// Snap a time to the microsecond grid the world clock can actually reach,
+/// so `now + 1000.0` never lands a float hair past every attainable instant.
+pub fn quantize(ms: f64) -> f64 {
+    to_micros(ms) as f64 / 1000.0
+}
+
 impl SimTime {
     pub fn new(start_ms: f64) -> Arc<Self> {
         Arc::new(SimTime { micros: AtomicI64::new(to_micros(start_ms)) })

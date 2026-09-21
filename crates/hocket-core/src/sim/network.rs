@@ -16,7 +16,11 @@ use crate::sim::clock::to_micros;
 
 pub type NodeId = String;
 
+/// A frame waiting out a partition: (link index at send time, recipient, event).
+type Parked = (usize, NodeId, NetEvent);
+
 /// What a node receives.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetEvent {
     /// A connection this node asked for is open.
@@ -80,6 +84,9 @@ pub struct Network {
     seq: u64,
     peer_seq: u64,
     partitions: BTreeSet<(NodeId, NodeId)>,
+    /// Frames held back by a partition, in send order, per pair.
+    parked: BTreeMap<(NodeId, NodeId), Vec<Parked>>,
+    last_release_at: f64,
     /// Nodes that are switched off: everything to or from them is dropped.
     down: BTreeSet<NodeId>,
     default: Conditions,
@@ -106,6 +113,8 @@ impl Network {
             seq: 0,
             peer_seq: 0,
             partitions: BTreeSet::new(),
+            parked: BTreeMap::new(),
+            last_release_at: 0.0,
             down: BTreeSet::new(),
             default,
             per_pair: HashMap::new(),
@@ -136,19 +145,43 @@ impl Network {
         self.per_pair.get(&pair(a, b)).copied().unwrap_or(self.default)
     }
 
-    /// Silently drop everything between `a` and `b` (sockets stay "open"
-    /// until someone times out).
+    /// Cut `a` off from `b` at the IP level. Frames sent meanwhile are parked
+    /// (TCP keeps retransmitting) and flow again on `heal` unless the socket
+    /// died first (an idle timeout on either end closes it, dropping them),
+    /// exactly like a wifi blip versus a real outage.
     pub fn partition(&mut self, a: &str, b: &str) {
         self.partitions.insert(pair(a, b));
     }
 
     pub fn heal(&mut self, a: &str, b: &str) {
         self.partitions.remove(&pair(a, b));
+        self.release_parked(&pair(a, b));
     }
 
     pub fn heal_all(&mut self) {
         self.partitions.clear();
         self.down.clear();
+        let pairs: Vec<(NodeId, NodeId)> = self.parked.keys().cloned().collect();
+        for p in pairs {
+            self.release_parked(&p);
+        }
+    }
+
+    fn release_parked(&mut self, p: &(NodeId, NodeId)) {
+        let Some(list) = self.parked.remove(p) else { return };
+        let now = self.queue.values().next().map(|d| d.at).unwrap_or(0.0);
+        for (link_idx_hint, to, event) in list {
+            // Only frames whose link still exists get through.
+            if !self.links.iter().any(|l| pair(&l.a, &l.b) == *p) {
+                self.stats_dropped += 1;
+                continue;
+            }
+            let c = self.conditions(&p.0, &p.1);
+            let at = self.last_release_at.max(now) + c.delay_ms;
+            self.last_release_at = at;
+            let _ = link_idx_hint;
+            self.enqueue(at, &to, event);
+        }
     }
 
     pub fn is_partitioned(&self, a: &str, b: &str) -> bool {
@@ -166,6 +199,7 @@ impl Network {
         }
         self.links.retain(|l| l.a != node && l.b != node);
         self.queue.retain(|_, d| d.to != node);
+        self.parked.retain(|(a, b), _| a != node && b != node);
     }
 
     pub fn node_up(&mut self, node: &str) {
@@ -185,6 +219,7 @@ impl Network {
             self.enqueue(now + 1.0, &l.b, NetEvent::Closed { peer: l.b_peer.clone() });
         }
         self.links.retain(|l| pair(&l.a, &l.b) != pair(a, b));
+        self.parked.remove(&pair(a, b));
     }
 
     fn next_peer(&mut self, prefix: &str) -> PeerId {
@@ -246,8 +281,12 @@ impl Network {
     /// jitter (which reorders).
     pub fn send(&mut self, now: f64, rng: &mut ChaCha8Rng, node: &str, peer: &str, msg: WireMessage) {
         let Some((idx, other, other_peer)) = self.link_for(node, peer) else { return };
-        if self.is_partitioned(node, &other) {
+        if self.down.contains(node) || self.down.contains(&other) {
             self.stats_dropped += 1;
+            return;
+        }
+        if self.partitions.contains(&pair(node, &other)) {
+            self.parked.entry(pair(node, &other)).or_default().push((idx, other, NetEvent::Message { peer: other_peer, msg }));
             return;
         }
         let c = self.conditions(node, &other);
@@ -270,6 +309,11 @@ impl Network {
     pub fn close(&mut self, now: f64, node: &str, peer: &str) {
         let Some((i, other, other_peer)) = self.link_for(node, peer) else { return };
         self.links.remove(i);
+        if !self.links.iter().any(|l| pair(&l.a, &l.b) == pair(node, &other)) {
+            if let Some(list) = self.parked.remove(&pair(node, &other)) {
+                self.stats_dropped += list.len() as u64;
+            }
+        }
         if !self.is_partitioned(node, &other) {
             let c = self.conditions(node, &other);
             self.enqueue(now + c.delay_ms, &other, NetEvent::Closed { peer: other_peer });
@@ -354,12 +398,31 @@ mod tests {
         assert_eq!(n.next_at(), Some(110.0));
         let evs = n.due(110.0);
         assert!(matches!(&evs[0], (to, NetEvent::Message { peer, msg }) if to == "c" && peer == &c_peer && msg.msg == Msg::ClockPing { t0: 1.0 }));
-        // partition drops silently
+        // a partition parks frames; healing releases them in order
         n.partition("a", "c");
         n.send(110.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::SyncRequest));
+        n.send(110.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::ClockPing { t0: 9.0 }));
         assert_eq!(n.in_flight(), 0);
-        assert_eq!(n.stats_dropped, 1);
+        assert_eq!(n.stats_dropped, 0);
         n.heal("a", "c");
+        assert_eq!(n.in_flight(), 2);
+        let evs = n.due(200.0);
+        assert!(matches!(&evs[0], (to, NetEvent::Message { msg, .. }) if to == "a" && msg.msg == Msg::SyncRequest));
+        assert!(matches!(&evs[1], (_, NetEvent::Message { msg, .. }) if msg.msg == Msg::ClockPing { t0: 9.0 }));
+        // a partition whose socket dies loses what was parked
+        n.partition("a", "c");
+        n.send(200.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::SyncRequest));
+        n.close(200.0, "c", &c_peer);
+        n.heal("a", "c");
+        assert_eq!(n.stats_dropped, 1);
+        n.due(300.0);
+        n.connect(150.0, &mut rng, "a", &["wss://c/".into()]);
+        let (a_peer, c_peer) = {
+            let evs = n.due(300.0);
+            let a = evs.iter().find_map(|(to, e)| match e { NetEvent::Connected { peer, .. } if to == "a" => Some(peer.clone()), _ => None }).unwrap();
+            let c = evs.iter().find_map(|(to, e)| match e { NetEvent::Accepted { peer } if to == "c" => Some(peer.clone()), _ => None }).unwrap();
+            (a, c)
+        };
         // jitter delays but a stream stays in order (TCP); across streams it reorders
         n.set_default_conditions(Conditions { delay_ms: 10.0, jitter_ms: 50.0, drop: 0.0 });
         n.connect(150.0, &mut rng, "b", &["wss://c/".into()]);

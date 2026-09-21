@@ -113,6 +113,10 @@ impl EngineConfig {
 }
 
 /// What the actor feeds the engine.
+///
+/// Variants carry whole frames and documents on purpose (handled once, then
+/// dropped); boxing would only move the allocation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
     // -- configuration ----------------------------------------------------
@@ -204,6 +208,7 @@ pub struct ResumeOfferDraft {
 }
 
 /// What the actor must do.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     WireOut { peer: PeerId, msg: WireMessage },
@@ -379,6 +384,10 @@ pub struct Engine {
     scrobble_queries: HashMap<String, (TrackId, EpochMs, EpochMs)>,
     /// Scrobbles decided locally while cut off; told to the room on rejoin.
     unreported_scrobbles: Vec<(TrackId, EpochMs)>,
+    /// Every `(track, startedAt)` this device knows was scrobbled by someone:
+    /// seeds our own room's dedupe log when we host it (LAN leadership moves
+    /// the room between devices; the log must move with the session).
+    known_scrobbled: Vec<(TrackId, EpochMs, DeviceId)>,
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
 
@@ -461,6 +470,7 @@ impl Engine {
             deferred_scrobbles: vec![],
             scrobble_queries: HashMap::new(),
             unreported_scrobbles: vec![],
+            known_scrobbled: vec![],
             saved_queues: vec![],
             settings: vec![],
             lan_peers: vec![],
@@ -785,9 +795,21 @@ impl Engine {
     }
 
     /// Whether the upstream we submit to is the one whose verdicts count for
-    /// scrobble dedupe: a remote room, or our own when no remote is wanted.
+    /// scrobble dedupe: a remote room we are attached to, or our own when no
+    /// remote is wanted at all (no coordinator configured, no LAN peers).
     fn upstream_authoritative(&self) -> bool {
-        self.remote.is_none() || self.is_connected()
+        if self.is_connected() {
+            return true;
+        }
+        if self.remote.is_some() || self.coordinator_target().is_some() {
+            return false; // a remote room is wanted and we are not attached to it
+        }
+        // LAN or alone: our own room is the authority when we are the leader
+        // (or nobody else is around).
+        match self.elect_lan_leader() {
+            None => true,
+            Some(l) => l == self.cfg.device.id,
+        }
     }
 
     fn upstream_send(&mut self, msg: Msg) {
@@ -840,10 +862,21 @@ impl Engine {
         }
     }
 
+    fn learn_scrobbled(&mut self, track_id: &str, started_at: EpochMs, device_id: &str) {
+        if !self.known_scrobbled.iter().any(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0) {
+            self.known_scrobbled.push((track_id.to_string(), started_at, device_id.to_string()));
+            if self.known_scrobbled.len() > 500 {
+                self.known_scrobbled.remove(0);
+            }
+        }
+    }
+
     /// Point the upstream at our own room and run the handshake over the loopback.
     fn attach_loopback(&mut self) {
         self.upstream_ready = false;
         self.room.adopt_document(self.doc.clone());
+        let known = self.known_scrobbled.clone();
+        self.room.seed_scrobbles(&known);
         let outs = self.room.handle(RoomInput::Connected(LOOPBACK.into()));
         self.process_room_outputs(outs);
         let hello = self.hello_msg(None);
@@ -1243,6 +1276,11 @@ impl Engine {
                     started_at,
                     scrobbled,
                 });
+                if scrobbled {
+                    if let Some(item) = self.doc.current.clone().filter(|c| Some(c.key.as_str()) == key.as_deref()) {
+                        self.learn_scrobbled(&item.track_id, started_at, &device_id);
+                    }
+                }
                 if let Some(r) = &mut self.resume {
                     if r.device_id == device_id {
                         // The device that was playing is back: no longer dormant.
@@ -1323,11 +1361,14 @@ impl Engine {
                     self.emit_picker();
                 }
             }
-            Msg::HandoffTakeover { target, key, track_id, position_ms, played_ms, started_at, scrobbled, lease, .. } => {
+            Msg::HandoffTakeover { from, target, key, track_id, position_ms, played_ms, started_at, scrobbled, lease, .. } => {
                 if target != self.cfg.device.id {
                     return;
                 }
                 let Some(lease) = lease else { return };
+                if scrobbled {
+                    self.learn_scrobbled(&track_id, started_at, &from);
+                }
                 self.prebuffer = None;
                 self.lease = lease.clone();
                 let now = self.now_local_ms();
@@ -1350,6 +1391,8 @@ impl Engine {
             }
             Msg::ScrobbleDedupeAnswer { query_id, duplicate } => {
                 if let Some((track_id, started_at, _)) = self.scrobble_queries.remove(&query_id) {
+                    let me = self.cfg.device.id.clone();
+                    self.learn_scrobbled(&track_id, started_at, &me);
                     self.out.push(Output::Scrobble { track_id, started_at, allowed: !duplicate });
                 }
             }
@@ -1495,6 +1538,9 @@ impl Engine {
                 if stamp.device_id != self.cfg.device.id {
                     self.last_remote_stamp = Some(stamp.clone());
                 }
+            }
+            for r in &rep.scrobbles {
+                self.learn_scrobbled(&r.track_id, r.started_at, &r.device_id);
             }
             let last_seen = rep.last_stamp.as_ref().and_then(|s| rep.device_last_seen(&s.device_id));
             self.maybe_offer_resume(last_seen);
@@ -2014,6 +2060,12 @@ impl Engine {
     // -- scrobbling -------------------------------------------------------------
 
     fn on_scrobble_reached(&mut self, track_id: TrackId, started_at: EpochMs) {
+        if self.known_scrobbled.iter().any(|(t, s, _)| t == &track_id && (s - started_at).abs() < 1000.0) {
+            // This play was already scrobbled (by us or by whoever handed it
+            // over); nobody needs to be asked.
+            self.out.push(Output::Scrobble { track_id, started_at, allowed: false });
+            return;
+        }
         if self.upstream_authoritative() {
             self.query_scrobble(track_id, started_at);
         } else {
@@ -2145,6 +2197,8 @@ impl Engine {
             self.deferred_scrobbles.drain(..).partition(|d| now - d.since >= grace);
         self.deferred_scrobbles = keep;
         for d in expired {
+            let me = self.cfg.device.id.clone();
+            self.learn_scrobbled(&d.track_id, d.started_at, &me);
             self.unreported_scrobbles.push((d.track_id.clone(), d.started_at));
             self.out.push(Output::Scrobble { track_id: d.track_id, started_at: d.started_at, allowed: true });
         }
@@ -2239,7 +2293,7 @@ mod tests {
         let outs = e.handle(Input::ClaimTransport { takeover: false });
         assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, detached: false, .. })));
         assert!(e.owns_transport());
-        assert_eq!(e.devices()[0].playing, true);
+        assert!(e.devices()[0].playing);
         let outs = e.handle(Input::ReleaseTransport);
         assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());

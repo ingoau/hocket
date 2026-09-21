@@ -41,7 +41,10 @@ use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "hocket-coordinator", about = "Headless Hocket coordinator: relay + replica, no credentials, no audio.")]
+#[command(
+    name = "hocket-coordinator",
+    about = "Headless Hocket coordinator: relay + replica, no credentials, no audio."
+)]
 pub struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "0.0.0.0:7373")]
@@ -84,8 +87,17 @@ impl App {
             Some(dir) => Box::new(FileReplicaStore::new(dir)?),
             None => Box::new(MemoryReplicaStore::new()),
         };
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
-        Ok(Arc::new(App { args, rooms: Mutex::new(HashMap::new()), store, http, peer_seq: AtomicU64::new(0), connections: AtomicU64::new(0) }))
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        Ok(Arc::new(App {
+            args,
+            rooms: Mutex::new(HashMap::new()),
+            store,
+            http,
+            peer_seq: AtomicU64::new(0),
+            connections: AtomicU64::new(0),
+        }))
     }
 
     fn next_peer(&self) -> PeerId {
@@ -95,7 +107,11 @@ impl App {
     /// Verify a credential by proxying a Subsonic `ping`. The credential is
     /// used for this one request and dropped.
     async fn verify(&self, credential: &Credential) -> bool {
-        let base = self.args.verify_url.clone().unwrap_or_else(|| credential.server_url.clone());
+        let base = self
+            .args
+            .verify_url
+            .clone()
+            .unwrap_or_else(|| credential.server_url.clone());
         let base = base.trim_end_matches('/');
         let url = format!("{base}/rest/ping.view");
         let params = credential.ping_params();
@@ -127,7 +143,9 @@ impl App {
     /// room hears about it, so nothing it sends is lost.
     fn attach_sender(&self, scope: &str, peer: &PeerId, tx: mpsc::UnboundedSender<Message>) {
         let mut rooms = self.rooms.lock();
-        let state = rooms.entry(scope.to_string()).or_insert_with(|| self.open_room(scope));
+        let state = rooms
+            .entry(scope.to_string())
+            .or_insert_with(|| self.open_room(scope));
         state.senders.insert(peer.clone(), tx);
     }
 
@@ -143,7 +161,10 @@ impl App {
         cfg.verify = !self.args.no_verify;
         cfg.max_members = self.args.max_members;
         info!(scope, restored = replica.is_some(), "room opened");
-        RoomState { room: Room::new(cfg, Arc::new(WallClock), RealReducer::shared(), replica), senders: HashMap::new() }
+        RoomState {
+            room: Room::new(cfg, Arc::new(WallClock), RealReducer::shared(), replica),
+            senders: HashMap::new(),
+        }
     }
 
     /// Feed one input to a scope's room, creating it (from the store) if
@@ -154,7 +175,9 @@ impl App {
             RoomInput::Disconnected(p) => Some(p.clone()),
             _ => None,
         };
-        let state = rooms.entry(scope.to_string()).or_insert_with(|| self.open_room(scope));
+        let state = rooms
+            .entry(scope.to_string())
+            .or_insert_with(|| self.open_room(scope));
         let outs = state.room.handle(input);
         let mut to_verify = vec![];
         for o in outs {
@@ -212,12 +235,19 @@ impl App {
 
     /// Whether a device is currently a member of the scope's room.
     pub fn has_member(&self, scope: &str, device_id: &str) -> bool {
-        self.rooms.lock().get(scope).map(|r| r.room.has_member(device_id)).unwrap_or(false)
+        self.rooms
+            .lock()
+            .get(scope)
+            .map(|r| r.room.has_member(device_id))
+            .unwrap_or(false)
     }
 
     /// The scope's current transport lease owner, if the room is open.
     pub fn live_owner(&self, scope: &str) -> Option<String> {
-        self.rooms.lock().get(scope).and_then(|r| r.room.live_owner())
+        self.rooms
+            .lock()
+            .get(scope)
+            .and_then(|r| r.room.live_owner())
     }
 
     pub fn store(&self) -> &dyn ReplicaStore {
@@ -290,7 +320,10 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
             }
             (None, other) => {
                 debug!(peer, msg = other.name(), "frame before hello");
-                let refuse = WireMessage::new(Msg::Refuse { reason: RefuseReason::Unauthorised, message: "hello first".into() });
+                let refuse = WireMessage::new(Msg::Refuse {
+                    reason: RefuseReason::Unauthorised,
+                    message: "hello first".into(),
+                });
                 if let Ok(t) = refuse.encode() {
                     let _ = tx.send(Message::Text(t.into()));
                 }
@@ -304,7 +337,13 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
             drop(credential);
             app.drive(&current_scope, RoomInput::Verified { peer: p, ok });
         }
-        if !app.rooms.lock().get(&current_scope).map(|r| r.senders.contains_key(&peer)).unwrap_or(false) {
+        if !app
+            .rooms
+            .lock()
+            .get(&current_scope)
+            .map(|r| r.senders.contains_key(&peer))
+            .unwrap_or(false)
+        {
             // The room closed us.
             break;
         }
@@ -327,7 +366,11 @@ pub fn router(app: Arc<App>) -> Router {
 }
 
 /// Serve until `shutdown` resolves. Returns the bound address once listening.
-pub async fn serve(app: Arc<App>, listen: SocketAddr, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+pub async fn serve(
+    app: Arc<App>,
+    listen: SocketAddr,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let addr = listener.local_addr()?;
     let ticker_app = app.clone();
@@ -352,7 +395,10 @@ pub async fn serve(app: Arc<App>, listen: SocketAddr, shutdown: impl std::future
     });
     let router = router(app);
     let handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+        if let Err(e) = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown)
+            .await
+        {
             warn!(error = %e, "server error");
         }
         ticker.abort();
@@ -360,4 +406,3 @@ pub async fn serve(app: Arc<App>, listen: SocketAddr, shutdown: impl std::future
     });
     Ok((addr, handle))
 }
-

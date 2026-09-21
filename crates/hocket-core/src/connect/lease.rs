@@ -383,7 +383,8 @@ mod tests {
         let mut m = LeaseMachine::new();
         let mut last = m.epoch();
         let mut now = 0.0;
-        let steps: Vec<Box<dyn Fn(&mut LeaseMachine, f64)>> = vec![
+        type Step = Box<dyn Fn(&mut LeaseMachine, f64)>;
+        let steps: Vec<Step> = vec![
             Box::new(|m, t| {
                 let _ = m.claim("a", None, false, t);
             }),
