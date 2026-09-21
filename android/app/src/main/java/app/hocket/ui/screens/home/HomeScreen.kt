@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -82,7 +83,7 @@ fun HomeScreen(nav: NavHostController) {
             return@Scaffold
         }
         val continueLabel = stringResource(R.string.home_continue)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
             if (recent.isNotEmpty()) {
                 item { SectionHeader(stringResource(R.string.home_continue)) }
                 items(recent.take(5), key = { "r" + it.playedAt + it.track.id }) { entry ->

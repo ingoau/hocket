@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.Event
@@ -142,7 +143,7 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
         TopAppBar(title = { Text(filter.name) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
             actions = { IconButton(onClick = { client.dispatch(Commands.saveFilter(filter)) }) { Icon(Icons.Filled.Save, stringResource(R.string.filter_save)) } })
     }) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp, start = 16.dp, end = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset, start = 16.dp, end = 16.dp)) {
             item { OutlinedTextField(value = filter.name, onValueChange = { filter = filter.copy(name = it) }, label = { Text(stringResource(R.string.filter_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
             item { Spacer(Modifier.height(12.dp)); GroupEditor(filter.root, depth = 0, onChange = { filter = filter.copy(root = it) }, onRemove = null) }
             item {

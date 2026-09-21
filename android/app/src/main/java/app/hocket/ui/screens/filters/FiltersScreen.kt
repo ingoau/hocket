@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.api.Filter
 import app.hocket.ui.LocalCoreClient
@@ -57,7 +58,7 @@ fun FiltersScreen(nav: NavHostController) {
             EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(padding), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
             return@Scaffold
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
             items(filters, key = { it.id }) { f ->
                 ListItem(
                     headlineContent = { Text(f.name) },

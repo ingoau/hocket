@@ -101,7 +101,6 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed) {
 
     companion object {
         val MINI_HEIGHT: Dp = 64.dp
-        val NAV_BAR_HEIGHT: Dp = 80.dp
     }
 }
 

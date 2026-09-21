@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
@@ -43,11 +46,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -197,6 +209,9 @@ fun navItems(): List<NavItem> {
     }
 }
 
+/** Bottom content inset for scrolling screens: the mini player floats over the last rows. */
+val BottomContentInset: Dp = NowPlayingSheetState.MINI_HEIGHT + 32.dp
+
 @Composable
 private fun MainShell() {
     val nav = rememberNavController()
@@ -208,6 +223,12 @@ private fun MainShell() {
             val backStack by nav.currentBackStackEntryAsState()
             val routeName = backStack?.destination?.route
             val scope = rememberCoroutineScope()
+            val density = LocalDensity.current
+            // The phone navigation bar is measured (its height includes the edge-to-edge navigation-bar
+            // inset) so the content column ends above it and the sheet's collapsed anchor sits on it.
+            var navBarHeightPx by remember { mutableIntStateOf(0) }
+            val systemBottomPx = WindowInsets.navigationBars.getBottom(density)
+            val bottomInsetPx = if (wide) systemBottomPx else navBarHeightPx
             fun go(item: NavItem) {
                 nav.navigate(item.route()) { popUpTo(nav.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true }
             }
@@ -227,30 +248,34 @@ private fun MainShell() {
                         }
                     }
                 }
-                Column(Modifier.weight(1f).fillMaxSize()) {
-                    Box(Modifier.weight(1f)) {
-                        AppNavHost(nav, Modifier.fillMaxSize())
-                    }
-                    // Space for the mini player, which is drawn by the sheet overlay.
-                    Box(Modifier.fillMaxWidth().padding(bottom = 0.dp))
-                    if (!wide) {
-                        Box(Modifier.padding(top = NowPlayingSheetState.MINI_HEIGHT)) {
-                            ShortNavigationBar {
-                                items.forEach { item ->
-                                    val selected = item.matches(routeName)
-                                    ShortNavigationBarItem(selected = selected, onClick = { go(item) }, icon = { Icon(item.icon(selected), null) }, label = { Text(item.label()) })
-                                }
-                            }
-                        }
-                    }
+                // Content ends above the navigation bar; only the mini player floats over it.
+                Box(Modifier.weight(1f).fillMaxSize().padding(bottom = with(density) { bottomInsetPx.toDp() })) {
+                    AppNavHost(nav, Modifier.fillMaxSize())
                 }
             }
             NowPlayingSheet(
                 state = sheet,
-                bottomInset = if (wide) 0.dp else NowPlayingSheetState.NAV_BAR_HEIGHT,
+                bottomInset = with(density) { bottomInsetPx.toDp() },
                 onOpenAlbum = { nav.navigate(Route.Album(it)) },
                 onOpenArtist = { nav.navigate(Route.Artist(it)) },
             )
+            if (!wide) {
+                // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
+                // sheet expands and the full player takes the screen.
+                ShortNavigationBar(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .zIndex(20f)
+                        .onSizeChanged { navBarHeightPx = it.height }
+                        .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                        .testTag("navBar"),
+                ) {
+                    items.forEach { item ->
+                        val selected = item.matches(routeName)
+                        ShortNavigationBarItem(selected = selected, onClick = { go(item) }, icon = { Icon(item.icon(selected), null) }, label = { Text(item.label()) }, modifier = Modifier.testTag("navBar." + item.id))
+                    }
+                }
+            }
         }
     }
 }

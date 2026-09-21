@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -113,7 +114,7 @@ private fun DetailScaffold(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
-            LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
                 item {
                     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(140.dp), if (roundArtwork) CircleShape else RoundedCornerShape(20.dp))
@@ -252,7 +253,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
-            LazyColumn(state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
                 item(key = "header") {
                     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Artwork(p.coverArt, ArtworkSizes.GRID, p.name, Modifier.size(140.dp), RoundedCornerShape(20.dp))

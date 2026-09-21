@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
@@ -74,7 +75,7 @@ fun DownloadsScreen(nav: NavHostController) {
             EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body), Modifier.padding(padding))
             return@Scaffold
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
             if (warn != null && storage.downloadsBytes > warn) {
                 item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
             }

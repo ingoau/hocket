@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.Genre
@@ -197,7 +198,7 @@ private fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, op
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Albums) client.setSelectionTotal(state.total) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
     val grid = rememberLazyGridState()
-    LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), state = grid, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+    LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), state = grid, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         val count = if (state.known) state.total else 0
         items(count, key = { i -> state.item(i, client.albumPages.pageSize)?.id ?: "ph$i" }) { i ->
             val album = state.item(i, client.albumPages.pageSize)
@@ -223,7 +224,7 @@ private fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     val selecting = selection.active && kind == SelectionKind.Artists
     LaunchedEffect(key, state.generation) { client.artistPages.ensure(key, 0) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         val count = if (state.known) state.total else 0
         items(count, key = { i -> state.item(i, client.artistPages.pageSize)?.id ?: "ph$i" }) { i ->
             val artist = state.item(i, client.artistPages.pageSize)
@@ -245,7 +246,7 @@ private fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     val selecting = selection.active && kind == SelectionKind.Playlists
     val list = playlists ?: return
     if (list.isEmpty()) { EmptyState(stringResource(R.string.empty_playlists_title), stringResource(R.string.empty_playlists_body)); return }
-    LazyColumn(contentPadding = PaddingValues(bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         items(list, key = { it.id }) { p ->
             PlaylistRow(p, onClick = { open(DetailTarget.Playlist(p.id)) }, selected = selecting && selection.contains(p.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Playlists, p.id) })
         }
@@ -267,7 +268,7 @@ private fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, nav
     LaunchedEffect(key, state.generation) { client.trackPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Tracks) client.setSelectionTotal(state.total) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         val count = if (state.known) state.total else 0
         items(count, key = { i -> state.item(i, client.trackPages.pageSize)?.id ?: "ph$i" }) { i ->
             val track = state.item(i, client.trackPages.pageSize)
@@ -296,7 +297,7 @@ private fun GenresTab(serverId: String, open: (DetailTarget) -> Unit) {
     LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data }
     val list = genres ?: return
     if (list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(contentPadding = PaddingValues(bottom = 160.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         items(list, key = { it.name }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }) }
     }
 }

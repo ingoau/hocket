@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.api.SettingScope
 import app.hocket.ui.LocalCoreClient
@@ -90,6 +91,6 @@ fun SettingsSection(title: String) {
 @Composable
 fun SubScreen(nav: NavHostController, title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     Scaffold(topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }) }) { padding ->
-        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(bottom = 160.dp)) { content() }
+        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(bottom = BottomContentInset)) { content() }
     }
 }

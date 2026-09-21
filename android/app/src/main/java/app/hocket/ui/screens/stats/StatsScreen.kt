@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Queries
 import app.hocket.core.api.ListeningStats
 import app.hocket.core.api.QueryResult
@@ -66,7 +67,7 @@ fun StatsScreen(nav: NavHostController) {
         topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.stats_title)) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
     ) { padding ->
         val s = stats
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
             item {
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                     val periods = listOf(7 to stringResource(R.string.stats_period_7), 30 to stringResource(R.string.stats_period_30), 365 to stringResource(R.string.stats_period_365))

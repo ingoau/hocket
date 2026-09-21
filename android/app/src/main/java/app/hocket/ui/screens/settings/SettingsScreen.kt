@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.Command
@@ -88,7 +89,7 @@ fun SettingsScreen(nav: NavHostController) {
     LaunchedEffect(Unit) { client.exports.collect { e -> if (e is Event.ConfigExported) { /* handled through the document launcher */ } } }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(modifier = Modifier.nestedScroll(scroll.nestedScrollConnection), topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.settings_title)) }, scrollBehavior = scroll) }) { padding ->
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = 160.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
             SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body))
 
             SettingsSection(stringResource(R.string.settings_server))

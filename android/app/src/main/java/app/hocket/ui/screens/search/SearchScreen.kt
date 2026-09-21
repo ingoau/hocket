@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
@@ -108,7 +109,7 @@ fun SearchScreen(nav: NavHostController) {
         val empty = results.tracks.isEmpty() && results.albums.isEmpty() && results.artists.isEmpty() && results.playlists.isEmpty()
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 160.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = BottomContentInset)) {
                 if (empty && remote == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), "") }
                 if (results.tracks.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_songs)) }
