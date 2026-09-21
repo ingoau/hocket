@@ -122,10 +122,47 @@ that the harness can swap for an in-memory implementation.
 ## Build
 
 ```
-cargo build --workspace                         # core, coordinator, bindings
-cargo test --workspace
-scripts/gen-bindings.sh                          # typeshare + uniffi + napi types
-scripts/build-android-core.sh                    # cargo-ndk -> android/core/src/main/jniLibs
-cd desktop && pnpm install && pnpm build         # napi addon + renderer + electron
-cd android && ./gradlew assembleDebug            # ANDROID_HOME=/opt/android-sdk
+# Rust core, coordinator, binding crates
+cargo build --workspace
+cargo test --workspace --all-features            # `sim` feature enables the full-core integration tests
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+
+# Generated types and FFI glue (typeshare -> TS/Kotlin, uniffi -> Kotlin glue)
+scripts/gen-bindings.sh
+
+# Desktop (Electron + React). `pnpm gen` also builds the napi addon into desktop/native/.
+cd desktop && pnpm install && pnpm gen && pnpm build
+pnpm typecheck && pnpm lint && pnpm test
+xvfb-run -a pnpm test:e2e                        # Playwright Electron e2e (fake core and native core + fake Navidrome)
+pnpm dist:dir                                    # electron-builder unpacked build
+
+# Android (Gradle 9, AGP 9, Kotlin 2.4, compileSdk 37.1, Material 3 Expressive)
+scripts/build-android-core.sh release            # cargo-ndk -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
+cd android && ./gradlew testDebugUnitTest assembleDebug :app:lintDebug   # ANDROID_HOME=/opt/android-sdk
+
+# Coordinator
+cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket
 ```
+
+Linux builds of the core need `libasound2-dev` (cpal). The desktop app's OS media
+session needs a D-Bus session bus on Linux; without one it logs and continues.
+
+## Testing strategy
+
+- Every subsystem has in-module unit tests; the queue reducer, filters, outbox
+  scrobbler and connect wire types also have property tests.
+- `crates/hocket-core/src/sim/` is the deterministic simulation harness
+  (virtual clock, in-memory network with partitions/delay/loss/reorder) running
+  real engines and reducers through scripted and randomised multi-device
+  scenarios with invariants checked after every event.
+- `crates/hocket-core/tests/actor_*.rs` drive full `Core` instances
+  (`Core::new_for_test`) with a scripted backend, a fake Navidrome and virtual
+  time: playback, undo, saved queues, scrobbling, sync, search, ratings via the
+  outbox, filters, lyrics, settings, downloads, and two cores over an in-memory
+  LAN doing a handoff.
+- `crates/hocket-coordinator/tests/handoff.rs` runs the real binary on an
+  ephemeral port with two engines over real WebSockets.
+- Desktop: vitest for renderer logic; Playwright Electron e2e against the
+  FakeCore and against the native core with a fake Navidrome HTTP server.
+- Android: JVM tests for the seam, page cache, selection and lyrics cursor;
+  Robolectric Compose tests for setup, queue, now-playing sheet and layout.
