@@ -113,7 +113,12 @@ pub struct OpContext {
 /// **total** for well-formed documents (never panic). They must not touch
 /// `revision`, `sessionId` or `scope`: the engine and room set those.
 pub trait SessionReducer: Send + Sync {
-    fn apply(&self, doc: &SessionDocument, op: &SessionOp, ctx: &OpContext) -> Result<SessionDocument, ReduceFailure>;
+    fn apply(
+        &self,
+        doc: &SessionDocument,
+        op: &SessionOp,
+        ctx: &OpContext,
+    ) -> Result<SessionDocument, ReduceFailure>;
 }
 
 /// Shared handle to a reducer.
@@ -121,7 +126,12 @@ pub type ReducerHandle = Arc<dyn SessionReducer>;
 
 /// Derive the op context every replica uses for an op.
 pub fn op_context(op_id: &str, now: EpochMs, position_ms: Ms) -> OpContext {
-    OpContext { now, seed: seed_from(op_id), key_prefix: op_id.to_string(), position_ms }
+    OpContext {
+        now,
+        seed: seed_from(op_id),
+        key_prefix: op_id.to_string(),
+        position_ms,
+    }
 }
 
 /// FNV-1a over the op id: stable, cheap, good enough for a shuffle seed.

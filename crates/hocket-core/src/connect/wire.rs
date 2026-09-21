@@ -28,9 +28,9 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp, QueueKey, QueueMode,
-    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
-    PROTOCOL_MIN_VERSION, PROTOCOL_VERSION,
+    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp,
+    QueueKey, QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
+    TrackId, TransportLease, UndoEntry, PROTOCOL_MIN_VERSION, PROTOCOL_VERSION,
 };
 
 /// Highest protocol version this build speaks.
@@ -59,7 +59,11 @@ pub struct WireMessage {
 impl WireMessage {
     /// Wrap a message with this build's protocol version.
     pub fn new(msg: Msg) -> Self {
-        WireMessage { protocol_version: PROTOCOL, msg, extra: HashMap::new() }
+        WireMessage {
+            protocol_version: PROTOCOL,
+            msg,
+            extra: HashMap::new(),
+        }
     }
 
     /// Serialise to one JSON text frame.
@@ -90,7 +94,12 @@ pub enum WireError {
     #[error("wire json: {0}")]
     Json(#[source] serde_json::Error),
     #[error("protocol {offered_min}..={offered_max} not compatible with {ours_min}..={ours_max}")]
-    Incompatible { offered_min: u32, offered_max: u32, ours_min: u32, ours_max: u32 },
+    Incompatible {
+        offered_min: u32,
+        offered_max: u32,
+        ours_min: u32,
+        ours_max: u32,
+    },
 }
 
 /// Pick the highest protocol both ranges contain, refusing anything below the
@@ -101,7 +110,12 @@ pub fn negotiate(their_min: u32, their_max: u32) -> Result<u32, WireError> {
     let low = their_min.max(ours_min);
     let high = their_max.min(ours_max);
     if their_max < PROTOCOL_MIN || low > high {
-        return Err(WireError::Incompatible { offered_min: their_min, offered_max: their_max, ours_min, ours_max });
+        return Err(WireError::Incompatible {
+            offered_min: their_min,
+            offered_max: their_max,
+            ours_min,
+            ours_max,
+        });
     }
     Ok(high)
 }
@@ -284,7 +298,9 @@ pub struct AutoplayOpItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum SessionOp {
-    PlayContext { args: PlayContextArgs },
+    PlayContext {
+        args: PlayContextArgs,
+    },
     PlayTracks {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
@@ -293,36 +309,79 @@ pub enum SessionOp {
         shuffle: bool,
         save_outgoing: bool,
     },
-    PlayNext { server_id: ServerId, track_ids: Vec<TrackId> },
-    PlayLater { server_id: ServerId, track_ids: Vec<TrackId> },
-    JumpToQueueItem { key: QueueKey },
-    RemoveQueueItems { keys: Vec<QueueKey> },
-    MoveQueueItem { key: QueueKey, to_index: u32 },
+    PlayNext {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+    },
+    PlayLater {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+    },
+    JumpToQueueItem {
+        key: QueueKey,
+    },
+    RemoveQueueItems {
+        keys: Vec<QueueKey>,
+    },
+    MoveQueueItem {
+        key: QueueKey,
+        to_index: u32,
+    },
     ClearQueue,
     ClearInsertions,
-    SetShuffle { enabled: bool },
+    SetShuffle {
+        enabled: bool,
+    },
     Reshuffle,
-    SetRepeat { mode: RepeatMode },
-    SetAutoplay { enabled: bool },
-    SetQueueMode { mode: QueueMode },
+    SetRepeat {
+        mode: RepeatMode,
+    },
+    SetAutoplay {
+        enabled: bool,
+    },
+    SetQueueMode {
+        mode: QueueMode,
+    },
     Next,
     Previous,
     /// Mark unplayable and advance; never scrobbles.
-    SkipUnavailable { key: QueueKey },
-    AppendAutoplay { items: Vec<AutoplayOpItem> },
+    SkipUnavailable {
+        key: QueueKey,
+    },
+    AppendAutoplay {
+        items: Vec<AutoplayOpItem>,
+    },
     TrackEnded,
-    RestoreSavedQueue { id: String, tracks: Option<Vec<TrackId>> },
-    SetContextTracks { tracks: Vec<TrackId> },
-    SaveCurrentQueue { pinned: bool },
-    PinSavedQueue { id: String, pinned: bool },
-    DeleteSavedQueue { id: String },
-    TouchSavedQueue { id: String },
+    RestoreSavedQueue {
+        id: String,
+        tracks: Option<Vec<TrackId>>,
+    },
+    SetContextTracks {
+        tracks: Vec<TrackId>,
+    },
+    SaveCurrentQueue {
+        pinned: bool,
+    },
+    PinSavedQueue {
+        id: String,
+        pinned: bool,
+    },
+    DeleteSavedQueue {
+        id: String,
+    },
+    TouchSavedQueue {
+        id: String,
+    },
     /// LWW merge of a saved-queue set into the document's.
-    MergeSavedQueues { remote: Vec<SavedQueue> },
+    MergeSavedQueues {
+        remote: Vec<SavedQueue>,
+    },
     /// Whole-document replacement: undo snapshot restore, initial push into an
     /// empty room, a returning device's fast-forward. `revision`, `sessionId`
     /// and `scope` of the target are kept.
-    Replace { document: SessionDocument },
+    Replace {
+        document: SessionDocument,
+    },
 }
 
 impl SessionOp {
@@ -331,7 +390,13 @@ impl SessionOp {
     pub fn from_command(cmd: &Command) -> Option<SessionOp> {
         Some(match cmd {
             Command::PlayContext { args } => SessionOp::PlayContext { args: args.clone() },
-            Command::PlayTracks { server_id, track_ids, start_index, label, shuffle } => SessionOp::PlayTracks {
+            Command::PlayTracks {
+                server_id,
+                track_ids,
+                start_index,
+                label,
+                shuffle,
+            } => SessionOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
                 start_index: *start_index,
@@ -339,15 +404,28 @@ impl SessionOp {
                 shuffle: *shuffle,
                 save_outgoing: true,
             },
-            Command::PlayNext { server_id, track_ids } => {
-                SessionOp::PlayNext { server_id: server_id.clone(), track_ids: track_ids.clone() }
-            }
-            Command::PlayLater { server_id, track_ids } => {
-                SessionOp::PlayLater { server_id: server_id.clone(), track_ids: track_ids.clone() }
-            }
+            Command::PlayNext {
+                server_id,
+                track_ids,
+            } => SessionOp::PlayNext {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+            },
+            Command::PlayLater {
+                server_id,
+                track_ids,
+            } => SessionOp::PlayLater {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+            },
             Command::JumpToQueueItem { key } => SessionOp::JumpToQueueItem { key: key.clone() },
-            Command::RemoveQueueItems { keys } => SessionOp::RemoveQueueItems { keys: keys.clone() },
-            Command::MoveQueueItem { key, to_index } => SessionOp::MoveQueueItem { key: key.clone(), to_index: *to_index },
+            Command::RemoveQueueItems { keys } => {
+                SessionOp::RemoveQueueItems { keys: keys.clone() }
+            }
+            Command::MoveQueueItem { key, to_index } => SessionOp::MoveQueueItem {
+                key: key.clone(),
+                to_index: *to_index,
+            },
             Command::ClearQueue => SessionOp::ClearQueue,
             Command::ClearInsertions => SessionOp::ClearInsertions,
             Command::SetShuffle { enabled } => SessionOp::SetShuffle { enabled: *enabled },
@@ -357,8 +435,14 @@ impl SessionOp {
             Command::Next => SessionOp::Next,
             Command::Previous => SessionOp::Previous,
             Command::SkipUnavailable { key } => SessionOp::SkipUnavailable { key: key.clone() },
-            Command::RestoreSavedQueue { id } => SessionOp::RestoreSavedQueue { id: id.clone(), tracks: None },
-            Command::PinSavedQueue { id, pinned } => SessionOp::PinSavedQueue { id: id.clone(), pinned: *pinned },
+            Command::RestoreSavedQueue { id } => SessionOp::RestoreSavedQueue {
+                id: id.clone(),
+                tracks: None,
+            },
+            Command::PinSavedQueue { id, pinned } => SessionOp::PinSavedQueue {
+                id: id.clone(),
+                pinned: *pinned,
+            },
             Command::DeleteSavedQueue { id } => SessionOp::DeleteSavedQueue { id: id.clone() },
             _ => return None,
         })
@@ -384,7 +468,10 @@ impl SessionOp {
 
     /// Ops only the transport owner issues (they follow playback itself).
     pub fn is_owner_op(&self) -> bool {
-        matches!(self, SessionOp::TrackEnded | SessionOp::SkipUnavailable { .. })
+        matches!(
+            self,
+            SessionOp::TrackEnded | SessionOp::SkipUnavailable { .. }
+        )
     }
 }
 
@@ -428,9 +515,14 @@ pub enum Msg {
         extra: Extra,
     },
     /// → client. Not admitted; the room closes the connection afterwards.
-    Refuse { reason: RefuseReason, message: String },
+    Refuse {
+        reason: RefuseReason,
+        message: String,
+    },
     /// Either direction. Sent before closing on purpose.
-    Bye { reason: String },
+    Bye {
+        reason: String,
+    },
 
     // -- session ops ----------------------------------------------------
     /// → room. Targets `baseRevision`; `epoch` is set for ops the transport owner issues
@@ -449,9 +541,17 @@ pub enum Msg {
         position_ms: Ms,
     },
     /// → client (the originator).
-    OpAck { op_id: String, revision: u32 },
+    OpAck {
+        op_id: String,
+        revision: u32,
+    },
     /// → client (the originator). Carries the current document for rollback.
-    OpReject { op_id: String, current_revision: u32, reason: RejectReason, document: SessionDocument },
+    OpReject {
+        op_id: String,
+        current_revision: u32,
+        reason: RejectReason,
+        document: SessionDocument,
+    },
     /// → client (everyone but the originator). An op the room accepted.
     OpCommitted {
         op: SessionOp,
@@ -464,7 +564,9 @@ pub enum Msg {
         position_ms: Ms,
     },
     /// → client. Full document (join, resync).
-    Document { document: SessionDocument },
+    Document {
+        document: SessionDocument,
+    },
     /// → room. Ask for a full document.
     SyncRequest,
 
@@ -480,7 +582,10 @@ pub enum Msg {
         epoch: u32,
     },
     /// → room, relayed to the owner: a non-owner's remote control.
-    TransportRequest { command: TransportCommand, from: DeviceId },
+    TransportRequest {
+        command: TransportCommand,
+        from: DeviceId,
+    },
     /// → room. Every 5 s while owning transport. `sentAt` (sender's clock) is
     /// echoed back as `ackOf` so the owner knows exactly which heartbeat was
     /// answered.
@@ -498,7 +603,9 @@ pub enum Msg {
         sent_at: EpochMs,
     },
     /// → room. Owner gives transport up.
-    LeaseRelease { epoch: u32 },
+    LeaseRelease {
+        epoch: u32,
+    },
     /// → client (broadcast on every change, and to the owner on renewal).
     /// `ackOf` echoes the `sentAt` of the heartbeat/claim this answers.
     LeaseGranted {
@@ -507,25 +614,51 @@ pub enum Msg {
         ack_of: Option<EpochMs>,
     },
     /// → client. A stamp, heartbeat or op carried a stale epoch.
-    LeaseFenced { current_epoch: u32, lease: TransportLease },
+    LeaseFenced {
+        current_epoch: u32,
+        lease: TransportLease,
+    },
 
     // -- presence and clock ---------------------------------------------
     /// → client. Presence means connected; sleeping devices are absent.
-    Presence { devices: Vec<DeviceInfo> },
+    Presence {
+        devices: Vec<DeviceInfo>,
+    },
     /// → room.
-    ClockPing { t0: EpochMs },
+    ClockPing {
+        t0: EpochMs,
+    },
     /// → client. `t1` receive time, `t2` send time, both on the session clock.
-    ClockPong { t0: EpochMs, t1: EpochMs, t2: EpochMs },
+    ClockPong {
+        t0: EpochMs,
+        t1: EpochMs,
+        t2: EpochMs,
+    },
 
     // -- handoff --------------------------------------------------------
     /// → room, relayed. The source opened its picker.
-    HandoffPickerOpen { from: DeviceId },
-    HandoffPickerClose { from: DeviceId },
+    HandoffPickerOpen {
+        from: DeviceId,
+    },
+    HandoffPickerClose {
+        from: DeviceId,
+    },
     /// → room, routed to `target`. Pre-buffer this item at this position; the
     /// target resolves its own stream URL.
-    HandoffPrepare { from: DeviceId, target: DeviceId, key: QueueKey, track_id: TrackId, position_ms: Ms },
+    HandoffPrepare {
+        from: DeviceId,
+        target: DeviceId,
+        key: QueueKey,
+        track_id: TrackId,
+        position_ms: Ms,
+    },
     /// → room, routed to `from`. Target reports readiness.
-    HandoffReady { from: DeviceId, target: DeviceId, key: QueueKey, ready: bool },
+    HandoffReady {
+        from: DeviceId,
+        target: DeviceId,
+        key: QueueKey,
+        ready: bool,
+    },
     /// → room (source), then routed to `target` with `lease` filled in by the
     /// room after it transferred ownership.
     HandoffTakeover {
@@ -541,26 +674,48 @@ pub enum Msg {
         lease: Option<TransportLease>,
     },
     /// → room. Source finished releasing after a takeover.
-    HandoffRelease { epoch: u32 },
+    HandoffRelease {
+        epoch: u32,
+    },
 
     // -- scrobbling -----------------------------------------------------
     /// → room. Record a submitted scrobble in the dedupe log.
-    ScrobbleSubmitted { track_id: TrackId, started_at: EpochMs, device_id: DeviceId },
+    ScrobbleSubmitted {
+        track_id: TrackId,
+        started_at: EpochMs,
+        device_id: DeviceId,
+    },
     /// → room. Claim a pair before submitting; the room records it if new.
-    ScrobbleDedupeQuery { query_id: String, track_id: TrackId, started_at: EpochMs, device_id: DeviceId },
+    ScrobbleDedupeQuery {
+        query_id: String,
+        track_id: TrackId,
+        started_at: EpochMs,
+        device_id: DeviceId,
+    },
     /// → client.
-    ScrobbleDedupeAnswer { query_id: String, duplicate: bool },
+    ScrobbleDedupeAnswer {
+        query_id: String,
+        duplicate: bool,
+    },
 
     // -- LWW sets -------------------------------------------------------
     /// Either direction. Merged LWW on `updatedAt` per context identity.
-    SavedQueuesSync { queues: Vec<SavedQueue> },
+    SavedQueuesSync {
+        queues: Vec<SavedQueue>,
+    },
     /// Either direction. Merged LWW on `updatedAt` per key.
-    SettingsSync { settings: Vec<Setting> },
+    SettingsSync {
+        settings: Vec<Setting>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
     /// stamped with its originating device.
-    UndoEntryShared { entry: UndoEntry, before_revision: u32, before: Option<SessionDocument> },
+    UndoEntryShared {
+        entry: UndoEntry,
+        before_revision: u32,
+        before: Option<SessionDocument>,
+    },
 
     /// Anything this build does not know. Ignored.
     #[serde(other)]
@@ -736,11 +891,17 @@ mod tests {
 
     #[test]
     fn envelope_round_trips_and_is_adjacently_tagged() {
-        let m = WireMessage::new(Msg::LeaseHeartbeat { epoch: 4, sent_at: 1.0 });
+        let m = WireMessage::new(Msg::LeaseHeartbeat {
+            epoch: 4,
+            sent_at: 1.0,
+        });
         let text = m.encode().unwrap();
         assert!(text.contains("\"type\":\"leaseHeartbeat\""));
         // Struct-variant fields keep serde's default names, as in `api.rs`.
-        assert!(text.contains("\"data\":{\"epoch\":4,\"sent_at\":1"), "{text}");
+        assert!(
+            text.contains("\"data\":{\"epoch\":4,\"sent_at\":1"),
+            "{text}"
+        );
         assert!(text.contains("\"protocolVersion\":1"));
         let back = WireMessage::decode(&text).unwrap();
         assert_eq!(back, m);
@@ -767,9 +928,15 @@ mod tests {
             Msg::SyncRequest,
             Msg::Bye { reason: "x".into() },
             Msg::ClockPing { t0: 0.0 },
-            Msg::LeaseHeartbeat { epoch: 0, sent_at: 0.0 },
+            Msg::LeaseHeartbeat {
+                epoch: 0,
+                sent_at: 0.0,
+            },
             Msg::HandoffPickerOpen { from: "a".into() },
-            Msg::ScrobbleDedupeAnswer { query_id: "q".into(), duplicate: false },
+            Msg::ScrobbleDedupeAnswer {
+                query_id: "q".into(),
+                duplicate: false,
+            },
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
             Msg::Unknown,
@@ -781,7 +948,10 @@ mod tests {
             assert!(Msg::is_known(tag), "{tag}");
         }
         // a malformed known message is still an error
-        assert!(WireMessage::decode(r#"{"protocolVersion":1,"msg":{"type":"op","data":{"nope":1}}}"#).is_err());
+        assert!(WireMessage::decode(
+            r#"{"protocolVersion":1,"msg":{"type":"op","data":{"nope":1}}}"#
+        )
+        .is_err());
     }
 
     #[test]
@@ -871,8 +1041,14 @@ mod tests {
 
     #[test]
     fn scope_key_normalises() {
-        assert_eq!(scope_key("HTTPS://Music.Example/", "bob"), "https://music.example|bob");
-        assert_eq!(scope_key(" https://music.example ", "bob"), scope_key("https://music.example/", "bob"));
+        assert_eq!(
+            scope_key("HTTPS://Music.Example/", "bob"),
+            "https://music.example|bob"
+        );
+        assert_eq!(
+            scope_key(" https://music.example ", "bob"),
+            scope_key("https://music.example/", "bob")
+        );
     }
 
     fn sq(id: &str, at: f64, pinned: bool) -> SavedQueue {
@@ -912,8 +1088,14 @@ mod tests {
         assert!(a.pinned && a.updated_at == 20.0);
         assert!(m1.iter().any(|q| q.id == "c"));
         let (m2, _) = merge_saved_queues(&theirs, &ours);
-        let mut s1: Vec<_> = m1.iter().map(|q| (q.id.clone(), q.updated_at, q.pinned)).collect();
-        let mut s2: Vec<_> = m2.iter().map(|q| (q.id.clone(), q.updated_at, q.pinned)).collect();
+        let mut s1: Vec<_> = m1
+            .iter()
+            .map(|q| (q.id.clone(), q.updated_at, q.pinned))
+            .collect();
+        let mut s2: Vec<_> = m2
+            .iter()
+            .map(|q| (q.id.clone(), q.updated_at, q.pinned))
+            .collect();
         s1.sort_by(|x, y| x.0.cmp(&y.0));
         s2.sort_by(|x, y| x.0.cmp(&y.0));
         assert_eq!(s1, s2);
@@ -929,7 +1111,10 @@ mod tests {
             scope: SettingScope::AccountSynced,
             updated_at: at,
         };
-        let (m, changed) = merge_settings(&[s("theme", "dark", 5.0)], &[s("theme", "light", 3.0), s("x", "1", 1.0)]);
+        let (m, changed) = merge_settings(
+            &[s("theme", "dark", 5.0)],
+            &[s("theme", "light", 3.0), s("x", "1", 1.0)],
+        );
         assert!(changed);
         assert_eq!(m.iter().find(|x| x.key == "theme").unwrap().value, "dark");
         assert_eq!(m.len(), 2);
@@ -950,6 +1135,12 @@ mod tests {
         .unwrap();
         assert!(text.contains("\"type\":\"replace\""));
         let back: Msg = serde_json::from_str(&text).unwrap();
-        assert!(matches!(back, Msg::Op { base_revision: 3, .. }));
+        assert!(matches!(
+            back,
+            Msg::Op {
+                base_revision: 3,
+                ..
+            }
+        ));
     }
 }

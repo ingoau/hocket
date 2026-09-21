@@ -45,7 +45,11 @@ mod tests {
     use super::*;
 
     fn c(id: &str, rev: u32, serving: bool) -> Candidate {
-        Candidate { device_id: id.into(), session_revision: rev, serving }
+        Candidate {
+            device_id: id.into(),
+            session_revision: rev,
+            serving,
+        }
     }
 
     #[test]

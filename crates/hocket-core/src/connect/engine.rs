@@ -27,8 +27,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, Ms, PositionStamp, QueueKey, SavedQueue,
-    SessionDocument, Setting, TrackId, TransportLease, TransportState, UndoEntry,
+    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, Ms, PositionStamp, QueueKey,
+    SavedQueue, SessionDocument, Setting, TrackId, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
 use crate::connect::discovery::{scope_hash, PeerAdvert};
@@ -38,11 +38,12 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
-    TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason,
+    ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
-    apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp, SyncPoint, LOOPBACK,
+    apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp,
+    SyncPoint, LOOPBACK,
 };
 use crate::util::Clock;
 
@@ -128,22 +129,43 @@ pub enum Input {
 
     // -- I/O reports -------------------------------------------------------
     /// The upstream socket requested by `Output::Connect` is open.
-    Connected { peer: PeerId, url: String },
-    ConnectFailed { error: String },
+    Connected {
+        peer: PeerId,
+        url: String,
+    },
+    ConnectFailed {
+        error: String,
+    },
     /// Any socket closed (upstream or inbound).
-    Disconnected { peer: PeerId },
-    ListenerStarted { port: u16 },
+    Disconnected {
+        peer: PeerId,
+    },
+    ListenerStarted {
+        port: u16,
+    },
     ListenerStopped,
     /// An inbound socket to our listener.
-    PeerConnected { peer: PeerId },
-    WireIn { peer: PeerId, msg: WireMessage },
+    PeerConnected {
+        peer: PeerId,
+    },
+    WireIn {
+        peer: PeerId,
+        msg: WireMessage,
+    },
     /// Answer to `Output::VerifyCredential`.
-    CredentialVerified { peer: PeerId, ok: bool },
+    CredentialVerified {
+        peer: PeerId,
+        ok: bool,
+    },
     PeerDiscovered(PeerAdvert),
-    PeerLost { device_id: DeviceId },
+    PeerLost {
+        device_id: DeviceId,
+    },
 
     // -- session -----------------------------------------------------------
-    LocalOp { op: SessionOp },
+    LocalOp {
+        op: SessionOp,
+    },
     /// Transport changed on this device (play/pause/seek/track). Never on a timer.
     /// `taken_at` is local time; `started_at` is a session-clock identity token
     /// (from [`Engine::now_session_ms`] or a `TakeTransport`).
@@ -156,7 +178,9 @@ pub enum Input {
         scrobbled: bool,
     },
     /// The user wants to play here (nobody owns, or a deliberate takeover).
-    ClaimTransport { takeover: bool },
+    ClaimTransport {
+        takeover: bool,
+    },
     /// This device stopped on purpose.
     ReleaseTransport,
     /// Play/pause/seek from this device's UI when it may not own transport.
@@ -165,17 +189,30 @@ pub enum Input {
     // -- handoff -----------------------------------------------------------
     OpenPicker,
     ClosePicker,
-    HandoffTo { device_id: DeviceId },
-    PreBufferReady { key: QueueKey },
-    PreBufferFailed { key: QueueKey },
+    HandoffTo {
+        device_id: DeviceId,
+    },
+    PreBufferReady {
+        key: QueueKey,
+    },
+    PreBufferFailed {
+        key: QueueKey,
+    },
     ResumeHere,
     DismissResume,
 
     // -- scrobbling, LWW sets, undo ---------------------------------------
-    ScrobbleReached { track_id: TrackId, started_at: EpochMs },
+    ScrobbleReached {
+        track_id: TrackId,
+        started_at: EpochMs,
+    },
     SavedQueuesChanged(Vec<SavedQueue>),
     SettingChanged(Setting),
-    UndoEntryCreated { entry: UndoEntry, before_revision: u32, before: Option<SessionDocument> },
+    UndoEntryCreated {
+        entry: UndoEntry,
+        before_revision: u32,
+        before: Option<SessionDocument>,
+    },
 
     Tick,
 }
@@ -211,30 +248,59 @@ pub struct ResumeOfferDraft {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
-    WireOut { peer: PeerId, msg: WireMessage },
+    WireOut {
+        peer: PeerId,
+        msg: WireMessage,
+    },
     /// Open one upstream socket, trying candidates in order; report with
     /// `Connected` or `ConnectFailed`.
-    Connect { candidates: Vec<String> },
-    Disconnect { peer: PeerId },
+    Connect {
+        candidates: Vec<String>,
+    },
+    Disconnect {
+        peer: PeerId,
+    },
     StartListener,
     StopListener,
     /// Publish (or withdraw) our mDNS record.
     Advertise(Option<PeerAdvert>),
     /// Proxy a Subsonic ping for an inbound LAN peer; answer `CredentialVerified`.
-    VerifyCredential { peer: PeerId, credential: Credential },
+    VerifyCredential {
+        peer: PeerId,
+        credential: Credential,
+    },
 
-    DocumentChanged { document: SessionDocument, cause: DocChange },
+    DocumentChanged {
+        document: SessionDocument,
+        cause: DocChange,
+    },
     /// A remote stamp: extrapolate from it.
-    TransportChanged { transport: TransportState },
-    LeaseChanged { lease: TransportLease, owns: bool, detached: bool },
+    TransportChanged {
+        transport: TransportState,
+    },
+    LeaseChanged {
+        lease: TransportLease,
+        owns: bool,
+        detached: bool,
+    },
     ConnectionChanged(ConnectionState),
     DevicesChanged(Vec<DeviceInfo>),
-    PickerChanged { open: bool, targets: Vec<DeviceInfo> },
+    PickerChanged {
+        open: bool,
+        targets: Vec<DeviceInfo>,
+    },
     ResumeOffer(Option<ResumeOfferDraft>),
     /// Snapshot this document as a saved queue; never merge it.
-    FilePreviousStateAsSavedQueue { document: SessionDocument, reason: String },
+    FilePreviousStateAsSavedQueue {
+        document: SessionDocument,
+        reason: String,
+    },
 
-    PreBuffer { key: QueueKey, track_id: TrackId, position_ms: Ms },
+    PreBuffer {
+        key: QueueKey,
+        track_id: TrackId,
+        position_ms: Ms,
+    },
     DiscardPreBuffer,
     /// This device now owns transport and should play from here.
     TakeTransport {
@@ -251,13 +317,24 @@ pub enum Output {
     /// Remote control for the transport owner (this device).
     TransportCommand(TransportCommand),
     /// Verdict on a `ScrobbleReached`.
-    Scrobble { track_id: TrackId, started_at: EpochMs, allowed: bool },
+    Scrobble {
+        track_id: TrackId,
+        started_at: EpochMs,
+        allowed: bool,
+    },
     SavedQueuesMerged(Vec<SavedQueue>),
     SettingsMerged(Vec<Setting>),
-    UndoEntryReceived { entry: UndoEntry, before_revision: u32, before: Option<SessionDocument> },
+    UndoEntryReceived {
+        entry: UndoEntry,
+        before_revision: u32,
+        before: Option<SessionDocument>,
+    },
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
-    Log { level: &'static str, message: String },
+    Log {
+        level: &'static str,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -272,10 +349,22 @@ struct PendingOp {
 
 #[derive(Debug, Clone, PartialEq)]
 enum RemoteState {
-    Connecting { since: EpochMs, attempt: u32 },
-    Handshaking { peer: PeerId, since: EpochMs, attempt: u32 },
-    Attached { peer: PeerId },
-    Backoff { until: EpochMs, attempt: u32 },
+    Connecting {
+        since: EpochMs,
+        attempt: u32,
+    },
+    Handshaking {
+        peer: PeerId,
+        since: EpochMs,
+        attempt: u32,
+    },
+    Attached {
+        peer: PeerId,
+    },
+    Backoff {
+        until: EpochMs,
+        attempt: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -533,7 +622,13 @@ impl Engine {
 
     /// Attached to a remote room (or serving one) and past the handshake.
     pub fn is_connected(&self) -> bool {
-        matches!(self.remote, Some(Remote { state: RemoteState::Attached { .. }, .. })) && self.upstream_ready
+        matches!(
+            self.remote,
+            Some(Remote {
+                state: RemoteState::Attached { .. },
+                ..
+            })
+        ) && self.upstream_ready
     }
 
     /// Serving our own room to inbound LAN peers.
@@ -558,7 +653,11 @@ impl Engine {
     /// The LAN leader this device follows (tier 2 client), if any.
     pub fn lan_leader(&self) -> Option<&DeviceId> {
         match &self.remote {
-            Some(Remote { tier: ConnectionTier::Lan, leader, .. }) => leader.as_ref(),
+            Some(Remote {
+                tier: ConnectionTier::Lan,
+                leader,
+                ..
+            }) => leader.as_ref(),
             _ => None,
         }
     }
@@ -625,7 +724,11 @@ impl Engine {
             connected: self.is_connected() || self.is_serving(),
             coordinator_url: self.cfg.coordinator_url.clone(),
             clock_offset_ms: self.offset_ms(),
-            round_trip_ms: if self.is_connected() { self.offset.round_trip_ms() } else { None },
+            round_trip_ms: if self.is_connected() {
+                self.offset.round_trip_ms()
+            } else {
+                None
+            },
             peer_count: self.devices.iter().filter(|d| !d.is_self).count() as u32,
             error: self.last_error.clone(),
         }
@@ -639,7 +742,12 @@ impl Engine {
         me.ready = false;
         me.last_seen = self.now_session_ms();
         let mut out = vec![me];
-        out.extend(self.devices.iter().filter(|d| d.id != self.cfg.device.id).cloned());
+        out.extend(
+            self.devices
+                .iter()
+                .filter(|d| d.id != self.cfg.device.id)
+                .cloned(),
+        );
         out
     }
 
@@ -717,9 +825,14 @@ impl Engine {
                 self.reevaluate();
             }
             Input::LocalOp { op } => self.on_local_op(op),
-            Input::LocalStamp { key, track_id, position, played_ms, started_at, scrobbled } => {
-                self.on_local_stamp(key, track_id, position, played_ms, started_at, scrobbled)
-            }
+            Input::LocalStamp {
+                key,
+                track_id,
+                position,
+                played_ms,
+                started_at,
+                scrobbled,
+            } => self.on_local_stamp(key, track_id, position, played_ms, started_at, scrobbled),
             Input::ClaimTransport { takeover } => {
                 if self.held.is_none() || takeover {
                     self.claim(None, takeover);
@@ -763,7 +876,10 @@ impl Engine {
                     self.out.push(Output::ResumeOffer(None));
                 }
             }
-            Input::ScrobbleReached { track_id, started_at } => self.on_scrobble_reached(track_id, started_at),
+            Input::ScrobbleReached {
+                track_id,
+                started_at,
+            } => self.on_scrobble_reached(track_id, started_at),
             Input::SavedQueuesChanged(list) => {
                 let (merged, _) = merge_saved_queues(&list, &self.saved_queues);
                 self.saved_queues = merged;
@@ -776,8 +892,16 @@ impl Engine {
                 let settings = self.settings.clone();
                 self.upstream_send(Msg::SettingsSync { settings });
             }
-            Input::UndoEntryCreated { entry, before_revision, before } => {
-                self.upstream_send(Msg::UndoEntryShared { entry, before_revision, before });
+            Input::UndoEntryCreated {
+                entry,
+                before_revision,
+                before,
+            } => {
+                self.upstream_send(Msg::UndoEntryShared {
+                    entry,
+                    before_revision,
+                    before,
+                });
             }
             Input::Tick => self.on_tick(),
         }
@@ -789,7 +913,10 @@ impl Engine {
 
     fn upstream_peer(&self) -> Option<PeerId> {
         match &self.remote {
-            Some(Remote { state: RemoteState::Attached { peer }, .. }) => Some(peer.clone()),
+            Some(Remote {
+                state: RemoteState::Attached { peer },
+                ..
+            }) => Some(peer.clone()),
             _ => None,
         }
     }
@@ -856,15 +983,24 @@ impl Engine {
                         self.out.push(Output::Disconnect { peer });
                     }
                 }
-                RoomOutput::Verify { peer, credential } => self.out.push(Output::VerifyCredential { peer, credential }),
-                RoomOutput::ReplicaChanged => self.out.push(Output::ReplicaChanged(self.room.replica().clone())),
+                RoomOutput::Verify { peer, credential } => {
+                    self.out.push(Output::VerifyCredential { peer, credential })
+                }
+                RoomOutput::ReplicaChanged => self
+                    .out
+                    .push(Output::ReplicaChanged(self.room.replica().clone())),
             }
         }
     }
 
     fn learn_scrobbled(&mut self, track_id: &str, started_at: EpochMs, device_id: &str) {
-        if !self.known_scrobbled.iter().any(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0) {
-            self.known_scrobbled.push((track_id.to_string(), started_at, device_id.to_string()));
+        if !self
+            .known_scrobbled
+            .iter()
+            .any(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0)
+        {
+            self.known_scrobbled
+                .push((track_id.to_string(), started_at, device_id.to_string()));
             if self.known_scrobbled.len() > 500 {
                 self.known_scrobbled.remove(0);
             }
@@ -903,7 +1039,11 @@ impl Engine {
     }
 
     fn emit_lease(&mut self) {
-        self.out.push(Output::LeaseChanged { lease: self.lease.clone(), owns: self.held.is_some(), detached: self.detached });
+        self.out.push(Output::LeaseChanged {
+            lease: self.lease.clone(),
+            owns: self.held.is_some(),
+            detached: self.detached,
+        });
     }
 
     fn emit_devices(&mut self) {
@@ -912,7 +1052,10 @@ impl Engine {
     }
 
     fn log(&mut self, level: &'static str, message: impl Into<String>) {
-        self.out.push(Output::Log { level, message: message.into() });
+        self.out.push(Output::Log {
+            level,
+            message: message.into(),
+        });
     }
 
     // -- tier selection ------------------------------------------------------
@@ -931,7 +1074,11 @@ impl Engine {
         let mut cands: Vec<Candidate> = self
             .lan_peers
             .iter()
-            .map(|p| Candidate { device_id: p.device_id.clone(), session_revision: p.session_revision, serving: p.serving })
+            .map(|p| Candidate {
+                device_id: p.device_id.clone(),
+                session_revision: p.session_revision,
+                serving: p.serving,
+            })
             .collect();
         cands.push(Candidate {
             device_id: self.cfg.device.id.clone(),
@@ -946,20 +1093,30 @@ impl Engine {
         let now = self.now_local_ms();
         let coordinator = self.coordinator_target();
         let leader = self.elect_lan_leader();
-        let lan_alternative = leader.as_ref().map(|l| l != &self.cfg.device.id).unwrap_or(false)
+        let lan_alternative = leader
+            .as_ref()
+            .map(|l| l != &self.cfg.device.id)
+            .unwrap_or(false)
             || (leader.is_some() && !self.lan_peers.is_empty());
         let coordinator_usable = coordinator.is_some()
-            && (self.coordinator_failures < 2 || now >= self.coordinator_retry_at || !lan_alternative);
+            && (self.coordinator_failures < 2
+                || now >= self.coordinator_retry_at
+                || !lan_alternative);
 
         // The listener runs whenever LAN is on; it costs nothing and lets
         // peers find us whichever way the election goes.
         let want_listener = self.cfg.lan_enabled;
         if want_listener != self.listener_wanted {
             self.listener_wanted = want_listener;
-            self.out.push(if want_listener { Output::StartListener } else { Output::StopListener });
+            self.out.push(if want_listener {
+                Output::StartListener
+            } else {
+                Output::StopListener
+            });
         }
 
-        let desired: Option<(ConnectionTier, Vec<String>, Option<DeviceId>)> = if coordinator_usable {
+        let desired: Option<(ConnectionTier, Vec<String>, Option<DeviceId>)> = if coordinator_usable
+        {
             coordinator.map(|u| (ConnectionTier::Coordinator, vec![u], None))
         } else if let Some(l) = leader.filter(|l| l != &self.cfg.device.id) {
             let advert = self.lan_peers.iter().find(|p| p.device_id == l).cloned();
@@ -992,7 +1149,10 @@ impl Engine {
                     tier,
                     candidates: candidates.clone(),
                     leader,
-                    state: RemoteState::Connecting { since: now, attempt: 0 },
+                    state: RemoteState::Connecting {
+                        since: now,
+                        attempt: 0,
+                    },
                 });
                 self.out.push(Output::Connect { candidates });
                 self.emit_connection();
@@ -1027,7 +1187,12 @@ impl Engine {
         if let Some(r) = self.remote.take() {
             match r.state {
                 RemoteState::Attached { peer } | RemoteState::Handshaking { peer, .. } => {
-                    self.out.push(Output::WireOut { peer: peer.clone(), msg: WireMessage::new(Msg::Bye { reason: "leaving".into() }) });
+                    self.out.push(Output::WireOut {
+                        peer: peer.clone(),
+                        msg: WireMessage::new(Msg::Bye {
+                            reason: "leaving".into(),
+                        }),
+                    });
                     self.out.push(Output::Disconnect { peer });
                 }
                 _ => {}
@@ -1061,7 +1226,11 @@ impl Engine {
         // Queries the vanished room never answered are asked again on rejoin.
         let now = self.now_local_ms();
         for (_, (track_id, started_at, _)) in self.scrobble_queries.drain() {
-            self.deferred_scrobbles.push(DeferredScrobble { track_id, started_at, since: now });
+            self.deferred_scrobbles.push(DeferredScrobble {
+                track_id,
+                started_at,
+                since: now,
+            });
         }
         // Pending ops will never be acked by the room that's gone: confirm them
         // through our own room instead (same ids, same keys).
@@ -1083,7 +1252,9 @@ impl Engine {
         let now = self.now_local_ms();
         let Some(r) = &self.remote else { return };
         let attempt = match &r.state {
-            RemoteState::Connecting { attempt, .. } | RemoteState::Handshaking { attempt, .. } => *attempt,
+            RemoteState::Connecting { attempt, .. } | RemoteState::Handshaking { attempt, .. } => {
+                *attempt
+            }
             RemoteState::Attached { .. } => 0,
             RemoteState::Backoff { attempt, .. } => *attempt,
         };
@@ -1091,7 +1262,10 @@ impl Engine {
         let tier = r.tier;
         let delay = self.cfg.backoff.delay_ms(attempt);
         if let Some(r) = &mut self.remote {
-            r.state = RemoteState::Backoff { until: now + delay, attempt: attempt + 1 };
+            r.state = RemoteState::Backoff {
+                until: now + delay,
+                attempt: attempt + 1,
+            };
         }
         if tier == ConnectionTier::Coordinator && !was_attached {
             self.coordinator_failures += 1;
@@ -1104,7 +1278,10 @@ impl Engine {
             self.emit_connection();
         }
         // Losing the coordinator may hand the LAN its turn.
-        if tier == ConnectionTier::Coordinator && self.coordinator_failures >= 2 && !self.lan_peers.is_empty() {
+        if tier == ConnectionTier::Coordinator
+            && self.coordinator_failures >= 2
+            && !self.lan_peers.is_empty()
+        {
             self.reevaluate();
         }
     }
@@ -1119,14 +1296,21 @@ impl Engine {
             RemoteState::Connecting { attempt, .. } => *attempt,
             _ => 0,
         };
-        r.state = RemoteState::Handshaking { peer: peer.clone(), since: now, attempt };
+        r.state = RemoteState::Handshaking {
+            peer: peer.clone(),
+            since: now,
+            attempt,
+        };
         if let Some(l) = &r.leader {
             self.last_known_lan.insert(l.clone(), url);
         }
         let credential = self.cfg.credential.clone();
         let hello = self.hello_msg(credential);
         self.last_upstream_msg_at = now;
-        self.out.push(Output::WireOut { peer, msg: WireMessage::new(hello) });
+        self.out.push(Output::WireOut {
+            peer,
+            msg: WireMessage::new(hello),
+        });
     }
 
     fn on_disconnected(&mut self, peer: PeerId) {
@@ -1147,7 +1331,12 @@ impl Engine {
     fn on_peer_connected(&mut self, peer: PeerId) {
         if self.remote.is_some() {
             // We follow another room; don't fork the session.
-            self.out.push(Output::WireOut { peer: peer.clone(), msg: WireMessage::new(Msg::Bye { reason: "not serving".into() }) });
+            self.out.push(Output::WireOut {
+                peer: peer.clone(),
+                msg: WireMessage::new(Msg::Bye {
+                    reason: "not serving".into(),
+                }),
+            });
             self.out.push(Output::Disconnect { peer });
             return;
         }
@@ -1175,13 +1364,19 @@ impl Engine {
     }
 
     fn on_peer_discovered(&mut self, advert: PeerAdvert) {
-        if advert.device_id == self.cfg.device.id || advert.scope_hash != scope_hash(&self.cfg.scope) {
+        if advert.device_id == self.cfg.device.id
+            || advert.scope_hash != scope_hash(&self.cfg.scope)
+        {
             return;
         }
         if advert.protocol < PROTOCOL_MIN {
             return;
         }
-        match self.lan_peers.iter_mut().find(|p| p.device_id == advert.device_id) {
+        match self
+            .lan_peers
+            .iter_mut()
+            .find(|p| p.device_id == advert.device_id)
+        {
             Some(p) => *p = advert,
             None => self.lan_peers.push(advert),
         }
@@ -1220,23 +1415,32 @@ impl Engine {
 
     fn on_upstream_message(&mut self, msg: WireMessage, from_loopback: bool) {
         match msg.msg {
-            Msg::Welcome { session_clock_ms, replica, members, .. } => {
-                self.on_welcome(session_clock_ms, replica, members, !from_loopback)
-            }
+            Msg::Welcome {
+                session_clock_ms,
+                replica,
+                members,
+                ..
+            } => self.on_welcome(session_clock_ms, replica, members, !from_loopback),
             Msg::Refuse { .. } | Msg::Bye { .. } if from_loopback => {
                 self.log("warn", "own room refused the loopback; re-attaching");
                 self.attach_loopback();
             }
             Msg::Refuse { reason, message } => {
                 self.log("warn", format!("refused: {reason:?}: {message}"));
-                let attempt_bump = if reason == RefuseReason::Unauthorised { 4 } else { 0 };
+                let attempt_bump = if reason == RefuseReason::Unauthorised {
+                    4
+                } else {
+                    0
+                };
                 if let Some(r) = &mut self.remote {
                     if let RemoteState::Handshaking { attempt, .. } = &mut r.state {
                         *attempt += attempt_bump;
                     }
                 }
                 if let Some(peer) = self.remote.as_ref().and_then(|r| match &r.state {
-                    RemoteState::Handshaking { peer, .. } | RemoteState::Attached { peer } => Some(peer.clone()),
+                    RemoteState::Handshaking { peer, .. } | RemoteState::Attached { peer } => {
+                        Some(peer.clone())
+                    }
                     _ => None,
                 }) {
                     self.out.push(Output::Disconnect { peer });
@@ -1250,12 +1454,30 @@ impl Engine {
                 self.on_upstream_lost(Some(format!("bye: {reason}")));
             }
             Msg::OpAck { op_id, revision } => self.on_op_ack(op_id, revision),
-            Msg::OpReject { op_id, current_revision, reason, document } => self.on_op_reject(op_id, current_revision, reason, document),
-            Msg::OpCommitted { op, revision, device_id, op_id, at, position_ms } => {
-                self.on_op_committed(op, revision, device_id, op_id, at, position_ms)
-            }
+            Msg::OpReject {
+                op_id,
+                current_revision,
+                reason,
+                document,
+            } => self.on_op_reject(op_id, current_revision, reason, document),
+            Msg::OpCommitted {
+                op,
+                revision,
+                device_id,
+                op_id,
+                at,
+                position_ms,
+            } => self.on_op_committed(op, revision, device_id, op_id, at, position_ms),
             Msg::Document { document } => self.adopt(document, DocChange::Sync),
-            Msg::TransportStamp { device_id, key, position, played_ms, started_at, scrobbled, .. } => {
+            Msg::TransportStamp {
+                device_id,
+                key,
+                position,
+                played_ms,
+                started_at,
+                scrobbled,
+                ..
+            } => {
                 if device_id == self.cfg.device.id {
                     return;
                 }
@@ -1277,7 +1499,12 @@ impl Engine {
                     scrobbled,
                 });
                 if scrobbled {
-                    if let Some(item) = self.doc.current.clone().filter(|c| Some(c.key.as_str()) == key.as_deref()) {
+                    if let Some(item) = self
+                        .doc
+                        .current
+                        .clone()
+                        .filter(|c| Some(c.key.as_str()) == key.as_deref())
+                    {
                         self.learn_scrobbled(&item.track_id, started_at, &device_id);
                     }
                 }
@@ -1317,7 +1544,8 @@ impl Engine {
             Msg::Presence { devices } => {
                 self.devices = devices;
                 if let Some(p) = &mut self.picker {
-                    let present: Vec<DeviceId> = self.devices.iter().map(|d| d.id.clone()).collect();
+                    let present: Vec<DeviceId> =
+                        self.devices.iter().map(|d| d.id.clone()).collect();
                     p.targets.retain(|(id, _)| present.contains(id));
                 }
                 self.emit_devices();
@@ -1328,7 +1556,10 @@ impl Engine {
             Msg::ClockPong { t0, t1, t2 } => {
                 let t3 = self.now_local_ms();
                 self.offset.record(ClockSample { t0, t1, t2, t3 });
-                let now = (self.offset.offset_ms().round(), self.offset.round_trip_ms().map(|r| r.round()));
+                let now = (
+                    self.offset.offset_ms().round(),
+                    self.offset.round_trip_ms().map(|r| r.round()),
+                );
                 if self.last_reported_offset != Some(now) {
                     self.last_reported_offset = Some(now);
                     self.emit_connection();
@@ -1341,15 +1572,31 @@ impl Engine {
                     self.out.push(Output::DiscardPreBuffer);
                 }
             }
-            Msg::HandoffPrepare { from, key, track_id, position_ms, .. } => {
+            Msg::HandoffPrepare {
+                from,
+                key,
+                track_id,
+                position_ms,
+                ..
+            } => {
                 if self.held.is_some() {
                     return; // we're the one playing; nothing to pre-buffer
                 }
                 let now = self.now_local_ms();
-                self.prebuffer = Some(PreBuffer { from, key: key.clone(), since: now });
-                self.out.push(Output::PreBuffer { key, track_id, position_ms });
+                self.prebuffer = Some(PreBuffer {
+                    from,
+                    key: key.clone(),
+                    since: now,
+                });
+                self.out.push(Output::PreBuffer {
+                    key,
+                    track_id,
+                    position_ms,
+                });
             }
-            Msg::HandoffReady { target, key, ready, .. } => {
+            Msg::HandoffReady {
+                target, key, ready, ..
+            } => {
                 if let Some(p) = &mut self.picker {
                     if p.key == key {
                         if let Some(t) = p.targets.iter_mut().find(|(id, _)| id == &target) {
@@ -1361,7 +1608,18 @@ impl Engine {
                     self.emit_picker();
                 }
             }
-            Msg::HandoffTakeover { from, target, key, track_id, position_ms, played_ms, started_at, scrobbled, lease, .. } => {
+            Msg::HandoffTakeover {
+                from,
+                target,
+                key,
+                track_id,
+                position_ms,
+                played_ms,
+                started_at,
+                scrobbled,
+                lease,
+                ..
+            } => {
                 if target != self.cfg.device.id {
                     return;
                 }
@@ -1378,22 +1636,42 @@ impl Engine {
                 self.stamp = Some(CurrentStamp {
                     key: Some(key.clone()),
                     track_id: Some(track_id.clone()),
-                    position: PositionStamp { position_ms, taken_at: self.now_session_ms(), rate: 1.0, is_playing: true },
+                    position: PositionStamp {
+                        position_ms,
+                        taken_at: self.now_session_ms(),
+                        rate: 1.0,
+                        is_playing: true,
+                    },
                     played_ms,
                     started_at,
                     scrobbled,
                 });
-                self.out.push(Output::TakeTransport { key, track_id, position_ms, played_ms, started_at, scrobbled, play: true });
+                self.out.push(Output::TakeTransport {
+                    key,
+                    track_id,
+                    position_ms,
+                    played_ms,
+                    started_at,
+                    scrobbled,
+                    play: true,
+                });
                 self.emit_lease();
                 if self.resume.take().is_some() {
                     self.out.push(Output::ResumeOffer(None));
                 }
             }
-            Msg::ScrobbleDedupeAnswer { query_id, duplicate } => {
+            Msg::ScrobbleDedupeAnswer {
+                query_id,
+                duplicate,
+            } => {
                 if let Some((track_id, started_at, _)) = self.scrobble_queries.remove(&query_id) {
                     let me = self.cfg.device.id.clone();
                     self.learn_scrobbled(&track_id, started_at, &me);
-                    self.out.push(Output::Scrobble { track_id, started_at, allowed: !duplicate });
+                    self.out.push(Output::Scrobble {
+                        track_id,
+                        started_at,
+                        allowed: !duplicate,
+                    });
                 }
             }
             Msg::SavedQueuesSync { queues } => {
@@ -1410,9 +1688,17 @@ impl Engine {
                     self.out.push(Output::SettingsMerged(merged));
                 }
             }
-            Msg::UndoEntryShared { entry, before_revision, before } => {
+            Msg::UndoEntryShared {
+                entry,
+                before_revision,
+                before,
+            } => {
                 if entry.device_id != self.cfg.device.id {
-                    self.out.push(Output::UndoEntryReceived { entry, before_revision, before });
+                    self.out.push(Output::UndoEntryReceived {
+                        entry,
+                        before_revision,
+                        before,
+                    });
                 }
             }
             Msg::Hello { .. }
@@ -1429,7 +1715,13 @@ impl Engine {
         }
     }
 
-    fn on_welcome(&mut self, session_clock_ms: EpochMs, replica: Option<ReplicaState>, members: Vec<DeviceInfo>, remote: bool) {
+    fn on_welcome(
+        &mut self,
+        session_clock_ms: EpochMs,
+        replica: Option<ReplicaState>,
+        members: Vec<DeviceInfo>,
+        remote: bool,
+    ) {
         let now = self.now_local_ms();
         if remote {
             match &mut self.remote {
@@ -1455,7 +1747,12 @@ impl Engine {
             // Say goodbye to anyone we were serving: they'll re-elect.
             let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
             for p in inbound {
-                self.out.push(Output::WireOut { peer: p.clone(), msg: WireMessage::new(Msg::Bye { reason: "joined a coordinator".into() }) });
+                self.out.push(Output::WireOut {
+                    peer: p.clone(),
+                    msg: WireMessage::new(Msg::Bye {
+                        reason: "joined a coordinator".into(),
+                    }),
+                });
                 self.out.push(Output::Disconnect { peer: p.clone() });
                 let outs = self.room.handle(RoomInput::Disconnected(p));
                 self.process_room_outputs(outs);
@@ -1466,7 +1763,10 @@ impl Engine {
         // -- reconcile --------------------------------------------------------
         let previous = self.doc.clone();
         let room_doc = replica.as_ref().map(|r| r.document.clone());
-        let room_trivial = room_doc.as_ref().map(|d| doc_is_trivial(d) && d.revision == 0).unwrap_or(true);
+        let room_trivial = room_doc
+            .as_ref()
+            .map(|d| doc_is_trivial(d) && d.revision == 0)
+            .unwrap_or(true);
         let room_rev = room_doc.as_ref().map(|d| d.revision).unwrap_or(0);
         self.pending.clear();
         if room_trivial {
@@ -1483,7 +1783,11 @@ impl Engine {
         } else {
             let rd = room_doc.clone().expect("non-trivial room has a document");
             let fast_forward = remote
-                && self.sync_base.as_ref().map(|b| b.session_id == rd.session_id && b.revision == rd.revision).unwrap_or(false);
+                && self
+                    .sync_base
+                    .as_ref()
+                    .map(|b| b.session_id == rd.session_id && b.revision == rd.revision)
+                    .unwrap_or(false);
             let behind = remote
                 && self.unsynced.is_empty()
                 && !self.unsynced_overflow
@@ -1510,10 +1814,14 @@ impl Engine {
                 self.unsynced_overflow = false;
                 if !same_session_state(&previous, &self.doc) {
                     let d = self.doc.clone();
-                    self.out.push(Output::DocumentChanged { document: d, cause: DocChange::Sync });
+                    self.out.push(Output::DocumentChanged {
+                        document: d,
+                        cause: DocChange::Sync,
+                    });
                 }
             } else {
-                let file = !behind && !doc_is_trivial(&previous) && !same_session_state(&previous, &rd);
+                let file =
+                    !behind && !doc_is_trivial(&previous) && !same_session_state(&previous, &rd);
                 self.adopt(rd.clone(), DocChange::Sync);
                 if file {
                     self.out.push(Output::FilePreviousStateAsSavedQueue {
@@ -1526,7 +1834,10 @@ impl Engine {
             }
         }
         if remote {
-            self.sync_base = Some(SyncPoint { session_id: self.doc.session_id.clone(), revision: self.confirmed.revision });
+            self.sync_base = Some(SyncPoint {
+                session_id: self.doc.session_id.clone(),
+                revision: self.confirmed.revision,
+            });
         }
 
         // -- lease and resume -------------------------------------------------
@@ -1542,7 +1853,10 @@ impl Engine {
             for r in &rep.scrobbles {
                 self.learn_scrobbled(&r.track_id, r.started_at, &r.device_id);
             }
-            let last_seen = rep.last_stamp.as_ref().and_then(|s| rep.device_last_seen(&s.device_id));
+            let last_seen = rep
+                .last_stamp
+                .as_ref()
+                .and_then(|s| rep.device_last_seen(&s.device_id));
             self.maybe_offer_resume(last_seen);
             let (merged, changed) = merge_saved_queues(&self.saved_queues, &rep.saved_queues);
             if changed {
@@ -1555,9 +1869,12 @@ impl Engine {
                 self.out.push(Output::SettingsMerged(merged));
             }
             if remote {
-                let (theirs_plus_ours, ours_has_more) = merge_saved_queues(&rep.saved_queues, &self.saved_queues);
+                let (theirs_plus_ours, ours_has_more) =
+                    merge_saved_queues(&rep.saved_queues, &self.saved_queues);
                 if ours_has_more {
-                    self.upstream_send(Msg::SavedQueuesSync { queues: theirs_plus_ours });
+                    self.upstream_send(Msg::SavedQueuesSync {
+                        queues: theirs_plus_ours,
+                    });
                 }
                 let (_, ours_has_more) = merge_settings(&rep.settings, &self.settings);
                 if ours_has_more {
@@ -1579,7 +1896,11 @@ impl Engine {
             let unreported = std::mem::take(&mut self.unreported_scrobbles);
             for (track_id, started_at) in unreported {
                 let device_id = self.cfg.device.id.clone();
-                self.upstream_send(Msg::ScrobbleSubmitted { track_id, started_at, device_id });
+                self.upstream_send(Msg::ScrobbleSubmitted {
+                    track_id,
+                    started_at,
+                    device_id,
+                });
             }
             let deferred = std::mem::take(&mut self.deferred_scrobbles);
             for d in deferred {
@@ -1604,12 +1925,29 @@ impl Engine {
         let at = self.now_session_ms();
         let position_ms = self.local_position();
         let ctx = op_context(&op_id, at, position_ms);
-        match apply_op(self.reducer.as_ref(), &self.doc, &op, &ctx, base.saturating_add(1)) {
+        match apply_op(
+            self.reducer.as_ref(),
+            &self.doc,
+            &op,
+            &ctx,
+            base.saturating_add(1),
+        ) {
             Ok(next) => {
                 self.doc = next;
                 let d = self.doc.clone();
-                self.out.push(Output::DocumentChanged { document: d, cause: DocChange::Local });
-                self.send_op(PendingOp { op_id, op, at, position_ms }, base);
+                self.out.push(Output::DocumentChanged {
+                    document: d,
+                    cause: DocChange::Local,
+                });
+                self.send_op(
+                    PendingOp {
+                        op_id,
+                        op,
+                        at,
+                        position_ms,
+                    },
+                    base,
+                );
             }
             Err(e) => self.log("debug", format!("local op not applicable: {e}")),
         }
@@ -1627,7 +1965,15 @@ impl Engine {
         let op_id = self.next_op_id();
         let at = self.now_session_ms();
         let position_ms = self.local_position();
-        self.resubmit_at(PendingOp { op_id, op, at, position_ms }, base);
+        self.resubmit_at(
+            PendingOp {
+                op_id,
+                op,
+                at,
+                position_ms,
+            },
+            base,
+        );
     }
 
     /// Re-send a pending op with its original id, time and position (keys
@@ -1639,7 +1985,13 @@ impl Engine {
 
     fn resubmit_at(&mut self, p: PendingOp, base: u32) {
         let ctx = op_context(&p.op_id, p.at, p.position_ms);
-        match apply_op(self.reducer.as_ref(), &self.doc, &p.op, &ctx, base.saturating_add(1)) {
+        match apply_op(
+            self.reducer.as_ref(),
+            &self.doc,
+            &p.op,
+            &ctx,
+            base.saturating_add(1),
+        ) {
             Ok(next) => self.doc = next,
             Err(e) => {
                 self.log("debug", format!("op not applicable: {e}"));
@@ -1650,7 +2002,11 @@ impl Engine {
     }
 
     fn send_op(&mut self, p: PendingOp, base: u32) {
-        let epoch = if p.op.is_owner_op() { self.held.as_ref().map(|h| h.epoch) } else { None };
+        let epoch = if p.op.is_owner_op() {
+            self.held.as_ref().map(|h| h.epoch)
+        } else {
+            None
+        };
         let device_id = self.cfg.device.id.clone();
         let msg = Msg::Op {
             base_revision: base,
@@ -1666,10 +2022,18 @@ impl Engine {
     }
 
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
-        let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else { return };
+        let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else {
+            return;
+        };
         let p = self.pending.remove(pos).expect("position exists");
         let ctx = op_context(&p.op_id, p.at, p.position_ms);
-        match apply_op(self.reducer.as_ref(), &self.confirmed, &p.op, &ctx, revision) {
+        match apply_op(
+            self.reducer.as_ref(),
+            &self.confirmed,
+            &p.op,
+            &ctx,
+            revision,
+        ) {
             Ok(next) => self.confirmed = next,
             Err(_) => {
                 // Should not happen (same op, same base); resync to be safe.
@@ -1681,7 +2045,10 @@ impl Engine {
             self.doc.updated_at = self.confirmed.updated_at;
         }
         if self.is_connected() {
-            self.sync_base = Some(SyncPoint { session_id: self.doc.session_id.clone(), revision });
+            self.sync_base = Some(SyncPoint {
+                session_id: self.doc.session_id.clone(),
+                revision,
+            });
         } else if self.sync_base.is_some() {
             if self.unsynced.len() >= UNSYNCED_CAP {
                 self.unsynced_overflow = true;
@@ -1693,21 +2060,39 @@ impl Engine {
         self.maybe_advertise(false);
     }
 
-    fn on_op_reject(&mut self, op_id: String, current_revision: u32, reason: RejectReason, document: SessionDocument) {
+    fn on_op_reject(
+        &mut self,
+        op_id: String,
+        current_revision: u32,
+        reason: RejectReason,
+        document: SessionDocument,
+    ) {
         if !self.pending.iter().any(|p| p.op_id == op_id) {
             return;
         }
         let previous = self.doc.clone();
-        self.log("info", format!("op {op_id} rejected: {reason:?} at room revision {current_revision} (ours {})", previous.revision));
+        self.log(
+            "info",
+            format!(
+                "op {op_id} rejected: {reason:?} at room revision {current_revision} (ours {})",
+                previous.revision
+            ),
+        );
         self.pending.clear();
         let had_unsynced = !self.unsynced.is_empty() || self.unsynced_overflow;
         self.confirmed = document.clone();
         self.doc = document;
         self.doc.revision = current_revision;
         let d = self.doc.clone();
-        self.out.push(Output::DocumentChanged { document: d, cause: DocChange::Rollback });
+        self.out.push(Output::DocumentChanged {
+            document: d,
+            cause: DocChange::Rollback,
+        });
         if self.is_connected() {
-            self.sync_base = Some(SyncPoint { session_id: self.doc.session_id.clone(), revision: current_revision });
+            self.sync_base = Some(SyncPoint {
+                session_id: self.doc.session_id.clone(),
+                revision: current_revision,
+            });
         }
         if had_unsynced && !doc_is_trivial(&previous) && !same_session_state(&previous, &self.doc) {
             self.out.push(Output::FilePreviousStateAsSavedQueue {
@@ -1722,7 +2107,15 @@ impl Engine {
         }
     }
 
-    fn on_op_committed(&mut self, op: SessionOp, revision: u32, device_id: DeviceId, op_id: String, at: EpochMs, position_ms: Ms) {
+    fn on_op_committed(
+        &mut self,
+        op: SessionOp,
+        revision: u32,
+        device_id: DeviceId,
+        op_id: String,
+        at: EpochMs,
+        position_ms: Ms,
+    ) {
         if device_id == self.cfg.device.id && self.pending.iter().any(|p| p.op_id == op_id) {
             return;
         }
@@ -1732,7 +2125,13 @@ impl Engine {
             return;
         }
         if revision > self.confirmed.revision.saturating_add(1) {
-            self.log("warn", format!("commit gap: at {} got {revision}; resyncing", self.confirmed.revision));
+            self.log(
+                "warn",
+                format!(
+                    "commit gap: at {} got {revision}; resyncing",
+                    self.confirmed.revision
+                ),
+            );
             self.upstream_send(Msg::SyncRequest);
             return;
         }
@@ -1748,13 +2147,22 @@ impl Engine {
                 self.confirmed = next;
                 self.doc = self.confirmed.clone();
                 let d = self.doc.clone();
-                self.out.push(Output::DocumentChanged { document: d, cause: DocChange::Remote });
+                self.out.push(Output::DocumentChanged {
+                    document: d,
+                    cause: DocChange::Remote,
+                });
                 if self.is_connected() {
-                    self.sync_base = Some(SyncPoint { session_id: self.doc.session_id.clone(), revision });
+                    self.sync_base = Some(SyncPoint {
+                        session_id: self.doc.session_id.clone(),
+                        revision,
+                    });
                 }
             }
             Err(e) => {
-                self.log("warn", format!("could not apply committed op {op_id}: {e}; resyncing"));
+                self.log(
+                    "warn",
+                    format!("could not apply committed op {op_id}: {e}; resyncing"),
+                );
                 self.upstream_send(Msg::SyncRequest);
             }
         }
@@ -1769,9 +2177,13 @@ impl Engine {
         self.confirmed = document.clone();
         self.doc = document;
         let d = self.doc.clone();
-        self.out.push(Output::DocumentChanged { document: d, cause });
+        self.out
+            .push(Output::DocumentChanged { document: d, cause });
         if self.is_connected() {
-            self.sync_base = Some(SyncPoint { session_id: self.doc.session_id.clone(), revision: self.doc.revision });
+            self.sync_base = Some(SyncPoint {
+                session_id: self.doc.session_id.clone(),
+                revision: self.doc.revision,
+            });
         }
         self.maybe_advertise(false);
     }
@@ -1781,12 +2193,22 @@ impl Engine {
     /// "X was playing Y · Resume here": dormant, only when nobody holds the
     /// lease and the last stamp came from someone else for what is current.
     fn maybe_offer_resume(&mut self, last_seen: Option<EpochMs>) {
-        let live_owner = if self.lease.expires_at > self.now_session_ms() { self.lease.owner.clone() } else { None };
+        let live_owner = if self.lease.expires_at > self.now_session_ms() {
+            self.lease.owner.clone()
+        } else {
+            None
+        };
         if live_owner.is_some() || self.held.is_some() {
             return;
         }
-        let (Some(stamp), Some(current)) = (self.last_remote_stamp.clone(), self.doc.current.clone()) else { return };
-        if stamp.device_id == self.cfg.device.id || stamp.key.as_deref() != Some(current.key.as_str()) {
+        let (Some(stamp), Some(current)) =
+            (self.last_remote_stamp.clone(), self.doc.current.clone())
+        else {
+            return;
+        };
+        if stamp.device_id == self.cfg.device.id
+            || stamp.key.as_deref() != Some(current.key.as_str())
+        {
             return;
         }
         let draft = ResumeOfferDraft {
@@ -1812,10 +2234,19 @@ impl Engine {
         if let Some(h) = &mut self.held {
             h.sent(now);
         }
-        self.upstream_send(Msg::LeaseClaim { epoch_expected, takeover, sent_at: now });
+        self.upstream_send(Msg::LeaseClaim {
+            epoch_expected,
+            takeover,
+            sent_at: now,
+        });
     }
 
-    fn on_lease_granted(&mut self, lease: TransportLease, ack_of: Option<EpochMs>, from_loopback: bool) {
+    fn on_lease_granted(
+        &mut self,
+        lease: TransportLease,
+        ack_of: Option<EpochMs>,
+        from_loopback: bool,
+    ) {
         let now = self.now_local_ms();
         let mine = lease.owner.as_deref() == Some(self.cfg.device.id.as_str());
         self.lease = lease.clone();
@@ -1844,7 +2275,12 @@ impl Engine {
                 self.stamp = Some(CurrentStamp {
                     key: Some(t.key.clone()),
                     track_id: Some(t.track_id.clone()),
-                    position: PositionStamp { position_ms: t.position_ms, taken_at: self.now_session_ms(), rate: 1.0, is_playing: true },
+                    position: PositionStamp {
+                        position_ms: t.position_ms,
+                        taken_at: self.now_session_ms(),
+                        rate: 1.0,
+                        is_playing: true,
+                    },
                     played_ms: t.played_ms,
                     started_at: t.started_at,
                     scrobbled: t.scrobbled,
@@ -1908,14 +2344,32 @@ impl Engine {
         let mut p = position;
         p.taken_at += self.offset_ms();
         let key_changed = self.stamp.as_ref().map(|s| s.key != key).unwrap_or(true);
-        self.stamp = Some(CurrentStamp { key: key.clone(), track_id: track_id.clone(), position: p.clone(), played_ms, started_at, scrobbled });
+        self.stamp = Some(CurrentStamp {
+            key: key.clone(),
+            track_id: track_id.clone(),
+            position: p.clone(),
+            played_ms,
+            started_at,
+            scrobbled,
+        });
         let Some(h) = &self.held else {
-            self.log("debug", "stamp from a device that does not own transport ignored");
+            self.log(
+                "debug",
+                "stamp from a device that does not own transport ignored",
+            );
             return;
         };
         let epoch = h.epoch;
         let device_id = self.cfg.device.id.clone();
-        self.upstream_send(Msg::TransportStamp { device_id, key, position: p, played_ms, started_at, scrobbled, epoch });
+        self.upstream_send(Msg::TransportStamp {
+            device_id,
+            key,
+            position: p,
+            played_ms,
+            started_at,
+            scrobbled,
+            epoch,
+        });
         if key_changed && self.picker.is_some() {
             self.reprepare_picker();
         }
@@ -1947,15 +2401,24 @@ impl Engine {
     fn open_picker(&mut self) {
         if self.held.is_none() {
             self.log("debug", "picker needs transport ownership");
-            self.out.push(Output::PickerChanged { open: false, targets: vec![] });
+            self.out.push(Output::PickerChanged {
+                open: false,
+                targets: vec![],
+            });
             return;
         }
         let Some(stamp) = self.stamp.clone() else {
-            self.out.push(Output::PickerChanged { open: false, targets: vec![] });
+            self.out.push(Output::PickerChanged {
+                open: false,
+                targets: vec![],
+            });
             return;
         };
         let (Some(key), Some(track_id)) = (stamp.key.clone(), stamp.track_id.clone()) else {
-            self.out.push(Output::PickerChanged { open: false, targets: vec![] });
+            self.out.push(Output::PickerChanged {
+                open: false,
+                targets: vec![],
+            });
             return;
         };
         let targets: Vec<(DeviceId, bool)> = self
@@ -1965,14 +2428,20 @@ impl Engine {
             .take(self.cfg.prebuffer_fanout)
             .map(|d| (d.id.clone(), false))
             .collect();
-        self.picker = Some(Picker { key, track_id, targets });
+        self.picker = Some(Picker {
+            key,
+            track_id,
+            targets,
+        });
         let from = self.cfg.device.id.clone();
         self.upstream_send(Msg::HandoffPickerOpen { from });
         self.reprepare_picker();
     }
 
     fn reprepare_picker(&mut self) {
-        let Some(stamp) = self.stamp.clone() else { return };
+        let Some(stamp) = self.stamp.clone() else {
+            return;
+        };
         let (Some(key), Some(track_id)) = (stamp.key.clone(), stamp.track_id.clone()) else {
             self.close_picker(true);
             return;
@@ -2008,16 +2477,26 @@ impl Engine {
                 let from = self.cfg.device.id.clone();
                 self.upstream_send(Msg::HandoffPickerClose { from });
             }
-            self.out.push(Output::PickerChanged { open: false, targets: vec![] });
+            self.out.push(Output::PickerChanged {
+                open: false,
+                targets: vec![],
+            });
         }
     }
 
     fn handoff_to(&mut self, device_id: DeviceId) {
-        let (Some(h), Some(stamp), Some(p)) = (self.held.clone(), self.stamp.clone(), self.picker.clone()) else {
-            self.log("debug", "handoff needs an open picker and transport ownership");
+        let (Some(h), Some(stamp), Some(p)) =
+            (self.held.clone(), self.stamp.clone(), self.picker.clone())
+        else {
+            self.log(
+                "debug",
+                "handoff needs an open picker and transport ownership",
+            );
             return;
         };
-        if !p.targets.iter().any(|(id, _)| id == &device_id) && !self.devices.iter().any(|d| d.id == device_id) {
+        if !p.targets.iter().any(|(id, _)| id == &device_id)
+            && !self.devices.iter().any(|d| d.id == device_id)
+        {
             self.log("debug", "handoff target is not present");
             return;
         }
@@ -2041,17 +2520,27 @@ impl Engine {
         self.held_remote_epoch = None;
         self.out.push(Output::ReleaseTransport);
         self.picker = None;
-        self.out.push(Output::PickerChanged { open: false, targets: vec![] });
+        self.out.push(Output::PickerChanged {
+            open: false,
+            targets: vec![],
+        });
         self.emit_lease();
     }
 
     fn on_prebuffer_result(&mut self, key: QueueKey, ready: bool) {
-        let Some(p) = self.prebuffer.clone() else { return };
+        let Some(p) = self.prebuffer.clone() else {
+            return;
+        };
         if p.key != key {
             return;
         }
         let target = self.cfg.device.id.clone();
-        self.upstream_send(Msg::HandoffReady { from: p.from, target, key, ready });
+        self.upstream_send(Msg::HandoffReady {
+            from: p.from,
+            target,
+            key,
+            ready,
+        });
         if !ready {
             self.prebuffer = None;
         }
@@ -2060,26 +2549,44 @@ impl Engine {
     // -- scrobbling -------------------------------------------------------------
 
     fn on_scrobble_reached(&mut self, track_id: TrackId, started_at: EpochMs) {
-        if self.known_scrobbled.iter().any(|(t, s, _)| t == &track_id && (s - started_at).abs() < 1000.0) {
+        if self
+            .known_scrobbled
+            .iter()
+            .any(|(t, s, _)| t == &track_id && (s - started_at).abs() < 1000.0)
+        {
             // This play was already scrobbled (by us or by whoever handed it
             // over); nobody needs to be asked.
-            self.out.push(Output::Scrobble { track_id, started_at, allowed: false });
+            self.out.push(Output::Scrobble {
+                track_id,
+                started_at,
+                allowed: false,
+            });
             return;
         }
         if self.upstream_authoritative() {
             self.query_scrobble(track_id, started_at);
         } else {
             let now = self.now_local_ms();
-            self.deferred_scrobbles.push(DeferredScrobble { track_id, started_at, since: now });
+            self.deferred_scrobbles.push(DeferredScrobble {
+                track_id,
+                started_at,
+                since: now,
+            });
         }
     }
 
     fn query_scrobble(&mut self, track_id: TrackId, started_at: EpochMs) {
         let query_id = self.next_op_id();
         let now = self.now_local_ms();
-        self.scrobble_queries.insert(query_id.clone(), (track_id.clone(), started_at, now));
+        self.scrobble_queries
+            .insert(query_id.clone(), (track_id.clone(), started_at, now));
         let device_id = self.cfg.device.id.clone();
-        self.upstream_send(Msg::ScrobbleDedupeQuery { query_id, track_id, started_at, device_id });
+        self.upstream_send(Msg::ScrobbleDedupeQuery {
+            query_id,
+            track_id,
+            started_at,
+            device_id,
+        });
     }
 
     /// Re-ask queries a lossy link swallowed. Same id: a late first answer
@@ -2096,7 +2603,12 @@ impl Engine {
                 e.2 = now;
             }
             let device_id = self.cfg.device.id.clone();
-            self.upstream_send(Msg::ScrobbleDedupeQuery { query_id, track_id, started_at, device_id });
+            self.upstream_send(Msg::ScrobbleDedupeQuery {
+                query_id,
+                track_id,
+                started_at,
+                device_id,
+            });
         }
     }
 
@@ -2127,13 +2639,18 @@ impl Engine {
                 RemoteState::Connecting { since, .. } if now - since > CONNECT_TIMEOUT_MS => {
                     self.on_upstream_lost(Some("connect timed out".into()));
                 }
-                RemoteState::Handshaking { peer, since, .. } if now - since > CONNECT_TIMEOUT_MS => {
+                RemoteState::Handshaking { peer, since, .. }
+                    if now - since > CONNECT_TIMEOUT_MS =>
+                {
                     self.out.push(Output::Disconnect { peer });
                     self.on_upstream_lost(Some("handshake timed out".into()));
                 }
                 RemoteState::Backoff { until, attempt } if now >= until => {
                     if let Some(r) = &mut self.remote {
-                        r.state = RemoteState::Connecting { since: now, attempt };
+                        r.state = RemoteState::Connecting {
+                            since: now,
+                            attempt,
+                        };
                         let candidates = r.candidates.clone();
                         self.out.push(Output::Connect { candidates });
                     }
@@ -2143,7 +2660,11 @@ impl Engine {
                         self.out.push(Output::Disconnect { peer });
                         self.on_upstream_lost(Some("upstream silent".into()));
                     } else {
-                        let interval = if self.pings_in_burst < PING_BURST { PING_BURST_INTERVAL_MS } else { PING_INTERVAL_MS };
+                        let interval = if self.pings_in_burst < PING_BURST {
+                            PING_BURST_INTERVAL_MS
+                        } else {
+                            PING_INTERVAL_MS
+                        };
                         if now - self.last_ping_at >= interval {
                             self.send_ping();
                         }
@@ -2154,8 +2675,13 @@ impl Engine {
         } else if self.coordinator_target().is_some() && now >= self.coordinator_retry_at {
             self.reevaluate();
         }
-        if matches!(self.remote, Some(Remote { tier: ConnectionTier::Lan, .. }))
-            && self.coordinator_target().is_some()
+        if matches!(
+            self.remote,
+            Some(Remote {
+                tier: ConnectionTier::Lan,
+                ..
+            })
+        ) && self.coordinator_target().is_some()
             && now >= self.coordinator_retry_at
         {
             self.coordinator_failures = 0;
@@ -2168,7 +2694,10 @@ impl Engine {
                 if let Some(h) = &mut self.held {
                     h.sent(now);
                 }
-                self.upstream_send(Msg::LeaseHeartbeat { epoch: h.epoch, sent_at: now });
+                self.upstream_send(Msg::LeaseHeartbeat {
+                    epoch: h.epoch,
+                    sent_at: now,
+                });
             }
             if h.lapsed(now) && !self.detached && self.remote.is_some() {
                 self.detached = true;
@@ -2183,7 +2712,12 @@ impl Engine {
                 self.prebuffer = None;
                 self.out.push(Output::DiscardPreBuffer);
                 let target = self.cfg.device.id.clone();
-                self.upstream_send(Msg::HandoffReady { from: p.from, target, key: p.key, ready: false });
+                self.upstream_send(Msg::HandoffReady {
+                    from: p.from,
+                    target,
+                    key: p.key,
+                    ready: false,
+                });
             }
         }
 
@@ -2193,14 +2727,21 @@ impl Engine {
 
         // Deferred scrobbles past the grace period: local judgement.
         let grace = self.cfg.scrobble_grace_ms;
-        let (expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) =
-            self.deferred_scrobbles.drain(..).partition(|d| now - d.since >= grace);
+        let (expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) = self
+            .deferred_scrobbles
+            .drain(..)
+            .partition(|d| now - d.since >= grace);
         self.deferred_scrobbles = keep;
         for d in expired {
             let me = self.cfg.device.id.clone();
             self.learn_scrobbled(&d.track_id, d.started_at, &me);
-            self.unreported_scrobbles.push((d.track_id.clone(), d.started_at));
-            self.out.push(Output::Scrobble { track_id: d.track_id, started_at: d.started_at, allowed: true });
+            self.unreported_scrobbles
+                .push((d.track_id.clone(), d.started_at));
+            self.out.push(Output::Scrobble {
+                track_id: d.track_id,
+                started_at: d.started_at,
+                allowed: true,
+            });
         }
 
         self.maybe_advertise(false);
@@ -2274,14 +2815,22 @@ mod tests {
     fn alone_ops_confirm_immediately_through_own_room() {
         let (mut e, _) = engine("a");
         let outs = e.handle(Input::LocalOp { op: play_op() });
-        assert!(matches!(outs[0], Output::DocumentChanged { cause: DocChange::Local, .. }));
+        assert!(matches!(
+            outs[0],
+            Output::DocumentChanged {
+                cause: DocChange::Local,
+                ..
+            }
+        ));
         assert_eq!(e.document().revision, 1);
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
         assert_eq!(e.room().revision(), 1);
         assert!(e.pending.is_empty());
         assert!(wire_outs(&outs).is_empty());
         assert_eq!(e.connection_state().tier, ConnectionTier::Local);
-        let outs = e.handle(Input::LocalOp { op: SessionOp::Next });
+        let outs = e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
         assert!(outs.iter().any(|o| matches!(o, Output::ReplicaChanged(_))));
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
     }
@@ -2291,11 +2840,20 @@ mod tests {
         let (mut e, _) = engine("a");
         e.handle(Input::LocalOp { op: play_op() });
         let outs = e.handle(Input::ClaimTransport { takeover: false });
-        assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, detached: false, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::LeaseChanged {
+                owns: true,
+                detached: false,
+                ..
+            }
+        )));
         assert!(e.owns_transport());
         assert!(e.devices()[0].playing);
         let outs = e.handle(Input::ReleaseTransport);
-        assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());
     }
 
@@ -2304,8 +2862,13 @@ mod tests {
         let (mut e, _) = engine("a");
         e.handle(Input::LocalOp { op: play_op() });
         let outs = e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
-        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
-        let outs = e.handle(Input::Connected { peer: "up".into(), url: "wss://c/".into() });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
+        let outs = e.handle(Input::Connected {
+            peer: "up".into(),
+            url: "wss://c/".into(),
+        });
         let w = wire_outs(&outs);
         assert!(matches!(&w[0], (p, Msg::Hello { session_revision: 1, .. }) if p == "up"));
         let outs = e.handle(Input::WireIn {
@@ -2320,22 +2883,56 @@ mod tests {
         });
         let w = wire_outs(&outs);
         assert!(w.iter().any(|(_, m)| matches!(m, Msg::ClockPing { .. })));
-        assert!(w.iter().any(|(_, m)| matches!(m, Msg::Op { base_revision: 0, op: SessionOp::Replace { .. }, .. })));
+        assert!(w.iter().any(|(_, m)| matches!(
+            m,
+            Msg::Op {
+                base_revision: 0,
+                op: SessionOp::Replace { .. },
+                ..
+            }
+        )));
         assert!(e.is_connected());
         assert_eq!(e.connection_state().tier, ConnectionTier::Coordinator);
         // provisional offset until the first pong
         assert_eq!(e.offset_ms(), 490_000.0);
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::ClockPong { t0: 10_000.0, t1: 500_040.0, t2: 500_040.0 }) });
-        assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if s.round_trip_ms.is_some())));
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::OpAck { op_id: "a-2".into(), revision: 1 }) });
-        assert!(outs.is_empty() || !outs.iter().any(|o| matches!(o, Output::DocumentChanged { .. })));
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::ClockPong {
+                t0: 10_000.0,
+                t1: 500_040.0,
+                t2: 500_040.0,
+            }),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::ConnectionChanged(s) if s.round_trip_ms.is_some())));
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "a-2".into(),
+                revision: 1,
+            }),
+        });
+        assert!(
+            outs.is_empty()
+                || !outs
+                    .iter()
+                    .any(|o| matches!(o, Output::DocumentChanged { .. }))
+        );
         assert_eq!(e.sync_base().unwrap().revision, 1);
         assert!(e.pending.is_empty());
     }
 
-    fn attach(e: &mut Engine, replica: Option<ReplicaState>, members: Vec<DeviceInfo>) -> Vec<Output> {
+    fn attach(
+        e: &mut Engine,
+        replica: Option<ReplicaState>,
+        members: Vec<DeviceInfo>,
+    ) -> Vec<Output> {
         e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
-        e.handle(Input::Connected { peer: "up".into(), url: "wss://c/".into() });
+        e.handle(Input::Connected {
+            peer: "up".into(),
+            url: "wss://c/".into(),
+        });
         e.handle(Input::WireIn {
             peer: "up".into(),
             msg: WireMessage::new(Msg::Welcome {
@@ -2365,7 +2962,9 @@ mod tests {
         newer.autoplay = true;
         let outs = attach(&mut e, Some(replica_with(newer)), vec![]);
         assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document } if document.revision == 5 && document.autoplay)));
-        assert!(!outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
         assert_eq!(e.sync_base().unwrap().revision, 5);
     }
 
@@ -2407,15 +3006,24 @@ mod tests {
         assert_eq!(e.sync_base().unwrap().revision, 2);
         // connection drops; user presses next twice offline
         let outs = e.handle(Input::Disconnected { peer: "up".into() });
-        assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if !s.connected)));
-        e.handle(Input::LocalOp { op: SessionOp::Next });
-        e.handle(Input::LocalOp { op: SessionOp::Next });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::ConnectionChanged(s) if !s.connected)));
+        e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
+        e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
         assert_eq!(e.unsynced.len(), 2);
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
         // reconnect: room still at revision 2 → replay
         clock.0.store(100_000, Ordering::SeqCst);
         e.handle(Input::Tick);
-        e.handle(Input::Connected { peer: "up2".into(), url: "wss://c/".into() });
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
         let outs = e.handle(Input::WireIn {
             peer: "up2".into(),
             msg: WireMessage::new(Msg::Welcome {
@@ -2434,9 +3042,25 @@ mod tests {
             })
             .collect();
         assert_eq!(ops.len(), 2);
-        assert!(matches!(ops[0], Msg::Op { base_revision: 2, op: SessionOp::Next, .. }));
-        assert!(matches!(ops[1], Msg::Op { base_revision: 3, op: SessionOp::Next, .. }));
-        assert!(!outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
+        assert!(matches!(
+            ops[0],
+            Msg::Op {
+                base_revision: 2,
+                op: SessionOp::Next,
+                ..
+            }
+        ));
+        assert!(matches!(
+            ops[1],
+            Msg::Op {
+                base_revision: 3,
+                op: SessionOp::Next,
+                ..
+            }
+        ));
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
     }
 
@@ -2448,18 +3072,40 @@ mod tests {
         attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted { op: play_op(), revision: 2, device_id: "b".into(), op_id: "b-1".into(), at: 1.0, position_ms: 0 }),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: play_op(),
+                revision: 2,
+                device_id: "b".into(),
+                op_id: "b-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
         });
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
-        e.handle(Input::LocalOp { op: SessionOp::Next });
+        e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
         assert_eq!(e.pending.len(), 1);
         // b's next commits at revision 3 before ours is answered
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted { op: SessionOp::Next, revision: 3, device_id: "b".into(), op_id: "b-2".into(), at: 2.0, position_ms: 0 }),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: SessionOp::Next,
+                revision: 3,
+                device_id: "b".into(),
+                op_id: "b-2".into(),
+                at: 2.0,
+                position_ms: 0,
+            }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Remote, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::DocumentChanged {
+                cause: DocChange::Remote,
+                ..
+            }
+        )));
         assert!(e.pending.is_empty());
         // one skip, not two
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
@@ -2474,7 +3120,9 @@ mod tests {
                 document: e.document().clone(),
             }),
         });
-        assert!(!outs.iter().any(|o| matches!(o, Output::DocumentChanged { .. })));
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::DocumentChanged { .. })));
     }
 
     #[test]
@@ -2484,37 +3132,88 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
         e.handle(Input::LocalOp { op: play_op() });
-        e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::OpAck { op_id: "a-2".into(), revision: 2 }) });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "a-2".into(),
+                revision: 2,
+            }),
+        });
         e.handle(Input::ClaimTransport { takeover: false });
-        let lease = TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 30_000.0 };
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::LeaseGranted { lease, ack_of: None }) });
-        assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
+        let lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 1,
+            expires_at: 30_000.0,
+        };
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease,
+                ack_of: None,
+            }),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
         // network dies; we keep playing detached and make an offline change
         e.handle(Input::Disconnected { peer: "up".into() });
         assert!(e.owns_transport() && e.is_detached());
-        e.handle(Input::LocalOp { op: SessionOp::Next });
+        e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
         // meanwhile the session moved on: room at revision 5, someone else owns
         clock.0.store(200_000, Ordering::SeqCst);
         e.handle(Input::Tick);
-        e.handle(Input::Connected { peer: "up2".into(), url: "wss://c/".into() });
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
         let mut moved = e.confirmed.clone();
         moved.revision = 5;
         moved.session_id = "s".into();
         moved.autoplay = true;
         let mut rep = replica_with(moved);
-        rep.transport_lease = TransportLease { owner: Some("b".into()), epoch: 3, expires_at: 999_999.0 };
+        rep.transport_lease = TransportLease {
+            owner: Some("b".into()),
+            epoch: 3,
+            expires_at: 999_999.0,
+        };
         let outs = e.handle(Input::WireIn {
             peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome { session_clock_ms: 200_000.0, accepted_protocol: 1, replica: Some(rep), members: vec![dev("b")], extra: Default::default() }),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 200_000.0,
+                accepted_protocol: 1,
+                replica: Some(rep),
+                members: vec![dev("b")],
+                extra: Default::default(),
+            }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseClaim { epoch_expected: Some(1), takeover: false, .. })));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::LeaseClaim {
+                epoch_expected: Some(1),
+                takeover: false,
+                ..
+            }
+        )));
         let outs = e.handle(Input::WireIn {
             peer: "up2".into(),
-            msg: WireMessage::new(Msg::LeaseFenced { current_epoch: 3, lease: TransportLease { owner: Some("b".into()), epoch: 3, expires_at: 999_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseFenced {
+                current_epoch: 3,
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 3,
+                    expires_at: 999_999.0,
+                },
+            }),
         });
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
-        assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());
     }
 
@@ -2523,31 +3222,63 @@ mod tests {
         let (mut src, _) = engine("a");
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
-        attach(&mut src, Some(replica_with(room_doc.clone())), vec![dev("b"), dev("c")]);
+        attach(
+            &mut src,
+            Some(replica_with(room_doc.clone())),
+            vec![dev("b"), dev("c")],
+        );
         src.handle(Input::ClaimTransport { takeover: false });
         src.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
         });
         src.handle(Input::LocalStamp {
             key: Some("k".into()),
             track_id: Some("t".into()),
-            position: PositionStamp { position_ms: 1000, taken_at: 10_000.0, rate: 1.0, is_playing: true },
+            position: PositionStamp {
+                position_ms: 1000,
+                taken_at: 10_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
             played_ms: 1000,
             started_at: 5.0,
             scrobbled: false,
         });
         let outs = src.handle(Input::OpenPicker);
         let w = wire_outs(&outs);
-        assert!(w.iter().any(|(_, m)| matches!(m, Msg::HandoffPickerOpen { .. })));
-        assert_eq!(w.iter().filter(|(_, m)| matches!(m, Msg::HandoffPrepare { .. })).count(), 2);
-        assert!(outs.iter().any(|o| matches!(o, Output::PickerChanged { open: true, targets } if targets.len() == 2)));
+        assert!(w
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffPickerOpen { .. })));
+        assert_eq!(
+            w.iter()
+                .filter(|(_, m)| matches!(m, Msg::HandoffPrepare { .. }))
+                .count(),
+            2
+        );
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::PickerChanged { open: true, targets } if targets.len() == 2)
+        ));
         let outs = src.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffReady { from: "a".into(), target: "b".into(), key: "k".into(), ready: true }),
+            msg: WireMessage::new(Msg::HandoffReady {
+                from: "a".into(),
+                target: "b".into(),
+                key: "k".into(),
+                ready: true,
+            }),
         });
         assert!(outs.iter().any(|o| matches!(o, Output::PickerChanged { targets, .. } if targets.iter().any(|d| d.id == "b" && d.ready))));
-        let outs = src.handle(Input::HandoffTo { device_id: "b".into() });
+        let outs = src.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
         let w = wire_outs(&outs);
         assert!(w.iter().any(|(_, m)| matches!(m, Msg::HandoffTakeover { target, epoch: 1, played_ms, .. } if target == "b" && *played_ms >= 1000)));
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
@@ -2558,11 +3289,25 @@ mod tests {
         attach(&mut tgt, Some(replica_with(room_doc)), vec![dev("a")]);
         let outs = tgt.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffPrepare { from: "a".into(), target: "b".into(), key: "k".into(), track_id: "t".into(), position_ms: 1000 }),
+            msg: WireMessage::new(Msg::HandoffPrepare {
+                from: "a".into(),
+                target: "b".into(),
+                key: "k".into(),
+                track_id: "t".into(),
+                position_ms: 1000,
+            }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::PreBuffer { position_ms: 1000, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::PreBuffer {
+                position_ms: 1000,
+                ..
+            }
+        )));
         let outs = tgt.handle(Input::PreBufferReady { key: "k".into() });
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::HandoffReady { ready: true, .. })));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffReady { ready: true, .. })));
         let outs = tgt.handle(Input::WireIn {
             peer: "up".into(),
             msg: WireMessage::new(Msg::HandoffTakeover {
@@ -2575,10 +3320,22 @@ mod tests {
                 started_at: 5.0,
                 scrobbled: false,
                 epoch: 1,
-                lease: Some(TransportLease { owner: Some("b".into()), epoch: 2, expires_at: 99_999.0 }),
+                lease: Some(TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 2,
+                    expires_at: 99_999.0,
+                }),
             }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { position_ms: 1500, played_ms: 1500, play: true, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::TakeTransport {
+                position_ms: 1500,
+                played_ms: 1500,
+                play: true,
+                ..
+            }
+        )));
         assert!(tgt.owns_transport());
         assert_eq!(tgt.held_epoch(), Some(2));
     }
@@ -2590,12 +3347,20 @@ mod tests {
         attach(&mut e, None, vec![dev("a")]);
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffPrepare { from: "a".into(), target: "b".into(), key: "k".into(), track_id: "t".into(), position_ms: 0 }),
+            msg: WireMessage::new(Msg::HandoffPrepare {
+                from: "a".into(),
+                target: "b".into(),
+                key: "k".into(),
+                track_id: "t".into(),
+                position_ms: 0,
+            }),
         });
         clock.0.store(10_000 + 61_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
         assert!(outs.iter().any(|o| matches!(o, Output::DiscardPreBuffer)));
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::HandoffReady { ready: false, .. })));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffReady { ready: false, .. })));
     }
 
     #[test]
@@ -2603,13 +3368,23 @@ mod tests {
         let (mut e, _) = engine("a");
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
-        room_doc.current = Some(crate::api::QueueItem { key: "k".into(), track_id: "t".into(), source: crate::api::QueueSource::Inserted, unavailable: false });
+        room_doc.current = Some(crate::api::QueueItem {
+            key: "k".into(),
+            track_id: "t".into(),
+            source: crate::api::QueueSource::Inserted,
+            unavailable: false,
+        });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {
             device_id: "pixel".into(),
             device_name: "Pixel".into(),
             key: Some("k".into()),
-            position: PositionStamp { position_ms: 30_000, taken_at: 9_000.0, rate: 1.0, is_playing: true },
+            position: PositionStamp {
+                position_ms: 30_000,
+                taken_at: 9_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
             played_ms: 30_000,
             started_at: 1.0,
             scrobbled: false,
@@ -2622,14 +3397,33 @@ mod tests {
         let draft = draft.expect("offer");
         assert_eq!(draft.device_name, "Pixel");
         assert_eq!(draft.position_ms, 31_000);
-        assert!(!outs.iter().any(|o| matches!(o, Output::TakeTransport { .. } | Output::LeaseChanged { owns: true, .. })));
+        assert!(!outs.iter().any(|o| matches!(
+            o,
+            Output::TakeTransport { .. } | Output::LeaseChanged { owns: true, .. }
+        )));
         let outs = e.handle(Input::ResumeHere);
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 4, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 4,
+                    expires_at: 99_999.0,
+                },
+            }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { position_ms: 31_000, played_ms: 30_000, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::TakeTransport {
+                position_ms: 31_000,
+                played_ms: 30_000,
+                ..
+            }
+        )));
         assert!(outs.iter().any(|o| matches!(o, Output::ResumeOffer(None))));
         assert!(e.resume_offer().is_none());
     }
@@ -2638,13 +3432,28 @@ mod tests {
     fn scrobble_verdicts_follow_the_room_and_defer_when_cut_off() {
         let (mut e, clock) = engine("a");
         // alone: own room answers immediately
-        let outs = e.handle(Input::ScrobbleReached { track_id: "t".into(), started_at: 1.0 });
-        assert!(outs.iter().any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
-        let outs = e.handle(Input::ScrobbleReached { track_id: "t".into(), started_at: 1.0 });
-        assert!(outs.iter().any(|o| matches!(o, Output::Scrobble { allowed: true, .. }))); // own retry
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: false, .. }))); // already scrobbled here
         attach(&mut e, None, vec![]);
-        let outs = e.handle(Input::ScrobbleReached { track_id: "t2".into(), started_at: 2.0 });
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::ScrobbleDedupeQuery { .. })));
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t2".into(),
+            started_at: 2.0,
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::ScrobbleDedupeQuery { .. })));
         let qid = wire_outs(&outs)
             .iter()
             .find_map(|(_, m)| match m {
@@ -2652,33 +3461,58 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::ScrobbleDedupeAnswer { query_id: qid, duplicate: true }) });
-        assert!(outs.iter().any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
+                query_id: qid,
+                duplicate: true,
+            }),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
         // cut off: defer, then local judgement after the grace period
         e.handle(Input::Disconnected { peer: "up".into() });
-        let outs = e.handle(Input::ScrobbleReached { track_id: "t3".into(), started_at: 3.0 });
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t3".into(),
+            started_at: 3.0,
+        });
         assert!(!outs.iter().any(|o| matches!(o, Output::Scrobble { .. })));
         clock.0.store(10_000 + 700_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
-        assert!(outs.iter().any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
     }
 
     #[test]
     fn reconnect_backs_off_and_retries() {
         let (mut e, clock) = engine("a");
         e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
-        let outs = e.handle(Input::ConnectFailed { error: "refused".into() });
-        assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if s.error.as_deref() == Some("refused"))));
+        let outs = e.handle(Input::ConnectFailed {
+            error: "refused".into(),
+        });
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::ConnectionChanged(s) if s.error.as_deref() == Some("refused"))
+        ));
         let outs = e.handle(Input::Tick);
         assert!(!outs.iter().any(|o| matches!(o, Output::Connect { .. })));
         clock.0.store(10_000 + 1_100, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
         assert!(outs.iter().any(|o| matches!(o, Output::Connect { .. })));
-        e.handle(Input::ConnectFailed { error: "refused".into() });
+        e.handle(Input::ConnectFailed {
+            error: "refused".into(),
+        });
         clock.0.store(10_000 + 1_100 + 1_500, Ordering::SeqCst);
-        assert!(!e.handle(Input::Tick).iter().any(|o| matches!(o, Output::Connect { .. })));
+        assert!(!e
+            .handle(Input::Tick)
+            .iter()
+            .any(|o| matches!(o, Output::Connect { .. })));
         clock.0.store(10_000 + 1_100 + 2_100, Ordering::SeqCst);
-        assert!(e.handle(Input::Tick).iter().any(|o| matches!(o, Output::Connect { .. })));
+        assert!(e
+            .handle(Input::Tick)
+            .iter()
+            .any(|o| matches!(o, Output::Connect { .. })));
     }
 
     #[test]
@@ -2688,15 +3522,31 @@ mod tests {
         e.handle(Input::ClaimTransport { takeover: false });
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted { ack_of: None, lease: TransportLease { owner: Some("a".into()), epoch: 1, expires_at: 99_999.0 } }),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
         });
         clock.0.store(15_100, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::LeaseHeartbeat { epoch: 1, .. })));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseHeartbeat { epoch: 1, .. })));
         // no acks: after 20 s we're detached but still playing
         clock.0.store(29_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
-        assert!(outs.iter().any(|o| matches!(o, Output::LeaseChanged { owns: true, detached: true, .. })));
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::LeaseChanged {
+                owns: true,
+                detached: true,
+                ..
+            }
+        )));
         assert!(e.owns_transport());
     }
 
@@ -2717,16 +3567,30 @@ mod tests {
         };
         // a peer with a higher revision wins: we connect to it
         let outs = e.handle(Input::PeerDiscovered(advert("z", 9)));
-        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")));
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")
+        ));
         assert_eq!(e.connection_state().tier, ConnectionTier::Lan);
         // it disappears: we're alone again
-        let outs = e.handle(Input::PeerLost { device_id: "z".into() });
-        assert!(outs.iter().any(|o| matches!(o, Output::ConnectionChanged(s) if s.tier == ConnectionTier::Local)));
+        let outs = e.handle(Input::PeerLost {
+            device_id: "z".into(),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::ConnectionChanged(s) if s.tier == ConnectionTier::Local)));
         // a lower-id peer with the same revision (0) wins over us ("m")
         e.handle(Input::PeerDiscovered(advert("a", 0)));
-        assert!(matches!(e.remote, Some(Remote { tier: ConnectionTier::Lan, .. })));
+        assert!(matches!(
+            e.remote,
+            Some(Remote {
+                tier: ConnectionTier::Lan,
+                ..
+            })
+        ));
         // a higher-id peer with the same revision: we win and serve
-        e.handle(Input::PeerLost { device_id: "a".into() });
+        e.handle(Input::PeerLost {
+            device_id: "a".into(),
+        });
         let outs = e.handle(Input::PeerDiscovered(advert("q", 0)));
         assert!(!outs.iter().any(|o| matches!(o, Output::Connect { .. })));
         assert!(e.remote.is_none());
@@ -2752,19 +3616,29 @@ mod tests {
                 extra: Default::default(),
             }),
         });
-        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in1" && matches!(m, Msg::Welcome { .. })));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(p, m)| p == "in1" && matches!(m, Msg::Welcome { .. })));
         assert!(e.is_serving());
         assert_eq!(e.connection_state().tier, ConnectionTier::Lan);
-        assert!(outs.iter().any(|o| matches!(o, Output::Advertise(Some(a)) if a.serving && a.port == 7)));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Advertise(Some(a)) if a.serving && a.port == 7)));
     }
 
     #[test]
     fn unknown_wire_messages_are_ignored() {
         let (mut e, _) = engine("a");
         attach(&mut e, None, vec![]);
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::Unknown) });
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::Unknown),
+        });
         assert!(outs.is_empty());
-        let outs = e.handle(Input::WireIn { peer: "stranger".into(), msg: WireMessage::new(Msg::SyncRequest) });
+        let outs = e.handle(Input::WireIn {
+            peer: "stranger".into(),
+            msg: WireMessage::new(Msg::SyncRequest),
+        });
         assert!(outs.is_empty());
     }
 
@@ -2773,14 +3647,41 @@ mod tests {
         use crate::api::{Setting, SettingScope};
         let (mut e, _) = engine("a");
         attach(&mut e, None, vec![]);
-        let s = Setting { key: "k".into(), value: "1".into(), scope: SettingScope::AccountSynced, updated_at: 5.0 };
+        let s = Setting {
+            key: "k".into(),
+            value: "1".into(),
+            scope: SettingScope::AccountSynced,
+            updated_at: 5.0,
+        };
         let outs = e.handle(Input::SettingChanged(s.clone()));
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(m, Msg::SettingsSync { settings } if settings.len() == 1)));
-        let newer = Setting { value: "2".into(), updated_at: 9.0, ..s.clone() };
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::SettingsSync { settings: vec![newer] }) });
-        assert!(outs.iter().any(|o| matches!(o, Output::SettingsMerged(m) if m[0].value == "2")));
-        let older = Setting { value: "0".into(), updated_at: 1.0, ..s };
-        let outs = e.handle(Input::WireIn { peer: "up".into(), msg: WireMessage::new(Msg::SettingsSync { settings: vec![older] }) });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::SettingsSync { settings } if settings.len() == 1)));
+        let newer = Setting {
+            value: "2".into(),
+            updated_at: 9.0,
+            ..s.clone()
+        };
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::SettingsSync {
+                settings: vec![newer],
+            }),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::SettingsMerged(m) if m[0].value == "2")));
+        let older = Setting {
+            value: "0".into(),
+            updated_at: 1.0,
+            ..s
+        };
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::SettingsSync {
+                settings: vec![older],
+            }),
+        });
         assert!(!outs.iter().any(|o| matches!(o, Output::SettingsMerged(_))));
         assert_eq!(e.settings()[0].value, "2");
     }

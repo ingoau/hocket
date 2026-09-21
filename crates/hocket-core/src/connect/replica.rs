@@ -19,8 +19,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, TrackId, TransportLease};
-use crate::connect::wire::{merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord};
+use crate::api::{
+    DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+};
+use crate::connect::wire::{
+    merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
+};
 
 /// Replicas idle for this long are dropped by [`ReplicaStore::purge_expired`].
 pub const REPLICA_TTL_MS: f64 = 30.0 * 24.0 * 3_600_000.0;
@@ -74,7 +78,13 @@ pub trait ReplicaExt {
     fn forget_device(&mut self, device_id: &str);
     fn merge_saved_queues(&mut self, theirs: &[SavedQueue], now: EpochMs) -> bool;
     fn merge_settings(&mut self, theirs: &[Setting], now: EpochMs) -> bool;
-    fn claim_scrobble(&mut self, track_id: &str, started_at: EpochMs, device_id: &str, now: EpochMs) -> ScrobbleClaim;
+    fn claim_scrobble(
+        &mut self,
+        track_id: &str,
+        started_at: EpochMs,
+        device_id: &str,
+        now: EpochMs,
+    ) -> ScrobbleClaim;
     fn set_document(&mut self, document: SessionDocument, now: EpochMs);
     fn set_stamp(&mut self, stamp: LastStamp, now: EpochMs);
     fn set_lease(&mut self, lease: TransportLease, now: EpochMs);
@@ -94,7 +104,10 @@ impl ReplicaExt for ReplicaState {
             None => {
                 let mut dev = device.clone();
                 dev.is_self = false;
-                self.devices.push(DeviceLease { device: dev, last_seen: now });
+                self.devices.push(DeviceLease {
+                    device: dev,
+                    last_seen: now,
+                });
             }
         }
         self.updated_at = now;
@@ -122,9 +135,23 @@ impl ReplicaExt for ReplicaState {
         changed
     }
 
-    fn claim_scrobble(&mut self, track_id: &str, started_at: EpochMs, device_id: &str, now: EpochMs) -> ScrobbleClaim {
-        if let Some(r) = self.scrobbles.iter().find(|r| r.track_id == track_id && same_start(r.started_at, started_at)) {
-            return if r.device_id == device_id { ScrobbleClaim::Own } else { ScrobbleClaim::Duplicate };
+    fn claim_scrobble(
+        &mut self,
+        track_id: &str,
+        started_at: EpochMs,
+        device_id: &str,
+        now: EpochMs,
+    ) -> ScrobbleClaim {
+        if let Some(r) = self
+            .scrobbles
+            .iter()
+            .find(|r| r.track_id == track_id && same_start(r.started_at, started_at))
+        {
+            return if r.device_id == device_id {
+                ScrobbleClaim::Own
+            } else {
+                ScrobbleClaim::Duplicate
+            };
         }
         self.scrobbles.push(ScrobbleRecord {
             track_id: track_id.to_string(),
@@ -162,7 +189,8 @@ impl ReplicaExt for ReplicaState {
     }
 
     fn expire(&mut self, now: EpochMs) {
-        self.scrobbles.retain(|r| now - r.recorded_at < SCROBBLE_LOG_TTL_MS);
+        self.scrobbles
+            .retain(|r| now - r.recorded_at < SCROBBLE_LOG_TTL_MS);
         self.devices.retain(|d| now - d.last_seen < DEVICE_TTL_MS);
     }
 
@@ -171,7 +199,10 @@ impl ReplicaExt for ReplicaState {
     }
 
     fn device_last_seen(&self, device_id: &str) -> Option<EpochMs> {
-        self.devices.iter().find(|d| d.device.id == device_id).map(|d| d.last_seen)
+        self.devices
+            .iter()
+            .find(|d| d.device.id == device_id)
+            .map(|d| d.last_seen)
     }
 }
 
@@ -275,7 +306,8 @@ impl FileReplicaStore {
     fn path_for(&self, scope: &str) -> PathBuf {
         use md5::{Digest, Md5};
         let digest = Md5::digest(scope.as_bytes());
-        self.dir.join(format!("{}.replica.json", hex::encode(digest)))
+        self.dir
+            .join(format!("{}.replica.json", hex::encode(digest)))
     }
 
     fn read_file(path: &Path) -> Result<Option<StoredReplica>, ReplicaError> {
@@ -293,9 +325,15 @@ impl FileReplicaStore {
 impl ReplicaStore for FileReplicaStore {
     fn load(&self, scope: &str) -> Result<Option<ReplicaState>, ReplicaError> {
         match Self::read_file(&self.path_for(scope))? {
-            Some(stored) if stored.schema_version <= STORE_SCHEMA_VERSION => Ok(Some(stored.replica)),
+            Some(stored) if stored.schema_version <= STORE_SCHEMA_VERSION => {
+                Ok(Some(stored.replica))
+            }
             Some(stored) => {
-                tracing::warn!(scope, version = stored.schema_version, "replica file from a newer schema; ignoring");
+                tracing::warn!(
+                    scope,
+                    version = stored.schema_version,
+                    "replica file from a newer schema; ignoring"
+                );
                 Ok(None)
             }
             None => Ok(None),
@@ -305,7 +343,11 @@ impl ReplicaStore for FileReplicaStore {
     fn save(&self, scope: &str, replica: &ReplicaState) -> Result<(), ReplicaError> {
         let path = self.path_for(scope);
         let tmp = path.with_extension("json.tmp");
-        let stored = StoredReplica { schema_version: STORE_SCHEMA_VERSION, scope: scope.to_string(), replica: replica.clone() };
+        let stored = StoredReplica {
+            schema_version: STORE_SCHEMA_VERSION,
+            scope: scope.to_string(),
+            replica: replica.clone(),
+        };
         let bytes = serde_json::to_vec_pretty(&stored)?;
         std::fs::write(&tmp, bytes)?;
         std::fs::rename(&tmp, &path)?;
@@ -386,7 +428,10 @@ mod tests {
         let mut r = new_replica(doc(), 0.0);
         assert_eq!(r.claim_scrobble("t", 1000.0, "a", 1.0), ScrobbleClaim::New);
         assert_eq!(r.claim_scrobble("t", 1000.4, "a", 2.0), ScrobbleClaim::Own);
-        assert_eq!(r.claim_scrobble("t", 1000.0, "b", 3.0), ScrobbleClaim::Duplicate);
+        assert_eq!(
+            r.claim_scrobble("t", 1000.0, "b", 3.0),
+            ScrobbleClaim::Duplicate
+        );
         assert_eq!(r.claim_scrobble("t", 5000.0, "b", 4.0), ScrobbleClaim::New);
         assert_eq!(r.scrobbles.len(), 2);
     }
@@ -438,7 +483,12 @@ mod tests {
     #[test]
     fn lww_merges_bump_updated_at_only_on_change() {
         let mut r = new_replica(doc(), 0.0);
-        let s = Setting { key: "k".into(), value: "1".into(), scope: SettingScope::AccountSynced, updated_at: 5.0 };
+        let s = Setting {
+            key: "k".into(),
+            value: "1".into(),
+            scope: SettingScope::AccountSynced,
+            updated_at: 5.0,
+        };
         assert!(r.merge_settings(std::slice::from_ref(&s), 1.0));
         assert_eq!(r.updated_at, 1.0);
         assert!(!r.merge_settings(&[s], 2.0));
@@ -489,7 +539,10 @@ mod tests {
         // garbage file is skipped, not fatal
         std::fs::write(store.dir().join("junk.replica.json"), b"not json").unwrap();
         assert_eq!(store.scopes().unwrap().len(), 1);
-        assert_eq!(store.purge_expired(100.0 + REPLICA_TTL_MS + 1.0).unwrap(), 1);
+        assert_eq!(
+            store.purge_expired(100.0 + REPLICA_TTL_MS + 1.0).unwrap(),
+            1
+        );
         assert!(store.load("https://x|u").unwrap().is_none());
         store.delete("https://x|u").unwrap(); // idempotent
     }
@@ -498,7 +551,11 @@ mod tests {
     fn file_store_ignores_newer_schema() {
         let dir = tempfile::tempdir().unwrap();
         let store = FileReplicaStore::new(dir.path()).unwrap();
-        let stored = StoredReplica { schema_version: 99, scope: "s".into(), replica: new_replica(doc(), 0.0) };
+        let stored = StoredReplica {
+            schema_version: 99,
+            scope: "s".into(),
+            replica: new_replica(doc(), 0.0),
+        };
         std::fs::write(store.path_for("s"), serde_json::to_vec(&stored).unwrap()).unwrap();
         assert!(store.load("s").unwrap().is_none());
     }

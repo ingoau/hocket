@@ -26,7 +26,9 @@ pub fn quantize(ms: f64) -> f64 {
 
 impl SimTime {
     pub fn new(start_ms: f64) -> Arc<Self> {
-        Arc::new(SimTime { micros: AtomicI64::new(to_micros(start_ms)) })
+        Arc::new(SimTime {
+            micros: AtomicI64::new(to_micros(start_ms)),
+        })
     }
 
     pub fn now_ms(&self) -> f64 {

@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs, Ms, Platform, PositionStamp, QueueKey, SavedQueue, TrackId};
+use crate::api::{
+    DeviceId, DeviceInfo, EpochMs, Ms, Platform, PositionStamp, QueueKey, SavedQueue, TrackId,
+};
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
 use crate::connect::session_adapter::RealReducer;
@@ -52,15 +54,28 @@ impl Library {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeviceEffect {
-    Connect { candidates: Vec<String> },
-    Send { peer: PeerId, msg: WireMessage },
-    Close { peer: PeerId },
+    Connect {
+        candidates: Vec<String>,
+    },
+    Send {
+        peer: PeerId,
+        msg: WireMessage,
+    },
+    Close {
+        peer: PeerId,
+    },
     StartListener,
     StopListener,
     Advertise(Option<PeerAdvert>),
-    Verify { peer: PeerId, credential: Credential },
+    Verify {
+        peer: PeerId,
+        credential: Credential,
+    },
     /// Submit to the (fake) Navidrome.
-    Scrobble { track_id: TrackId, started_at: EpochMs },
+    Scrobble {
+        track_id: TrackId,
+        started_at: EpochMs,
+    },
 }
 
 /// The backend model: what is loaded and where it is.
@@ -115,7 +130,10 @@ pub struct SimDevice {
 
 impl std::fmt::Debug for SimDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimDevice").field("id", &self.id).field("engine", &self.engine).finish()
+        f.debug_struct("SimDevice")
+            .field("id", &self.id)
+            .field("engine", &self.engine)
+            .finish()
     }
 }
 
@@ -160,7 +178,12 @@ impl SimDevice {
         let now = clock.now_ms();
         let (doc, sync_base, saved, outbox) = match persisted {
             Some(p) => (p.document, p.sync_base, p.saved_queues, p.outbox),
-            None => (crate::session::new_document(scope, format!("session-{id}"), now), None, vec![], vec![]),
+            None => (
+                crate::session::new_document(scope, format!("session-{id}"), now),
+                None,
+                vec![],
+                vec![],
+            ),
         };
         let world_start = clock.world_now_ms();
         let engine = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, sync_base);
@@ -193,7 +216,10 @@ impl SimDevice {
         // The outbox retries: ask again for every scrobble without a verdict.
         for (t, s) in outbox {
             d.outbox.push((t.clone(), s));
-            d.handle(Input::ScrobbleReached { track_id: t, started_at: s });
+            d.handle(Input::ScrobbleReached {
+                track_id: t,
+                started_at: s,
+            });
         }
         // Kick the tier selection (the engine only connects on a config change or tick).
         d.handle(Input::Tick);
@@ -229,7 +255,8 @@ impl SimDevice {
 
     fn note(&mut self, s: String) {
         if self.keep_log {
-            self.log.push(format!("[{:>9.0}] {}: {}", self.now(), self.id, s));
+            self.log
+                .push(format!("[{:>9.0}] {}: {}", self.now(), self.id, s));
         }
     }
 
@@ -259,20 +286,36 @@ impl SimDevice {
     fn react(&mut self, o: Output) {
         match o {
             Output::WireOut { peer, msg } => self.effects.push(DeviceEffect::Send { peer, msg }),
-            Output::Connect { candidates } => self.effects.push(DeviceEffect::Connect { candidates }),
+            Output::Connect { candidates } => {
+                self.effects.push(DeviceEffect::Connect { candidates })
+            }
             Output::Disconnect { peer } => self.effects.push(DeviceEffect::Close { peer }),
             Output::StartListener => self.effects.push(DeviceEffect::StartListener),
             Output::StopListener => self.effects.push(DeviceEffect::StopListener),
             Output::Advertise(a) => self.effects.push(DeviceEffect::Advertise(a)),
-            Output::VerifyCredential { peer, credential } => self.effects.push(DeviceEffect::Verify { peer, credential }),
+            Output::VerifyCredential { peer, credential } => {
+                self.effects.push(DeviceEffect::Verify { peer, credential })
+            }
             Output::DocumentChanged { document, cause } => {
-                self.note(format!("doc rev {} ({cause:?}) current={:?}", document.revision, document.current.as_ref().map(|c| &c.track_id)));
+                self.note(format!(
+                    "doc rev {} ({cause:?}) current={:?}",
+                    document.revision,
+                    document.current.as_ref().map(|c| &c.track_id)
+                ));
                 if self.owns() {
                     let key = document.current.as_ref().map(|c| c.key.clone());
                     if key != self.playback.key {
                         let keep_playing = self.playback.playing || self.playback.ended;
                         match document.current.clone() {
-                            Some(item) => self.load(item.key, item.track_id, 0, 0, self.engine.now_session_ms(), false, keep_playing),
+                            Some(item) => self.load(
+                                item.key,
+                                item.track_id,
+                                0,
+                                0,
+                                self.engine.now_session_ms(),
+                                false,
+                                keep_playing,
+                            ),
                             None => {
                                 self.playback = Playback::default();
                                 self.stamp();
@@ -286,7 +329,15 @@ impl SimDevice {
                 if owns {
                     if self.playback.key.is_none() {
                         if let Some(item) = self.engine.document().current.clone() {
-                            self.load(item.key, item.track_id, 0, 0, self.engine.now_session_ms(), false, true);
+                            self.load(
+                                item.key,
+                                item.track_id,
+                                0,
+                                0,
+                                self.engine.now_session_ms(),
+                                false,
+                                true,
+                            );
                         }
                     } else if !self.playback.playing {
                         self.set_playing(true);
@@ -295,9 +346,27 @@ impl SimDevice {
                     self.set_playing(false);
                 }
             }
-            Output::TakeTransport { key, track_id, position_ms, played_ms, started_at, scrobbled, play } => {
-                self.note(format!("take transport {track_id} @ {position_ms} played={played_ms}"));
-                self.load(key, track_id, position_ms, played_ms, started_at, scrobbled, play);
+            Output::TakeTransport {
+                key,
+                track_id,
+                position_ms,
+                played_ms,
+                started_at,
+                scrobbled,
+                play,
+            } => {
+                self.note(format!(
+                    "take transport {track_id} @ {position_ms} played={played_ms}"
+                ));
+                self.load(
+                    key,
+                    track_id,
+                    position_ms,
+                    played_ms,
+                    started_at,
+                    scrobbled,
+                    play,
+                );
             }
             Output::ReleaseTransport => {
                 self.note("release transport".into());
@@ -308,13 +377,23 @@ impl SimDevice {
                 self.prebuffer_ready_at = Some((quantize(self.world_now() + 500.0), key));
             }
             Output::DiscardPreBuffer => self.prebuffer_ready_at = None,
-            Output::Scrobble { track_id, started_at, allowed } => {
-                self.outbox.retain(|(t, s)| !(t == &track_id && *s == started_at));
+            Output::Scrobble {
+                track_id,
+                started_at,
+                allowed,
+            } => {
+                self.outbox
+                    .retain(|(t, s)| !(t == &track_id && *s == started_at));
                 if allowed {
                     self.note(format!("scrobble {track_id} @ {started_at}"));
-                    self.effects.push(DeviceEffect::Scrobble { track_id, started_at });
+                    self.effects.push(DeviceEffect::Scrobble {
+                        track_id,
+                        started_at,
+                    });
                 } else {
-                    self.note(format!("scrobble {track_id} @ {started_at} was a duplicate"));
+                    self.note(format!(
+                        "scrobble {track_id} @ {started_at} was a duplicate"
+                    ));
                 }
             }
             Output::FilePreviousStateAsSavedQueue { document, reason } => {
@@ -322,10 +401,16 @@ impl SimDevice {
                 self.filed_count += 1;
                 self.id_counter += 1;
                 let id = format!("sq-{}-{}", self.id, self.id_counter);
-                if let Some(mut sq) = crate::session::saved::snapshot(&document, self.playback.position_ms, self.now(), id) {
+                if let Some(mut sq) = crate::session::saved::snapshot(
+                    &document,
+                    self.playback.position_ms,
+                    self.now(),
+                    id,
+                ) {
                     sq.updated_at = self.engine.now_session_ms();
                     sq.label = format!("{} (from {})", sq.label, self.id);
-                    let (merged, _) = crate::connect::wire::merge_saved_queues(&self.saved_queues, &[sq]);
+                    let (merged, _) =
+                        crate::connect::wire::merge_saved_queues(&self.saved_queues, &[sq]);
                     self.saved_queues = merged.clone();
                     self.queued.push(Input::SavedQueuesChanged(merged));
                 }
@@ -347,7 +432,16 @@ impl SimDevice {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn load(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms, played_ms: Ms, started_at: EpochMs, scrobbled: bool, play: bool) {
+    fn load(
+        &mut self,
+        key: QueueKey,
+        track_id: TrackId,
+        position_ms: Ms,
+        played_ms: Ms,
+        started_at: EpochMs,
+        scrobbled: bool,
+        play: bool,
+    ) {
         let duration_ms = self.library.duration(&track_id);
         self.playback = Playback {
             key: Some(key),
@@ -405,7 +499,12 @@ impl SimDevice {
         let input = Input::LocalStamp {
             key: p.key.clone(),
             track_id: p.track_id.clone(),
-            position: PositionStamp { position_ms: p.position_ms, taken_at: p.position_at, rate: 1.0, is_playing: p.playing },
+            position: PositionStamp {
+                position_ms: p.position_ms,
+                taken_at: p.position_at,
+                rate: 1.0,
+                is_playing: p.playing,
+            },
             played_ms: p.played_ms,
             started_at: p.started_at,
             scrobbled: p.scrobbled,
@@ -424,13 +523,18 @@ impl SimDevice {
         self.playback.position_at = now;
         self.playback.position_ms = self.playback.position_ms.saturating_add(elapsed);
         self.playback.played_ms = self.playback.played_ms.saturating_add(elapsed);
-        if !self.playback.scrobbled && self.playback.played_ms >= scrobble_threshold_ms(self.playback.duration_ms) {
+        if !self.playback.scrobbled
+            && self.playback.played_ms >= scrobble_threshold_ms(self.playback.duration_ms)
+        {
             self.playback.scrobbled = true;
             let t = self.playback.track_id.clone().expect("loaded");
             let s = self.playback.started_at;
             self.scrobbles_reached.push((t.clone(), s));
             self.outbox.push((t.clone(), s));
-            self.queued.push(Input::ScrobbleReached { track_id: t, started_at: s });
+            self.queued.push(Input::ScrobbleReached {
+                track_id: t,
+                started_at: s,
+            });
             self.stamp();
         }
         if self.playback.position_ms >= self.playback.duration_ms && !self.playback.ended {
@@ -440,7 +544,9 @@ impl SimDevice {
             self.playback.position_ms = self.playback.duration_ms;
             self.playback.ended = true;
             self.playback.playing = false;
-            self.queued.push(Input::LocalOp { op: SessionOp::TrackEnded });
+            self.queued.push(Input::LocalOp {
+                op: SessionOp::TrackEnded,
+            });
         }
     }
 
@@ -469,7 +575,12 @@ impl SimDevice {
     }
 
     pub fn next_tick_at(&self) -> EpochMs {
-        self.next_tick_at.min(self.prebuffer_ready_at.as_ref().map(|(t, _)| *t).unwrap_or(f64::MAX))
+        self.next_tick_at.min(
+            self.prebuffer_ready_at
+                .as_ref()
+                .map(|(t, _)| *t)
+                .unwrap_or(f64::MAX),
+        )
     }
 
     /// Current playback position (for assertions and snapshots).

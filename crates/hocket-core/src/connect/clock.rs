@@ -67,7 +67,9 @@ impl OffsetEstimator {
 
     /// The sample with the shortest round trip in the window.
     pub fn best(&self) -> Option<&ClockSample> {
-        self.samples.iter().min_by(|a, b| a.round_trip().total_cmp(&b.round_trip()))
+        self.samples
+            .iter()
+            .min_by(|a, b| a.round_trip().total_cmp(&b.round_trip()))
     }
 
     /// Estimated offset (session − local) in ms; `0` before any sample.
@@ -100,13 +102,18 @@ pub struct SessionClock {
 
 impl std::fmt::Debug for SessionClock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionClock").field("offset_ms", &self.offset_ms()).finish()
+        f.debug_struct("SessionClock")
+            .field("offset_ms", &self.offset_ms())
+            .finish()
     }
 }
 
 impl SessionClock {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
-        SessionClock { clock, estimator: Arc::new(parking_lot::RwLock::new(OffsetEstimator::new())) }
+        SessionClock {
+            clock,
+            estimator: Arc::new(parking_lot::RwLock::new(OffsetEstimator::new())),
+        }
     }
 
     /// Local wall time from the injected clock.
@@ -159,7 +166,11 @@ pub fn extrapolate(stamp: &PositionStamp, now_session_ms: EpochMs) -> Ms {
         return stamp.position_ms;
     }
     let elapsed = (now_session_ms - stamp.taken_at).max(0.0);
-    let rate = if stamp.rate.is_finite() && stamp.rate > 0.0 { stamp.rate } else { 1.0 };
+    let rate = if stamp.rate.is_finite() && stamp.rate > 0.0 {
+        stamp.rate
+    } else {
+        1.0
+    };
     let advanced = elapsed * rate;
     let pos = stamp.position_ms as f64 + advanced;
     if pos >= u32::MAX as f64 {
@@ -170,7 +181,11 @@ pub fn extrapolate(stamp: &PositionStamp, now_session_ms: EpochMs) -> Ms {
 }
 
 /// Extrapolate, but clamp to the track's duration when known.
-pub fn extrapolate_clamped(stamp: &PositionStamp, now_session_ms: EpochMs, duration_ms: Option<Ms>) -> Ms {
+pub fn extrapolate_clamped(
+    stamp: &PositionStamp,
+    now_session_ms: EpochMs,
+    duration_ms: Option<Ms>,
+) -> Ms {
     let p = extrapolate(stamp, now_session_ms);
     match duration_ms {
         Some(d) => p.min(d),
@@ -267,26 +282,48 @@ mod tests {
 
     #[test]
     fn extrapolation_honours_rate_and_playing() {
-        let playing = PositionStamp { position_ms: 10_000, taken_at: 1000.0, rate: 1.0, is_playing: true };
+        let playing = PositionStamp {
+            position_ms: 10_000,
+            taken_at: 1000.0,
+            rate: 1.0,
+            is_playing: true,
+        };
         assert_eq!(extrapolate(&playing, 3500.0), 12_500);
-        let fast = PositionStamp { rate: 2.0, ..playing.clone() };
+        let fast = PositionStamp {
+            rate: 2.0,
+            ..playing.clone()
+        };
         assert_eq!(extrapolate(&fast, 3500.0), 15_000);
-        let paused = PositionStamp { is_playing: false, ..playing.clone() };
+        let paused = PositionStamp {
+            is_playing: false,
+            ..playing.clone()
+        };
         assert_eq!(extrapolate(&paused, 99_999.0), 10_000);
         // clock behind the stamp: never before the stamp
         assert_eq!(extrapolate(&playing, 0.0), 10_000);
         // bad rate falls back to 1
-        let bad = PositionStamp { rate: f64::NAN, ..playing.clone() };
+        let bad = PositionStamp {
+            rate: f64::NAN,
+            ..playing.clone()
+        };
         assert_eq!(extrapolate(&bad, 2000.0), 11_000);
         assert_eq!(extrapolate_clamped(&playing, 3500.0, Some(11_000)), 11_000);
     }
 
     #[test]
     fn resume_snaps_past_an_hour() {
-        let stamp = PositionStamp { position_ms: 90_000, taken_at: 0.0, rate: 1.0, is_playing: true };
+        let stamp = PositionStamp {
+            position_ms: 90_000,
+            taken_at: 0.0,
+            rate: 1.0,
+            is_playing: true,
+        };
         assert_eq!(resume_position(&stamp, 60_000.0), 150_000);
         assert_eq!(resume_position(&stamp, MAX_EXTRAPOLATION_GAP_MS + 1.0), 0);
-        let paused = PositionStamp { is_playing: false, ..stamp.clone() };
+        let paused = PositionStamp {
+            is_playing: false,
+            ..stamp.clone()
+        };
         assert_eq!(resume_position(&paused, 1000.0), 90_000);
         assert_eq!(resume_position(&paused, MAX_EXTRAPOLATION_GAP_MS * 2.0), 0);
     }

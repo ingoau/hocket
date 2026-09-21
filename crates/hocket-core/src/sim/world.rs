@@ -100,34 +100,90 @@ pub struct FakeServer {
 
 impl FakeServer {
     pub fn count(&self, track_id: &str, started_at: EpochMs) -> usize {
-        self.scrobbles.iter().filter(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0).count()
+        self.scrobbles
+            .iter()
+            .filter(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0)
+            .count()
     }
 }
 
 /// A scheduled user or fault action.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    PlayTracks { device: usize, tracks: Vec<TrackId> },
-    Next { device: usize },
-    Previous { device: usize },
-    PlayNext { device: usize, tracks: Vec<TrackId> },
-    Shuffle { device: usize, enabled: bool },
-    TogglePlay { device: usize },
-    Seek { device: usize, position_ms: u32 },
-    ClaimTransport { device: usize, takeover: bool },
-    OpenPicker { device: usize },
-    HandoffTo { device: usize, target: usize },
-    ClosePicker { device: usize },
-    ResumeHere { device: usize },
-    Partition { device: usize, duration_ms: f64 },
-    Heal { device: usize },
-    Cut { device: usize },
-    Crash { device: usize, duration_ms: f64 },
-    Restart { device: usize },
-    Sleep { device: usize, duration_ms: f64 },
-    Wake { device: usize },
-    Lossy { device: usize, drop: f64, duration_ms: f64 },
-    Clean { device: usize },
+    PlayTracks {
+        device: usize,
+        tracks: Vec<TrackId>,
+    },
+    Next {
+        device: usize,
+    },
+    Previous {
+        device: usize,
+    },
+    PlayNext {
+        device: usize,
+        tracks: Vec<TrackId>,
+    },
+    Shuffle {
+        device: usize,
+        enabled: bool,
+    },
+    TogglePlay {
+        device: usize,
+    },
+    Seek {
+        device: usize,
+        position_ms: u32,
+    },
+    ClaimTransport {
+        device: usize,
+        takeover: bool,
+    },
+    OpenPicker {
+        device: usize,
+    },
+    HandoffTo {
+        device: usize,
+        target: usize,
+    },
+    ClosePicker {
+        device: usize,
+    },
+    ResumeHere {
+        device: usize,
+    },
+    Partition {
+        device: usize,
+        duration_ms: f64,
+    },
+    Heal {
+        device: usize,
+    },
+    Cut {
+        device: usize,
+    },
+    Crash {
+        device: usize,
+        duration_ms: f64,
+    },
+    Restart {
+        device: usize,
+    },
+    Sleep {
+        device: usize,
+        duration_ms: f64,
+    },
+    Wake {
+        device: usize,
+    },
+    Lossy {
+        device: usize,
+        drop: f64,
+        duration_ms: f64,
+    },
+    Clean {
+        device: usize,
+    },
 }
 
 pub struct World {
@@ -197,8 +253,17 @@ impl World {
         for i in 0..cfg.devices {
             let skew = rng.random_range(-cfg.max_skew_ms..=cfg.max_skew_ms);
             let clock = Arc::new(DeviceClock::new(time.clone(), skew));
-            let url = matches!(cfg.topology, Topology::Coordinator).then(|| COORDINATOR_URL.to_string());
-            let mut d = SimDevice::new(&device_name(i), &scope, clock, library.clone(), url, cfg.topology == Topology::Lan, None);
+            let url =
+                matches!(cfg.topology, Topology::Coordinator).then(|| COORDINATOR_URL.to_string());
+            let mut d = SimDevice::new(
+                &device_name(i),
+                &scope,
+                clock,
+                library.clone(),
+                url,
+                cfg.topology == Topology::Lan,
+                None,
+            );
             d.keep_log = cfg.keep_logs;
             w.devices.push(d);
         }
@@ -218,7 +283,8 @@ impl World {
 
     pub fn schedule(&mut self, at: EpochMs, action: Action) {
         self.schedule_seq += 1;
-        self.schedule.insert((to_micros(at), self.schedule_seq), action);
+        self.schedule
+            .insert((to_micros(at), self.schedule_seq), action);
     }
 
     pub fn schedule_in(&mut self, delay_ms: f64, action: Action) {
@@ -255,7 +321,14 @@ impl World {
                 let devs: Vec<String> = self
                     .devices
                     .iter()
-                    .map(|d| format!("{}:{}{}", d.id, d.next_tick_at(), if d.asleep { "(asleep)" } else { "" }))
+                    .map(|d| {
+                        format!(
+                            "{}:{}{}",
+                            d.id,
+                            d.next_tick_at(),
+                            if d.asleep { "(asleep)" } else { "" }
+                        )
+                    })
                     .collect();
                 eprintln!(
                     "TRACE now={:.3} next={:.3} inflight={} net_next={:?} sched={:?} coord={:?} devs={:?} events={}",
@@ -287,7 +360,11 @@ impl World {
     fn step(&mut self) {
         let now = self.now();
         // scheduled actions
-        let due: Vec<(i64, u64)> = self.schedule.range(..=(to_micros(now), u64::MAX)).map(|(k, _)| *k).collect();
+        let due: Vec<(i64, u64)> = self
+            .schedule
+            .range(..=(to_micros(now), u64::MAX))
+            .map(|(k, _)| *k)
+            .collect();
         for k in due {
             if let Some(a) = self.schedule.remove(&k) {
                 self.perform(a);
@@ -313,7 +390,10 @@ impl World {
         self.events += 1;
         self.check_invariants();
         if self.net.in_flight() > 20_000 {
-            self.violations.push(format!("[{now:.0}] message storm: {}", self.net.pending_summary()));
+            self.violations.push(format!(
+                "[{now:.0}] message storm: {}",
+                self.net.pending_summary()
+            ));
             self.assert_ok();
         }
     }
@@ -333,7 +413,9 @@ impl World {
             self.coordinator_outputs(outs);
             return;
         }
-        let Some(i) = self.device_index(node) else { return };
+        let Some(i) = self.device_index(node) else {
+            return;
+        };
         if self.devices[i].asleep {
             return;
         }
@@ -351,11 +433,15 @@ impl World {
         let now = self.now();
         for o in outs {
             match o {
-                RoomOutput::Send(peer, msg) => self.net.send(now, &mut self.rng, COORDINATOR_NODE, &peer, msg),
+                RoomOutput::Send(peer, msg) => {
+                    self.net
+                        .send(now, &mut self.rng, COORDINATOR_NODE, &peer, msg)
+                }
                 RoomOutput::Close(peer) => self.net.close(now, COORDINATOR_NODE, &peer),
                 RoomOutput::Verify { peer, credential } => {
                     // The fake Navidrome accepts the one credential the devices carry.
-                    let ok = credential.username == "user" && credential.token.as_deref() == Some("tok");
+                    let ok =
+                        credential.username == "user" && credential.token.as_deref() == Some("tok");
                     let outs = match &mut self.coordinator {
                         Some(c) => c.room.handle(RoomInput::Verified { peer, ok }),
                         None => vec![],
@@ -366,7 +452,12 @@ impl World {
                     if let Some(c) = &mut self.coordinator {
                         let _ = c.store.save(c.room.scope(), c.room.replica());
                         // Invariant 6: the stored stamp came from the live owner.
-                        let stamp = c.room.replica().last_stamp.as_ref().map(|s| (s.device_id.clone(), s.key.clone()));
+                        let stamp = c
+                            .room
+                            .replica()
+                            .last_stamp
+                            .as_ref()
+                            .map(|s| (s.device_id.clone(), s.key.clone()));
                         if stamp != c.last_stamp_key {
                             if let Some((dev, _)) = &stamp {
                                 let owner = c.room.live_owner();
@@ -381,7 +472,10 @@ impl World {
                         // Invariant 2: room revision monotonic.
                         let rev = c.room.revision();
                         if rev < c.max_revision {
-                            self.violations.push(format!("[{now:.0}] coordinator revision went from {} to {rev}", c.max_revision));
+                            self.violations.push(format!(
+                                "[{now:.0}] coordinator revision went from {} to {rev}",
+                                c.max_revision
+                            ));
                         }
                         c.max_revision = c.max_revision.max(rev);
                     }
@@ -404,13 +498,18 @@ impl World {
                 let id = self.devices[i].id.clone();
                 for e in effects {
                     match e {
-                        DeviceEffect::Connect { candidates } => self.net.connect(now, &mut self.rng, &id, &candidates),
-                        DeviceEffect::Send { peer, msg } => self.net.send(now, &mut self.rng, &id, &peer, msg),
+                        DeviceEffect::Connect { candidates } => {
+                            self.net.connect(now, &mut self.rng, &id, &candidates)
+                        }
+                        DeviceEffect::Send { peer, msg } => {
+                            self.net.send(now, &mut self.rng, &id, &peer, msg)
+                        }
                         DeviceEffect::Close { peer } => self.net.close(now, &id, &peer),
                         DeviceEffect::StartListener => {
                             let port = 4000 + i as u16;
                             self.devices[i].listener_port = Some(port);
-                            self.net.bind(&format!("ws://10.0.0.{}:{port}/", i + 1), &id);
+                            self.net
+                                .bind(&format!("ws://10.0.0.{}:{port}/", i + 1), &id);
                             self.devices[i].handle(Input::ListenerStarted { port });
                         }
                         DeviceEffect::StopListener => {
@@ -434,8 +533,13 @@ impl World {
                         DeviceEffect::Verify { peer, .. } => {
                             self.devices[i].handle(Input::CredentialVerified { peer, ok: true });
                         }
-                        DeviceEffect::Scrobble { track_id, started_at } => {
-                            self.server.scrobbles.push((track_id, started_at, id.clone()));
+                        DeviceEffect::Scrobble {
+                            track_id,
+                            started_at,
+                        } => {
+                            self.server
+                                .scrobbles
+                                .push((track_id, started_at, id.clone()));
                         }
                     }
                 }
@@ -452,8 +556,11 @@ impl World {
         if self.cfg.topology != Topology::Lan {
             return;
         }
-        let adverts: Vec<(usize, crate::connect::discovery::PeerAdvert)> =
-            self.lan_adverts.iter().map(|(i, a)| (*i, a.clone())).collect();
+        let adverts: Vec<(usize, crate::connect::discovery::PeerAdvert)> = self
+            .lan_adverts
+            .iter()
+            .map(|(i, a)| (*i, a.clone()))
+            .collect();
         let present: BTreeSet<usize> = adverts.iter().map(|(i, _)| *i).collect();
         for i in 0..self.devices.len() {
             if self.devices[i].asleep || self.net.is_down(&self.devices[i].id) {
@@ -466,7 +573,9 @@ impl World {
                 self.devices[i].handle(Input::PeerDiscovered(a.clone()));
             }
             let lost: Vec<String> = (0..self.devices.len())
-                .filter(|j| *j != i && (!present.contains(j) || self.net.is_down(&self.devices[*j].id)))
+                .filter(|j| {
+                    *j != i && (!present.contains(j) || self.net.is_down(&self.devices[*j].id))
+                })
                 .map(|j| self.devices[j].id.clone())
                 .collect();
             for device_id in lost {
@@ -534,17 +643,32 @@ impl World {
                 };
                 self.devices[i].handle(Input::LocalOp { op });
             }
-            Action::Next { .. } => self.devices[i].handle(Input::LocalOp { op: SessionOp::Next }),
-            Action::Previous { .. } => self.devices[i].handle(Input::LocalOp { op: SessionOp::Previous }),
-            Action::PlayNext { tracks, .. } => {
-                self.devices[i].handle(Input::LocalOp { op: SessionOp::PlayNext { server_id: "srv".into(), track_ids: tracks } })
+            Action::Next { .. } => self.devices[i].handle(Input::LocalOp {
+                op: SessionOp::Next,
+            }),
+            Action::Previous { .. } => self.devices[i].handle(Input::LocalOp {
+                op: SessionOp::Previous,
+            }),
+            Action::PlayNext { tracks, .. } => self.devices[i].handle(Input::LocalOp {
+                op: SessionOp::PlayNext {
+                    server_id: "srv".into(),
+                    track_ids: tracks,
+                },
+            }),
+            Action::Shuffle { enabled, .. } => self.devices[i].handle(Input::LocalOp {
+                op: SessionOp::SetShuffle { enabled },
+            }),
+            Action::TogglePlay { .. } => {
+                self.devices[i].handle(Input::TransportRequest(TransportCommand::TogglePlay))
             }
-            Action::Shuffle { enabled, .. } => self.devices[i].handle(Input::LocalOp { op: SessionOp::SetShuffle { enabled } }),
-            Action::TogglePlay { .. } => self.devices[i].handle(Input::TransportRequest(TransportCommand::TogglePlay)),
             Action::Seek { position_ms, .. } => {
-                self.devices[i].handle(Input::TransportRequest(TransportCommand::SeekTo { position_ms }))
+                self.devices[i].handle(Input::TransportRequest(TransportCommand::SeekTo {
+                    position_ms,
+                }))
             }
-            Action::ClaimTransport { takeover, .. } => self.devices[i].handle(Input::ClaimTransport { takeover }),
+            Action::ClaimTransport { takeover, .. } => {
+                self.devices[i].handle(Input::ClaimTransport { takeover })
+            }
             Action::OpenPicker { .. } => self.devices[i].handle(Input::OpenPicker),
             Action::HandoffTo { target, .. } => {
                 let t = self.devices[target].id.clone();
@@ -578,13 +702,17 @@ impl World {
                     let library = self.library.clone();
                     let scope = self.scope.clone();
                     let clock = self.devices[i].clock.clone();
-                    let url = self.coordinator.is_some().then(|| COORDINATOR_URL.to_string());
+                    let url = self
+                        .coordinator
+                        .is_some()
+                        .then(|| COORDINATOR_URL.to_string());
                     let lan = self.cfg.topology == Topology::Lan;
                     let keep_log = self.devices[i].keep_log;
                     let mut fresh = SimDevice::new(&id, &scope, clock, library, url, lan, Some(p));
                     fresh.keep_log = keep_log;
                     fresh.log = std::mem::take(&mut self.devices[i].log);
-                    fresh.scrobbles_reached = std::mem::take(&mut self.devices[i].scrobbles_reached);
+                    fresh.scrobbles_reached =
+                        std::mem::take(&mut self.devices[i].scrobbles_reached);
                     fresh.filed_count = self.devices[i].filed_count;
                     self.devices[i] = fresh;
                     self.device_rev_watermark[i] = None;
@@ -606,8 +734,13 @@ impl World {
                     self.devices[i].handle(Input::Tick);
                 }
             }
-            Action::Lossy { drop, duration_ms, .. } => {
-                let c = Conditions { drop, ..self.cfg.conditions };
+            Action::Lossy {
+                drop, duration_ms, ..
+            } => {
+                let c = Conditions {
+                    drop,
+                    ..self.cfg.conditions
+                };
                 for o in self.other_nodes(i) {
                     self.net.set_conditions(&id, &o, c);
                 }
@@ -626,7 +759,13 @@ impl World {
     }
 
     fn other_nodes(&self, i: usize) -> Vec<String> {
-        let mut v: Vec<String> = self.devices.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, d)| d.id.clone()).collect::<Vec<_>>();
+        let mut v: Vec<String> = self
+            .devices
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, d)| d.id.clone())
+            .collect::<Vec<_>>();
         if self.coordinator.is_some() {
             v.push(COORDINATOR_NODE.into());
         }
@@ -650,7 +789,13 @@ impl World {
     /// Heal every fault and wake/restart everyone.
     pub fn heal_everything(&mut self) {
         self.net.heal_all();
-        let sleeping: Vec<usize> = self.devices.iter().enumerate().filter(|(_, d)| d.asleep).map(|(i, _)| i).collect();
+        let sleeping: Vec<usize> = self
+            .devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.asleep)
+            .map(|(i, _)| i)
+            .collect();
         for i in sleeping {
             if self.crashed.contains_key(&i) {
                 self.perform(Action::Restart { device: i });
@@ -661,7 +806,13 @@ impl World {
         let pending: Vec<(i64, u64)> = self.schedule.keys().copied().collect();
         for k in pending {
             if let Some(a) = self.schedule.get(&k) {
-                if matches!(a, Action::Heal { .. } | Action::Wake { .. } | Action::Restart { .. } | Action::Clean { .. }) {
+                if matches!(
+                    a,
+                    Action::Heal { .. }
+                        | Action::Wake { .. }
+                        | Action::Restart { .. }
+                        | Action::Clean { .. }
+                ) {
                     let a = a.clone();
                     self.schedule.remove(&k);
                     self.perform(a);
@@ -683,7 +834,10 @@ impl World {
             return None;
         }
         match self.cfg.topology {
-            Topology::Coordinator => d.engine.is_connected().then(|| COORDINATOR_NODE.to_string()),
+            Topology::Coordinator => d
+                .engine
+                .is_connected()
+                .then(|| COORDINATOR_NODE.to_string()),
             Topology::Lan => {
                 if d.engine.is_serving() {
                     Some(d.id.clone())
@@ -702,7 +856,10 @@ impl World {
         if room == COORDINATOR_NODE {
             return self.coordinator.as_ref().map(|c| c.room.lease().epoch);
         }
-        self.devices.iter().find(|d| d.id == room).map(|d| d.engine.room().lease().epoch)
+        self.devices
+            .iter()
+            .find(|d| d.id == room)
+            .map(|d| d.engine.room().lease().epoch)
     }
 
     fn check_invariants(&mut self) {
@@ -744,7 +901,9 @@ impl World {
         }
         for (room, list) in current_holders {
             if list.len() > 1 {
-                self.violations.push(format!("[{now:.0}] two transport owners in room {room}: {list:?}"));
+                self.violations.push(format!(
+                    "[{now:.0}] two transport owners in room {room}: {list:?}"
+                ));
             }
         }
         // 2. device confirmed revision monotonic while attached
@@ -754,7 +913,10 @@ impl World {
                 let rev = d.engine.document().revision;
                 if let Some(w) = self.device_rev_watermark[i] {
                     if rev < w {
-                        self.violations.push(format!("[{now:.0}] {} revision went from {w} to {rev} while attached", d.id));
+                        self.violations.push(format!(
+                            "[{now:.0}] {} revision went from {w} to {rev} while attached",
+                            d.id
+                        ));
                     }
                 }
                 self.device_rev_watermark[i] = Some(rev);
@@ -765,7 +927,10 @@ impl World {
         // 7. filing never leaves local ops behind
         for d in &self.devices {
             if d.filed_count > 0 && d.engine.has_unsynced() && d.engine.is_connected() {
-                self.violations.push(format!("[{now:.0}] {} kept unsynced ops after filing its state", d.id));
+                self.violations.push(format!(
+                    "[{now:.0}] {} kept unsynced ops after filing its state",
+                    d.id
+                ));
             }
         }
     }
@@ -776,14 +941,21 @@ impl World {
         // 5. convergence: every attached device holds its room's document,
         //    and (LAN) the healed network has settled on one room.
         if self.cfg.topology == Topology::Lan {
-            let rooms: BTreeSet<String> = (0..self.devices.len()).filter_map(|i| self.room_key(i)).collect();
+            let rooms: BTreeSet<String> = (0..self.devices.len())
+                .filter_map(|i| self.room_key(i))
+                .collect();
             if rooms.len() > 1 {
-                self.violations.push(format!("[{now:.0}] LAN did not settle on one room after heal: {rooms:?}"));
+                self.violations.push(format!(
+                    "[{now:.0}] LAN did not settle on one room after heal: {rooms:?}"
+                ));
             }
         }
         for i in 0..self.devices.len() {
             let room_doc = match self.cfg.topology {
-                Topology::Coordinator => self.coordinator.as_ref().map(|c| c.room.replica().document.clone()),
+                Topology::Coordinator => self
+                    .coordinator
+                    .as_ref()
+                    .map(|c| c.room.replica().document.clone()),
                 Topology::Lan => self
                     .room_key(i)
                     .and_then(|leader| self.devices.iter().find(|d| d.id == leader))
@@ -794,11 +966,13 @@ impl World {
                 continue;
             }
             if self.cfg.topology == Topology::Coordinator && !d.engine.is_connected() {
-                self.violations.push(format!("[{now:.0}] {} not connected after heal", d.id));
+                self.violations
+                    .push(format!("[{now:.0}] {} not connected after heal", d.id));
                 continue;
             }
             if d.engine.pending_count() != 0 {
-                self.violations.push(format!("[{now:.0}] {} still has pending ops", d.id));
+                self.violations
+                    .push(format!("[{now:.0}] {} still has pending ops", d.id));
             }
             if let Some(rd) = &room_doc {
                 if self.room_key(i).is_some() && !same_session_state(d.engine.document(), rd) {
@@ -822,25 +996,42 @@ impl World {
         for (t, s) in &reached {
             let n = self.server.count(t, *s as f64);
             if n != 1 {
-                self.violations.push(format!("[{now:.0}] scrobble ({t}, {s}) submitted {n} times"));
+                self.violations.push(format!(
+                    "[{now:.0}] scrobble ({t}, {s}) submitted {n} times"
+                ));
             }
         }
         for (t, s, _) in &self.server.scrobbles {
             if !reached.contains(&(t.clone(), *s as i64)) {
-                self.violations.push(format!("[{now:.0}] scrobble ({t}, {s}) submitted but never reached"));
+                self.violations.push(format!(
+                    "[{now:.0}] scrobble ({t}, {s}) submitted but never reached"
+                ));
             }
         }
         for d in &self.devices {
             if !d.outbox.is_empty() && !d.asleep {
-                self.violations.push(format!("[{now:.0}] {} has {} scrobbles without a verdict", d.id, d.outbox.len()));
+                self.violations.push(format!(
+                    "[{now:.0}] {} has {} scrobbles without a verdict",
+                    d.id,
+                    d.outbox.len()
+                ));
             }
         }
         // 1b. at quiescence the room's owner is the one device that owns
         if let Some(c) = &self.coordinator {
             let owner = c.room.live_owner();
-            let owning: Vec<String> = self.devices.iter().filter(|d| d.owns() && !d.asleep).map(|d| d.id.clone()).collect();
-            if owning.len() > 1 || (owning.len() == 1 && owner.as_deref() != Some(owning[0].as_str())) {
-                self.violations.push(format!("[{now:.0}] room owner {owner:?} vs owning devices {owning:?}"));
+            let owning: Vec<String> = self
+                .devices
+                .iter()
+                .filter(|d| d.owns() && !d.asleep)
+                .map(|d| d.id.clone())
+                .collect();
+            if owning.len() > 1
+                || (owning.len() == 1 && owner.as_deref() != Some(owning[0].as_str()))
+            {
+                self.violations.push(format!(
+                    "[{now:.0}] room owner {owner:?} vs owning devices {owning:?}"
+                ));
             }
         }
     }
@@ -851,7 +1042,8 @@ impl World {
         self.heal_everything();
         self.run_for(120_000.0);
         for _ in 0..240 {
-            let quiet = self.net.in_flight() == 0 && self.devices.iter().all(|d| d.engine.pending_count() == 0);
+            let quiet = self.net.in_flight() == 0
+                && self.devices.iter().all(|d| d.engine.pending_count() == 0);
             if quiet {
                 break;
             }
@@ -894,9 +1086,17 @@ impl World {
         w.run_for(3_000.0);
         // someone starts playing
         let first = rng.random_range(0..n);
-        let tracks: Vec<TrackId> = (0..rng.random_range(3..=8)).map(|_| ids.choose(&mut rng).cloned().unwrap()).collect();
-        w.perform(Action::PlayTracks { device: first, tracks });
-        w.perform(Action::ClaimTransport { device: first, takeover: false });
+        let tracks: Vec<TrackId> = (0..rng.random_range(3..=8))
+            .map(|_| ids.choose(&mut rng).cloned().unwrap())
+            .collect();
+        w.perform(Action::PlayTracks {
+            device: first,
+            tracks,
+        });
+        w.perform(Action::ClaimTransport {
+            device: first,
+            takeover: false,
+        });
         w.run_for(2_000.0);
         for _ in 0..actions {
             let gap = rng.random_range(500.0..12_000.0);
@@ -904,21 +1104,31 @@ impl World {
             let d = rng.random_range(0..n);
             let roll: f64 = rng.random();
             let action = if roll < 0.10 {
-                let tracks: Vec<TrackId> = (0..rng.random_range(2..=6)).map(|_| ids.choose(&mut rng).cloned().unwrap()).collect();
+                let tracks: Vec<TrackId> = (0..rng.random_range(2..=6))
+                    .map(|_| ids.choose(&mut rng).cloned().unwrap())
+                    .collect();
                 Action::PlayTracks { device: d, tracks }
             } else if roll < 0.28 {
                 Action::Next { device: d }
             } else if roll < 0.33 {
                 Action::Previous { device: d }
             } else if roll < 0.40 {
-                let tracks: Vec<TrackId> = (0..rng.random_range(1..=3)).map(|_| ids.choose(&mut rng).cloned().unwrap()).collect();
+                let tracks: Vec<TrackId> = (0..rng.random_range(1..=3))
+                    .map(|_| ids.choose(&mut rng).cloned().unwrap())
+                    .collect();
                 Action::PlayNext { device: d, tracks }
             } else if roll < 0.44 {
-                Action::Shuffle { device: d, enabled: rng.random() }
+                Action::Shuffle {
+                    device: d,
+                    enabled: rng.random(),
+                }
             } else if roll < 0.50 {
                 Action::TogglePlay { device: d }
             } else if roll < 0.54 {
-                Action::Seek { device: d, position_ms: rng.random_range(0..200_000) }
+                Action::Seek {
+                    device: d,
+                    position_ms: rng.random_range(0..200_000),
+                }
             } else if roll < 0.62 {
                 // handoff: the owner opens the picker, then picks after a beat
                 if let Some(owner) = w.devices.iter().position(|x| x.owns()) {
@@ -927,7 +1137,13 @@ impl World {
                         w.perform(Action::OpenPicker { device: owner });
                         let beat = rng.random_range(300.0..4_000.0);
                         if rng.random::<f64>() < 0.85 {
-                            w.schedule_in(beat, Action::HandoffTo { device: owner, target });
+                            w.schedule_in(
+                                beat,
+                                Action::HandoffTo {
+                                    device: owner,
+                                    target,
+                                },
+                            );
                         } else {
                             w.schedule_in(beat, Action::ClosePicker { device: owner });
                         }
@@ -937,21 +1153,44 @@ impl World {
             } else if roll < 0.68 {
                 if w.devices[d].resume_offer.is_some() {
                     Action::ResumeHere { device: d }
-                } else if !w.devices.iter().any(|x| x.owns() && !x.engine.is_detached()) {
-                    Action::ClaimTransport { device: d, takeover: false }
+                } else if !w
+                    .devices
+                    .iter()
+                    .any(|x| x.owns() && !x.engine.is_detached())
+                {
+                    Action::ClaimTransport {
+                        device: d,
+                        takeover: false,
+                    }
                 } else {
-                    Action::ClaimTransport { device: d, takeover: true }
+                    Action::ClaimTransport {
+                        device: d,
+                        takeover: true,
+                    }
                 }
             } else if roll < 0.78 {
-                Action::Partition { device: d, duration_ms: rng.random_range(2_000.0..90_000.0) }
+                Action::Partition {
+                    device: d,
+                    duration_ms: rng.random_range(2_000.0..90_000.0),
+                }
             } else if roll < 0.83 {
                 Action::Cut { device: d }
             } else if roll < 0.88 {
-                Action::Crash { device: d, duration_ms: rng.random_range(5_000.0..120_000.0) }
+                Action::Crash {
+                    device: d,
+                    duration_ms: rng.random_range(5_000.0..120_000.0),
+                }
             } else if roll < 0.93 {
-                Action::Sleep { device: d, duration_ms: rng.random_range(5_000.0..120_000.0) }
+                Action::Sleep {
+                    device: d,
+                    duration_ms: rng.random_range(5_000.0..120_000.0),
+                }
             } else {
-                Action::Lossy { device: d, drop: rng.random_range(0.05..0.5), duration_ms: rng.random_range(5_000.0..60_000.0) }
+                Action::Lossy {
+                    device: d,
+                    drop: rng.random_range(0.05..0.5),
+                    duration_ms: rng.random_range(5_000.0..60_000.0),
+                }
             };
             w.perform(action);
         }
@@ -962,7 +1201,9 @@ impl World {
 
 /// Top-level fields on which two documents differ, for violation messages.
 pub fn doc_diff(a: &crate::api::SessionDocument, b: &crate::api::SessionDocument) -> String {
-    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) = (serde_json::to_value(a), serde_json::to_value(b)) else {
+    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) =
+        (serde_json::to_value(a), serde_json::to_value(b))
+    else {
         return "unserialisable".into();
     };
     let mut out = vec![];
@@ -971,7 +1212,11 @@ pub fn doc_diff(a: &crate::api::SessionDocument, b: &crate::api::SessionDocument
             if va != vb {
                 let sa = va.to_string();
                 let sb = vb.to_string();
-                out.push(format!("{k}: {} vs {}", &sa[..sa.len().min(160)], &sb[..sb.len().min(160)]));
+                out.push(format!(
+                    "{k}: {} vs {}",
+                    &sa[..sa.len().min(160)],
+                    &sb[..sb.len().min(160)]
+                ));
             }
         }
     }

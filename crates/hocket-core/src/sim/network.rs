@@ -24,13 +24,25 @@ type Parked = (usize, NodeId, NetEvent);
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetEvent {
     /// A connection this node asked for is open.
-    Connected { peer: PeerId, url: String },
+    Connected {
+        peer: PeerId,
+        url: String,
+    },
     /// A connection this node asked for could not be opened.
-    ConnectFailed { error: String },
+    ConnectFailed {
+        error: String,
+    },
     /// Someone connected to this node's listener.
-    Accepted { peer: PeerId },
-    Message { peer: PeerId, msg: WireMessage },
-    Closed { peer: PeerId },
+    Accepted {
+        peer: PeerId,
+    },
+    Message {
+        peer: PeerId,
+        msg: WireMessage,
+    },
+    Closed {
+        peer: PeerId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +84,11 @@ pub const RETRANSMIT_MAX_MS: f64 = 1_500.0;
 
 impl Default for Conditions {
     fn default() -> Self {
-        Conditions { delay_ms: 20.0, jitter_ms: 5.0, drop: 0.0 }
+        Conditions {
+            delay_ms: 20.0,
+            jitter_ms: 5.0,
+            drop: 0.0,
+        }
     }
 }
 
@@ -142,7 +158,10 @@ impl Network {
     }
 
     fn conditions(&self, a: &str, b: &str) -> Conditions {
-        self.per_pair.get(&pair(a, b)).copied().unwrap_or(self.default)
+        self.per_pair
+            .get(&pair(a, b))
+            .copied()
+            .unwrap_or(self.default)
     }
 
     /// Cut `a` off from `b` at the IP level. Frames sent meanwhile are parked
@@ -168,7 +187,9 @@ impl Network {
     }
 
     fn release_parked(&mut self, p: &(NodeId, NodeId)) {
-        let Some(list) = self.parked.remove(p) else { return };
+        let Some(list) = self.parked.remove(p) else {
+            return;
+        };
         let now = self.queue.values().next().map(|d| d.at).unwrap_or(0.0);
         for (link_idx_hint, to, event) in list {
             // Only frames whose link still exists get through.
@@ -192,9 +213,18 @@ impl Network {
     /// after a delay, as a real TCP reset would, and nothing reaches it.
     pub fn node_down(&mut self, now: f64, node: &str) {
         self.down.insert(node.to_string());
-        let links: Vec<Link> = self.links.iter().filter(|l| l.a == node || l.b == node).cloned().collect();
+        let links: Vec<Link> = self
+            .links
+            .iter()
+            .filter(|l| l.a == node || l.b == node)
+            .cloned()
+            .collect();
         for l in links {
-            let (other, other_peer) = if l.a == node { (l.b.clone(), l.b_peer.clone()) } else { (l.a.clone(), l.a_peer.clone()) };
+            let (other, other_peer) = if l.a == node {
+                (l.b.clone(), l.b_peer.clone())
+            } else {
+                (l.a.clone(), l.a_peer.clone())
+            };
             self.enqueue(now + 50.0, &other, NetEvent::Closed { peer: other_peer });
         }
         self.links.retain(|l| l.a != node && l.b != node);
@@ -212,11 +242,27 @@ impl Network {
 
     /// Cut every link between `a` and `b` right now (both sides see `Closed`).
     pub fn cut(&mut self, now: f64, a: &str, b: &str) {
-        let links: Vec<Link> =
-            self.links.iter().filter(|l| pair(&l.a, &l.b) == pair(a, b)).cloned().collect();
+        let links: Vec<Link> = self
+            .links
+            .iter()
+            .filter(|l| pair(&l.a, &l.b) == pair(a, b))
+            .cloned()
+            .collect();
         for l in links {
-            self.enqueue(now + 1.0, &l.a, NetEvent::Closed { peer: l.a_peer.clone() });
-            self.enqueue(now + 1.0, &l.b, NetEvent::Closed { peer: l.b_peer.clone() });
+            self.enqueue(
+                now + 1.0,
+                &l.a,
+                NetEvent::Closed {
+                    peer: l.a_peer.clone(),
+                },
+            );
+            self.enqueue(
+                now + 1.0,
+                &l.b,
+                NetEvent::Closed {
+                    peer: l.b_peer.clone(),
+                },
+            );
         }
         self.links.retain(|l| pair(&l.a, &l.b) != pair(a, b));
         self.parked.remove(&pair(a, b));
@@ -230,7 +276,14 @@ impl Network {
     fn enqueue(&mut self, at: f64, to: &str, event: NetEvent) {
         self.seq += 1;
         let key = (to_micros(at), self.seq);
-        self.queue.insert(key, Delivery { at, to: to.to_string(), event });
+        self.queue.insert(
+            key,
+            Delivery {
+                at,
+                to: to.to_string(),
+                event,
+            },
+        );
     }
 
     /// `from` opens a connection to the first candidate URL that resolves to
@@ -238,7 +291,9 @@ impl Network {
     /// target, or `ConnectFailed`.
     pub fn connect(&mut self, now: f64, rng: &mut ChaCha8Rng, from: &str, candidates: &[String]) {
         for url in candidates {
-            let Some(target) = self.urls.get(url).cloned() else { continue };
+            let Some(target) = self.urls.get(url).cloned() else {
+                continue;
+            };
             if target == from {
                 continue;
             }
@@ -257,12 +312,29 @@ impl Network {
                 last_b_to_a: 0.0,
             });
             let rtt = c.delay_ms * 2.0 + rng.random_range(0.0..=c.jitter_ms);
-            self.enqueue(now + rtt, from, NetEvent::Connected { peer: a_peer, url: url.clone() });
-            self.enqueue(now + rtt / 2.0, &target, NetEvent::Accepted { peer: b_peer });
+            self.enqueue(
+                now + rtt,
+                from,
+                NetEvent::Connected {
+                    peer: a_peer,
+                    url: url.clone(),
+                },
+            );
+            self.enqueue(
+                now + rtt / 2.0,
+                &target,
+                NetEvent::Accepted { peer: b_peer },
+            );
             return;
         }
         let delay = self.default.delay_ms * 2.0;
-        self.enqueue(now + delay, from, NetEvent::ConnectFailed { error: "unreachable".into() });
+        self.enqueue(
+            now + delay,
+            from,
+            NetEvent::ConnectFailed {
+                error: "unreachable".into(),
+            },
+        );
     }
 
     fn link_for(&self, node: &str, peer: &str) -> Option<(usize, NodeId, PeerId)> {
@@ -279,14 +351,30 @@ impl Network {
 
     /// Send a frame from `node` on `peer`. Applies partition, drop, delay and
     /// jitter (which reorders).
-    pub fn send(&mut self, now: f64, rng: &mut ChaCha8Rng, node: &str, peer: &str, msg: WireMessage) {
-        let Some((idx, other, other_peer)) = self.link_for(node, peer) else { return };
+    pub fn send(
+        &mut self,
+        now: f64,
+        rng: &mut ChaCha8Rng,
+        node: &str,
+        peer: &str,
+        msg: WireMessage,
+    ) {
+        let Some((idx, other, other_peer)) = self.link_for(node, peer) else {
+            return;
+        };
         if self.down.contains(node) || self.down.contains(&other) {
             self.stats_dropped += 1;
             return;
         }
         if self.partitions.contains(&pair(node, &other)) {
-            self.parked.entry(pair(node, &other)).or_default().push((idx, other, NetEvent::Message { peer: other_peer, msg }));
+            self.parked.entry(pair(node, &other)).or_default().push((
+                idx,
+                other,
+                NetEvent::Message {
+                    peer: other_peer,
+                    msg,
+                },
+            ));
             return;
         }
         let c = self.conditions(node, &other);
@@ -297,26 +385,47 @@ impl Network {
             at += rng.random_range(RETRANSMIT_MIN_MS..=RETRANSMIT_MAX_MS);
         }
         let link = &mut self.links[idx];
-        let last = if link.a == node { &mut link.last_a_to_b } else { &mut link.last_b_to_a };
+        let last = if link.a == node {
+            &mut link.last_a_to_b
+        } else {
+            &mut link.last_b_to_a
+        };
         if at < *last {
             at = *last;
         }
         *last = at;
-        self.enqueue(at, &other, NetEvent::Message { peer: other_peer, msg });
+        self.enqueue(
+            at,
+            &other,
+            NetEvent::Message {
+                peer: other_peer,
+                msg,
+            },
+        );
     }
 
     /// Close a connection from one side; the other side sees `Closed`.
     pub fn close(&mut self, now: f64, node: &str, peer: &str) {
-        let Some((i, other, other_peer)) = self.link_for(node, peer) else { return };
+        let Some((i, other, other_peer)) = self.link_for(node, peer) else {
+            return;
+        };
         self.links.remove(i);
-        if !self.links.iter().any(|l| pair(&l.a, &l.b) == pair(node, &other)) {
+        if !self
+            .links
+            .iter()
+            .any(|l| pair(&l.a, &l.b) == pair(node, &other))
+        {
             if let Some(list) = self.parked.remove(&pair(node, &other)) {
                 self.stats_dropped += list.len() as u64;
             }
         }
         if !self.is_partitioned(node, &other) {
             let c = self.conditions(node, &other);
-            self.enqueue(now + c.delay_ms, &other, NetEvent::Closed { peer: other_peer });
+            self.enqueue(
+                now + c.delay_ms,
+                &other,
+                NetEvent::Closed { peer: other_peer },
+            );
         }
     }
 
@@ -379,12 +488,23 @@ mod tests {
     #[test]
     fn connect_send_reorder_partition_close() {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
-        let mut n = Network::new(Conditions { delay_ms: 10.0, jitter_ms: 0.0, drop: 0.0 });
+        let mut n = Network::new(Conditions {
+            delay_ms: 10.0,
+            jitter_ms: 0.0,
+            drop: 0.0,
+        });
         n.bind("wss://c/", "c");
-        n.connect(0.0, &mut rng, "a", &["wss://nope/".into(), "wss://c/".into()]);
+        n.connect(
+            0.0,
+            &mut rng,
+            "a",
+            &["wss://nope/".into(), "wss://c/".into()],
+        );
         let mut evs = n.due(100.0);
         evs.sort_by(|x, y| x.0.cmp(&y.0));
-        assert!(matches!(&evs[0], (n, NetEvent::Connected { url, .. }) if n == "a" && url == "wss://c/"));
+        assert!(
+            matches!(&evs[0], (n, NetEvent::Connected { url, .. }) if n == "a" && url == "wss://c/")
+        );
         assert!(matches!(&evs[1], (n, NetEvent::Accepted { .. }) if n == "c"));
         let a_peer = match &evs[0].1 {
             NetEvent::Connected { peer, .. } => peer.clone(),
@@ -394,24 +514,54 @@ mod tests {
             NetEvent::Accepted { peer } => peer.clone(),
             _ => unreachable!(),
         };
-        n.send(100.0, &mut rng, "a", &a_peer, WireMessage::new(Msg::ClockPing { t0: 1.0 }));
+        n.send(
+            100.0,
+            &mut rng,
+            "a",
+            &a_peer,
+            WireMessage::new(Msg::ClockPing { t0: 1.0 }),
+        );
         assert_eq!(n.next_at(), Some(110.0));
         let evs = n.due(110.0);
-        assert!(matches!(&evs[0], (to, NetEvent::Message { peer, msg }) if to == "c" && peer == &c_peer && msg.msg == Msg::ClockPing { t0: 1.0 }));
+        assert!(
+            matches!(&evs[0], (to, NetEvent::Message { peer, msg }) if to == "c" && peer == &c_peer && msg.msg == Msg::ClockPing { t0: 1.0 })
+        );
         // a partition parks frames; healing releases them in order
         n.partition("a", "c");
-        n.send(110.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::SyncRequest));
-        n.send(110.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::ClockPing { t0: 9.0 }));
+        n.send(
+            110.0,
+            &mut rng,
+            "c",
+            &c_peer,
+            WireMessage::new(Msg::SyncRequest),
+        );
+        n.send(
+            110.0,
+            &mut rng,
+            "c",
+            &c_peer,
+            WireMessage::new(Msg::ClockPing { t0: 9.0 }),
+        );
         assert_eq!(n.in_flight(), 0);
         assert_eq!(n.stats_dropped, 0);
         n.heal("a", "c");
         assert_eq!(n.in_flight(), 2);
         let evs = n.due(200.0);
-        assert!(matches!(&evs[0], (to, NetEvent::Message { msg, .. }) if to == "a" && msg.msg == Msg::SyncRequest));
-        assert!(matches!(&evs[1], (_, NetEvent::Message { msg, .. }) if msg.msg == Msg::ClockPing { t0: 9.0 }));
+        assert!(
+            matches!(&evs[0], (to, NetEvent::Message { msg, .. }) if to == "a" && msg.msg == Msg::SyncRequest)
+        );
+        assert!(
+            matches!(&evs[1], (_, NetEvent::Message { msg, .. }) if msg.msg == Msg::ClockPing { t0: 9.0 })
+        );
         // a partition whose socket dies loses what was parked
         n.partition("a", "c");
-        n.send(200.0, &mut rng, "c", &c_peer, WireMessage::new(Msg::SyncRequest));
+        n.send(
+            200.0,
+            &mut rng,
+            "c",
+            &c_peer,
+            WireMessage::new(Msg::SyncRequest),
+        );
         n.close(200.0, "c", &c_peer);
         n.heal("a", "c");
         assert_eq!(n.stats_dropped, 1);
@@ -419,12 +569,28 @@ mod tests {
         n.connect(150.0, &mut rng, "a", &["wss://c/".into()]);
         let (a_peer, c_peer) = {
             let evs = n.due(300.0);
-            let a = evs.iter().find_map(|(to, e)| match e { NetEvent::Connected { peer, .. } if to == "a" => Some(peer.clone()), _ => None }).unwrap();
-            let c = evs.iter().find_map(|(to, e)| match e { NetEvent::Accepted { peer } if to == "c" => Some(peer.clone()), _ => None }).unwrap();
+            let a = evs
+                .iter()
+                .find_map(|(to, e)| match e {
+                    NetEvent::Connected { peer, .. } if to == "a" => Some(peer.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let c = evs
+                .iter()
+                .find_map(|(to, e)| match e {
+                    NetEvent::Accepted { peer } if to == "c" => Some(peer.clone()),
+                    _ => None,
+                })
+                .unwrap();
             (a, c)
         };
         // jitter delays but a stream stays in order (TCP); across streams it reorders
-        n.set_default_conditions(Conditions { delay_ms: 10.0, jitter_ms: 50.0, drop: 0.0 });
+        n.set_default_conditions(Conditions {
+            delay_ms: 10.0,
+            jitter_ms: 50.0,
+            drop: 0.0,
+        });
         n.connect(150.0, &mut rng, "b", &["wss://c/".into()]);
         let b_peer = n
             .due(200.0)
@@ -435,8 +601,22 @@ mod tests {
             })
             .unwrap();
         for i in 0..20 {
-            n.send(200.0, &mut rng, "a", &a_peer, WireMessage::new(Msg::ClockPing { t0: i as f64 }));
-            n.send(200.0, &mut rng, "b", &b_peer, WireMessage::new(Msg::ClockPing { t0: 100.0 + i as f64 }));
+            n.send(
+                200.0,
+                &mut rng,
+                "a",
+                &a_peer,
+                WireMessage::new(Msg::ClockPing { t0: i as f64 }),
+            );
+            n.send(
+                200.0,
+                &mut rng,
+                "b",
+                &b_peer,
+                WireMessage::new(Msg::ClockPing {
+                    t0: 100.0 + i as f64,
+                }),
+            );
         }
         let evs = n.due(300.0);
         let order: Vec<f64> = evs
@@ -461,7 +641,7 @@ mod tests {
         let evs = n.due(400.0);
         assert!(matches!(&evs[0], (to, NetEvent::Closed { peer }) if to == "c" && peer == &c_peer));
         assert_eq!(n.link_count(), 1); // b's stream is still up
-        // unreachable url fails
+                                       // unreachable url fails
         n.connect(400.0, &mut rng, "a", &["wss://nope/".into()]);
         let evs = n.due(500.0);
         assert!(matches!(&evs[0], (_, NetEvent::ConnectFailed { .. })));
@@ -470,7 +650,11 @@ mod tests {
     #[test]
     fn node_down_closes_links_for_others_and_drops_inbound() {
         let mut rng = ChaCha8Rng::seed_from_u64(2);
-        let mut n = Network::new(Conditions { delay_ms: 1.0, jitter_ms: 0.0, drop: 0.0 });
+        let mut n = Network::new(Conditions {
+            delay_ms: 1.0,
+            jitter_ms: 0.0,
+            drop: 0.0,
+        });
         n.bind("wss://c/", "c");
         n.connect(0.0, &mut rng, "a", &["wss://c/".into()]);
         n.due(10.0);

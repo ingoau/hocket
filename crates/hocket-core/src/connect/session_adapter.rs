@@ -58,7 +58,10 @@ pub struct RealReducer {
 
 impl Default for RealReducer {
     fn default() -> Self {
-        RealReducer { history_cap: DEFAULT_HISTORY_CAP, saved: SavedQueuePolicy::default() }
+        RealReducer {
+            history_cap: DEFAULT_HISTORY_CAP,
+            saved: SavedQueuePolicy::default(),
+        }
     }
 }
 
@@ -73,7 +76,14 @@ impl RealReducer {
 pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
     Some(match op {
         SessionOp::PlayContext { args } => QueueOp::PlayContext { args: args.clone() },
-        SessionOp::PlayTracks { server_id, track_ids, start_index, label, shuffle, save_outgoing } => QueueOp::PlayTracks {
+        SessionOp::PlayTracks {
+            server_id,
+            track_ids,
+            start_index,
+            label,
+            shuffle,
+            save_outgoing,
+        } => QueueOp::PlayTracks {
             server_id: server_id.clone(),
             track_ids: track_ids.clone(),
             start_index: *start_index,
@@ -81,15 +91,26 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             shuffle: *shuffle,
             save_outgoing: *save_outgoing,
         },
-        SessionOp::PlayNext { server_id, track_ids } => {
-            QueueOp::PlayNext { server_id: server_id.clone(), track_ids: track_ids.clone() }
-        }
-        SessionOp::PlayLater { server_id, track_ids } => {
-            QueueOp::PlayLater { server_id: server_id.clone(), track_ids: track_ids.clone() }
-        }
+        SessionOp::PlayNext {
+            server_id,
+            track_ids,
+        } => QueueOp::PlayNext {
+            server_id: server_id.clone(),
+            track_ids: track_ids.clone(),
+        },
+        SessionOp::PlayLater {
+            server_id,
+            track_ids,
+        } => QueueOp::PlayLater {
+            server_id: server_id.clone(),
+            track_ids: track_ids.clone(),
+        },
         SessionOp::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
         SessionOp::RemoveQueueItems { keys } => QueueOp::RemoveQueueItems { keys: keys.clone() },
-        SessionOp::MoveQueueItem { key, to_index } => QueueOp::MoveQueueItem { key: key.clone(), to_index: *to_index },
+        SessionOp::MoveQueueItem { key, to_index } => QueueOp::MoveQueueItem {
+            key: key.clone(),
+            to_index: *to_index,
+        },
         SessionOp::ClearQueue => QueueOp::ClearQueue,
         SessionOp::ClearInsertions => QueueOp::ClearInsertions,
         SessionOp::SetShuffle { enabled } => QueueOp::SetShuffle { enabled: *enabled },
@@ -112,19 +133,34 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
                 .collect(),
         },
         SessionOp::TrackEnded => QueueOp::TrackEnded,
-        SessionOp::RestoreSavedQueue { id, tracks } => QueueOp::RestoreSavedQueue { id: id.clone(), tracks: tracks.clone() },
-        SessionOp::SetContextTracks { tracks } => QueueOp::SetContextTracks { tracks: tracks.clone() },
+        SessionOp::RestoreSavedQueue { id, tracks } => QueueOp::RestoreSavedQueue {
+            id: id.clone(),
+            tracks: tracks.clone(),
+        },
+        SessionOp::SetContextTracks { tracks } => QueueOp::SetContextTracks {
+            tracks: tracks.clone(),
+        },
         SessionOp::SaveCurrentQueue { pinned } => QueueOp::SaveCurrentQueue { pinned: *pinned },
-        SessionOp::PinSavedQueue { id, pinned } => QueueOp::PinSavedQueue { id: id.clone(), pinned: *pinned },
+        SessionOp::PinSavedQueue { id, pinned } => QueueOp::PinSavedQueue {
+            id: id.clone(),
+            pinned: *pinned,
+        },
         SessionOp::DeleteSavedQueue { id } => QueueOp::DeleteSavedQueue { id: id.clone() },
         SessionOp::TouchSavedQueue { id } => QueueOp::TouchSavedQueue { id: id.clone() },
-        SessionOp::MergeSavedQueues { remote } => QueueOp::MergeSavedQueues { remote: remote.clone() },
+        SessionOp::MergeSavedQueues { remote } => QueueOp::MergeSavedQueues {
+            remote: remote.clone(),
+        },
         SessionOp::Replace { .. } => return None,
     })
 }
 
 impl SessionReducer for RealReducer {
-    fn apply(&self, doc: &SessionDocument, op: &SessionOp, ctx: &OpContext) -> Result<SessionDocument, ReduceFailure> {
+    fn apply(
+        &self,
+        doc: &SessionDocument,
+        op: &SessionOp,
+        ctx: &OpContext,
+    ) -> Result<SessionDocument, ReduceFailure> {
         let Some(qop) = to_queue_op(op) else {
             return Err(ReduceFailure("replace is handled by the engine".into()));
         };
@@ -187,7 +223,10 @@ mod tests {
         let base = crate::session::new_document("s", "sid".into(), 0.0);
         let a = apply_op(&r, &base, &ctx_op(3), &op_context("x", 1.0, 0), 1).unwrap();
         let b = apply_op(&r, &base, &ctx_op(3), &op_context("y", 1.0, 0), 1).unwrap();
-        assert_ne!(a.current.as_ref().unwrap().key, b.current.as_ref().unwrap().key);
+        assert_ne!(
+            a.current.as_ref().unwrap().key,
+            b.current.as_ref().unwrap().key
+        );
     }
 
     #[test]
@@ -197,7 +236,14 @@ mod tests {
         base.transport.lease.epoch = 7;
         let mut other = crate::session::new_document("other", "other-sid".into(), 0.0);
         other.autoplay = true;
-        let out = apply_op(&r, &base, &SessionOp::Replace { document: other }, &op_context("o", 5.0, 0), 4).unwrap();
+        let out = apply_op(
+            &r,
+            &base,
+            &SessionOp::Replace { document: other },
+            &op_context("o", 5.0, 0),
+            4,
+        )
+        .unwrap();
         assert_eq!(out.session_id, "sid");
         assert_eq!(out.scope, "scope");
         assert_eq!(out.revision, 4);
@@ -209,7 +255,13 @@ mod tests {
     fn unapplicable_op_is_an_error_not_a_panic() {
         let r = RealReducer::default();
         let base = crate::session::new_document("s", "sid".into(), 0.0);
-        let err = apply_op(&r, &base, &SessionOp::JumpToQueueItem { key: "nope".into() }, &op_context("o", 1.0, 0), 1);
+        let err = apply_op(
+            &r,
+            &base,
+            &SessionOp::JumpToQueueItem { key: "nope".into() },
+            &op_context("o", 1.0, 0),
+            1,
+        );
         assert!(err.is_err());
     }
 
@@ -217,27 +269,46 @@ mod tests {
     fn every_wire_op_maps() {
         use crate::api::{QueueMode, RepeatMode};
         let ops = vec![
-            SessionOp::PlayNext { server_id: "s".into(), track_ids: vec![] },
-            SessionOp::PlayLater { server_id: "s".into(), track_ids: vec![] },
+            SessionOp::PlayNext {
+                server_id: "s".into(),
+                track_ids: vec![],
+            },
+            SessionOp::PlayLater {
+                server_id: "s".into(),
+                track_ids: vec![],
+            },
             SessionOp::JumpToQueueItem { key: "k".into() },
             SessionOp::RemoveQueueItems { keys: vec![] },
-            SessionOp::MoveQueueItem { key: "k".into(), to_index: 0 },
+            SessionOp::MoveQueueItem {
+                key: "k".into(),
+                to_index: 0,
+            },
             SessionOp::ClearQueue,
             SessionOp::ClearInsertions,
             SessionOp::SetShuffle { enabled: true },
             SessionOp::Reshuffle,
-            SessionOp::SetRepeat { mode: RepeatMode::All },
+            SessionOp::SetRepeat {
+                mode: RepeatMode::All,
+            },
             SessionOp::SetAutoplay { enabled: true },
-            SessionOp::SetQueueMode { mode: QueueMode::YouTube },
+            SessionOp::SetQueueMode {
+                mode: QueueMode::YouTube,
+            },
             SessionOp::Next,
             SessionOp::Previous,
             SessionOp::SkipUnavailable { key: "k".into() },
             SessionOp::AppendAutoplay { items: vec![] },
             SessionOp::TrackEnded,
-            SessionOp::RestoreSavedQueue { id: "i".into(), tracks: None },
+            SessionOp::RestoreSavedQueue {
+                id: "i".into(),
+                tracks: None,
+            },
             SessionOp::SetContextTracks { tracks: vec![] },
             SessionOp::SaveCurrentQueue { pinned: true },
-            SessionOp::PinSavedQueue { id: "i".into(), pinned: true },
+            SessionOp::PinSavedQueue {
+                id: "i".into(),
+                pinned: true,
+            },
             SessionOp::DeleteSavedQueue { id: "i".into() },
             SessionOp::TouchSavedQueue { id: "i".into() },
             SessionOp::MergeSavedQueues { remote: vec![] },
@@ -245,6 +316,9 @@ mod tests {
         for op in ops {
             assert!(to_queue_op(&op).is_some(), "{op:?}");
         }
-        assert!(to_queue_op(&SessionOp::Replace { document: crate::session::new_document("s", "x".into(), 0.0) }).is_none());
+        assert!(to_queue_op(&SessionOp::Replace {
+            document: crate::session::new_document("s", "x".into(), 0.0)
+        })
+        .is_none());
     }
 }

@@ -53,7 +53,11 @@ pub trait Transport: Send + Sync {
 
 /// Try candidate URLs in order (last-known address first) and return the
 /// first that connects.
-pub async fn connect_first(transport: &dyn Transport, peer: PeerId, candidates: &[String]) -> Result<Connection, TransportError> {
+pub async fn connect_first(
+    transport: &dyn Transport,
+    peer: PeerId,
+    candidates: &[String],
+) -> Result<Connection, TransportError> {
     let mut last = TransportError::NoCandidate;
     for url in candidates {
         match transport.connect(peer.clone(), url.clone()).await {
@@ -76,7 +80,10 @@ pub struct Backoff {
 
 impl Default for Backoff {
     fn default() -> Self {
-        Backoff { base_ms: 1_000.0, max_ms: 30_000.0 }
+        Backoff {
+            base_ms: 1_000.0,
+            max_ms: 30_000.0,
+        }
     }
 }
 
@@ -110,7 +117,10 @@ impl Transport for WsTransport {
         Box::pin(async move {
             let (ws, _resp) = tokio_tungstenite::connect_async(url.as_str())
                 .await
-                .map_err(|e| TransportError::Connect { url: url.clone(), error: e.to_string() })?;
+                .map_err(|e| TransportError::Connect {
+                    url: url.clone(),
+                    error: e.to_string(),
+                })?;
             Ok(pump(peer, url, ws))
         })
     }
@@ -152,7 +162,10 @@ where
                     }
                     Err(e) => tracing::warn!(peer = %p2, error = %e, "bad frame ignored"),
                 },
-                Ok(Message::Binary(b)) => match std::str::from_utf8(&b).ok().and_then(|t| WireMessage::decode(t).ok()) {
+                Ok(Message::Binary(b)) => match std::str::from_utf8(&b)
+                    .ok()
+                    .and_then(|t| WireMessage::decode(t).ok())
+                {
                     Some(m) => {
                         if in_tx.send(m).is_err() {
                             break;
@@ -165,7 +178,12 @@ where
             }
         }
     });
-    Connection { peer, url, tx: out_tx, rx: in_rx }
+    Connection {
+        peer,
+        url,
+        tx: out_tx,
+        rx: in_rx,
+    }
 }
 
 /// A tiny WebSocket server on an ephemeral (or given) port, for peers on the
@@ -181,10 +199,20 @@ impl LanListener {
     /// Bind `0.0.0.0:port` (`0` for ephemeral) and start accepting.
     pub async fn bind(port: u16, ids: Arc<PeerIds>) -> Result<LanListener, TransportError> {
         let addr = format!("0.0.0.0:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .map_err(|e| TransportError::Bind { addr: addr.clone(), error: e.to_string() })?;
-        let port = listener.local_addr().map_err(|e| TransportError::Bind { addr, error: e.to_string() })?.port();
+        let listener =
+            tokio::net::TcpListener::bind(&addr)
+                .await
+                .map_err(|e| TransportError::Bind {
+                    addr: addr.clone(),
+                    error: e.to_string(),
+                })?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| TransportError::Bind {
+                addr,
+                error: e.to_string(),
+            })?
+            .port();
         let (tx, rx) = mpsc::unbounded_channel();
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -208,7 +236,11 @@ impl LanListener {
                 }
             }
         });
-        Ok(LanListener { port, accepted: rx, shutdown: Some(stop_tx) })
+        Ok(LanListener {
+            port,
+            accepted: rx,
+            shutdown: Some(stop_tx),
+        })
     }
 
     pub fn port(&self) -> u16 {
@@ -264,12 +296,24 @@ mod tests {
         let url = format!("ws://127.0.0.1:{}/", listener.port());
         let transport = WsTransport;
         let candidates = vec!["ws://127.0.0.1:1/".to_string(), url];
-        let mut client = connect_first(&transport, ids.next("up"), &candidates).await.unwrap();
+        let mut client = connect_first(&transport, ids.next("up"), &candidates)
+            .await
+            .unwrap();
         let mut server_side = listener.accept().await.unwrap();
-        client.tx.send(WireMessage::new(Msg::ClockPing { t0: 1.0 })).unwrap();
+        client
+            .tx
+            .send(WireMessage::new(Msg::ClockPing { t0: 1.0 }))
+            .unwrap();
         let got = server_side.rx.recv().await.unwrap();
         assert_eq!(got.msg, Msg::ClockPing { t0: 1.0 });
-        server_side.tx.send(WireMessage::new(Msg::ClockPong { t0: 1.0, t1: 2.0, t2: 3.0 })).unwrap();
+        server_side
+            .tx
+            .send(WireMessage::new(Msg::ClockPong {
+                t0: 1.0,
+                t1: 2.0,
+                t2: 3.0,
+            }))
+            .unwrap();
         let got = client.rx.recv().await.unwrap();
         assert!(matches!(got.msg, Msg::ClockPong { .. }));
         // closing the client ends the server's stream

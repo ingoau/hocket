@@ -67,17 +67,27 @@ impl PeerAdvert {
         m.insert("port".into(), self.port.to_string());
         m.insert("proto".into(), self.protocol.to_string());
         m.insert("rev".into(), self.session_revision.to_string());
-        m.insert("serving".into(), if self.serving { "1" } else { "0" }.into());
+        m.insert(
+            "serving".into(),
+            if self.serving { "1" } else { "0" }.into(),
+        );
         m
     }
 
     /// Parse TXT records plus the resolved addresses/port. `None` when a
     /// required key is missing.
-    pub fn from_txt(txt: &HashMap<String, String>, addresses: Vec<String>, port: u16) -> Option<PeerAdvert> {
+    pub fn from_txt(
+        txt: &HashMap<String, String>,
+        addresses: Vec<String>,
+        port: u16,
+    ) -> Option<PeerAdvert> {
         Some(PeerAdvert {
             device_id: txt.get("id")?.clone(),
             device_name: txt.get("name").cloned().unwrap_or_default(),
-            platform: txt.get("platform").and_then(|p| parse_platform(p)).unwrap_or(Platform::Linux),
+            platform: txt
+                .get("platform")
+                .and_then(|p| parse_platform(p))
+                .unwrap_or(Platform::Linux),
             scope_hash: txt.get("scope")?.clone(),
             port: txt.get("port").and_then(|p| p.parse().ok()).unwrap_or(port),
             protocol: txt.get("proto").and_then(|p| p.parse().ok()).unwrap_or(1),
@@ -132,14 +142,19 @@ pub fn parse_platform(s: &str) -> Option<Platform> {
 pub enum DiscoveryEvent {
     /// A peer appeared or its advert changed.
     Found(PeerAdvert),
-    Lost { device_id: DeviceId },
+    Lost {
+        device_id: DeviceId,
+    },
 }
 
 /// The discovery seam. `start` begins browsing and delivers events on the
 /// given channel; `advertise` publishes (or, with `None`, withdraws) our own
 /// record; `stop` tears everything down.
 pub trait Discovery: Send {
-    fn start(&mut self, events: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<(), DiscoveryError>;
+    fn start(
+        &mut self,
+        events: mpsc::UnboundedSender<DiscoveryEvent>,
+    ) -> Result<(), DiscoveryError>;
     fn advertise(&mut self, advert: Option<PeerAdvert>) -> Result<(), DiscoveryError>;
     fn stop(&mut self);
 }
@@ -150,7 +165,10 @@ pub trait Discovery: Send {
 pub struct NoDiscovery;
 
 impl Discovery for NoDiscovery {
-    fn start(&mut self, _events: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<(), DiscoveryError> {
+    fn start(
+        &mut self,
+        _events: mpsc::UnboundedSender<DiscoveryEvent>,
+    ) -> Result<(), DiscoveryError> {
         Ok(())
     }
     fn advertise(&mut self, _advert: Option<PeerAdvert>) -> Result<(), DiscoveryError> {
@@ -178,7 +196,12 @@ mod mdns_impl {
 
     impl MdnsDiscovery {
         pub fn new(self_id: DeviceId) -> Self {
-            MdnsDiscovery { self_id, daemon: None, registered: None, stop: None }
+            MdnsDiscovery {
+                self_id,
+                daemon: None,
+                registered: None,
+                stop: None,
+            }
         }
 
         fn daemon(&mut self) -> Result<&ServiceDaemon, DiscoveryError> {
@@ -191,9 +214,15 @@ mod mdns_impl {
     }
 
     impl Discovery for MdnsDiscovery {
-        fn start(&mut self, events: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<(), DiscoveryError> {
+        fn start(
+            &mut self,
+            events: mpsc::UnboundedSender<DiscoveryEvent>,
+        ) -> Result<(), DiscoveryError> {
             let self_id = self.self_id.clone();
-            let rx = self.daemon()?.browse(SERVICE_TYPE).map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
+            let rx = self
+                .daemon()?
+                .browse(SERVICE_TYPE)
+                .map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
             let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             self.stop = Some(stop.clone());
             std::thread::Builder::new()
@@ -212,7 +241,10 @@ mod mdns_impl {
                                     if advert.device_id == self_id {
                                         continue;
                                     }
-                                    names.insert(info.get_fullname().to_string(), advert.device_id.clone());
+                                    names.insert(
+                                        info.get_fullname().to_string(),
+                                        advert.device_id.clone(),
+                                    );
                                     if events.send(DiscoveryEvent::Found(advert)).is_err() {
                                         break;
                                     }
@@ -220,7 +252,8 @@ mod mdns_impl {
                             }
                             ServiceEvent::ServiceRemoved(_, fullname) => {
                                 if let Some(id) = names.remove(&fullname) {
-                                    if events.send(DiscoveryEvent::Lost { device_id: id }).is_err() {
+                                    if events.send(DiscoveryEvent::Lost { device_id: id }).is_err()
+                                    {
                                         break;
                                     }
                                 }
@@ -241,11 +274,20 @@ mod mdns_impl {
             }
             let Some(advert) = advert else { return Ok(()) };
             let host = format!("{}.local.", advert.device_id);
-            let info = ServiceInfo::new(SERVICE_TYPE, &advert.device_id, &host, "", advert.port, advert.txt())
-                .map_err(|e| DiscoveryError::Mdns(e.to_string()))?
-                .enable_addr_auto();
+            let info = ServiceInfo::new(
+                SERVICE_TYPE,
+                &advert.device_id,
+                &host,
+                "",
+                advert.port,
+                advert.txt(),
+            )
+            .map_err(|e| DiscoveryError::Mdns(e.to_string()))?
+            .enable_addr_auto();
             let fullname = info.get_fullname().to_string();
-            self.daemon()?.register(info).map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
+            self.daemon()?
+                .register(info)
+                .map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
             self.registered = Some(fullname);
             Ok(())
         }
@@ -328,7 +370,13 @@ mod tests {
 
     #[test]
     fn platform_strings_round_trip() {
-        for p in [Platform::Android, Platform::Linux, Platform::MacOs, Platform::Windows, Platform::Coordinator] {
+        for p in [
+            Platform::Android,
+            Platform::Linux,
+            Platform::MacOs,
+            Platform::Windows,
+            Platform::Coordinator,
+        ] {
             assert_eq!(parse_platform(platform_str(p)), Some(p));
         }
         assert_eq!(parse_platform("amiga"), None);
