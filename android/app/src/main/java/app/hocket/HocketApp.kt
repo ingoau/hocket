@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okio.Path.Companion.toOkioPath
 
 /**
  * Process-wide wiring: binds to the playback service (which owns the core) and builds the one
@@ -56,7 +57,7 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: coil3.PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.2).build() }
-            .diskCache { DiskCache.Builder().directory(cacheDir.resolve("coil")).maxSizeBytes(64L * 1024 * 1024).build() }
+            .diskCache { DiskCache.Builder().directory(cacheDir.resolve("coil").toOkioPath()).maxSizeBytes(64L * 1024 * 1024).build() }
             .crossfade(180)
             .build()
 }

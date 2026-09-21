@@ -1,0 +1,73 @@
+package app.hocket.ui
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.ui.nav.AppRoot
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [35], application = android.app.Application::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ServerSetupFlowTest {
+    @get:Rule
+    val compose = createComposeRule()
+
+    @Test
+    fun setupIsTheWholeFirstScreenAndConnectsToAGoodServer() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+        compose.onNodeWithTag("setup.url").assertIsDisplayed()
+        compose.onNodeWithTag("setup.connect").assertIsDisplayed()
+        compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
+        compose.onNodeWithTag("setup.username").performTextInput("ada")
+        compose.onNodeWithTag("setup.password").performTextInput("secret")
+        compose.onNodeWithTag("setup.connect").performClick()
+        // A server that meets the floor takes us into the shell: the Home title appears.
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
+        compose.onNodeWithText("Your music").assertIsDisplayed()
+    }
+
+    @Test
+    fun serverBelowTheFloorShowsAClearError() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+        compose.onNodeWithTag("setup.url").performTextInput("https://old.example.net")
+        compose.onNodeWithTag("setup.username").performTextInput("ada")
+        compose.onNodeWithTag("setup.password").performTextInput("secret")
+        compose.onNodeWithTag("setup.connect").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.tooOld") == 1 }
+        compose.onNodeWithTag("setup.tooOld").assertIsDisplayed()
+        // Still on setup: the URL field is there, not the shell.
+        compose.onNodeWithTag("setup.url").assertIsDisplayed()
+    }
+
+    @Test
+    fun wrongPasswordStaysOnSetupWithTheError() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+        compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
+        compose.onNodeWithTag("setup.username").performTextInput("ada")
+        compose.onNodeWithTag("setup.password").performTextInput("wrong")
+        compose.onNodeWithTag("setup.connect").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.error") == 1 }
+        compose.onNodeWithTag("setup.url").assertIsDisplayed()
+    }
+}
+
+fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTagCount(tag: String): Int =
+    onAllNodes(androidx.compose.ui.test.hasTestTag(tag)).fetchSemanticsNodes().size

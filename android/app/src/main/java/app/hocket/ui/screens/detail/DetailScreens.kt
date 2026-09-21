@@ -290,7 +290,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     sheetFor?.let { (i, t) ->
         ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } },
             extraTop = if (!p.isSmart && p.isMine) ({
-                androidx.compose.material3.TextButton(onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))); sheetFor = null }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(stringResource(R.string.action_remove_from_queue).replace("queue", "playlist")) }
+                androidx.compose.material3.TextButton(onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))); sheetFor = null }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(stringResource(R.string.action_remove_from_playlist)) }
             }) else null)
     }
     if (playlistSheet) ActionSheet(Commands.playlists(listOf(p.id)), p.name, p.owner, onDismiss = { playlistSheet = false })

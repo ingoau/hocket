@@ -7,7 +7,8 @@ plugins {
 
 android {
     namespace = "app.hocket"
-    compileSdk = 36
+    compileSdk = 37
+    compileSdkMinor = 1
 
     defaultConfig {
         applicationId = "app.hocket"

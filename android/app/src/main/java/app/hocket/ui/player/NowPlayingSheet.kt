@@ -120,6 +120,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val density = LocalDensity.current
         val navPx = with(density) { bottomInset.toPx() }
         val maxHeightPx = constraints.maxHeight.toFloat()
+        val maxWidthPx = constraints.maxWidth
         val collapsedOffset = maxHeightPx - with(density) { NowPlayingSheetState.MINI_HEIGHT.toPx() } - navPx
         LaunchedEffect(collapsedOffset) {
             state.collapsedOffset = collapsedOffset
@@ -195,8 +196,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                             }
                         }
                         // The one artwork that scales from thumbnail (mini bar) to hero (now-playing page).
-                        val hero = remember(constraints.maxWidth) { with(density) { (constraints.maxWidth.toDp() - 48.dp).coerceAtMost(420.dp) } }
-                        val heroLeft = with(density) { (constraints.maxWidth.toDp() - hero) / 2 }
+                        val hero = remember(maxWidthPx) { with(density) { (maxWidthPx.toDp() - 48.dp).coerceAtMost(420.dp) } }
+                        val heroLeft = with(density) { (maxWidthPx.toDp() - hero) / 2 }
                         val artSize = lerp(48.dp, hero, progress)
                         val artLeft = lerp(8.dp, heroLeft, progress)
                         val artTop = lerp(8.dp, 112.dp, progress)

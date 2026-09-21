@@ -1,6 +1,7 @@
 package app.hocket.ui.queue
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,10 +66,9 @@ fun QueuePanel(modifier: Modifier = Modifier) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Column(modifier) {
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = ButtonGroupDefaults.ConnectedSpaceBetween) {
-                toggleableItem(checked = tab == 0, label = stringResourceCompat(R.string.player_tab_queue), onCheckedChange = { tab = 0 })
-                toggleableItem(checked = tab == 1, label = stringResourceCompat(R.string.player_tab_recent), onCheckedChange = { tab = 1 })
-                toggleableItem(checked = tab == 2, label = stringResourceCompat(R.string.player_tab_history), onCheckedChange = { tab = 2 })
+            val labels = listOf(stringResource(R.string.player_tab_queue), stringResource(R.string.player_tab_recent), stringResource(R.string.player_tab_history))
+            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                labels.forEachIndexed { i, label -> toggleableItem(checked = tab == i, label = label, onCheckedChange = { tab = i }) }
             }
         }
         when (tab) {
@@ -78,9 +78,6 @@ fun QueuePanel(modifier: Modifier = Modifier) {
         }
     }
 }
-
-@Composable
-private fun stringResourceCompat(id: Int): String = stringResource(id)
 
 private sealed interface Row {
     data class Header(val id: String, val text: String) : Row

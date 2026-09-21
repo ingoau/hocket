@@ -81,11 +81,12 @@ fun HomeScreen(nav: NavHostController) {
             EmptyState(stringResource(R.string.empty_home_title), stringResource(R.string.empty_home_body), Modifier.padding(padding), stringResource(R.string.nav_library)) { nav.navigate(Route.Library()) }
             return@Scaffold
         }
+        val continueLabel = stringResource(R.string.home_continue)
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 160.dp)) {
             if (recent.isNotEmpty()) {
                 item { SectionHeader(stringResource(R.string.home_continue)) }
                 items(recent.take(5), key = { "r" + it.playedAt + it.track.id }) { entry ->
-                    TrackRow(entry.track, onClick = { client.dispatch(Commands.playTracks(serverId, recent.map { it.track.id }.distinct(), recent.map { it.track.id }.distinct().indexOf(entry.track.id), entryLabel(recent))) },
+                    TrackRow(entry.track, onClick = { client.dispatch(Commands.playTracks(serverId, recent.map { it.track.id }.distinct(), recent.map { it.track.id }.distinct().indexOf(entry.track.id), continueLabel)) },
                         trailing = { Text(entryAgo(entry), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp)) })
                 }
             }
@@ -114,9 +115,6 @@ fun HomeScreen(nav: NavHostController) {
     }
     if (jobs) JobsSheet { jobs = false }
 }
-
-@Composable
-private fun entryLabel(recent: List<PlayHistoryEntry>): String = stringResource(R.string.home_continue)
 
 @Composable
 private fun entryAgo(entry: PlayHistoryEntry): String = app.hocket.ui.components.formatAgo(entry.playedAt)

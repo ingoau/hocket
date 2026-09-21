@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "app.hocket.core"
-    compileSdk = 36
+    compileSdk = 37
+    compileSdkMinor = 1
 
     defaultConfig {
         minSdk = 26
@@ -21,7 +22,6 @@ android {
     }
     // The Rust core (.so per ABI) lands here from scripts/build-android-core.sh. The directory may be
     // absent; NativeCore.isAvailable() reports that and the app falls back to FakeCore.
-    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
 }
 
 kotlin {

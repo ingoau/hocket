@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
@@ -77,5 +78,4 @@ fun smallerSize(size: Int): Int = when (size) {
 }
 
 @Composable
-fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): androidx.compose.runtime.State<T> =
-    androidx.lifecycle.compose.collectAsStateWithLifecycle()
+fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): androidx.compose.runtime.State<T> = collectAsStateWithLifecycle()

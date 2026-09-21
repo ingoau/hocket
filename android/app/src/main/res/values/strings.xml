@@ -41,6 +41,7 @@
     <string name="action_go_to_album">Go to album</string>
     <string name="action_go_to_artist">Go to artist</string>
     <string name="action_remove_from_queue">Remove from queue</string>
+    <string name="action_remove_from_playlist">Remove from playlist</string>
     <string name="action_sort">Sort</string>
     <string name="action_expand">Expand</string>
     <string name="action_collapse">Collapse</string>

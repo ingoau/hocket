@@ -43,9 +43,10 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
         Column(Modifier.navigationBarsPadding().padding(horizontal = 24.dp)) {
             Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(16.dp))
+            val options = listOf(15, 30, 45, 60, 90).map { it to stringResource(R.string.sleep_minutes, it) }
             ButtonGroup(overflowIndicator = {}) {
-                listOf(15, 30, 45, 60, 90).forEach { m ->
-                    toggleableItem(checked = minutes == m && !endOfTrack, label = stringResourceCompat(R.string.sleep_minutes, m), onCheckedChange = { minutes = m; endOfTrack = false })
+                options.forEach { (m, label) ->
+                    toggleableItem(checked = minutes == m && !endOfTrack, label = label, onCheckedChange = { minutes = m; endOfTrack = false })
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -66,6 +67,3 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
         }
     }
 }
-
-@Composable
-private fun stringResourceCompat(id: Int, arg: Int): String = stringResource(id, arg)
