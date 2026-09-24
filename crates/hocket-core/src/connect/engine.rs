@@ -1101,7 +1101,7 @@ impl Engine {
                 self.lan_blocklist.clear();
                 self.lan_strikes.clear();
                 // Inbound members were admitted under the old key.
-                let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+                let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
                 for p in inbound {
                     self.out.push(Output::WireOut {
                         peer: p.clone(),
@@ -2681,7 +2681,7 @@ impl Engine {
             self.last_ping_at = 0.0;
             self.send_ping();
             // Say goodbye to anyone we were serving: they'll re-elect.
-            let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+            let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
                 self.out.push(Output::WireOut {
                     peer: p.clone(),
