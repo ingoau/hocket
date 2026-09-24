@@ -571,7 +571,8 @@ button.qrow { width: 100%; }
 /* Snackbars: inverse-surface pills that spring up from below. */
 .toast { display: flex; align-items: center; gap: 12px; background: var(--fg); color: var(--bg); min-height: 40px; padding: 6px 8px 6px 18px; border-radius: var(--shape-lg); box-shadow: var(--shadow); font-size: var(--fs-md); }
 .toast.fade-in { animation: toast-in var(--dur-spring-long) var(--spring-fast); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(0.94); } to { opacity: 1; transform: none; } }
+/* Transform only: a toast is never drawn part-transparent, so its text keeps full contrast from the first frame. */
+@keyframes toast-in { from { transform: translateY(16px) scale(0.94); } to { transform: none; } }
 .toast:not(:has(.btn)) { padding-right: 18px; }
 .toast .btn { background: transparent; color: var(--accent-inverse); border-color: transparent; font-weight: 600; }
 .toast .btn:hover { background: color-mix(in srgb, var(--bg) 14%, transparent); }

@@ -214,22 +214,23 @@ export function FullscreenPlayer() {
         <WavySeek durationMs={track?.durationMs} playing={playing && !transport.buffering} />
 
         <div className="np-transport">
+          <button type="button" className={`np-tonal np-flank ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={20} filled={queue.shuffle} /></button>
           <button type="button" className="np-skip" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="fs-previous"><Icon name="previous" size={38} filled /></button>
           <button type="button" className={`np-play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
             {transport.buffering ? <Icon name="spinner" className="spin" size={34} /> : <Icon name={playing ? "pause" : "play"} size={42} filled />}
           </button>
           <button type="button" className="np-skip" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="fs-next"><Icon name="next" size={38} filled /></button>
+          <button type="button" className={`np-tonal np-flank ${queue.repeat !== "off" ? "on" : ""}`} aria-pressed={queue.repeat !== "off"} aria-label={repeatLabel} title={repeatLabel} onClick={() => d({ type: "setRepeat", data: { mode: queue.repeat === "off" ? "all" : queue.repeat === "all" ? "one" : "off" } })} data-testid="fs-repeat"><Icon name={queue.repeat === "one" ? "repeatOne" : "repeat"} size={20} filled={queue.repeat !== "off"} /></button>
         </div>
 
-        <div className="np-options" role="toolbar" aria-label={t("nowPlaying.playbackOptions")}>
-          <button type="button" className={`np-tonal ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={20} filled={queue.shuffle} /></button>
-          <button type="button" className={`np-tonal ${queue.repeat !== "off" ? "on" : ""}`} aria-pressed={queue.repeat !== "off"} aria-label={repeatLabel} title={repeatLabel} onClick={() => d({ type: "setRepeat", data: { mode: queue.repeat === "off" ? "all" : queue.repeat === "all" ? "one" : "off" } })} data-testid="fs-repeat"><Icon name={queue.repeat === "one" ? "repeatOne" : "repeat"} size={20} filled={queue.repeat !== "off"} /></button>
-          <button type="button" className={`np-tonal ${queue.autoplay ? "on" : ""}`} aria-pressed={queue.autoplay} aria-label={t("player.autoplay")} title={t("player.autoplay")} onClick={() => d({ type: "setAutoplay", data: { enabled: !queue.autoplay } })} data-testid="fs-autoplay"><Icon name="autoplay" size={20} filled={queue.autoplay} /></button>
-          <button type="button" className={`np-tonal ${remote ? "on" : ""}`} aria-label={remote ? t("player.playingOn", { device: remote }) : t("player.connect")} title={remote ? t("player.playingOn", { device: remote }) : t("player.connect")} onClick={() => void executeAction("ui.playOn")} data-testid="fs-connect"><Icon name="devices" size={20} filled={!!remote} /></button>
-          <button type="button" className={`np-tonal ${sleep ? "on" : ""}`} aria-label={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} title={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} onClick={() => openDialog({ kind: "sleepTimer" })} data-testid="fs-sleep"><Icon name="sleep" size={20} filled={!!sleep} /></button>
+        <div className="np-row2">
+          <div className="np-options" role="toolbar" aria-label={t("nowPlaying.playbackOptions")}>
+            <button type="button" className={`np-tonal ${queue.autoplay ? "on" : ""}`} aria-pressed={queue.autoplay} aria-label={t("player.autoplay")} title={t("player.autoplay")} onClick={() => d({ type: "setAutoplay", data: { enabled: !queue.autoplay } })} data-testid="fs-autoplay"><Icon name="autoplay" size={20} filled={queue.autoplay} /></button>
+            <button type="button" className={`np-tonal ${remote ? "on" : ""}`} aria-label={remote ? t("player.playingOn", { device: remote }) : t("player.connect")} title={remote ? t("player.playingOn", { device: remote }) : t("player.connect")} onClick={() => void executeAction("ui.playOn")} data-testid="fs-connect"><Icon name="devices" size={20} filled={!!remote} /></button>
+            <button type="button" className={`np-tonal ${sleep ? "on" : ""}`} aria-label={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} title={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} onClick={() => openDialog({ kind: "sleepTimer" })} data-testid="fs-sleep"><Icon name="sleep" size={20} filled={!!sleep} /></button>
+          </div>
+          <NpVolume />
         </div>
-
-        <NpVolume />
 
         <div className="np-modes" role="group" aria-label={t("nowPlaying.views")}>
           {PANES.map((p) => (
