@@ -1604,7 +1604,7 @@ impl Engine {
         if !r.candidates.contains(&url) || !matches!(r.state, RemoteState::Connecting { .. }) {
             // A socket from an attempt the election has since superseded (or a
             // duplicate): it leads to the wrong room. Never adopt it.
-            self.log("debug", format!("dropping a stale connection to {url} ({peer}); remote {:?}", self.remote));
+            self.log("debug", format!("dropping a stale connection to {url}"));
             self.out.push(Output::Disconnect { peer });
             return;
         }
@@ -1696,6 +1696,18 @@ impl Engine {
         let Some(l) = self.remote.as_ref().and_then(|r| r.leader.clone()) else {
             return false;
         };
+        // Only a peer that claims to serve is lying when it turns us away.
+        // One that advertises it is not serving (it follows someone else,
+        // mid-election) is honest about it: plain backoff, no strike, or
+        // honest devices that all chased the same bad advert would end up
+        // ignoring each other.
+        let claims_serving = self
+            .lan_peers
+            .iter()
+            .any(|p| p.device_id == l && p.serving);
+        if !claims_serving {
+            return false;
+        }
         let (strikes, blocks) = self.lan_strikes.entry(l.clone()).or_insert((0, 0));
         *strikes += 1;
         if *strikes < LAN_STRIKES {
@@ -1818,8 +1830,6 @@ impl Engine {
         let is_upstream = matches!(&self.remote, Some(Remote { state: RemoteState::Attached { peer: p } | RemoteState::Handshaking { peer: p, .. }, .. }) if p == &peer);
         if is_upstream {
             self.on_upstream_lost(Some("connection closed".into()));
-        } else {
-            self.log("debug", format!("TMP closed {peer} ignored; remote {:?}", self.remote));
         }
     }
 
@@ -1864,7 +1874,6 @@ impl Engine {
         }
         let is_upstream = matches!(&self.remote, Some(Remote { state: RemoteState::Attached { peer: p } | RemoteState::Handshaking { peer: p, .. }, .. }) if p == &peer);
         if !is_upstream {
-            self.log("debug", format!("TMP frame {} from {peer} ignored; remote {:?}", msg.msg.name(), self.remote));
             return;
         }
         self.last_upstream_msg_at = self.now_local_ms();
@@ -3234,6 +3243,15 @@ impl Engine {
         // Own room timers (lease lapse for inbound peers, member timeouts).
         let outs = self.room.handle(RoomInput::Tick);
         self.process_room_outputs(outs);
+
+        // A LAN block ran out: the election (and with it who is authoritative
+        // for scrobbles) changes, so act on it now rather than at the next
+        // advert.
+        let before = self.lan_blocklist.len();
+        self.lan_blocklist.retain(|_, until| now < *until);
+        if self.lan_blocklist.len() != before {
+            self.reevaluate();
+        }
 
         // Remote connection lifecycle.
         if let Some(r) = self.remote.clone() {

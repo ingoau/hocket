@@ -225,7 +225,12 @@ impl Network {
             } else {
                 (l.a.clone(), l.a_peer.clone())
             };
-            self.enqueue(now + 50.0, &other, NetEvent::Closed { peer: other_peer });
+            let after = Self::last_towards(&l, &other);
+            self.enqueue(
+                (now + 50.0).max(after),
+                &other,
+                NetEvent::Closed { peer: other_peer },
+            );
         }
         self.links.retain(|l| l.a != node && l.b != node);
         self.queue.retain(|_, d| d.to != node);
@@ -250,14 +255,14 @@ impl Network {
             .collect();
         for l in links {
             self.enqueue(
-                now + 1.0,
+                (now + 1.0).max(l.last_b_to_a),
                 &l.a,
                 NetEvent::Closed {
                     peer: l.a_peer.clone(),
                 },
             );
             self.enqueue(
-                now + 1.0,
+                (now + 1.0).max(l.last_a_to_b),
                 &l.b,
                 NetEvent::Closed {
                     peer: l.b_peer.clone(),
@@ -303,15 +308,18 @@ impl Network {
             let c = self.conditions(from, &target);
             let a_peer = self.next_peer("out");
             let b_peer = self.next_peer("in");
+            let rtt = c.delay_ms * 2.0 + rng.random_range(0.0..=c.jitter_ms);
+            // Like a WebSocket handshake: the target can answer (or hang up)
+            // as soon as it accepts, but nothing it says reaches the caller
+            // before the caller learned the socket is open.
             self.links.push(Link {
                 a: from.to_string(),
                 a_peer: a_peer.clone(),
                 b: target.clone(),
                 b_peer: b_peer.clone(),
-                last_a_to_b: 0.0,
-                last_b_to_a: 0.0,
+                last_a_to_b: now + rtt / 2.0,
+                last_b_to_a: now + rtt,
             });
-            let rtt = c.delay_ms * 2.0 + rng.random_range(0.0..=c.jitter_ms);
             self.enqueue(
                 now + rtt,
                 from,
@@ -414,6 +422,8 @@ impl Network {
         let Some((i, other, other_peer)) = self.link_for(node, peer) else {
             return;
         };
+        // The close travels behind everything already sent on the stream.
+        let after = Self::last_towards(&self.links[i], &other);
         self.links.remove(i);
         if !self
             .links
@@ -427,10 +437,19 @@ impl Network {
         if !self.is_partitioned(node, &other) {
             let c = self.conditions(node, &other);
             self.enqueue(
-                now + c.delay_ms,
+                (now + c.delay_ms).max(after),
                 &other,
                 NetEvent::Closed { peer: other_peer },
             );
+        }
+    }
+
+    /// When the last delivery already scheduled on `l` towards `to` lands.
+    fn last_towards(l: &Link, to: &str) -> f64 {
+        if l.a == to {
+            l.last_b_to_a
+        } else {
+            l.last_a_to_b
         }
     }
 
