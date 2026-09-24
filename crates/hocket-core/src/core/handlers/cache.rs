@@ -27,6 +27,10 @@ pub(crate) struct CacheState {
     /// Whether the "skipping what isn't offline" notice was shown for the
     /// current run of skips.
     pub offline_notice: bool,
+    /// The offline marks a clear submitted to a remote room, until its
+    /// verdict: refused as stale (a peer's op landed first), the clear runs
+    /// once more on the room's document. See `clear_offline_skips`.
+    pub offline_clear_sent: Option<std::collections::BTreeSet<QueueKey>>,
     pub last_check: f64,
 }
 

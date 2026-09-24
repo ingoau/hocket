@@ -263,15 +263,44 @@ impl Actor {
     /// play again (a real load failure keeps its mark). Synced to peers; no
     /// undo entry, and an undo that restores the marks is cleared again.
     pub(crate) fn clear_offline_skips(&mut self) {
+        self.run_offline_clear(true);
+    }
+
+    /// The clear is a whole-document `Replace`, which a remote room refuses
+    /// as stale when a peer's op landed first; `retry` arms one more run
+    /// against the room's document (see [`Actor::on_offline_clear_refused`]).
+    pub(crate) fn run_offline_clear(&mut self, retry: bool) {
+        self.cache.offline_clear_sent = None;
         if self.is_offline() {
             return;
         }
-        let pending = self
+        let marks = self
             .doc()
-            .is_some_and(|d| !crate::session::offline_skipped(d).is_empty());
-        if pending && self.local_reduced_op(QueueOp::ClearOfflineSkips, |_| true) {
+            .map(crate::session::offline_skipped)
+            .unwrap_or_default();
+        if !marks.is_empty() && self.local_reduced_op(QueueOp::ClearOfflineSkips, |_| true) {
             self.cache.offline_skips = 0;
             self.cache.offline_notice = false;
+            let awaiting_room = self.engine.as_ref().is_some_and(|e| e.pending_count() > 0);
+            if retry && awaiting_room {
+                self.cache.offline_clear_sent = Some(marks);
+            }
+        }
+    }
+
+    /// A remote change or rollback arrived while a clear awaited the
+    /// room's verdict. Marks it cleared still standing mean the room took
+    /// another op instead (ours was refused as stale, or abandoned): clear
+    /// again, once, on the next turn of the loop. Marks it never saw (a
+    /// peer skipping offline since) are left alone.
+    fn on_offline_clear_refused(&mut self, document: &SessionDocument) {
+        let Some(sent) = self.cache.offline_clear_sent.take() else {
+            return;
+        };
+        if !crate::session::offline_skipped(document).is_disjoint(&sent) {
+            let _ = self.tx.send(crate::core::ActorMsg::Internal(
+                crate::core::Internal::RetryOfflineClear,
+            ));
         }
     }
 
@@ -470,6 +499,9 @@ impl Actor {
     // -- document changes -------------------------------------------------------
 
     fn on_document_changed(&mut self, document: SessionDocument, cause: DocChange) {
+        if cause != DocChange::Local {
+            self.on_offline_clear_refused(&document);
+        }
         let old = self.last_doc.replace(document.clone());
         let effects = match cause {
             DocChange::Local => self.pending_effects.take().unwrap_or_default(),

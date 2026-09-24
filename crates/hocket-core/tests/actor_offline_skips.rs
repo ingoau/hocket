@@ -271,3 +271,64 @@ async fn a_repeating_queue_with_nothing_offline_stops_with_a_coded_notice() {
     assert!(!t.backend.is_playing());
     t.core.shutdown().await;
 }
+
+/// The clear is a whole-document `Replace`: when a peer's op lands in the
+/// room first, the room refuses it as stale. It is re-run once against the
+/// new document instead of leaving the marks until the next reconnect. Run
+/// with each device as the one that was offline, so one run has it
+/// following the other's room.
+#[tokio::test(flavor = "current_thread")]
+async fn a_clear_refused_as_stale_is_run_again() {
+    let mut peer_op_won = false;
+    for offline_is_first in [true, false] {
+        let server = seeded_server(6, 200.0);
+        let net = MemoryNet::new();
+        let clock = SimTime::new(1_700_000_000_000.0);
+        let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+        let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+        TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+        assert!(a.snapshot().await.connection.connected);
+        let (off, peer) = if offline_is_first { (&a, &b) } else { (&b, &a) };
+        off.run(Command::SetAutoplay { enabled: false }).await;
+        off.run(network(NetworkKind::Offline)).await;
+        off.run(Command::PlayTracks {
+            server_id: off.server_id.clone(),
+            track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+            start_index: 0,
+            label: "Sel".into(),
+            shuffle: false,
+        })
+        .await;
+        TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+        assert_eq!(marked(&marks(off).await), ["t0", "t1", "t2"]);
+        assert_eq!(marks(peer).await, marks(off).await);
+
+        // The peer's op and the network's return race for the same revision.
+        peer.dispatch(Command::PlayLater {
+            server_id: peer.server_id.clone(),
+            track_ids: vec!["t4".into()],
+        });
+        off.dispatch(network(NetworkKind::Wifi));
+        // Well inside a lease heartbeat (which would also clear them, later).
+        TestCore::run_all_for(&[&a, &b], 500.0).await;
+
+        // Whichever op the room took first, the marks are gone everywhere.
+        // (When the offline device serves the room, its clear wins and the
+        // peer's stale op is the one refused.)
+        for (name, t) in [("offline device", off), ("peer", peer)] {
+            let m = marks(t).await;
+            assert!(
+                marked(&m).is_empty(),
+                "{name} (offline_is_first={offline_is_first}): {m:?}"
+            );
+        }
+        assert_eq!(marks(off).await, marks(peer).await);
+        peer_op_won |= marks(off).await.iter().any(|(id, _)| id == "t4");
+        a.core.shutdown().await;
+        b.core.shutdown().await;
+    }
+    assert!(
+        peer_op_won,
+        "in one run the peer's op won the race, so the clear was refused and run again"
+    );
+}

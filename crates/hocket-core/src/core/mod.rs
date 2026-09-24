@@ -183,6 +183,8 @@ pub enum Internal {
     /// Clear offline skip marks if online (posted when this device takes
     /// transport, so it never runs inside the lease reaction).
     ClearOfflineSkips,
+    /// Run a refused offline-skip clear once more (see `CacheState::offline_clear_sent`).
+    RetryOfflineClear,
     /// An album-primer fetch ended.
     PrimeDone {
         generation: u64,
