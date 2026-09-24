@@ -172,6 +172,17 @@ pub struct Client {
 }
 
 impl Client {
+    /// Build a client after validating the base URL (see
+    /// [`super::validate_base_url`]). Prefer this over [`Client::new`] for
+    /// user-supplied URLs.
+    pub fn try_new(
+        config: ClientConfig,
+        transport: Arc<dyn HttpTransport>,
+    ) -> SubsonicResult<Self> {
+        super::validate_base_url(&config.base_url)?;
+        Ok(Self::new(config, transport))
+    }
+
     pub fn new(config: ClientConfig, transport: Arc<dyn HttpTransport>) -> Self {
         let limiter = Arc::new(Semaphore::new(config.max_concurrent.max(1)));
         Client {
@@ -212,12 +223,13 @@ impl Client {
     }
 
     /// `base/rest/<endpoint>` with auth + protocol params and `params`.
-    pub fn rest_url(&self, endpoint: &str, params: &[(&str, String)]) -> Url {
+    /// Fails (never panics) when the base URL cannot take a path.
+    pub fn rest_url(&self, endpoint: &str, params: &[(&str, String)]) -> SubsonicResult<Url> {
         let mut url = self.config.base_url.clone();
         {
             let mut segs = url
                 .path_segments_mut()
-                .expect("base url is not cannot-be-a-base");
+                .map_err(|_| SubsonicError::Protocol("server url cannot take a path".into()))?;
             segs.pop_if_empty();
             segs.push("rest");
             segs.push(endpoint);
@@ -232,7 +244,18 @@ impl Client {
                 q.append_pair(k, v);
             }
         }
-        url
+        Ok(url)
+    }
+
+    /// `rest_url` for the infallible URL-builder trait methods: a base URL
+    /// that cannot take a path was rejected at `add_server` time, so this is
+    /// unreachable in practice; rather than panic, hand back a URL that will
+    /// fail the request.
+    fn rest_url_or_base(&self, endpoint: &str, params: &[(&str, String)]) -> Url {
+        self.rest_url(endpoint, params).unwrap_or_else(|e| {
+            tracing::error!(error = %e, endpoint, "cannot build rest url");
+            self.config.base_url.clone()
+        })
     }
 
     /// Execute one endpoint with retries; returns the inner response on `status: ok`.
@@ -245,7 +268,7 @@ impl Client {
         loop {
             attempt += 1;
             // Fresh salt on every attempt.
-            let url = self.rest_url(endpoint, params);
+            let url = self.rest_url(endpoint, params)?;
             let result = self.execute_raw(HttpRequest::get(url)).await;
             match result {
                 Ok(resp) => match classify(resp) {
@@ -292,6 +315,37 @@ impl Client {
             })
             .collect()
     }
+}
+
+/// A 2xx media download that is not media: a JSON/text body (a Subsonic
+/// error envelope, an HTML login page) or nothing at all. Returns the typed
+/// error to surface; the caller deletes the file.
+async fn media_download_error(out: &DownloadOutcome, dest: &Path) -> Option<SubsonicError> {
+    let ct = out
+        .content_type
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let textual = ct.starts_with("application/json") || ct.starts_with("text/");
+    if !textual && out.bytes > 0 {
+        return None;
+    }
+    if out.bytes == 0 {
+        return Some(SubsonicError::Protocol("empty media response".into()));
+    }
+    // Small bodies only: an error envelope is a few hundred bytes.
+    let body = if out.bytes <= 64 * 1024 {
+        tokio::fs::read(dest).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Some(match parse_envelope(&body) {
+        Err(SubsonicError::Protocol(_)) | Ok(_) => {
+            SubsonicError::Protocol(format!("media response was {ct} instead of audio/image"))
+        }
+        Err(e) => e,
+    })
 }
 
 /// HTTP-level status → error, or the body for the JSON layer.
@@ -744,7 +798,7 @@ impl SubsonicApi for Client {
         if let Some(s) = size {
             params.push(("size", s.to_string()));
         }
-        self.rest_url("getCoverArt", &params)
+        self.rest_url_or_base("getCoverArt", &params)
     }
 
     fn stream_url(&self, id: &str, options: &StreamOptions) -> Url {
@@ -765,11 +819,11 @@ impl SubsonicApi for Client {
         if options.estimate_content_length {
             params.push(("estimateContentLength", "true".to_string()));
         }
-        self.rest_url("stream", &params)
+        self.rest_url_or_base("stream", &params)
     }
 
     fn download_url(&self, id: &str) -> Url {
-        self.rest_url("download", &[("id", id.to_string())])
+        self.rest_url_or_base("download", &[("id", id.to_string())])
     }
 
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
@@ -782,7 +836,15 @@ impl SubsonicApi for Client {
                 .map_err(|_| SubsonicError::Network("closed".into()))?;
             let out = self.transport.download(url, &dest, None).await?;
             match out.status {
-                200..=299 => Ok(out),
+                200..=299 => {
+                    // Subsonic reports protocol errors (bad token, unknown
+                    // id) as HTTP 200 + JSON; never keep that as media.
+                    if let Some(e) = media_download_error(&out, &dest).await {
+                        let _ = tokio::fs::remove_file(&dest).await;
+                        return Err(e);
+                    }
+                    Ok(out)
+                }
                 401 | 403 => Err(SubsonicError::Auth(format!("http {}", out.status))),
                 404 => Err(SubsonicError::NotFound("http 404".into())),
                 s => Err(SubsonicError::Server {

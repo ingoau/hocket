@@ -72,14 +72,23 @@ impl Client {
             }
         }
 
+        // The native login sends the plaintext password: only over https or
+        // to loopback (contract: token+salt is the only thing on the wire
+        // otherwise). Elsewhere the native API is simply reported absent.
         caps.native_api = match self.auth_mode() {
-            AuthMode::Password { .. } => match super::native::login(self).await {
-                Ok(_) => super::native::keepalive(self).await.unwrap_or(false),
-                Err(e) => {
-                    tracing::info!(error = %e, "native api unavailable");
-                    false
+            AuthMode::Password { .. } if super::allows_plaintext_credential(self.base_url()) => {
+                match super::native::login(self).await {
+                    Ok(_) => super::native::keepalive(self).await.unwrap_or(false),
+                    Err(e) => {
+                        tracing::info!(error = %e, "native api unavailable");
+                        false
+                    }
                 }
-            },
+            }
+            AuthMode::Password { .. } => {
+                tracing::info!("native api skipped: base url is plain http on a non-loopback host");
+                false
+            }
             AuthMode::ApiKey { .. } => false,
         };
 

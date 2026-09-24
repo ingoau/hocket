@@ -2,7 +2,7 @@
 //! so tests and the simulation harness can substitute an in-memory fake.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -27,6 +27,48 @@ pub enum TransportError {
     Timeout,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// The response body exceeded [`MAX_BODY_BYTES`].
+    #[error("response body larger than {MAX_BODY_BYTES} bytes")]
+    TooLarge,
+}
+
+/// Cap on a buffered API response body (`execute`). `search3` pages are a
+/// few MiB at most; anything bigger is a hostile or broken server.
+pub const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Refuse a download destination that could escape the directory the caller
+/// meant: no `..` components, a real file name, and (when the transport has a
+/// root) inside that root. Server-supplied strings (track ids, suffixes) are
+/// sanitised upstream; this is the last line of defence.
+pub fn check_download_dest(dest: &Path, root: Option<&Path>) -> std::io::Result<()> {
+    let bad = |why: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing download destination: {why}"),
+        )
+    };
+    if dest.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(bad("path contains `..`"));
+    }
+    if dest.file_name().is_none() {
+        return Err(bad("no file name"));
+    }
+    if let Some(root) = root {
+        if !dest.starts_with(root) {
+            return Err(bad("outside the download root"));
+        }
+    }
+    Ok(())
+}
+
+/// A unique sibling temp name for `dest` (`<name>.<random>.part`), so two
+/// writers for the same destination never share a temp file.
+pub fn part_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dest.with_file_name(format!("{name}.{}.part", crate::util::new_id()))
 }
 
 /// A request the transport executes. `body` is sent as JSON with `POST`/`PUT`
@@ -98,9 +140,12 @@ pub struct DownloadOutcome {
 // reqwest implementation
 // ---------------------------------------------------------------------------
 
-/// Production transport over reqwest + rustls.
+/// Production transport over reqwest + rustls. Never follows redirects: a
+/// redirect would otherwise carry the token+salt query, the native-API JWT
+/// header or a login body to another host or down to `http://`.
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    download_root: Option<PathBuf>,
 }
 
 impl ReqwestTransport {
@@ -109,10 +154,21 @@ impl ReqwestTransport {
             .user_agent(user_agent)
             .timeout(timeout)
             .connect_timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .use_rustls_tls()
             .build()
-            .map_err(|e| TransportError::Network(e.to_string()))?;
-        Ok(ReqwestTransport { client })
+            .map_err(|e| TransportError::Network(e.without_url().to_string()))?;
+        Ok(ReqwestTransport {
+            client,
+            download_root: None,
+        })
+    }
+
+    /// Restrict [`HttpTransport::download`] to destinations under `root`
+    /// (the app's data + cache directories' common parent, typically).
+    pub fn with_download_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.download_root = Some(root.into());
+        self
     }
 
     fn build(&self, request: &HttpRequest) -> reqwest::RequestBuilder {
@@ -132,12 +188,32 @@ impl ReqwestTransport {
     }
 }
 
+/// reqwest errors print their URL (with the auth query) in `Display`;
+/// strip it before the message can reach a log or the UI.
 fn map_reqwest(e: reqwest::Error) -> TransportError {
     if e.is_timeout() {
         TransportError::Timeout
     } else {
-        TransportError::Network(e.to_string())
+        TransportError::Network(e.without_url().to_string())
     }
+}
+
+/// Buffer a response body up to [`MAX_BODY_BYTES`].
+async fn read_capped(resp: reqwest::Response) -> Result<Bytes, TransportError> {
+    use futures::StreamExt;
+    if resp.content_length().is_some_and(|n| n > MAX_BODY_BYTES) {
+        return Err(TransportError::TooLarge);
+    }
+    let mut buf = bytes::BytesMut::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(map_reqwest)?;
+        if (buf.len() + chunk.len()) as u64 > MAX_BODY_BYTES {
+            return Err(TransportError::TooLarge);
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf.freeze())
 }
 
 impl HttpTransport for ReqwestTransport {
@@ -150,7 +226,7 @@ impl HttpTransport for ReqwestTransport {
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(String::from);
-            let body = resp.bytes().await.map_err(map_reqwest)?;
+            let body = read_capped(resp).await?;
             Ok(HttpResponse {
                 status,
                 content_type,
@@ -169,6 +245,7 @@ impl HttpTransport for ReqwestTransport {
         Box::pin(async move {
             use futures::StreamExt;
             use tokio::io::AsyncWriteExt;
+            check_download_dest(&dest, self.download_root.as_deref())?;
             let resp = self.client.get(url).send().await.map_err(map_reqwest)?;
             let status = resp.status().as_u16();
             let content_type = resp
@@ -187,21 +264,37 @@ impl HttpTransport for ReqwestTransport {
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let tmp = dest.with_extension("part");
+            // Unique temp name: concurrent writers for the same dest never
+            // share it, and `dest` only ever appears by a completed rename.
+            let tmp = part_path(&dest);
             let mut file = tokio::fs::File::create(&tmp).await?;
-            let mut stream = resp.bytes_stream();
-            let mut written: u64 = 0;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(map_reqwest)?;
-                file.write_all(&chunk).await?;
-                written += chunk.len() as u64;
-                if let Some(p) = &progress {
-                    p(written, total);
+            let written: Result<u64, TransportError> = async {
+                let mut stream = resp.bytes_stream();
+                let mut written: u64 = 0;
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(map_reqwest)?;
+                    file.write_all(&chunk).await?;
+                    written += chunk.len() as u64;
+                    if let Some(p) = &progress {
+                        p(written, total);
+                    }
                 }
+                file.flush().await?;
+                Ok(written)
             }
-            file.flush().await?;
+            .await;
             drop(file);
-            tokio::fs::rename(&tmp, &dest).await?;
+            let written = match written {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    return Err(e);
+                }
+            };
+            if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(e.into());
+            }
             Ok(DownloadOutcome {
                 status,
                 content_type,
@@ -410,6 +503,7 @@ impl HttpTransport for FakeTransport {
                     bytes: 0,
                 });
             }
+            check_download_dest(&dest, None)?;
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }

@@ -43,6 +43,41 @@ pub use auth::{AuthMode, Credential};
 pub use client::{AlbumListType, Client, ClientConfig, RetryPolicy, Search3Page, StreamOptions};
 pub use native::{NativePlaylistUpdate, NativeSession};
 pub use transport::{FakeReply, FakeTransport, HttpTransport, ReqwestTransport};
+
+/// Whether `base` may carry a plaintext credential (the native-API login
+/// body): `https://`, or a loopback host where nothing leaves the machine.
+pub fn allows_plaintext_credential(base: &Url) -> bool {
+    if base.scheme() == "https" {
+        return true;
+    }
+    match base.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
+/// Validate a server base URL for use as a Subsonic client root: `http`
+/// or `https`, a host, no embedded userinfo, and joinable (not
+/// cannot-be-a-base).
+pub fn validate_base_url(base: &Url) -> SubsonicResult<()> {
+    if !matches!(base.scheme(), "http" | "https") {
+        return Err(SubsonicError::Protocol(format!(
+            "unsupported url scheme `{}`",
+            base.scheme()
+        )));
+    }
+    if base.cannot_be_a_base() || base.host_str().is_none_or(str::is_empty) {
+        return Err(SubsonicError::Protocol("server url has no host".into()));
+    }
+    if !base.username().is_empty() || base.password().is_some() {
+        return Err(SubsonicError::Protocol(
+            "server url must not embed credentials".into(),
+        ));
+    }
+    Ok(())
+}
 pub use types::*;
 
 /// Typed client error. `kind()` maps it onto the seam's [`ErrorKind`].
@@ -111,6 +146,9 @@ impl From<transport::TransportError> for SubsonicError {
             transport::TransportError::Network(m) => SubsonicError::Network(m),
             transport::TransportError::Timeout => SubsonicError::Network("timeout".into()),
             transport::TransportError::Io(e) => SubsonicError::Io(e.to_string()),
+            transport::TransportError::TooLarge => {
+                SubsonicError::Protocol("response body too large".into())
+            }
         }
     }
 }

@@ -64,23 +64,30 @@ pub struct NativePlaylistUpdate {
     pub sync: Option<bool>,
 }
 
-pub(super) fn native_url(client: &Client, path: &str) -> Url {
+pub(super) fn native_url(client: &Client, path: &str) -> SubsonicResult<Url> {
     let mut url = client.base_url().clone();
     {
         let mut segs = url
             .path_segments_mut()
-            .expect("base url is not cannot-be-a-base");
+            .map_err(|_| SubsonicError::Protocol("server url cannot take a path".into()))?;
         segs.pop_if_empty();
         for s in path.trim_start_matches('/').split('/') {
             segs.push(s);
         }
     }
-    url
+    Ok(url)
 }
 
 /// Log in with the password credential. Not possible in `apiKey` mode (the
 /// native API has no key auth), in which case `native_api` stays false.
+/// The login body carries the plaintext password, so it is only ever sent
+/// over `https://` or to a loopback host (design: "never plaintext").
 pub(super) async fn login(client: &Client) -> SubsonicResult<NativeLogin> {
+    if !super::allows_plaintext_credential(client.base_url()) {
+        return Err(SubsonicError::Unsupported(
+            "native api login needs https (or a loopback host)".into(),
+        ));
+    }
     let (username, password) = match client.auth_mode() {
         AuthMode::Password { username, password } => (username, password),
         AuthMode::ApiKey { .. } => {
@@ -92,7 +99,7 @@ pub(super) async fn login(client: &Client) -> SubsonicResult<NativeLogin> {
     let body =
         serde_json::json!({ "username": username, "password": password.expose() }).to_string();
     let req =
-        HttpRequest::get(native_url(client, "auth/login")).with_json_body(Method::Post, &body);
+        HttpRequest::get(native_url(client, "auth/login")?).with_json_body(Method::Post, &body);
     let resp = client.execute_raw(req).await?;
     match resp.status {
         200..=299 => {
@@ -117,7 +124,7 @@ pub(super) async fn login(client: &Client) -> SubsonicResult<NativeLogin> {
 pub(super) async fn keepalive(client: &Client) -> SubsonicResult<bool> {
     let resp = authed(
         client,
-        HttpRequest::get(native_url(client, "api/keepalive/keepalive")),
+        HttpRequest::get(native_url(client, "api/keepalive/keepalive")?),
     )
     .await?;
     Ok((200..300).contains(&resp.status))
@@ -167,7 +174,7 @@ fn parse_native<T: serde::de::DeserializeOwned>(
 pub(super) async fn get_playlist(client: &Client, id: &str) -> SubsonicResult<NativePlaylist> {
     let resp = authed(
         client,
-        HttpRequest::get(native_url(client, &format!("api/playlist/{id}"))),
+        HttpRequest::get(native_url(client, &format!("api/playlist/{id}"))?),
     )
     .await?;
     parse_native(resp, "playlist")
@@ -179,7 +186,7 @@ pub(super) async fn update_playlist(
     update: &NativePlaylistUpdate,
 ) -> SubsonicResult<NativePlaylist> {
     let body = serde_json::to_string(update).map_err(|e| SubsonicError::Protocol(e.to_string()))?;
-    let req = HttpRequest::get(native_url(client, &format!("api/playlist/{id}")))
+    let req = HttpRequest::get(native_url(client, &format!("api/playlist/{id}"))?)
         .with_json_body(Method::Put, &body);
     let resp = authed(client, req).await?;
     // Navidrome answers PUT with the updated resource, but be lenient: on an
@@ -201,7 +208,7 @@ pub(super) async fn create_playlist(
 ) -> SubsonicResult<String> {
     let body = serde_json::to_string(update).map_err(|e| SubsonicError::Protocol(e.to_string()))?;
     let req =
-        HttpRequest::get(native_url(client, "api/playlist")).with_json_body(Method::Post, &body);
+        HttpRequest::get(native_url(client, "api/playlist")?).with_json_body(Method::Post, &body);
     let resp = authed(client, req).await?;
     let created: Created = parse_native(resp, "playlist create")?;
     Ok(created.id)

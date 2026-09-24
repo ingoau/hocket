@@ -831,3 +831,336 @@ async fn fake_server_behaves_like_a_server() {
     assert_eq!(r.song.len(), 1);
     assert_eq!(r.song[0].id, "b");
 }
+
+// ---------------------------------------------------------------------------
+// Review fixes: H1/H2/M1/M2/L5 (server-facing)
+// ---------------------------------------------------------------------------
+
+fn client_at(t: &FakeTransport, base: &str) -> Client {
+    let mut cfg = ClientConfig::new(
+        "srv1",
+        Url::parse(base).unwrap(),
+        AuthMode::Password {
+            username: "alice".into(),
+            password: Credential::new("sesame"),
+        },
+    );
+    cfg.retry = RetryPolicy::none();
+    Client::new(cfg, Arc::new(t.clone()))
+}
+
+/// H2: the native login (plaintext password in the body) is never attempted
+/// over plain `http://` to a non-loopback host; loopback and https are fine.
+#[tokio::test]
+async fn native_login_only_over_https_or_loopback() {
+    for (base, expect_login) in [
+        ("http://music.example.org/nd/", false),
+        ("http://192.168.1.10:4533/", false),
+        ("http://127.0.0.1:4533/", true),
+        ("http://localhost:4533/", true),
+        ("http://[::1]:4533/", true),
+        ("https://music.example.org/", true),
+    ] {
+        let t = FakeTransport::new();
+        t.on_endpoint("ping", FakeReply::Json(PING.into()));
+        t.on_endpoint(
+            "getOpenSubsonicExtensions",
+            FakeReply::Json(EXTENSIONS.into()),
+        );
+        t.on(
+            |r| r.url.path().ends_with("/auth/login"),
+            vec![FakeReply::Json(NATIVE_LOGIN.into())],
+        );
+        t.on(
+            |r| r.url.path().contains("/api/keepalive"),
+            vec![FakeReply::Json(
+                r#"{"response":"ok","id":"keepalive"}"#.into(),
+            )],
+        );
+        let c = client_at(&t, base);
+        let caps = c.probe().await.unwrap();
+        let login_sent = t
+            .requests()
+            .iter()
+            .any(|r| r.url.path().ends_with("/auth/login"));
+        assert_eq!(login_sent, expect_login, "{base}: login attempted");
+        assert_eq!(caps.native_api, expect_login, "{base}: native_api");
+        if !expect_login {
+            // nothing with the password ever left the client
+            assert!(t.requests().iter().all(|r| r
+                .body
+                .as_ref()
+                .is_none_or(|b| !b.windows(6).any(|w| w == b"sesame"))));
+            // and a direct native call refuses rather than logging in
+            assert!(matches!(
+                c.native_playlist("pl2").await.unwrap_err(),
+                SubsonicError::Unsupported(_)
+            ));
+        }
+    }
+}
+
+/// M1: a base URL that cannot take a path is an error, never a panic.
+#[tokio::test]
+async fn cannot_be_a_base_url_is_an_error_not_a_panic() {
+    let t = FakeTransport::new();
+    t.on_endpoint("ping", FakeReply::Json(PING.into()));
+    let c = client_at(&t, "mailto:x@y");
+    assert!(matches!(
+        c.rest_url("ping", &[]).unwrap_err(),
+        SubsonicError::Protocol(_)
+    ));
+    assert!(matches!(
+        c.ping().await.unwrap_err(),
+        SubsonicError::Protocol(_)
+    ));
+    assert!(matches!(
+        c.probe().await.unwrap_err(),
+        SubsonicError::Protocol(_)
+    ));
+    assert!(matches!(
+        c.native_playlist("x").await.unwrap_err(),
+        SubsonicError::Protocol(_) | SubsonicError::Unsupported(_)
+    ));
+    // URL builders degrade to the base instead of panicking
+    let _ = c.stream_url("s1", &StreamOptions::default());
+    let _ = c.cover_art_url("s1", None);
+    let _ = c.download_url("s1");
+    // and try_new refuses up front
+    let cfg = ClientConfig::new(
+        "srv1",
+        Url::parse("mailto:x@y").unwrap(),
+        AuthMode::ApiKey {
+            api_key: Credential::new("k"),
+        },
+    );
+    assert!(Client::try_new(cfg, Arc::new(t.clone())).is_err());
+}
+
+#[test]
+fn base_url_validation() {
+    use super::validate_base_url;
+    let ok = |s: &str| validate_base_url(&Url::parse(s).unwrap()).is_ok();
+    assert!(ok("https://music.example.org/"));
+    assert!(ok("http://192.168.1.2:4533/nd"));
+    assert!(!ok("mailto:x@y"));
+    assert!(!ok("data:text/plain,hi"));
+    assert!(!ok("javascript:alert(1)"));
+    assert!(!ok("ftp://music.example.org/"));
+    assert!(!ok("file:///etc/passwd"));
+    assert!(!ok("https://alice:pw@music.example.org/"));
+    assert!(!ok("https://alice@music.example.org/"));
+}
+
+/// M2: a 2xx whose body is a Subsonic error envelope (or empty, or text)
+/// is a typed error and leaves no file behind.
+#[tokio::test]
+async fn download_to_file_rejects_json_envelope_text_and_empty_bodies() {
+    let t = FakeTransport::new();
+    t.on_endpoint("download", FakeReply::Json(PING_ERROR.into()));
+    t.on_endpoint(
+        "stream",
+        FakeReply::Bytes {
+            content_type: "text/html; charset=utf-8".into(),
+            body: bytes::Bytes::from_static(b"<html>login</html>"),
+        },
+    );
+    t.on_endpoint(
+        "getCoverArt",
+        FakeReply::Bytes {
+            content_type: "image/jpeg".into(),
+            body: bytes::Bytes::new(),
+        },
+    );
+    let c = client(&t);
+    let dir = tempfile::tempdir().unwrap();
+
+    let dest = dir.path().join("t.flac");
+    let e = c
+        .download_to_file(c.download_url("s1"), &dest)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, SubsonicError::Auth(_)), "{e}");
+    assert!(!dest.exists(), "json envelope must not be kept as media");
+
+    let dest = dir.path().join("t.opus");
+    let e = c
+        .download_to_file(c.stream_url("s1", &StreamOptions::default()), &dest)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, SubsonicError::Protocol(_)), "{e}");
+    assert!(!dest.exists());
+
+    let dest = dir.path().join("c.img");
+    let e = c
+        .download_to_file(c.cover_art_url("c", Some(320)), &dest)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, SubsonicError::Protocol(_)), "{e}");
+    assert!(!dest.exists());
+}
+
+/// H1: the transport refuses a destination with `..` in it, and a root-bound
+/// transport refuses anything outside its root.
+#[tokio::test]
+async fn download_refuses_traversing_destinations() {
+    use super::transport::check_download_dest;
+    use std::path::Path;
+    let dir = tempfile::tempdir().unwrap();
+    let t = FakeTransport::new();
+    t.on_endpoint(
+        "download",
+        FakeReply::Bytes {
+            content_type: "audio/flac".into(),
+            body: bytes::Bytes::from_static(b"FLAC"),
+        },
+    );
+    let c = client(&t);
+    let evil = dir.path().join("downloads/srv/abc.../../../../evil");
+    let e = c
+        .download_to_file(c.download_url("s1"), &evil)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, SubsonicError::Io(_)), "{e}");
+    assert!(!dir.path().join("evil").exists());
+    assert!(!dir.path().join("downloads").exists());
+
+    let root = Path::new("/data/hocket");
+    assert!(check_download_dest(Path::new("/data/hocket/downloads/s/t.flac"), Some(root)).is_ok());
+    assert!(check_download_dest(Path::new("/data/hocket/downloads/s/t.flac"), None).is_ok());
+    assert!(check_download_dest(Path::new("/data/hocket/downloads/../../x"), Some(root)).is_err());
+    assert!(check_download_dest(Path::new("/data/other/x"), Some(root)).is_err());
+    assert!(check_download_dest(Path::new("/"), None).is_err());
+}
+
+/// A tiny one-shot HTTP server for the reqwest-level tests: answers every
+/// connection with `response` and records the request line.
+async fn one_shot_http(response: &'static str) -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let seen = seen2.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                seen.lock().push(head);
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+/// H2: the production transport never follows a redirect (which would
+/// forward the auth query / native JWT / login body elsewhere), and never
+/// puts the URL (with its `t=`/`s=` query) into an error message.
+#[tokio::test]
+async fn reqwest_transport_does_not_follow_redirects_or_leak_urls() {
+    use super::transport::{HttpRequest, HttpTransport, ReqwestTransport, TransportError};
+    let (base, seen) = one_shot_http(
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5)).unwrap();
+    let url = Url::parse(&format!("{base}/rest/ping?t=secrettoken&s=salt")).unwrap();
+    let resp = tr
+        .execute(HttpRequest::get(url.clone()).with_header("x-nd-authorization", "Bearer j"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status, 302, "redirect surfaced, not followed");
+    assert_eq!(seen.lock().len(), 1);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("t.flac");
+    let out = tr.download(url, &dest, None).await.unwrap();
+    assert_eq!(out.status, 302);
+    assert!(!dest.exists());
+    assert_eq!(seen.lock().len(), 2, "no second request to the Location");
+
+    // connection refused → error text must not carry the URL/query
+    let dead = Url::parse("http://127.0.0.1:1/rest/ping?t=secrettoken&s=salt").unwrap();
+    let e = tr
+        .execute(HttpRequest::get(dead.clone()))
+        .await
+        .unwrap_err();
+    let msg = e.to_string();
+    assert!(matches!(e, TransportError::Network(_)), "{msg}");
+    assert!(
+        !msg.contains("secrettoken") && !msg.contains("127.0.0.1"),
+        "{msg}"
+    );
+    let e = tr.download(dead, &dest, None).await.unwrap_err();
+    assert!(!e.to_string().contains("secrettoken"));
+}
+
+/// L5: an API body above the cap is refused up front.
+#[tokio::test]
+async fn reqwest_transport_caps_response_bodies() {
+    use super::transport::{HttpRequest, HttpTransport, ReqwestTransport, TransportError};
+    let (base, _) = one_shot_http(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 99999999999\r\nConnection: close\r\n\r\n{",
+    )
+    .await;
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5)).unwrap();
+    let url = Url::parse(&format!("{base}/rest/search3")).unwrap();
+    let e = tr.execute(HttpRequest::get(url)).await.unwrap_err();
+    assert!(matches!(e, TransportError::TooLarge), "{e}");
+    assert!(matches!(SubsonicError::from(e), SubsonicError::Protocol(_)));
+}
+
+/// M8/H3 (transport half): a failed stream leaves no `.part` behind and a
+/// successful one leaves only `dest`; temp names are unique per call.
+#[tokio::test]
+async fn reqwest_download_cleans_up_temp_files() {
+    use super::transport::{part_path, HttpTransport, ReqwestTransport};
+    use std::path::Path;
+    let a = part_path(Path::new("/x/abc.flac"));
+    let b = part_path(Path::new("/x/abc.flac"));
+    assert_ne!(a, b);
+    assert!(a.to_string_lossy().ends_with(".part"));
+    assert!(a.to_string_lossy().contains("abc.flac."));
+    assert_ne!(
+        part_path(Path::new("/x/abc.mp3")).file_name(),
+        a.file_name()
+    );
+
+    // body shorter than Content-Length → the stream errors mid-way
+    let (base, _) = one_shot_http(
+        "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 100\r\nConnection: close\r\n\r\nFLAC",
+    )
+    .await;
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("dl/t.flac");
+    let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
+    assert!(tr.download(url, &dest, None).await.is_err());
+    let left: Vec<_> = std::fs::read_dir(dir.path().join("dl"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(left.is_empty(), "no temp or dest left behind: {left:?}");
+
+    let (base, _) = one_shot_http(
+        "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 4\r\nConnection: close\r\n\r\nFLAC",
+    )
+    .await;
+    let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
+    let out = tr.download(url, &dest, None).await.unwrap();
+    assert_eq!(out.bytes, 4);
+    let left: Vec<_> = std::fs::read_dir(dir.path().join("dl"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, vec!["t.flac".to_string()]);
+}
