@@ -800,3 +800,137 @@ async fn pins_download_through_the_job_queue() {
         other => panic!("{other:?}"),
     }
 }
+
+async fn mirror_playlist(t: &TestCore, id: &str) -> Vec<String> {
+    match t
+        .query(Query::PlaylistTracks {
+            id: id.into(),
+            page: Page {
+                offset: 0,
+                limit: 100,
+            },
+        })
+        .await
+    {
+        QueryResult::Tracks(p) => p.items.into_iter().map(|t| t.id).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playlist_append_undo_removes_and_redo_re_adds_without_new_history() {
+    let server = seeded_server(6, 180.0);
+    server.add_playlist("pl", "Mine", "alice", &["t0", "t1"], false);
+    let t = synced("pl-undo", server).await;
+
+    // Append (no index): the common "Add to playlist" path.
+    t.run(Command::PlaylistAdd {
+        playlist_id: "pl".into(),
+        track_ids: vec!["t2".into(), "t3".into()],
+        at_index: None,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t2", "t3"]);
+    let undo = t.snapshot().await.undo;
+    assert!(undo.can_undo && !undo.can_redo);
+    assert_eq!(undo.history.len(), 1);
+
+    // Undo really removes the appended tracks (mirror and server).
+    t.run(Command::Undo).await;
+    t.run_for(500.0).await;
+    assert_eq!(mirror_playlist(&t, "pl").await, ["t0", "t1"]);
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1"]);
+    let undo = t.snapshot().await.undo;
+    assert!(
+        !undo.can_undo && undo.can_redo,
+        "undo is a step back, not a new action: {undo:?}"
+    );
+    assert!(t.events.all().iter().any(
+        |e| matches!(e, Event::Toast { toast } if toast.message == "Undid Add to playlist (2)")
+    ));
+
+    // Redo puts them back; the redo stack was not wiped by the undo.
+    t.run(Command::Redo).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t2", "t3"]);
+    let undo = t.snapshot().await.undo;
+    assert!(undo.can_undo && !undo.can_redo);
+    assert_eq!(undo.history.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playlist_remove_and_move_undo_are_compare_and_swap() {
+    let server = seeded_server(6, 180.0);
+    server.add_playlist("pl", "Mine", "alice", &["t0", "t1", "t2", "t3"], false);
+    let t = synced("pl-cas", server).await;
+
+    // Move t0 to the end, undo restores it.
+    t.run(Command::PlaylistMove {
+        playlist_id: "pl".into(),
+        from_index: 0,
+        to_index: 3,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t1", "t2", "t3", "t0"]);
+    t.run(Command::Undo).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t2", "t3"]);
+    assert!(!t.snapshot().await.undo.can_undo);
+
+    // Remove t2, then someone else deletes t2's neighbour on the server and
+    // the mirror re-syncs: the undo (re-add at index 2) still applies since
+    // t2 is still absent.
+    t.run(Command::PlaylistRemove {
+        playlist_id: "pl".into(),
+        indices: vec![2],
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t3"]);
+    t.run(Command::Undo).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t2", "t3"]);
+
+    // Add t4, then t4 is removed elsewhere and the mirror re-syncs: the undo
+    // expects t4 present, finds it gone, reports honestly and leaves it.
+    t.run(Command::PlaylistAdd {
+        playlist_id: "pl".into(),
+        track_ids: vec!["t4".into()],
+        at_index: None,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(
+        t.server.playlist_song_ids("pl"),
+        ["t0", "t1", "t2", "t3", "t4"]
+    );
+    t.server.state.lock().playlist_songs.insert(
+        "pl".into(),
+        vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+    );
+    t.run(Command::SyncLibrary {
+        server_id: t.server_id.clone(),
+        full: true,
+    })
+    .await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+            .count()
+            >= 2
+    })
+    .await;
+    assert_eq!(mirror_playlist(&t, "pl").await, ["t0", "t1", "t2", "t3"]);
+    t.events.clear();
+    t.run(Command::Undo).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.playlist_song_ids("pl"), ["t0", "t1", "t2", "t3"]);
+    assert!(t.events.all().iter().any(|e| matches!(
+        e,
+        Event::Toast { toast } if toast.message == "Undid Add to playlist (1): undid 0 of 1, 1 changed elsewhere"
+    )), "{:?}", t.events.all().iter().filter(|e| matches!(e, Event::Toast{..})).collect::<Vec<_>>());
+}

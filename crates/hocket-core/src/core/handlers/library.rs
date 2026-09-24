@@ -262,7 +262,26 @@ impl Actor {
         comment: Option<String>,
         public: Option<bool>,
     ) {
-        let prior = self.db.playlist(&playlist_id).ok().flatten();
+        self.rename_playlist_inner(playlist_id, name, comment, public, true);
+    }
+
+    /// `record_undo == false` is the undo/redo path: the mutation is queued
+    /// without touching the undo stack (an inverse is a step back in
+    /// history, not a new action).
+    fn rename_playlist_inner(
+        &mut self,
+        playlist_id: PlaylistId,
+        name: String,
+        comment: Option<String>,
+        public: Option<bool>,
+        record_undo: bool,
+    ) {
+        let prior = self
+            .db
+            .playlist(&playlist_id)
+            .ok()
+            .flatten()
+            .filter(|_| record_undo);
         self.enqueue(
             Mutation::PlaylistRename {
                 playlist_id: playlist_id.clone(),
@@ -315,11 +334,27 @@ impl Actor {
         track_ids: Vec<TrackId>,
         at_index: Option<u32>,
     ) {
+        self.playlist_add_inner(playlist_id, track_ids, at_index, true);
+    }
+
+    fn playlist_add_inner(
+        &mut self,
+        playlist_id: PlaylistId,
+        track_ids: Vec<TrackId>,
+        at_index: Option<u32>,
+        record_undo: bool,
+    ) {
         if self.playlist_is_smart(&playlist_id) {
             self.toast("Smart playlists are read-only", None);
             return;
         }
         let order = self.playlist_order(&playlist_id);
+        // Where the tracks land in the current order (an append has a
+        // concrete index too, so the undo can remove exactly these).
+        let at = at_index
+            .map(|a| a as usize)
+            .unwrap_or(order.len())
+            .min(order.len());
         self.enqueue(
             Mutation::PlaylistAdd {
                 playlist_id: playlist_id.clone(),
@@ -328,33 +363,44 @@ impl Actor {
             },
             Some(Prior::PlaylistOrder(order)),
         );
-        let items = track_ids
-            .iter()
-            .enumerate()
-            .map(|(i, t)| RemoteItem {
-                target: RemoteTarget::PlaylistTrack {
-                    playlist_id: playlist_id.clone(),
-                    track_id: t.clone(),
-                },
-                prior: RemoteValue::Member {
-                    present: false,
-                    index: None,
-                },
-                set: RemoteValue::Member {
-                    present: true,
-                    index: at_index.map(|a| a + i as u32),
-                },
-            })
-            .collect();
-        self.push_remote_undo(
-            "playlistAdd",
-            format!("Add to playlist ({})", track_ids.len()),
-            items,
-        );
+        if record_undo {
+            let items = track_ids
+                .iter()
+                .enumerate()
+                .map(|(i, t)| RemoteItem {
+                    target: RemoteTarget::PlaylistTrack {
+                        playlist_id: playlist_id.clone(),
+                        track_id: t.clone(),
+                    },
+                    prior: RemoteValue::Member {
+                        present: false,
+                        index: None,
+                    },
+                    set: RemoteValue::Member {
+                        present: true,
+                        index: Some((at + i) as u32),
+                    },
+                })
+                .collect();
+            self.push_remote_undo(
+                "playlistAdd",
+                format!("Add to playlist ({})", track_ids.len()),
+                items,
+            );
+        }
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
     pub(crate) fn playlist_remove(&mut self, playlist_id: PlaylistId, indices: Vec<u32>) {
+        self.playlist_remove_inner(playlist_id, indices, true);
+    }
+
+    fn playlist_remove_inner(
+        &mut self,
+        playlist_id: PlaylistId,
+        indices: Vec<u32>,
+        record_undo: bool,
+    ) {
         if self.playlist_is_smart(&playlist_id) {
             self.toast("Smart playlists are read-only", None);
             return;
@@ -375,29 +421,31 @@ impl Actor {
             },
             Some(Prior::PlaylistOrder(order)),
         );
-        let items = track_ids
-            .iter()
-            .zip(indices.iter())
-            .map(|(t, i)| RemoteItem {
-                target: RemoteTarget::PlaylistTrack {
-                    playlist_id: playlist_id.clone(),
-                    track_id: t.clone(),
-                },
-                prior: RemoteValue::Member {
-                    present: true,
-                    index: Some(*i),
-                },
-                set: RemoteValue::Member {
-                    present: false,
-                    index: None,
-                },
-            })
-            .collect();
-        self.push_remote_undo(
-            "playlistRemove",
-            format!("Remove from playlist ({})", track_ids.len()),
-            items,
-        );
+        if record_undo {
+            let items = track_ids
+                .iter()
+                .zip(indices.iter())
+                .map(|(t, i)| RemoteItem {
+                    target: RemoteTarget::PlaylistTrack {
+                        playlist_id: playlist_id.clone(),
+                        track_id: t.clone(),
+                    },
+                    prior: RemoteValue::Member {
+                        present: true,
+                        index: Some(*i),
+                    },
+                    set: RemoteValue::Member {
+                        present: false,
+                        index: None,
+                    },
+                })
+                .collect();
+            self.push_remote_undo(
+                "playlistRemove",
+                format!("Remove from playlist ({})", track_ids.len()),
+                items,
+            );
+        }
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
@@ -406,6 +454,16 @@ impl Actor {
         playlist_id: PlaylistId,
         from_index: u32,
         to_index: u32,
+    ) {
+        self.playlist_move_inner(playlist_id, from_index, to_index, true);
+    }
+
+    fn playlist_move_inner(
+        &mut self,
+        playlist_id: PlaylistId,
+        from_index: u32,
+        to_index: u32,
+        record_undo: bool,
     ) {
         if self.playlist_is_smart(&playlist_id) {
             self.toast("Smart playlists are read-only", None);
@@ -424,19 +482,126 @@ impl Actor {
             },
             Some(Prior::PlaylistOrder(order)),
         );
-        self.push_remote_undo(
-            "playlistMove",
-            "Move in playlist".into(),
-            vec![RemoteItem {
-                target: RemoteTarget::PlaylistTrack {
-                    playlist_id: playlist_id.clone(),
+        if record_undo {
+            self.push_remote_undo(
+                "playlistMove",
+                "Move in playlist".into(),
+                vec![RemoteItem {
+                    target: RemoteTarget::PlaylistTrack {
+                        playlist_id: playlist_id.clone(),
+                        track_id,
+                    },
+                    prior: RemoteValue::Position(from_index),
+                    set: RemoteValue::Position(to_index),
+                }],
+            );
+        }
+        self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
+    }
+
+    /// Compare-and-swap for a playlist inverse: the mirror's current order
+    /// (kept in step with the outbox) must still show `expect` for the
+    /// target, else the item was changed elsewhere and is left alone. The
+    /// mutation runs through the internal path, never the public handler,
+    /// so no new undo entry is pushed and the redo stack survives.
+    fn apply_playlist_cas(&mut self, m: &CasMutation) -> CasResult {
+        use RemoteTarget as T;
+        use RemoteValue as V;
+        match (&m.target, &m.expect, &m.command) {
+            (
+                T::PlaylistTrack {
+                    playlist_id,
                     track_id,
                 },
-                prior: RemoteValue::Position(from_index),
-                set: RemoteValue::Position(to_index),
-            }],
-        );
-        self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
+                V::Member { present, index },
+                cmd,
+            ) => {
+                let order = self.playlist_order(playlist_id);
+                let hinted = index
+                    .map(|i| i as usize)
+                    .filter(|i| order.get(*i) == Some(track_id));
+                let found = hinted.or_else(|| order.iter().position(|t| t == track_id));
+                if found.is_some() != *present {
+                    return CasResult::Skipped;
+                }
+                match cmd {
+                    Command::PlaylistRemove { playlist_id, .. } => {
+                        let Some(i) = found else {
+                            return CasResult::Skipped;
+                        };
+                        self.playlist_remove_inner(playlist_id.clone(), vec![i as u32], false);
+                    }
+                    Command::PlaylistAdd {
+                        playlist_id,
+                        track_ids,
+                        at_index,
+                    } => {
+                        self.playlist_add_inner(
+                            playlist_id.clone(),
+                            track_ids.clone(),
+                            *at_index,
+                            false,
+                        );
+                    }
+                    _ => return CasResult::Failed,
+                }
+                CasResult::Applied
+            }
+            (
+                T::PlaylistTrack {
+                    playlist_id,
+                    track_id,
+                },
+                V::Position(expect_at),
+                Command::PlaylistMove {
+                    playlist_id: pl,
+                    to_index,
+                    ..
+                },
+            ) => {
+                let order = self.playlist_order(playlist_id);
+                if order.get(*expect_at as usize) != Some(track_id) {
+                    return CasResult::Skipped;
+                }
+                self.playlist_move_inner(pl.clone(), *expect_at, *to_index, false);
+                CasResult::Applied
+            }
+            (
+                T::Playlist { id },
+                V::Meta {
+                    name,
+                    comment,
+                    public,
+                },
+                Command::RenamePlaylist {
+                    playlist_id,
+                    name: new_name,
+                    comment: new_comment,
+                    public: new_public,
+                },
+            ) => {
+                let Some(p) = self.db.playlist(id).ok().flatten() else {
+                    return CasResult::Skipped;
+                };
+                let same = p.name == *name
+                    && comment
+                        .as_ref()
+                        .is_none_or(|c| p.comment.as_ref() == Some(c))
+                    && public.is_none_or(|b| p.public == b);
+                if !same {
+                    return CasResult::Skipped;
+                }
+                self.rename_playlist_inner(
+                    playlist_id.clone(),
+                    new_name.clone(),
+                    new_comment.clone(),
+                    *new_public,
+                    false,
+                );
+                CasResult::Applied
+            }
+            _ => CasResult::Failed,
+        }
     }
 
     // -- undo tier 2: compare-and-swap ---------------------------------------------------
@@ -493,10 +658,11 @@ impl Actor {
                     self.spawn_cas(entry_id, api, target, Prior::Loved(*exp), Prior::Loved(new));
                 }
                 _ => {
-                    // Playlist inverses run as plain commands (the outbox
-                    // rebases them on the server's current order).
-                    self.handle_command(m.command.clone());
-                    self.record_cas(entry_id, CasResult::Applied);
+                    // Playlist inverses: CAS against the mirror's current
+                    // order, then queue through the internal path (the
+                    // outbox rebases on the server's order when it flushes).
+                    let result = self.apply_playlist_cas(&m);
+                    self.record_cas(entry_id, result);
                 }
             }
         }
