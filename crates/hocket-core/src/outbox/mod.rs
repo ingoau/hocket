@@ -15,6 +15,17 @@
 //! - [`Outbox::execute_cas`] — compare-and-swap for inverses of already-sent
 //!   mutations: `Applied` or `Skipped { current }` so undo can say "undid 487
 //!   of 500, 13 changed elsewhere".
+//! - [`Outbox::recover`] at start-up (entries left `inflight` by a crash) and
+//!   [`Outbox::prune`] from housekeeping (finished entries older than a
+//!   `Duration`, e.g. 7 days).
+//!
+//! Delivery is at-least-once, so every replay is made safe rather than
+//! avoided: a `PlaylistCreate` records the server id on the entry before any
+//! mirror work and reuses it (or matches the playlist by name/owner created
+//! after the entry) on replay; an appending `PlaylistAdd` skips ids the
+//! server already has; a `Scrobble` whose history row is already
+//! `scrobbled` is done; the mirror update and the `done` status are one
+//! transaction; local DB failures defer the entry instead of failing it.
 //! - [`scrobbler::Scrobbler`] — pure, clock-injected Last.fm state machine;
 //!   [`scrobbler::ScrobbleRecorder`] turns its actions into play history rows
 //!   and outbox entries.
@@ -214,6 +225,9 @@ pub struct OutboxEntry {
     pub next_attempt_at: f64,
     pub last_error: Option<String>,
     pub expected_prior: Option<Prior>,
+    /// Server-side id the mutation produced (a created playlist), recorded
+    /// before any mirror work so a replay reuses it.
+    pub server_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +257,9 @@ pub struct FlushReport {
     pub deferred: usize,
     /// Permanent failures (entry status `failed`).
     pub failed: Vec<(String, String)>,
+    /// Entries dropped unsent because they no longer make sense (a
+    /// "now playing" older than [`NOW_PLAYING_MAX_AGE_MS`]).
+    pub expired: usize,
     pub conflicts: Vec<Conflict>,
     /// Newly created playlists: (entry id, server playlist id).
     pub created_playlists: Vec<(String, String)>,
@@ -274,6 +291,10 @@ pub fn backoff_ms(attempts: u32) -> f64 {
 /// (the entry stays pending and keeps retrying).
 pub const REPORT_AFTER_ATTEMPTS: u32 = 5;
 
+/// A "now playing" (`submission=false`) entry older than this at flush time
+/// is dropped rather than sent: the track stopped long ago.
+pub const NOW_PLAYING_MAX_AGE_MS: f64 = 5.0 * 60_000.0;
+
 #[derive(Clone)]
 pub struct Outbox {
     db: Db,
@@ -295,10 +316,52 @@ fn entry_from_row(r: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
         next_attempt_at: r.get(6)?,
         last_error: r.get(7)?,
         expected_prior: prior.and_then(|p| serde_json::from_str(&p).ok()),
+        server_ref: r.get(9)?,
     })
 }
 
-const ENTRY_COLUMNS: &str = "id, server_id, mutation, status, created_at, attempts, next_attempt_at, last_error, expected_prior";
+const ENTRY_COLUMNS: &str = "id, server_id, mutation, status, created_at, attempts, next_attempt_at, last_error, expected_prior, server_ref";
+
+/// Mirror writes that belong to a successful server call, applied in the
+/// same transaction that marks the entry `done`.
+enum PostCall {
+    None,
+    /// Upsert the playlist row and replace its membership.
+    Playlist {
+        playlist: api::Playlist,
+        track_ids: Vec<String>,
+    },
+    /// The playlist no longer exists on the server.
+    PlaylistGone(String),
+    /// `play_history.scrobbled = 1` for the row.
+    Scrobbled(i64),
+}
+
+fn apply_post_call(tx: &rusqlite::Connection, post: &PostCall) -> DbResult<()> {
+    match post {
+        PostCall::None => {}
+        PostCall::Playlist {
+            playlist,
+            track_ids,
+        } => {
+            crate::db::queries::upsert_playlists_in(tx, std::slice::from_ref(playlist), 0)?;
+            crate::db::queries::set_playlist_tracks_in(
+                tx,
+                &playlist.server_id,
+                &playlist.id,
+                track_ids,
+            )?;
+        }
+        PostCall::PlaylistGone(id) => {
+            tx.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", [id])?;
+            tx.execute("DELETE FROM playlists WHERE id = ?1", [id])?;
+        }
+        PostCall::Scrobbled(h) => {
+            tx.execute("UPDATE play_history SET scrobbled = 1 WHERE id = ?1", [h])?;
+        }
+    }
+    Ok(())
+}
 
 impl Outbox {
     pub fn new(db: Db, clock: Arc<dyn Clock>) -> Self {
@@ -427,18 +490,21 @@ impl Outbox {
     }
 
     /// Entries left `inflight` by a crashed process become pending again.
+    /// The attempt counts (the server may have applied the call), so the
+    /// replay takes the idempotent path.
     pub fn recover(&self) -> DbResult<usize> {
         self.db.with_conn(|c| {
             Ok(c.execute(
-                "UPDATE outbox SET status = 'pending' WHERE status = 'inflight'",
+                "UPDATE outbox SET status = 'pending', attempts = attempts + 1, last_error = 'interrupted' WHERE status = 'inflight'",
                 [],
             )?)
         })
     }
 
-    /// Delete finished entries older than `max_age_ms`.
-    pub fn prune(&self, max_age_ms: f64) -> DbResult<usize> {
-        let cutoff = self.clock.now_ms() - max_age_ms;
+    /// Delete finished (`done`/`cancelled`) entries older than `max_age`.
+    /// Call from periodic housekeeping, e.g. `prune(Duration::from_secs(7 * 86_400))`.
+    pub fn prune(&self, max_age: std::time::Duration) -> DbResult<usize> {
+        let cutoff = self.clock.now_ms() - max_age.as_millis() as f64;
         self.db.with_conn(|c| {
             Ok(c.execute("DELETE FROM outbox WHERE status IN ('done','cancelled') AND COALESCE(finished_at, created_at) < ?1", [cutoff])?)
         })
@@ -458,6 +524,25 @@ impl Outbox {
         })?;
         let mut report = FlushReport::default();
         for entry in due {
+            // A "now playing" for a track that stopped long ago is noise.
+            if let Mutation::Scrobble {
+                submission: false,
+                played_at,
+                ..
+            } = &entry.mutation
+            {
+                if now - played_at > NOW_PLAYING_MAX_AGE_MS {
+                    self.db.with_conn(|c| {
+                        c.execute(
+                            "UPDATE outbox SET status = 'cancelled', finished_at = ?2, last_error = 'expired' WHERE id = ?1 AND status = 'pending'",
+                            params![entry.id, now],
+                        )?;
+                        Ok(())
+                    })?;
+                    report.expired += 1;
+                    continue;
+                }
+            }
             let claimed = self.db.with_conn(|c| {
                 Ok(c.execute(
                     "UPDATE outbox SET status = 'inflight' WHERE id = ?1 AND status = 'pending'",
@@ -468,17 +553,37 @@ impl Outbox {
                 continue; // cancelled meanwhile
             }
             match self.execute(api, &entry, &mut report).await {
-                Ok(()) => {
-                    report.applied += 1;
-                    self.db.with_conn(|c| {
-                        c.execute(
+                Ok(post) => {
+                    // Mirror update and `done` are one transaction: either
+                    // both land or the entry is replayed (idempotently).
+                    let finished = self.db.with_tx(|tx| {
+                        apply_post_call(tx, &post)?;
+                        tx.execute(
                             "UPDATE outbox SET status = 'done', attempts = attempts + 1, finished_at = ?2, last_error = NULL WHERE id = ?1",
                             params![entry.id, self.clock.now_ms()],
                         )?;
                         Ok(())
-                    })?;
+                    });
+                    if let Err(e) = finished {
+                        // Best effort: leave it replayable rather than stuck inflight.
+                        let _ = self.db.with_conn(|c| {
+                            c.execute(
+                                "UPDATE outbox SET status = 'pending', attempts = attempts + 1, last_error = ?2 WHERE id = ?1",
+                                params![entry.id, e.to_string()],
+                            )?;
+                            Ok(())
+                        });
+                        return Err(e);
+                    }
+                    report.applied += 1;
                 }
-                Err(e) if e.is_transient() || matches!(e, SubsonicError::Auth(_)) => {
+                // Local DB trouble (`Io`) after a server call is not a reason
+                // to give up: the replay is idempotent, so defer like a
+                // network blip.
+                Err(e)
+                    if e.is_transient()
+                        || matches!(e, SubsonicError::Auth(_) | SubsonicError::Io(_)) =>
+                {
                     let attempts = entry.attempts + 1;
                     let next = self.clock.now_ms() + backoff_ms(attempts);
                     self.db.with_conn(|c| {
@@ -516,12 +621,16 @@ impl Outbox {
         Ok(report)
     }
 
+    /// Perform the server call for an entry. Returns the mirror writes to
+    /// apply together with the `done` status. `entry.attempts > 0` means
+    /// the call may already have been applied (crash, lost response).
     async fn execute(
         &self,
         api: &dyn SubsonicApi,
         entry: &OutboxEntry,
         report: &mut FlushReport,
-    ) -> Result<(), SubsonicError> {
+    ) -> Result<PostCall, SubsonicError> {
+        let replay = entry.attempts > 0;
         match &entry.mutation {
             Mutation::SetRating { target, rating } => {
                 let id = match target {
@@ -549,7 +658,8 @@ impl Outbox {
                         }
                     }
                 }
-                api.set_rating(id, *rating).await
+                api.set_rating(id, *rating).await?;
+                Ok(PostCall::None)
             }
             Mutation::SetLoved { target, loved } => {
                 let t = match target {
@@ -574,13 +684,63 @@ impl Outbox {
                     }
                 }
                 if *loved {
-                    api.star(&[t]).await
+                    api.star(&[t]).await?;
                 } else {
-                    api.unstar(&[t]).await
+                    api.unstar(&[t]).await?;
                 }
+                Ok(PostCall::None)
             }
             Mutation::PlaylistCreate { name, track_ids } => {
-                let created = api.create_playlist(name, track_ids).await?;
+                // Replay-safe: reuse the id recorded on a previous attempt,
+                // else (if this is a retry) a playlist of ours with this name
+                // created after the entry, else create.
+                let mut existing = None;
+                if let Some(r) = &entry.server_ref {
+                    match api.playlist(r).await {
+                        Ok(p) => existing = Some(p),
+                        Err(SubsonicError::NotFound(_)) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+                if existing.is_none() && replay {
+                    let me = api.username();
+                    let mut candidates: Vec<_> = api
+                        .playlists()
+                        .await?
+                        .into_iter()
+                        .filter(|p| p.name == *name)
+                        .filter(|p| me.is_none() || p.owner.is_none() || p.owner == me)
+                        .filter(|p| {
+                            p.created
+                                .as_deref()
+                                .and_then(crate::subsonic::parse_iso_ms)
+                                .is_none_or(|c| c >= entry.created_at - 60_000.0)
+                        })
+                        .collect();
+                    candidates.sort_by(|a, b| b.created.cmp(&a.created));
+                    if let Some(c) = candidates.first() {
+                        tracing::info!(
+                            entry = entry.id,
+                            playlist = c.id,
+                            "replayed playlist create matched an existing playlist"
+                        );
+                        existing = Some(api.playlist(&c.id).await?);
+                    }
+                }
+                let created = match existing {
+                    Some(p) => p,
+                    None => api.create_playlist(name, track_ids).await?,
+                };
+                // Record the server id before any mirror work.
+                self.db
+                    .with_conn(|c| {
+                        c.execute(
+                            "UPDATE outbox SET server_ref = ?2 WHERE id = ?1",
+                            params![entry.id, created.playlist.id],
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(db_err)?;
                 report
                     .created_playlists
                     .push((entry.id.clone(), created.playlist.id.clone()));
@@ -590,15 +750,19 @@ impl Outbox {
                     api.username().as_deref(),
                     &created.playlist,
                 );
-                self.db.upsert_playlists(&[p], 0).map_err(db_err)?;
-                self.db
-                    .set_playlist_tracks(sid, &created.playlist.id, track_ids)
-                    .map_err(db_err)?;
-                Ok(())
+                let ids: Vec<String> = created.entry.iter().map(|c| c.id.clone()).collect();
+                Ok(PostCall::Playlist {
+                    playlist: p,
+                    track_ids: if ids.is_empty() {
+                        track_ids.clone()
+                    } else {
+                        ids
+                    },
+                })
             }
             Mutation::PlaylistDelete { playlist_id } => {
                 match api.delete_playlist(playlist_id).await {
-                    Ok(()) | Err(SubsonicError::NotFound(_)) => Ok(()),
+                    Ok(()) | Err(SubsonicError::NotFound(_)) => Ok(PostCall::None),
                     Err(e) => Err(e),
                 }
             }
@@ -617,7 +781,8 @@ impl Outbox {
                         ..Default::default()
                     },
                 )
-                .await
+                .await?;
+                Ok(PostCall::None)
             }
             Mutation::PlaylistAdd {
                 playlist_id,
@@ -626,14 +791,30 @@ impl Outbox {
             } => {
                 match at_index {
                     None => {
-                        api.update_playlist(
-                            playlist_id,
-                            PlaylistUpdate {
-                                song_ids_to_add: track_ids.clone(),
-                                ..Default::default()
-                            },
-                        )
-                        .await?;
+                        // On a replay the append may already have landed:
+                        // only add what the server doesn't have.
+                        let to_add: Vec<String> = if replay {
+                            let current = api.playlist(playlist_id).await?;
+                            let have: std::collections::HashSet<&str> =
+                                current.entry.iter().map(|c| c.id.as_str()).collect();
+                            track_ids
+                                .iter()
+                                .filter(|t| !have.contains(t.as_str()))
+                                .cloned()
+                                .collect()
+                        } else {
+                            track_ids.clone()
+                        };
+                        if !to_add.is_empty() {
+                            api.update_playlist(
+                                playlist_id,
+                                PlaylistUpdate {
+                                    song_ids_to_add: to_add,
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                        }
                     }
                     Some(idx) => {
                         let current = api.playlist(playlist_id).await?;
@@ -713,12 +894,31 @@ impl Outbox {
                 submission,
                 history_id,
             } => {
+                // A submission whose history row is already scrobbled was
+                // delivered on a previous attempt: done, never sent twice.
+                if let (true, Some(h)) = (submission, history_id) {
+                    let already: bool = self
+                        .db
+                        .with_conn(|c| {
+                            Ok(c.query_row(
+                                "SELECT scrobbled FROM play_history WHERE id = ?1",
+                                [h],
+                                |r| r.get::<_, i64>(0),
+                            )
+                            .optional()?
+                            .is_some_and(|v| v != 0))
+                        })
+                        .map_err(db_err)?;
+                    if already {
+                        return Ok(PostCall::None);
+                    }
+                }
                 api.scrobble(track_id, Some(*played_at), *submission)
                     .await?;
-                if let (true, Some(h)) = (submission, history_id) {
-                    self.db.mark_scrobbled(*h).map_err(db_err)?;
-                }
-                Ok(())
+                Ok(match (submission, history_id) {
+                    (true, Some(h)) => PostCall::Scrobbled(*h),
+                    _ => PostCall::None,
+                })
             }
             Mutation::SavePlayQueue {
                 track_ids,
@@ -730,16 +930,18 @@ impl Outbox {
                     current: current.clone(),
                     position_ms: *position_ms,
                 })
-                .await
+                .await?;
+                Ok(PostCall::None)
             }
         }
     }
 
+    /// Re-read a playlist after an edit; the mirror write happens with `done`.
     async fn refresh_playlist(
         &self,
         api: &dyn SubsonicApi,
         playlist_id: &str,
-    ) -> Result<(), SubsonicError> {
+    ) -> Result<PostCall, SubsonicError> {
         let sid = api.server_id();
         match api.playlist(playlist_id).await {
             Ok(p) => {
@@ -749,16 +951,12 @@ impl Outbox {
                     &p.playlist,
                 );
                 let ids: Vec<String> = p.entry.iter().map(|c| c.id.clone()).collect();
-                self.db.upsert_playlists(&[pl], 0).map_err(db_err)?;
-                self.db
-                    .set_playlist_tracks(sid, playlist_id, &ids)
-                    .map_err(db_err)?;
-                Ok(())
+                Ok(PostCall::Playlist {
+                    playlist: pl,
+                    track_ids: ids,
+                })
             }
-            Err(SubsonicError::NotFound(_)) => {
-                self.db.delete_playlist(playlist_id).map_err(db_err)?;
-                Ok(())
-            }
+            Err(SubsonicError::NotFound(_)) => Ok(PostCall::PlaylistGone(playlist_id.to_string())),
             Err(e) => Err(e),
         }
     }
@@ -845,6 +1043,8 @@ impl Outbox {
     }
 }
 
+/// Local DB trouble during a flush is deferred like a network blip (the
+/// replay is idempotent), never a permanent failure.
 fn db_err(e: DbError) -> SubsonicError {
     SubsonicError::Io(e.to_string())
 }
@@ -934,7 +1134,9 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             track_ids,
             at_index,
         } => {
-            let (sid, mut order) = local_order(tx, playlist_id)?;
+            let Some((sid, mut order)) = local_order(tx, playlist_id)? else {
+                return Ok(());
+            };
             let at = at_index
                 .map(|i| i as usize)
                 .unwrap_or(order.len())
@@ -949,7 +1151,9 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             track_ids,
             indices,
         } => {
-            let (sid, mut order) = local_order(tx, playlist_id)?;
+            let Some((sid, mut order)) = local_order(tx, playlist_id)? else {
+                return Ok(());
+            };
             let mut remove: Vec<usize> = vec![];
             for (n, t) in track_ids.iter().enumerate() {
                 let hinted = indices
@@ -978,7 +1182,9 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             from_index,
             to_index,
         } => {
-            let (sid, mut order) = local_order(tx, playlist_id)?;
+            let Some((sid, mut order)) = local_order(tx, playlist_id)? else {
+                return Ok(());
+            };
             let from = if order.get(*from_index as usize) == Some(track_id) {
                 Some(*from_index as usize)
             } else {
@@ -998,21 +1204,28 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
     Ok(())
 }
 
-fn local_order(tx: &rusqlite::Connection, playlist_id: &str) -> DbResult<(String, Vec<String>)> {
-    let sid: String = tx
+/// The mirror's `(server_id, order)` for a playlist; `None` when the mirror
+/// does not know the playlist (nothing to update optimistically).
+fn local_order(
+    tx: &rusqlite::Connection,
+    playlist_id: &str,
+) -> DbResult<Option<(String, Vec<String>)>> {
+    let Some(sid) = tx
         .query_row(
             "SELECT server_id FROM playlists WHERE id = ?1",
             [playlist_id],
-            |r| r.get(0),
+            |r| r.get::<_, String>(0),
         )
         .optional()?
-        .unwrap_or_default();
+    else {
+        return Ok(None);
+    };
     let mut st = tx.prepare_cached(
         "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC",
     )?;
     let rows = st.query_map([playlist_id], |r| r.get::<_, String>(0))?;
     let order = rows.collect::<Result<Vec<_>, _>>()?;
-    Ok((sid, order))
+    Ok(Some((sid, order)))
 }
 
 fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbResult<()> {
@@ -1083,8 +1296,9 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             | Mutation::PlaylistMove { playlist_id, .. },
             Prior::PlaylistOrder(order),
         ) => {
-            let (sid, _) = local_order(tx, playlist_id)?;
-            crate::db::queries::set_playlist_tracks_in(tx, &sid, playlist_id, order)?;
+            if let Some((sid, _)) = local_order(tx, playlist_id)? {
+                crate::db::queries::set_playlist_tracks_in(tx, &sid, playlist_id, order)?;
+            }
         }
         _ => {}
     }
@@ -1637,16 +1851,18 @@ mod tests {
 
     #[tokio::test]
     async fn scrobble_marks_history_and_save_play_queue() {
-        let (db, s, outbox, _) = setup();
+        let (db, s, outbox, clock) = setup();
+        // a play that started a minute ago (a now-playing older than 5 min is dropped)
+        let played_at = clock.now_ms() - 60_000.0;
         let h = db
-            .record_play("srv", "t0", 123.0, 100_000, false, "dev")
+            .record_play("srv", "t0", played_at, 100_000, false, "dev")
             .unwrap();
         outbox
             .enqueue(
                 "srv",
                 Mutation::Scrobble {
                     track_id: "t0".into(),
-                    played_at: 123.0,
+                    played_at,
                     submission: false,
                     history_id: None,
                 },
@@ -1658,7 +1874,7 @@ mod tests {
                 "srv",
                 Mutation::Scrobble {
                     track_id: "t0".into(),
-                    played_at: 123.0,
+                    played_at,
                     submission: true,
                     history_id: Some(h),
                 },
@@ -1697,7 +1913,7 @@ mod tests {
         let sc = s.scrobbles();
         assert_eq!(sc.len(), 2);
         assert!(!sc[0].submission && sc[1].submission);
-        assert_eq!(sc[1].time_ms, Some(123.0));
+        assert_eq!(sc[1].time_ms, Some(played_at));
         assert!(db.recently_played(1).unwrap()[0].scrobbled);
         assert_eq!(
             s.state
@@ -1708,6 +1924,316 @@ mod tests {
                 .current
                 .as_deref(),
             Some("t2")
+        );
+    }
+
+    /// Simulate a crash after the server accepted the call but before the
+    /// entry was marked done: the row is back to `inflight`.
+    fn crash_after_call(db: &Db, entry_id: &str) {
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE outbox SET status = 'inflight', finished_at = NULL WHERE id = ?1",
+                [entry_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// H4: a replayed `PlaylistCreate` reuses the recorded server id; with
+    /// the id lost too (crash between the call and the ref write) it matches
+    /// the playlist by name/owner instead of creating a second one.
+    #[tokio::test]
+    async fn replayed_playlist_create_does_not_duplicate() {
+        let (db, s, outbox, _) = setup();
+        let id = outbox
+            .enqueue(
+                "srv",
+                Mutation::PlaylistCreate {
+                    name: "New".into(),
+                    track_ids: vec!["t0".into(), "t1".into()],
+                },
+                None,
+            )
+            .unwrap();
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(r.applied, 1);
+        let pid = r.created_playlists[0].1.clone();
+        assert_eq!(
+            outbox.entry(&id).unwrap().unwrap().server_ref.as_deref(),
+            Some(pid.as_str())
+        );
+        let count_named = |s: &FakeServer| {
+            s.state
+                .lock()
+                .playlists
+                .values()
+                .filter(|p| p.name == "New")
+                .count()
+        };
+        assert_eq!(count_named(&s), 1);
+
+        // crash 1: done never persisted, server_ref was.
+        crash_after_call(&db, &id);
+        db.delete_playlist(&pid).unwrap();
+        assert_eq!(outbox.recover().unwrap(), 1);
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!((r.applied, r.failed.len()), (1, 0));
+        assert_eq!(count_named(&s), 1, "reused the recorded id");
+        assert_eq!(r.created_playlists[0].1, pid);
+        assert_eq!(db.playlist_track_ids(&pid).unwrap(), vec!["t0", "t1"]);
+        assert_eq!(
+            outbox.entry(&id).unwrap().unwrap().status,
+            EntryStatus::Done
+        );
+
+        // crash 2: even the ref is gone (died between the call and the write).
+        crash_after_call(&db, &id);
+        db.with_conn(|c| {
+            c.execute("UPDATE outbox SET server_ref = NULL WHERE id = ?1", [&id])?;
+            Ok(())
+        })
+        .unwrap();
+        outbox.recover().unwrap();
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(r.applied, 1);
+        assert_eq!(count_named(&s), 1, "matched by name/owner, no duplicate");
+        assert_eq!(r.created_playlists[0].1, pid);
+        assert_eq!(s.calls_to("createPlaylist"), 1, "one create call in total");
+
+        // a genuinely new first attempt still creates (no false dedupe)
+        outbox
+            .enqueue(
+                "srv",
+                Mutation::PlaylistCreate {
+                    name: "New".into(),
+                    track_ids: vec!["t2".into()],
+                },
+                None,
+            )
+            .unwrap();
+        outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(count_named(&s), 2);
+    }
+
+    /// H4: a replayed appending `PlaylistAdd` skips ids the server already
+    /// has; a first attempt appends as asked.
+    #[tokio::test]
+    async fn replayed_playlist_add_skips_ids_already_present() {
+        let (db, s, outbox, _) = setup();
+        let id = outbox
+            .enqueue(
+                "srv",
+                Mutation::PlaylistAdd {
+                    playlist_id: "pl".into(),
+                    track_ids: vec!["t4".into()],
+                    at_index: None,
+                },
+                Some(Prior::PlaylistOrder(vec![
+                    "t0".into(),
+                    "t1".into(),
+                    "t2".into(),
+                    "t3".into(),
+                ])),
+            )
+            .unwrap();
+        outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(
+            s.playlist_song_ids("pl"),
+            vec!["t0", "t1", "t2", "t3", "t4"]
+        );
+        crash_after_call(&db, &id);
+        outbox.recover().unwrap();
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(r.applied, 1);
+        assert_eq!(
+            s.playlist_song_ids("pl"),
+            vec!["t0", "t1", "t2", "t3", "t4"],
+            "no second t4"
+        );
+        assert_eq!(
+            db.playlist_track_ids("pl").unwrap(),
+            vec!["t0", "t1", "t2", "t3", "t4"]
+        );
+        assert_eq!(s.calls_to("updatePlaylist"), 1);
+    }
+
+    /// H4: a replayed scrobble whose history row is already scrobbled is
+    /// done without a second submission.
+    #[tokio::test]
+    async fn replayed_scrobble_is_not_submitted_twice() {
+        let (db, s, outbox, clock) = setup();
+        let played_at = clock.now_ms() - 30_000.0;
+        let h = db
+            .record_play("srv", "t0", played_at, 100_000, false, "dev")
+            .unwrap();
+        let id = outbox
+            .enqueue(
+                "srv",
+                Mutation::Scrobble {
+                    track_id: "t0".into(),
+                    played_at,
+                    submission: true,
+                    history_id: Some(h),
+                },
+                None,
+            )
+            .unwrap();
+        outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(s.scrobbles().len(), 1);
+        assert!(db.recently_played(1).unwrap()[0].scrobbled);
+        crash_after_call(&db, &id);
+        outbox.recover().unwrap();
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!(r.applied, 1);
+        assert_eq!(s.scrobbles().len(), 1, "never duplicated");
+        assert_eq!(
+            outbox.entry(&id).unwrap().unwrap().status,
+            EntryStatus::Done
+        );
+    }
+
+    /// M7: a stale "now playing" is dropped at flush instead of being sent
+    /// long after the track stopped; local DB errors defer, never fail.
+    #[tokio::test]
+    async fn stale_now_playing_is_dropped_and_db_errors_defer() {
+        let (_db, s, outbox, clock) = setup();
+        let now = clock.now_ms();
+        outbox
+            .enqueue(
+                "srv",
+                Mutation::Scrobble {
+                    track_id: "t0".into(),
+                    played_at: now - NOW_PLAYING_MAX_AGE_MS - 1.0,
+                    submission: false,
+                    history_id: None,
+                },
+                None,
+            )
+            .unwrap();
+        let fresh = outbox
+            .enqueue(
+                "srv",
+                Mutation::Scrobble {
+                    track_id: "t1".into(),
+                    played_at: now - 1_000.0,
+                    submission: false,
+                    history_id: None,
+                },
+                None,
+            )
+            .unwrap();
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!((r.expired, r.applied), (1, 1));
+        let sc = s.scrobbles();
+        assert_eq!(sc.len(), 1);
+        assert_eq!(sc[0].id, "t1");
+        assert_eq!(
+            outbox.entry(&fresh).unwrap().unwrap().status,
+            EntryStatus::Done
+        );
+        assert_eq!(outbox.pending_count().unwrap(), 0);
+
+        // an `Io` failure (what a local DB error maps to) is deferred
+        let id = outbox
+            .enqueue(
+                "srv",
+                Mutation::SetRating {
+                    target: RatingTarget::Track { id: "t0".into() },
+                    rating: 4,
+                },
+                None,
+            )
+            .unwrap();
+        s.fail_next(SubsonicError::Io("database is locked".into()), 1);
+        let r = outbox.flush(&s, 10).await.unwrap();
+        assert_eq!((r.deferred, r.failed.len()), (1, 0));
+        let e = outbox.entry(&id).unwrap().unwrap();
+        assert_eq!(e.status, EntryStatus::Pending);
+        assert_eq!(e.attempts, 1);
+    }
+
+    /// L1: an edit for a playlist the mirror doesn't know writes no rows.
+    #[tokio::test]
+    async fn playlist_edit_on_unknown_playlist_writes_no_orphan_rows() {
+        let (db, _s, outbox, _) = setup();
+        outbox
+            .enqueue(
+                "srv",
+                Mutation::PlaylistAdd {
+                    playlist_id: "nope".into(),
+                    track_ids: vec!["t0".into()],
+                    at_index: None,
+                },
+                None,
+            )
+            .unwrap();
+        outbox
+            .enqueue(
+                "srv",
+                Mutation::PlaylistMove {
+                    playlist_id: "nope".into(),
+                    track_id: "t0".into(),
+                    from_index: 0,
+                    to_index: 1,
+                },
+                None,
+            )
+            .unwrap();
+        let n: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM playlist_tracks WHERE playlist_id = 'nope' OR server_id = ''",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    /// M3: `prune(Duration)` removes finished entries older than the age.
+    #[tokio::test]
+    async fn prune_removes_old_finished_entries_only() {
+        let (_db, s, outbox, clock) = setup();
+        let done = outbox
+            .enqueue(
+                "srv",
+                Mutation::SetRating {
+                    target: RatingTarget::Track { id: "t0".into() },
+                    rating: 4,
+                },
+                None,
+            )
+            .unwrap();
+        outbox.flush(&s, 10).await.unwrap();
+        let pending = outbox
+            .enqueue(
+                "srv",
+                Mutation::SetRating {
+                    target: RatingTarget::Track { id: "t1".into() },
+                    rating: 4,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            outbox
+                .prune(std::time::Duration::from_secs(7 * 86_400))
+                .unwrap(),
+            0
+        );
+        *clock.0.lock() += 8.0 * 86_400_000.0;
+        assert_eq!(
+            outbox
+                .prune(std::time::Duration::from_secs(7 * 86_400))
+                .unwrap(),
+            1
+        );
+        assert!(outbox.entry(&done).unwrap().is_none());
+        assert!(
+            outbox.entry(&pending).unwrap().is_some(),
+            "pending is never pruned"
         );
     }
 

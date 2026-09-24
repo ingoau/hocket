@@ -26,11 +26,19 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 
 use crate::util::{now_ms, Clock};
 
-/// Numbered, forward-only migrations. `0001` is `schema.sql` itself.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[(1, "0001_init", include_str!("schema.sql"))];
+/// Numbered, forward-only migrations. `0001` is `schema.sql` itself (the
+/// v1 snapshot; never edited), later ones live in `migrations/`.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[
+    (1, "0001_init", include_str!("schema.sql")),
+    (
+        2,
+        "0002_outbox_server_ref",
+        include_str!("migrations/0002_outbox_server_ref.sql"),
+    ),
+];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
