@@ -91,7 +91,7 @@ class LargeFontLayoutTest {
         compose.onNodeWithTag("player.page").performScrollTo()
         compose.onNodeWithTag("player.playPause").performScrollTo()
         holds("now playing, transport in view")
-        click("player.tab.1")
+        click("player.mode.queue")
         compose.waitForIdle()
         holds("queue")
     }

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The full player's header, mode pills and About view. -->
+<resources>
+    <string name="player_playing_from">Playing from</string>
+    <string name="player_playing_from_autoplay">Autoplay</string>
+    <string name="player_playing_from_a11y">Playing from %1$s</string>
+    <string name="player_mode_lyrics">Lyrics</string>
+    <string name="player_mode_queue">Queue</string>
+    <string name="player_mode_about">About</string>
+    <string name="player_show_artwork">Show artwork</string>
+    <string name="player_add_to_playlist">Add to playlist</string>
+    <string name="player_sleep_active_a11y">On</string>
+    <string name="player_about_title">About this song</string>
+    <string name="player_about_album">Album</string>
+    <string name="player_about_artist">Artist</string>
+    <string name="player_about_album_artist">Album artist</string>
+    <string name="player_about_year">Year</string>
+    <string name="player_about_genre">Genre</string>
+    <string name="player_about_track">Track</string>
+    <string name="player_about_disc">Disc</string>
+    <string name="player_about_duration">Duration</string>
+    <string name="player_about_format">Format</string>
+    <string name="player_about_bitrate">Bitrate</string>
+    <string name="player_about_bitrate_value">%1$d kbps</string>
+    <string name="player_about_sample_rate">Sample rate</string>
+    <string name="player_about_sample_rate_value">%1$s kHz</string>
+    <string name="player_about_bit_depth">Bit depth</string>
+    <string name="player_about_bit_depth_value">%1$d-bit</string>
+    <string name="player_about_channels">Channels</string>
+    <string name="player_about_play_count">Plays</string>
+    <string name="player_about_last_played">Last played</string>
+    <string name="player_about_size">File size</string>
+    <string name="player_about_path">File</string>
+    <string name="player_about_comment">Comment</string>
+    <string name="player_about_rating">Your rating</string>
+    <string name="player_about_loading">Loading details…</string>
+</resources>

@@ -168,7 +168,7 @@ private fun DetailScaffold(
                     content()
                 }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
 }
@@ -447,7 +447,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                     }
                 }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
     if (p != null) {

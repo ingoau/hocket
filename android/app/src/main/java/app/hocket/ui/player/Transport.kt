@@ -4,6 +4,18 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toPath
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.graphics.shapes.Morph
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -53,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -111,9 +122,8 @@ fun rememberPressScale(interactionSource: InteractionSource): State<Float> {
 }
 
 /**
- * A filled transport button drawn in one graphics layer: the press bounce, the corner radius (a
- * fraction of the height, so a pill at 0.5) and the clip all change without recomposition or
- * relayout.
+ * A filled transport button drawn in one graphics layer: the press bounce, its shape (from
+ * [shapeFor], given the layer's size) and the clip all change without recomposition or relayout.
  */
 @Composable
 private fun TransportButton(
@@ -123,7 +133,7 @@ private fun TransportButton(
     content: Color,
     interactionSource: MutableInteractionSource,
     modifier: Modifier = Modifier,
-    cornerFraction: () -> Float = { 0.5f },
+    shapeFor: GraphicsLayerScope.() -> Shape,
     icon: @Composable () -> Unit,
 ) {
     val scale by rememberPressScale(interactionSource)
@@ -132,7 +142,7 @@ private fun TransportButton(
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                shape = RoundedCornerShape(size.height * cornerFraction().coerceIn(0f, 0.5f))
+                shape = shapeFor()
                 clip = true
             }
             .background(container)
@@ -145,8 +155,9 @@ private fun TransportButton(
 }
 
 /**
- * Play/pause as a big filled pill whose corners morph: fully round while paused, a rounded rectangle
- * while playing (Metrolist). The icon crossfades; haptics are toggle on/off.
+ * Play/pause as a big filled button whose outline morphs (Material 3 Expressive): a soft
+ * nine-sided cookie while paused, a rounded square while playing, on a springy spec. The icon
+ * crossfades with a little scale; haptics are toggle on/off.
  */
 @Composable
 fun PlayPauseButton(
@@ -154,14 +165,16 @@ fun PlayPauseButton(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    iconSize: Dp = 40.dp,
 ) {
     val reduced = LocalReducedMotion.current
-    // 0.5 = pill (paused), PLAYING_CORNER = rounded rectangle (playing).
-    val corner = remember { Animatable(if (playing) PLAYING_CORNER else 0.5f) }
+    // 0 = paused (cookie), 1 = playing (rounded square).
+    val morphProgress = remember { Animatable(if (playing) 1f else 0f) }
     LaunchedEffect(playing, reduced) {
-        val target = if (playing) PLAYING_CORNER else 0.5f
-        if (reduced) corner.snapTo(target) else corner.animateTo(target, Motion.settle)
+        val target = if (playing) 1f else 0f
+        if (reduced) morphProgress.snapTo(target) else morphProgress.animateTo(target, Motion.morph)
     }
+    val morph = remember { Morph(MaterialShapes.Cookie9Sided, MaterialShapes.Square) }
     val haptics = LocalHapticFeedback.current
     val label = stringResource(if (playing) R.string.action_pause else R.string.action_play)
     TransportButton(
@@ -170,7 +183,7 @@ fun PlayPauseButton(
         container = MaterialTheme.colorScheme.primary,
         content = MaterialTheme.colorScheme.onPrimary,
         interactionSource = interactionSource,
-        cornerFraction = { corner.value },
+        shapeFor = { MorphShape(morph, morphProgress.value) },
         modifier = modifier.testTag("player.playPause"),
     ) {
         AnimatedContent(
@@ -180,17 +193,27 @@ fun PlayPauseButton(
                 else (fadeIn(tween(150)) + scaleIn(initialScale = 0.6f)) togetherWith (fadeOut(tween(100)) + scaleOut(targetScale = 0.6f))
             },
             label = "playPauseIcon",
-        ) { p -> Icon(if (p) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(36.dp)) }
+        ) { p -> Icon(if (p) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(iconSize)) }
     }
 }
 
-/** Corner radius, as a fraction of the height, of the play button while playing. */
-private const val PLAYING_CORNER = 0.3f
+/**
+ * A [Morph] between two of [MaterialShapes] (normalised to a unit square) at [progress], scaled to
+ * the outline's size. Cheap to create: a graphics layer builds one per frame while it animates.
+ */
+private class MorphShape(private val morph: Morph, private val progress: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val path = morph.toPath(progress, Path())
+        path.transform(Matrix().apply { scale(size.width, size.height) })
+        return Outline.Generic(path)
+    }
+}
 
 /**
- * Previous, play/pause and next in one row (Metrolist): filled tonal skip buttons either side of a
- * wide play/pause pill. The pressed button grows and its neighbours give way (weights on a
- * slightly springy spec); every button also bounces on press.
+ * Previous, play/pause and next (Material 3 Expressive): tonal round skip buttons either side of a
+ * larger shape-morphing play/pause. A pressed skip button widens and squishes towards a rounded
+ * square while its neighbours give way a little, on springy specs; every button bounces on press.
+ * [height] is the play button's size; the skip buttons are a little smaller.
  */
 @Composable
 fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier) {
@@ -201,24 +224,30 @@ fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit,
     val prevPressed by prevSource.collectIsPressedAsState()
     val playPressed by playSource.collectIsPressedAsState()
     val nextPressed by nextSource.collectIsPressedAsState()
-    fun target(pressed: Boolean, otherPressed: Boolean, rest: Float, grown: Float, shrunk: Float) =
-        if (reduced) rest else if (pressed) grown else if (otherPressed) shrunk else rest
-    val prevWeight by animateFloatAsState(target(prevPressed, playPressed || nextPressed, 0.45f, 0.65f, 0.35f), Motion.press, label = "prevWeight")
-    val playWeight by animateFloatAsState(target(playPressed, prevPressed || nextPressed, 1.3f, 1.9f, 1.1f), Motion.press, label = "playWeight")
-    val nextWeight by animateFloatAsState(target(nextPressed, playPressed || prevPressed, 0.45f, 0.65f, 0.35f), Motion.press, label = "nextWeight")
+    val skip = height * 0.8f
+    fun width(pressed: Boolean, otherPressed: Boolean) = if (reduced) skip else if (pressed) skip * 1.35f else if (otherPressed) skip * 0.92f else skip
+    val prevWidth by animateDpAsState(width(prevPressed, playPressed || nextPressed), Motion.pressDp, label = "prevWidth")
+    val nextWidth by animateDpAsState(width(nextPressed, playPressed || prevPressed), Motion.pressDp, label = "nextWidth")
     val tonal = MaterialTheme.colorScheme.secondaryContainer
     val onTonal = MaterialTheme.colorScheme.onSecondaryContainer
-    Row(modifier.fillMaxWidth().height(height), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        SkipButton(onPrevious, stringResource(R.string.action_previous), Icons.Filled.SkipPrevious, tonal, onTonal, prevSource, Modifier.weight(prevWeight).testTag("player.previous"))
-        PlayPauseButton(playing, onToggle, Modifier.weight(playWeight).fillMaxHeight(), playSource)
-        SkipButton(onNext, stringResource(R.string.action_next), Icons.Filled.SkipNext, tonal, onTonal, nextSource, Modifier.weight(nextWeight).testTag("player.next"))
+    Row(modifier.fillMaxWidth().height(height), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+        SkipButton(onPrevious, stringResource(R.string.action_previous), Icons.Filled.SkipPrevious, tonal, onTonal, prevSource, prevPressed, Modifier.size(prevWidth, skip).testTag("player.previous"))
+        PlayPauseButton(playing, onToggle, Modifier.size(height), playSource, iconSize = height * 0.45f)
+        SkipButton(onNext, stringResource(R.string.action_next), Icons.Filled.SkipNext, tonal, onTonal, nextSource, nextPressed, Modifier.size(nextWidth, skip).testTag("player.next"))
     }
 }
 
 @Composable
-private fun RowScope.SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, modifier: Modifier) {
-    TransportButton(onClick, label, container, content, source, modifier.fillMaxHeight()) {
-        Icon(icon, null, Modifier.size(30.dp))
+private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, pressed: Boolean, modifier: Modifier) {
+    val reduced = LocalReducedMotion.current
+    // Round at rest, squishing to a rounded square while pressed.
+    val corner = remember { Animatable(0.5f) }
+    LaunchedEffect(pressed, reduced) {
+        val target = if (pressed && !reduced) 0.28f else 0.5f
+        if (reduced) corner.snapTo(target) else corner.animateTo(target, Motion.morph)
+    }
+    TransportButton(onClick, label, container, content, source, modifier, shapeFor = { RoundedCornerShape(size.height * corner.value.coerceIn(0f, 0.5f)) }) {
+        Icon(icon, null, Modifier.size(32.dp))
     }
 }
 
@@ -226,7 +255,7 @@ private fun RowScope.SkipButton(onClick: () -> Unit, label: String, icon: ImageV
  * Wavy progress with tap- and drag-to-seek (Metrolist/Navic): the wave's amplitude eases to flat
  * while paused or dragging, the thumb follows the finger, and after a release (or a tap) the bar
  * holds the new position until the core reports it (or [SEEK_HOLD_MS] passes) instead of snapping
- * back to the old one. Elapsed and remaining time sit underneath.
+ * back to the old one. Elapsed and total time sit underneath.
  *
  * [position] is read in the draw phase only; the rest of the bar changes once a second at most.
  *
@@ -335,7 +364,7 @@ private fun SeekTimes(positionMs: Long, durationMs: Long) {
     val color = MaterialTheme.colorScheme.onSurfaceVariant
     Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
         Text(formatClock(positionMs), style = style, color = color, modifier = Modifier.weight(1f))
-        Text("-" + formatClock((durationMs - positionMs).coerceAtLeast(0)), style = style, color = color)
+        Text(formatClock(durationMs.coerceAtLeast(0)), style = style, color = color)
     }
 }
 

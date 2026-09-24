@@ -158,6 +158,10 @@ class PlayerAccessibilityTest {
     fun theRatingIsOneAdjustableControlThatSaysHowManyStars() {
         start()
         expand()
+        // The rating lives in the About mode.
+        compose.onNodeWithTag("player.mode.about").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { exists("rating") }
+        compose.waitForIdle()
         val id = core.client.nowPlaying.value!!.track.id
         compose.onNodeWithTag("rating").performSemanticsAction(SemanticsActions.SetProgress) { it(3f) }
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.rating == 3u }
@@ -187,6 +191,26 @@ class PlayerAccessibilityTest {
         compose.onNodeWithTag("player.artwork").performCustomAction(compose, "Next track")
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id != before }
         assertNotEquals(before, core.client.nowPlaying.value!!.track.id)
+    }
+
+    @Test
+    fun theModePillsAreTabsWithASelectedState() {
+        start()
+        expand()
+        for (mode in listOf("lyrics", "queue", "about")) {
+            val pill = node("player.mode.$mode")
+            assertEquals(androidx.compose.ui.semantics.Role.Tab, pill.config[SemanticsProperties.Role])
+            assertEquals(false, pill.config[SemanticsProperties.Selected])
+        }
+        compose.onNodeWithTag("player.mode.queue").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals(true, node("player.mode.queue").config[SemanticsProperties.Selected])
+        assertEquals(false, node("player.mode.lyrics").config[SemanticsProperties.Selected])
+        // The artwork, now a thumbnail, offers the way back as a labelled click.
+        assertEquals("Show artwork", node("player.artwork").config[SemanticsActions.OnClick].label)
+        assertEquals("one live region: the page title", 1, liveRegions().size)
+        val behind = all().filter { A11yChecks.actionable(it) && !isInSheet(it) }
+        assertTrue("nothing actionable outside the sheet: ${behind.map { A11yChecks.describe(it) }}", behind.isEmpty())
     }
 
     @Suppress("unused")

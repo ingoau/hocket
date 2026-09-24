@@ -205,7 +205,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                         }
                     }
                 }
-                SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp), onSelectAll = {
+                SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), onSelectAll = {
                     scope.launch {
                         when (pager.currentPage) {
                             0 -> (client.query(Queries.albumCount(serverId)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Albums, it.toInt()) }
@@ -453,7 +453,7 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
                     LibraryList.Genres -> GenresTab(serverId, ::open, top)
                 }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
 }

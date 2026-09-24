@@ -76,12 +76,15 @@ class AppScreenshotTest {
             awaitTag("player.playPause")
             settle()
             shot(dir, "$prefix-4-player")
-            compose.onNodeWithTag("player.tab.1").performSemanticsAction(SemanticsActions.OnClick)
+            compose.onNodeWithTag("player.mode.queue").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-5-queue")
+            compose.onNodeWithTag("player.mode.about").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            shot(dir, "$prefix-7-about")
             // The lyrics page animates forever: step the clock rather than waiting for idle.
             compose.mainClock.autoAdvance = false
-            compose.onNodeWithTag("player.tab.2").performSemanticsAction(SemanticsActions.OnClick)
+            compose.onNodeWithTag("player.mode.lyrics").performSemanticsAction(SemanticsActions.OnClick)
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
             shot(dir, "$prefix-6-lyrics")
         }

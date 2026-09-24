@@ -61,6 +61,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -273,16 +277,28 @@ private fun ToastCollector(host: SnackbarHostState) {
  */
 val LocalPlayerVisible = compositionLocalOf { false }
 
+/**
+ * What floats over the bottom of the screens: the (transparent) navigation bar with the system
+ * navigation bar under it, or just the system inset beside a rail. Content runs under it (and
+ * under the mini player), over a gradient scrim, so screens pad their lists by
+ * [BottomContentInset] and place bottom overlays above [BottomOverlayInset].
+ */
+val LocalBottomBarInset = compositionLocalOf { 0.dp }
+
 /** The gap the mini player keeps above the navigation bar. */
-private val MiniPlayerGap = 8.dp
+private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
 
 /**
- * Bottom content inset for scrolling screens: while something is playing the mini player (taller
- * at large font sizes) floats over the last rows, so they scroll clear of it; otherwise only a
- * small margin, so nothing leaves an empty band at the bottom.
+ * Bottom content inset for scrolling screens: the navigation bar and, while something is playing,
+ * the mini player (taller at large font sizes) float over the last rows, so they scroll clear of
+ * both; otherwise only the bar and a small margin, so nothing leaves an empty band at the bottom.
  */
 val BottomContentInset: Dp
-    @Composable get() = if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
+    @Composable get() = LocalBottomBarInset.current + if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
+
+/** Where a screen's bottom overlay (a selection toolbar, a floating button) sits clear of the bar and the mini player. */
+val BottomOverlayInset: Dp
+    @Composable get() = LocalBottomBarInset.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
 /**
  * The phone navigation bar's height before it has been measured: Material's short navigation bar
@@ -357,7 +373,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
             val editLabel = stringResource(R.string.bottom_bar_edit)
             val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
-            CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected) {
+            val bottomInset = with(density) { bottomInsetPx.toDp() }
+            CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
             Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
                 if (wide) {
                     val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
@@ -377,8 +394,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         }
                     }
                 }
-                // Content ends above the navigation bar; only the mini player floats over it.
-                Box(Modifier.weight(1f).fillMaxSize().padding(bottom = with(density) { bottomInsetPx.toDp() })) {
+                // Content runs to the bottom of the screen: the transparent navigation bar and the
+                // mini player float over it, over the scrim below ([BottomContentInset]).
+                Box(Modifier.weight(1f).fillMaxSize()) {
                     val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }) }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
                         AppNavHost(nav, transitions, Modifier.fillMaxSize())
@@ -402,18 +420,29 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 onOpenArtist = navigator.openArtist,
             )
             }
+            // The scrim the bar and the mini player float on (Navic): the surface colour eased in
+            // from transparent, so content scrolling under them fades out instead of clashing.
+            if (!wide || playerVisible) {
+                val scrimHeight = bottomInset + (if (playerVisible) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 40.dp
+                val surface = MaterialTheme.colorScheme.surface
+                val scrim = remember(surface) { easedScrim(surface) }
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
+            }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
                 // sheet expands and the full player takes the screen (read in the placement phase, so
                 // dragging the sheet does not recompose the bar). A long press opens its editor (also
                 // a TalkBack action on every item).
                 ShortNavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    // Transparent over the scrim (Navic's detached style).
+                    containerColor = Color.Transparent,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .zIndex(20f)
                         .onSizeChanged { navBarMeasuredPx = it.height }
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                        // Its icons fade quickly as the player grows over them.
+                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
                         .longPressToEdit(openEditor)
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
@@ -460,6 +489,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
         }
     }
 }
+
+/**
+ * A vertical gradient from transparent (top) to [color] (bottom) with an eased curve (circular
+ * ease-in, measured from the bottom), so the scrim is nearly solid behind the bar and fades out
+ * softly above the mini player instead of showing a hard band.
+ */
+private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGradient(
+    *Array(stops) { i ->
+        val t = i / (stops - 1f)
+        val fromBottom = 1f - t
+        t to color.copy(alpha = color.alpha * kotlin.math.sqrt((1f - fromBottom * fromBottom).coerceAtLeast(0f)))
+    },
+)
 
 @Composable
 private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo, modifier: Modifier) {

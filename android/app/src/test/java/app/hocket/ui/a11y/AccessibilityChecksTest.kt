@@ -117,12 +117,15 @@ class AccessibilityChecksTest {
         compose.onNodeWithTag("miniPlayer").performClick()
         compose.waitUntil(5_000) { displayed("player.playPause") }
         check("now playing")
-        compose.onNodeWithTag("player.tab.1").performClick()
+        compose.onNodeWithTag("player.mode.queue").performClick()
         compose.waitForIdle()
         check("queue")
+        compose.onNodeWithTag("player.mode.about").performClick()
+        compose.waitForIdle()
+        check("about")
         // The lyrics page runs a frame loop while shown: drive the clock by hand from here.
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithTag("player.tab.2").performClick()
+        compose.onNodeWithTag("player.mode.lyrics").performClick()
         repeat(60) { compose.mainClock.advanceTimeByFrame() }
         A11yChecks.assertAccessible(compose, "lyrics")
     }
