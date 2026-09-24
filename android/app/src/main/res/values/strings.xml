@@ -148,8 +148,6 @@
     <string name="sort_descending">Descending</string>
     <string name="selected_count">%1$d selected</string>
     <string name="selection_mode">Selection mode</string>
-    <string name="row_select">Select %1$s</string>
-    <string name="row_selected">%1$s, selected</string>
     <string name="row_track_a11y">%1$s, %2$s, %3$s</string>
     <string name="row_state_playing">playing</string>
     <string name="row_state_loved">loved</string>
@@ -165,7 +163,6 @@
     <string name="row_artist_a11y">Artist %1$s, %2$d albums</string>
     <string name="row_playlist_a11y">Playlist %1$s, %2$d songs</string>
     <string name="row_genre_a11y">Genre %1$s, %2$d songs</string>
-    <string name="row_now_playing">Now playing</string>
     <string name="badge_downloaded">Downloaded</string>
     <string name="badge_cached">Cached</string>
     <string name="badge_explicit">Explicit</string>
@@ -215,7 +212,6 @@
     <string name="player_tab_lyrics">Lyrics</string>
     <string name="player_tab_recent">Recent</string>
     <string name="player_tab_history">History</string>
-    <string name="player_seek">Seek</string>
     <string name="player_seek_a11y">Playback position</string>
     <string name="player_seek_state">%1$s of %2$s</string>
     <string name="player_artwork_a11y">Artwork for %1$s</string>
@@ -272,7 +268,6 @@
     <string name="queue_continuing">Continuing from %1$s</string>
     <string name="queue_up_next">Up next</string>
     <string name="queue_autoplay_section">Autoplay</string>
-    <string name="queue_drag_handle">Drag to reorder</string>
     <string name="queue_removed">Removed from queue</string>
     <string name="queue_clear">Clear queue</string>
     <string name="queue_clear_insertions">Clear playing next</string>
@@ -282,7 +277,6 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queue_item_a11y">%1$s by %2$s, %3$s</string>
-    <string name="queue_swipe_remove">Swipe to remove</string>
     <string name="queue_unavailable">Couldn’t play here</string>
 
     <!-- Saved queues -->
@@ -437,7 +431,6 @@
     <string name="settings_eq">Equalizer</string>
     <string name="settings_eq_enabled">Equalizer on</string>
     <string name="settings_eq_preamp">EQ preamp</string>
-    <string name="settings_eq_band_a11y">%1$s: %2$+.1f dB</string>
     <string name="settings_eq_band_label">Equaliser band %1$s</string>
     <string name="settings_eq_reset">Flat</string>
     <string name="settings_db">%1$+.1f dB</string>

@@ -137,7 +137,7 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
         val minutes = sleepMinutes.int ?: 30
         SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
-        val minuteResources = androidx.compose.ui.platform.LocalContext.current.resources
+        val minuteResources = androidx.compose.ui.platform.LocalResources.current
         ChoiceRow(listOf(15, 30, 45, 60, 90).map { it to it.toString() }, isSelected = { minutes == it }, onSelect = { sleepMinutes.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp),
             describe = { m -> minuteResources.getQuantityString(R.plurals.a11y_minutes, m, m) })
         SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
@@ -192,7 +192,7 @@ fun LibrarySettingsScreen(nav: NavHostController) {
         val threshold = loveThreshold.int ?: 4
         SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope, tag = "ratings.loveThreshold")
         val offLabel = stringResource(R.string.settings_love_threshold_off)
-        val resources = androidx.compose.ui.platform.LocalContext.current.resources
+        val resources = androidx.compose.ui.platform.LocalResources.current
         ChoiceRow(listOf<Pair<Int?, String>>(null to offLabel) + (1..5).map { it to "$it★" }, isSelected = { n -> if (n == null) !bridgeOn else bridgeOn && threshold == n },
             onSelect = { n -> if (n == null) loveBridge.setBool(false) else { loveThreshold.setInt(n); loveBridge.setBool(true) } },
             describe = { n -> n?.let { resources.getQuantityString(R.plurals.a11y_stars, it, it) } }, modifier = Modifier.padding(horizontal = 16.dp))

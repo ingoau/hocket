@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -46,7 +45,7 @@ import kotlin.math.roundToInt
 @Composable
 fun RatingStars(rating: Int, onRate: (Int) -> Unit, modifier: Modifier = Modifier, starSize: Dp = 28.dp, tint: Color = MaterialTheme.colorScheme.primary) {
     val haptics = LocalHapticFeedback.current
-    val resources = LocalContext.current.resources
+    val resources = androidx.compose.ui.platform.LocalResources.current
     val label = stringResource(R.string.rating_stars)
     val state = Spoken.rating(resources, rating)
     val clear = stringResource(R.string.rating_clear)

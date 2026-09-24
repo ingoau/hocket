@@ -214,7 +214,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
                 IconToggleButton(checked = track.loved, onCheckedChange = { client.dispatch(Commands.loveTrack(track.id, it)) }, modifier = Modifier.testTag("player.love")) {
                     Icon(if (track.loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, stringResource(if (track.loved) R.string.player_loved else R.string.player_not_loved), tint = if (track.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
+                IconButton(onClick = { more = true }, modifier = Modifier.testTag("player.more")) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
             }
             RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 22.dp, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.height(8.dp))
@@ -244,7 +244,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
                     Icon(Icons.Filled.AutoAwesome, stringResource(if (queue.autoplay) R.string.player_autoplay_on else R.string.player_autoplay_off), tint = if (queue.autoplay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 val sleepActive = sleep != null
-                IconToggleButton(checked = sleepActive, onCheckedChange = { sleepSheet = true }) {
+                IconToggleButton(checked = sleepActive, onCheckedChange = { sleepSheet = true }, modifier = Modifier.testTag("player.sleep")) {
                     Icon(Icons.Filled.Bedtime, stringResource(R.string.player_sleep_timer), tint = if (sleepActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconToggleButton(checked = !owns, onCheckedChange = { handoff = true }, modifier = Modifier.testTag("player.connect")) {

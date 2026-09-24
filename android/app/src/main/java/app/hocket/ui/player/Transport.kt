@@ -45,7 +45,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -113,7 +112,7 @@ fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (L
     val fraction = if (dragging) dragFraction else if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val shownMs = if (dragging) (dragFraction * durationMs).toLong() else positionMs
     val label = stringResource(R.string.player_seek_a11y)
-    val resources = LocalContext.current.resources
+    val resources = androidx.compose.ui.platform.LocalResources.current
     // Whole seconds: the semantics (and anything announced from them) move once a second at most.
     val positionS = (shownMs / 1000).coerceAtLeast(0)
     val durationS = (durationMs / 1000).coerceAtLeast(0)

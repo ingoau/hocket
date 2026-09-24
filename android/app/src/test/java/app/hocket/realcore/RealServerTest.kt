@@ -137,4 +137,63 @@ class RealServerTest {
         assertTrue("gaps between lines are kept", lyrics.lines.filter { !it.background }.zipWithNext().any { (a, b) -> (a.endMs ?: 0u) < (b.startMs ?: 0u) })
         assertTrue(lyrics.lines.none { it.background && it.text.isBlank() })
     }
+
+    /**
+     * Tally through the app's streaming path against the real server: with the core-stream
+     * capability the player gets a `hocket-stream://` source (no server URL, no credentials), and
+     * [app.hocket.playback.HocketStreamDataSource] reads it through the core: the start of the file
+     * is audio, and a seek (a new open at an offset, bounded) returns the same bytes as the
+     * sequential read did.
+     */
+    @Test
+    fun tallyStreamsThroughTheCoreDataSource() = runBlocking {
+        val config = CoreConfig(
+            dataDir = File(dataDir, "data").apply { mkdirs() }.absolutePath,
+            cacheDir = File(dataDir, "cache").apply { mkdirs() }.absolutePath,
+            deviceId = "jvm-real-server-stream", deviceName = "JVM", platform = Platform.Android, appVersion = "0.1.0-test", audio = AudioMode.External, coordinatorListen = null,
+        )
+        val c = NativeCore.create(config, logLevel = "warn")
+        c.events.onEach { events += it }.launchIn(scope)
+        core = c
+        app.hocket.playback.CoreHost.start(c)
+        waitFor(20_000, "Started") { it as? Event.Started }
+        // Metered: no background prefetch competing with the reads below.
+        c.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, true, "test")))
+        c.dispatch(Commands.addServer(url, user, pass, null))
+        val info = waitFor(60_000, "a reachable server") { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.serverVersion != null } } }.data.servers.first()
+        waitFor(600_000, "the library sync to finish") { e -> (e as? Event.SyncProgress)?.takeIf { it.data.progress.finished } }
+
+        c.dispatch(Commands.playTracks(info.id, listOf(TALLY), 0, "Stream test"))
+        val backend = waitFor(60_000, "a Load for Tally") { e -> (e as? Event.Backend)?.takeIf { (it.data.command as? app.hocket.core.api.BackendCommand.Load)?.data?.source?.track?.id == TALLY } }
+        val load = (backend.data.command as app.hocket.core.api.BackendCommand.Load).data.source
+        assertTrue("a core stream: ${mask(load.url.take(20))}", load.url.startsWith("hocket-stream://"))
+        assertTrue("no server address or credentials in the player's url", !load.url.contains(url) && !load.url.contains("t=") && !load.url.contains(user))
+
+        val source = app.hocket.playback.HocketStreamDataSource { c }
+        val uri = android.net.Uri.parse(load.url)
+        val length = source.open(androidx.media3.datasource.DataSpec(uri))
+        val head = ByteArray(256 * 1024)
+        var got = 0
+        while (got < head.size) {
+            val n = source.read(head, got, head.size - got)
+            if (n == androidx.media3.common.C.RESULT_END_OF_INPUT) break
+            got += n
+        }
+        source.close()
+        assertTrue("read ${got} bytes of ${length}", got == head.size)
+        val magic = String(head, 0, 4, Charsets.ISO_8859_1)
+        assertTrue("audio expected, got ${head.take(8).map { it.toInt() and 0xff }}", magic == "fLaC" || magic.startsWith("ID3") || magic == "OggS" || String(head, 4, 4, Charsets.ISO_8859_1) == "ftyp" || (head[0].toInt() and 0xff) == 0xff)
+
+        val offset = 100_000L
+        assertEquals(1000L, source.open(androidx.media3.datasource.DataSpec.Builder().setUri(uri).setPosition(offset).setLength(1000).build()))
+        val part = ByteArray(1000)
+        var p = 0
+        while (p < part.size) {
+            val n = source.read(part, p, part.size - p)
+            if (n == androidx.media3.common.C.RESULT_END_OF_INPUT) break
+            p += n
+        }
+        source.close()
+        assertTrue("the ranged read matches the sequential one", part.contentEquals(head.copyOfRange(offset.toInt(), offset.toInt() + 1000)))
+    }
 }

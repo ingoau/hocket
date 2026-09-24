@@ -144,4 +144,77 @@ class AccessibilityChecksTest {
         }
         assertEquals(SettingsCategory.entries.size, visited)
     }
+
+    private fun open(settingsCategory: String, row: String) {
+        click("navBar.settings")
+        compose.onNodeWithTag("settings.category.$settingsCategory").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { displayed("setting.$row") || runCatching { compose.onNodeWithTag("setting.$row").performScrollTo() }.isSuccess }
+        compose.onNodeWithTag("setting.$row").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+    }
+
+    private fun click(tag: String) {
+        compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun downloadsFiltersAndStatsPassTheChecks() {
+        start()
+        open("downloads", "open.downloads")
+        check("downloads")
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("settings.category.library").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithTag("setting.open.filters").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("filters")
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("setting.open.stats").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("stats")
+    }
+
+    private fun expanded() {
+        if (!displayed("player.playPause")) compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
+        compose.waitUntil(5_000) { displayed("player.playPause") }
+    }
+
+    private fun back() {
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun theRowMenuAndThePlayerSheetsPassTheChecks() {
+        start()
+        expanded()
+        // The track's menu (ActionSheet), then the sleep timer and the Connect picker.
+        compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("track menu")
+        back()
+        expanded()
+        compose.onNodeWithTag("player.sleep").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("sleep timer")
+        back()
+        expanded()
+        compose.onNodeWithTag("player.connect").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("connect picker")
+    }
+
+    @Test
+    fun theSetupScreenPassesTheChecks() {
+        val core = TestCore(startWithServer = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { displayed("setup.url") }
+        check("server setup")
+    }
 }

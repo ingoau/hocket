@@ -56,13 +56,24 @@ fixture so serde/kotlinx drift fails a JVM test.
 `PlaybackService` (a Media3 `MediaSessionService`, `foregroundServiceType="mediaPlayback"`) owns
 the one core for the process through `CoreHost`:
 
-- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item
-  `ProgressiveMediaSource` (each item carries its own headers) plus the gapless follow-up as a
-  second playlist item; `SetNext` replaces everything after the current item; the transition is
+- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item media
+  source through `DefaultMediaSourceFactory` over `CoreStreamDataSourceFactory` (each item carries its
+  own headers) plus the gapless follow-up as a second playlist item; `SetNext` replaces everything after the current item; the transition is
   detected from `onMediaItemTransition(AUTO)` and the played item removed. `PreBuffer` prepares a
   second silent ExoPlayer at the requested position (`PreBufferReady` when READY); `DiscardPreBuffer`
   releases it. `gain_db` is applied as `10^(gain/20) * masterVolume` clamped to 1.0 — Media3 has no
   gain stage, so positive gain is an approximation (documented in `ExoBackend`).
+- Core streams: `CoreHost.start` sends `SetBackendCapabilities{core_stream}` ahead of `Start` on
+  every core start (the core does not persist it), so the native core hands ExoPlayer
+  `hocket-stream://<token>` sources instead of server URLs. `HocketStreamDataSource`
+  (`BaseDataSource`, network) reads them through the core's blocking UniFFI calls
+  (`streamOpen(url, offset, length)` / `streamRead(handle, ≤256 KiB)` / `streamClose`, on ExoPlayer's
+  loader threads): a seek is a new open at the position; the core fetches from the server, caches a
+  whole read and serves later plays and seeks from disk. An unknown/expired token is
+  `ERROR_CODE_IO_FILE_NOT_FOUND`, never retried (`CoreStreamLoadErrorPolicy`), so the backend reports
+  a fatal error and the core resolves a fresh token. The factory routes the `hocket-stream` scheme to
+  it and everything else (`file:`, a direct server URL for the fake core) to `DefaultDataSource`; there
+  is no `CacheDataSource` (the core caches). `NativeCore` implements the `CoreStreams` seam.
 - Reports back: `Ready`, `Playing`, `Paused`, `Buffering`, `Position` every 750 ms while playing and
   on every seek/transition, `Ended`, `TransitionedToNext`, `Error`, `PreBufferReady`,
   `AudioFocusLost` (transient when Media3 suppresses rather than pauses).
@@ -86,7 +97,9 @@ the one core for the process through `CoreHost`:
   it, dropped on an auth error, and removed before `RemoveServer` on sign-out. Shutdown flushes the
   core on a worker thread (`NativeCore.close` blocks for the flush, bounded).
 
-`CoreClient` folds events into `StateFlow`s per snapshot piece, extrapolates position (a 60 Hz
+`CoreClient.query` fails soft: a query the core cannot answer (shut down, freed, the dead core)
+returns `null` instead of throwing into a composition coroutine; every caller already treats a
+missing result as "nothing". `CoreClient` folds events into `StateFlow`s per snapshot piece, extrapolates position (a 60 Hz
 `WhileSubscribed` ticker that runs only while a screen collecting it is resumed), keeps keyed page
 caches for tracks/albums/artists/playlist tracks (invalidated on `LibraryChanged`) and holds the
 id-keyed selection with select-all as a predicate.
@@ -125,8 +138,11 @@ fixtures (ping 0.63.1, extensions, getArtists, getAlbumList2/search3 paged, play
 scan status, PNG cover art, WAV streams, lyrics, setRating/star/scrobble, 404 `/auth/login`). It
 covers AddServer → probe → sync → albums/tracks in the mirror → artwork cached → PlayContext →
 `Backend.Load` → Ready/Playing/Position/Ended reports advancing the queue → SetRating reaching the
-server → Undo (compare-and-swap) reverting it; credential replay on restart; and the wrong-password
-Auth error. The test runs at Robolectric SDK 32 because the UniFFI glue's `SystemCleaner` path on
+server → Undo (compare-and-swap) reverting it; credential replay on restart; the wrong-password
+Auth error; and a track played through `HocketStreamDataSource` (open, read, a seek as a new open at
+an offset, close) with the second play and the seek making no stream request to the server.
+`RealServerTest` (only with `HOCKET_TEST_URL/USER/PASS` in the environment) does login, sync, Tally's
+syllable lyrics and a streamed read with a ranged re-open against a real Navidrome. The test runs at Robolectric SDK 32 because the UniFFI glue's `SystemCleaner` path on
 33+ needs `jdk.internal.ref`, which the JDK does not export. It is skipped when the host `.so` is
 absent.
 
@@ -153,3 +169,38 @@ absent.
   blurred still otherwise or when battery saver / "animated background off" applies.
 - Touch targets are at least 48 dp; every interactive element has a content description; strings
   live in `res/values/strings.xml`.
+
+## Accessibility
+
+- TalkBack: list rows are ONE item ("Tally, twenty one pilots, 3:32, loved", state "playing") with
+  the row menu as custom actions (play next, add to queue, go to album/artist via
+  `LocalDetailNavigator`, download, rate, more); queue rows add remove / move up / move down, the
+  alternatives to the swipe and the drag handle. Icons inside rows carry no description of their
+  own. Every gesture has an action: the mini player's skip swipe (next/previous-track actions), the
+  sheet drag (expand / collapse / dismiss on `nowPlaying.sheet`, plus the collapse button and back),
+  the artwork swipe and long-press, reordering.
+- The mini player (collapsed) and the page title (expanded) are polite live regions whose text
+  changes once per track: a track change is announced once, position never is. Exactly one of the
+  two is in the tree; while the full player covers the screen the page and navigation behind it are
+  removed from the tree (`clearAndSetSemantics`).
+- Adjustable controls speak values, not percentages: the seek bar ("1 minute 32 seconds of 3 minutes
+  32 seconds", whole-second range, `setProgress` seeks), the rating ("3 of 5 stars", one node,
+  steps of one star), sliders (`LabelledSlider`: a 48 dp slot owns the semantics) and EQ bands.
+- Lyrics: one labelled container; lines are items with "current line" / "background vocal" states;
+  nothing is a live region.
+- Reduced motion: `LocalReducedMotion` (provided by `HocketTheme`) follows the animator duration
+  scale, which "Remove animations" sets to 0. Frame-driven motion honours it: the syllable sweep
+  becomes a static highlight of the lit line, no depth-of-field blur or line scaling, jump scrolling,
+  a still AGSL background, flat wavy progress lines. (Compose's own animations follow the scale
+  anyway.)
+- Contrast: `ArtworkColors.accessible` nudges every text/on-colour pair of an artwork scheme to WCAG
+  AA (4.5:1; 3:1 for the outline), moving a container when even white/black text cannot reach it;
+  the lyrics scrim is computed from the artwork texture's brightest pixel (`LyricsContrast`).
+- Large fonts and display size: the mini player grows with the font (`miniPlayerHeight`), the
+  player tabs scroll above 1.3x, transport and album header reflow on narrow screens, and option sets
+  use `ChoiceRow` (wraps; `ButtonGroup` with an empty overflow hid options).
+- Tests: `ui/a11y/A11yChecks` runs ATF's checks (labels, 48 dp touch area and 24 dp visible target,
+  redundant "button", duplicate bounds) over the Compose semantics tree of every window, plus layout
+  checks (clipped/squeezed controls, cut-off text, overlaps). ATF itself (`enableAccessibilityChecks`)
+  is not used: under Robolectric it only sees the View tree, never Compose's virtual nodes.
+  `LargeFontLayoutTest` runs at font scale 2.0 on a 320 dp wide screen.

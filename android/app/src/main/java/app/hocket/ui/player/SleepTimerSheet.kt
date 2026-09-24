@@ -47,7 +47,7 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
             Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             Spacer(Modifier.height(16.dp))
             val options = listOf(15, 30, 45, 60, 90).map { it to stringResource(R.string.sleep_minutes, it) }
-            val resources = androidx.compose.ui.platform.LocalContext.current.resources
+            val resources = androidx.compose.ui.platform.LocalResources.current
             app.hocket.ui.components.ChoiceRow(options, isSelected = { minutes == it && !endOfTrack }, onSelect = { minutes = it; endOfTrack = false },
                 describe = { m -> resources.getQuantityString(R.plurals.a11y_minutes, m, m) })
             Spacer(Modifier.height(16.dp))

@@ -2,7 +2,6 @@ package app.hocket.ui.a11y
 
 import android.content.res.Resources
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 import app.hocket.R
 
 /** Durations and positions the way a screen reader should say them: "1 minute 32 seconds". */
@@ -30,4 +29,4 @@ object Spoken {
 }
 
 @Composable
-fun spokenDuration(ms: Long): String = Spoken.duration(LocalContext.current.resources, ms)
+fun spokenDuration(ms: Long): String = Spoken.duration(androidx.compose.ui.platform.LocalResources.current, ms)

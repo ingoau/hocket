@@ -97,9 +97,13 @@ object A11yChecks {
         return false
     }
 
-    fun issues(rule: ComposeTestRule, minTouchDp: Float = 48f): List<Issue> {
-        val root = rule.onRoot().fetchSemanticsNode()
-        val density = rule.density.density
+    /** Every window's root (a modal sheet or dialog is a window of its own). */
+    fun roots(rule: ComposeTestRule, unmerged: Boolean = false): List<SemanticsNode> =
+        rule.onAllNodes(androidx.compose.ui.test.isRoot(), useUnmergedTree = unmerged).fetchSemanticsNodes()
+
+    fun issues(rule: ComposeTestRule, minTouchDp: Float = 48f): List<Issue> = roots(rule).flatMap { issues(it, rule.density.density, minTouchDp) }
+
+    private fun issues(root: SemanticsNode, density: Float, minTouchDp: Float): List<Issue> {
         val rootBounds = root.boundsInRoot
         val nodes = all(root).filter { actionable(it) && visible(it, rootBounds) }
         val out = mutableListOf<Issue>()
@@ -140,7 +144,12 @@ object A11yChecks {
      * bar: the bottom inset lets it scroll clear) is not an overlap; controls within one are.
      */
     fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar")): List<Issue> {
-        val root = rule.onRoot().fetchSemanticsNode()
+        val merged = roots(rule)
+        val unmergedRoots = roots(rule, unmerged = true)
+        return merged.indices.flatMap { i -> layoutIssues(merged[i], unmergedRoots.getOrNull(i) ?: merged[i], rule.density.density, overlays) }
+    }
+
+    private fun layoutIssues(root: SemanticsNode, unmergedRoot: SemanticsNode, density: Float, overlays: Set<String>): List<Issue> {
         val rootBounds = root.boundsInRoot
         val everything = all(root).filter { visible(it, rootBounds) }
         val out = mutableListOf<Issue>()
@@ -157,10 +166,9 @@ object A11yChecks {
         }
         // The unmerged tree: every control and text node on its own (a button's label, the stars
         // inside the rating item), including parts that are hidden from accessibility.
-        val unmergedAll = all(rule.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        val unmergedAll = all(unmergedRoot)
         // Squeezed controls: a row with more than fits hands the last children what is left, so a
         // fixed-size button quietly shrinks (to nothing, even) instead of overflowing.
-        val density = rule.density.density
         for (n in unmergedAll) {
             if (!(n.config.contains(SemanticsActions.OnClick) || n.config.contains(SemanticsProperties.ToggleableState))) continue
             val p = n.positionInRoot
