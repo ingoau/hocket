@@ -461,6 +461,7 @@ mod tests {
                     action_label: Some("Undo".into()),
                     action_command: Some(serde_json::to_string(&Command::Undo).unwrap()),
                     duration_ms: 5000,
+                    undo_entry_id: None,
                 }
             }),
         );

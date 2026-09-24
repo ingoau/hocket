@@ -125,6 +125,7 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.LineHeightStyle
 import app.hocket.ui.components.RatingStars
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.combinedClickable
 
 /**
  * The full player (the owner's mockup, made Material 3 Expressive). Top to bottom:
@@ -263,8 +264,28 @@ private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit) {
             Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Text(source, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        // Connect: highlighted while another device plays.
-        IconToggleButton(checked = !owns, onCheckedChange = { onConnect() }, modifier = Modifier.testTag("player.connect")) {
+        // Connect, highlighted while another device plays. Tap opens the picker; long-press pulls
+        // playback straight to this device.
+        val devices by client.devices.collectAsStateWithLifecycle()
+        val haptics = LocalHapticFeedback.current
+        val takeOverLabel = stringResource(R.string.player_take_over)
+        Box(
+            Modifier.size(48.dp).clip(CircleShape)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onConnect,
+                    onLongClickLabel = takeOverLabel,
+                    onLongClick = {
+                        val self = devices.firstOrNull { it.isSelf }
+                        if (!owns && self != null) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            client.dispatch(Commands.handoffTo(self.id))
+                        } else onConnect()
+                    },
+                )
+                .testTag("player.connect"),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(Icons.Filled.Cast, stringResource(R.string.player_connect), tint = if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconButton(onClick = onCollapse, modifier = Modifier.testTag("player.collapse")) {

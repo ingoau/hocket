@@ -1279,6 +1279,10 @@ pub struct UndoEntry {
     pub at: EpochMs,
     /// e.g. "undid 487 of 500, 13 changed elsewhere"
     pub note: Option<String>,
+    /// The action threw away the queue (played a new context, cleared it,
+    /// restored a saved queue), so undoing it is worth offering loudly.
+    #[serde(default)]
+    pub replaces_queue: bool,
 }
 
 #[typeshare]
@@ -1292,6 +1296,9 @@ pub struct Toast {
     /// Command to dispatch when the button is pressed, JSON-encoded [`Command`].
     pub action_command: Option<String>,
     pub duration_ms: Ms,
+    /// Set on "Undid …" / "Redid …" toasts: the [`UndoEntry`] they report on.
+    #[serde(default)]
+    pub undo_entry_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

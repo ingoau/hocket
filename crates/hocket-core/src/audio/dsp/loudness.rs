@@ -164,9 +164,7 @@ impl LoudnessMeter {
             .map(|(sum, w)| w * sum / n)
             .sum();
         self.sub_blocks.push(power);
-        for c in &mut self.current {
-            *c = 0.0;
-        }
+        self.current.fill(0.0);
         self.current_frames = 0;
     }
 

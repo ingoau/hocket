@@ -73,7 +73,11 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: android-actions/setup-android@v3
-      - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
+        with:
+          # The default also asks for the legacy `tools` package, which the
+          # SDK repository no longer serves.
+          packages: platform-tools
+      - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"
       - run: cargo install cargo-ndk typeshare-cli
       - run: scripts/gen-bindings.sh
       - run: scripts/build-android-core.sh release

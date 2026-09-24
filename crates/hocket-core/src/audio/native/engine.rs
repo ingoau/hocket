@@ -1460,14 +1460,35 @@ mod tests {
         rig.wait_for(Duration::from_secs(5), |r| {
             matches!(r, BackendReport::Ended { .. })
         });
-        // Discarded pre-buffers never report.
+        // Discarded pre-buffers never report. The load may finish before the
+        // discard is even sent, so only reports after it count: a seek
+        // reports its position synchronously, right after the engine has
+        // handled the discard.
+        rig.backend
+            .load(rig.wav("a.wav", 48_000, 48_000 * 2), None, 0, false)
+            .unwrap();
+        rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Paused { .. })
+        });
         let b = rig.wav("b.wav", 48_000, 48_000);
+        rig.take();
         rig.backend.pre_buffer(b, 0).unwrap();
         rig.backend.discard_pre_buffer().unwrap();
+        rig.backend.seek(1234).unwrap();
+        let is_barrier = |r: &BackendReport| {
+            matches!(
+                r,
+                BackendReport::Position {
+                    position_ms: 1234,
+                    ..
+                }
+            )
+        };
+        rig.wait_for(Duration::from_secs(5), is_barrier);
         thread::sleep(Duration::from_millis(300));
-        assert!(!rig
-            .reports
-            .lock()
+        let reports = rig.reports.lock();
+        let barrier = reports.iter().position(is_barrier).unwrap();
+        assert!(!reports[barrier..]
             .iter()
             .any(|r| matches!(r, BackendReport::PreBufferReady { key } if key == "b.wav")));
     }

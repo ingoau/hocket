@@ -47,6 +47,8 @@ export interface CoreState {
   lastError: { kind: string; message: string; detail?: string; at: number } | undefined;
   /** Undo entry ids already announced with a toast (the core only emits UndoChanged for a fresh mutation). */
   announcedUndo: string[];
+  /** Undo entry ids whose action replaced or cleared the queue: the only ones that get toasts. */
+  queueReplacingUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
 }
 
@@ -91,6 +93,7 @@ export const initialCoreState: CoreState = {
   lastError: undefined,
   exported: undefined,
   announcedUndo: [],
+  queueReplacingUndo: [],
 };
 
 
@@ -150,19 +153,25 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
     case "undoChanged": {
-      // design.md "Global undo": a fresh mutation gets one toast with the single
-      // Undo action. The core emits only UndoChanged for it (its own toasts are
-      // "Undid …/Redid …"), so announce the newest entry here, once per id.
+      // design.md "Global undo": a fresh mutation that throws the queue away gets
+      // one toast with the single Undo action; everything else stays quiet (the
+      // undo button and history still cover it). The core emits only UndoChanged
+      // for it (its own toasts are "Undid …/Redid …"), so announce the newest
+      // entry here, once per id.
       // Freshness is keyed on the top entry's id, never on the history length:
       // the core caps the history it sends (HISTORY_SHEET_LIMIT, byte budget),
       // so the length stops growing long before the user stops mutating.
       const top = e.data.state.history[0];
       const fresh = top && e.data.state.canUndo && !state.announcedUndo.includes(top.id) && top.id !== state.undo.history[0]?.id;
-      const toasts = fresh ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
+      const toasts = fresh && top.replacesQueue ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
       const announced = fresh ? [...state.announcedUndo, top.id].slice(-500) : state.announcedUndo;
-      return { ...state, undo: e.data.state, toasts, announcedUndo: announced };
+      const replacing = e.data.state.history.filter((h) => h.replacesQueue && !state.queueReplacingUndo.includes(h.id)).map((h) => h.id);
+      const queueReplacingUndo = replacing.length ? [...state.queueReplacingUndo, ...replacing].slice(-500) : state.queueReplacingUndo;
+      return { ...state, undo: e.data.state, toasts, announcedUndo: announced, queueReplacingUndo };
     }
     case "toast":
+      // "Undid …/Redid …" only for an entry that replaced the queue.
+      if (e.data.toast.undoEntryId && !state.queueReplacingUndo.includes(e.data.toast.undoEntryId)) return state;
       return { ...state, toasts: [...state.toasts.filter((t) => t.id !== e.data.toast.id), e.data.toast].slice(-4) };
     case "playerNotice":
       return { ...state, playerNotice: e.data.message || e.data.code ? { message: e.data.message ?? undefined, code: e.data.code ?? undefined, detail: e.data.detail ?? undefined } : undefined };

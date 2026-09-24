@@ -744,7 +744,7 @@ impl Actor {
         } else {
             ("Redo".to_string(), Command::Redo)
         };
-        self.toast(message, Some(action));
+        self.toast_for(message, Some(action), Some(entry_id.to_string()));
         self.emit(Event::UndoChanged {
             state: self.undo.state(),
         });

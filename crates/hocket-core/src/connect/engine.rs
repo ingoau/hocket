@@ -1101,7 +1101,7 @@ impl Engine {
                 self.lan_blocklist.clear();
                 self.lan_strikes.clear();
                 // Inbound members were admitted under the old key.
-                let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+                let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
                 for p in inbound {
                     self.out.push(Output::WireOut {
                         peer: p.clone(),
@@ -2362,6 +2362,11 @@ impl Engine {
                     self.out.push(Output::Prime { track_id });
                 }
             }
+            Msg::HandoffRequest { target, .. } => {
+                if self.held.is_some() {
+                    self.handoff_to(target);
+                }
+            }
             Msg::LeaseGranted { lease, ack_of } => {
                 if from_loopback && lease.owner.is_none() && self.held.is_some() {
                     // Our own room lapsed us (a long suspend); it holds nothing
@@ -2676,7 +2681,7 @@ impl Engine {
             self.last_ping_at = 0.0;
             self.send_ping();
             // Say goodbye to anyone we were serving: they'll re-elect.
-            let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+            let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
                 self.out.push(Output::WireOut {
                     peer: p.clone(),
@@ -3461,18 +3466,55 @@ impl Engine {
     }
 
     fn handoff_to(&mut self, device_id: DeviceId) {
-        let (Some(h), Some(stamp), Some(p)) =
-            (self.held.clone(), self.stamp.clone(), self.picker.clone())
-        else {
-            self.log(
-                "debug",
-                "handoff needs an open picker and transport ownership",
-            );
+        let me = self.cfg.device.id.clone();
+        let Some(h) = self.held.clone() else {
+            // Not ours to hand off: ask whoever plays to hand off to the
+            // pick (this device, to pull playback here, or a third one).
+            let now = self.now_session_ms();
+            let owner = self
+                .lease
+                .owner
+                .clone()
+                .filter(|_| self.lease.expires_at > now);
+            match owner {
+                Some(owner) if owner == device_id => {
+                    self.log("debug", "handoff target already plays");
+                }
+                Some(_) => {
+                    self.upstream_send(Msg::HandoffRequest {
+                        target: device_id,
+                        from: me,
+                    });
+                }
+                None => self.log("debug", "handoff needs a device that plays"),
+            }
             return;
         };
-        if !p.targets.iter().any(|(id, _)| id == &device_id)
-            && !self.devices.iter().any(|d| d.id == device_id)
-        {
+        if device_id == me {
+            // Already playing here.
+            return;
+        }
+        let Some(stamp) = self.stamp.clone() else {
+            self.log("debug", "handoff needs something playing");
+            return;
+        };
+        // The picker's prepared item, or (a request from another device,
+        // with no picker open here) whatever plays now.
+        let (key, track_id) = match self.picker.clone() {
+            Some(p) => (p.key, p.track_id),
+            None => match (stamp.key.clone(), stamp.track_id.clone()) {
+                (Some(k), Some(t)) => (k, t),
+                _ => {
+                    self.log("debug", "handoff needs something playing");
+                    return;
+                }
+            },
+        };
+        let picked = self
+            .picker
+            .as_ref()
+            .is_some_and(|p| p.targets.iter().any(|(id, _)| id == &device_id));
+        if !picked && !self.devices.iter().any(|d| d.id == device_id) {
             self.log("debug", "handoff target is not present");
             return;
         }
@@ -3483,8 +3525,8 @@ impl Engine {
         self.upstream_send(Msg::HandoffTakeover {
             from,
             target: device_id,
-            key: p.key,
-            track_id: p.track_id,
+            key,
+            track_id,
             position_ms,
             played_ms: stamp.played_ms + position_ms.saturating_sub(stamp.position.position_ms),
             started_at: stamp.started_at,
@@ -3497,11 +3539,12 @@ impl Engine {
         self.detached = false;
         self.held_remote_epoch = None;
         self.out.push(Output::ReleaseTransport);
-        self.picker = None;
-        self.out.push(Output::PickerChanged {
-            open: false,
-            targets: vec![],
-        });
+        if self.picker.take().is_some() {
+            self.out.push(Output::PickerChanged {
+                open: false,
+                targets: vec![],
+            });
+        }
         self.emit_lease();
     }
 
@@ -4515,6 +4558,80 @@ mod tests {
             .iter()
             .any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());
+    }
+
+    /// A device that does not play picks itself (or another device): it asks
+    /// the owner through the room, and the owner hands off without a picker.
+    #[test]
+    fn non_owner_pulls_playback_through_the_owner() {
+        let lease_a = TransportLease {
+            owner: Some("a".into()),
+            epoch: 1,
+            expires_at: 99_999.0,
+        };
+        // the puller
+        let (mut b, _) = engine("b");
+        attach(&mut b, None, vec![dev("a")]);
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: lease_a.clone(),
+            }),
+        });
+        assert!(!b.owns_transport());
+        let outs = b.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
+        assert!(wire_outs(&outs).iter().any(
+            |(_, m)| matches!(m, Msg::HandoffRequest { target, from } if target == "b" && from == "b")
+        ));
+        // naming the device that already plays asks nobody
+        let outs = b.handle(Input::HandoffTo {
+            device_id: "a".into(),
+        });
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffRequest { .. })));
+
+        // the owner, with no picker open
+        let (mut a, _) = engine("a");
+        attach(&mut a, None, vec![dev("b")]);
+        a.handle(Input::ClaimTransport { takeover: false });
+        a.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: lease_a,
+            }),
+        });
+        a.handle(Input::LocalStamp {
+            key: Some("k".into()),
+            track_id: Some("t".into()),
+            position: PositionStamp {
+                position_ms: 1000,
+                taken_at: 10_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 1000,
+            started_at: 5.0,
+            scrobbled: false,
+        });
+        let outs = a.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::HandoffRequest {
+                target: "b".into(),
+                from: "b".into(),
+            }),
+        });
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::HandoffTakeover { target, key, track_id, epoch: 1, .. }
+                if target == "b" && key == "k" && track_id == "t"
+        )));
+        assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(!a.owns_transport());
     }
 
     #[test]

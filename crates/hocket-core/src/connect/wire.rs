@@ -720,6 +720,14 @@ pub enum Msg {
         epoch: u32,
         lease: Option<TransportLease>,
     },
+    /// → room, relayed to the transport owner: a non-owner picked `target`
+    /// (itself, to pull playback here, or a third device). The owner hands
+    /// off as if it had picked `target` from its own picker. Peers that do
+    /// not know it ignore it.
+    HandoffRequest {
+        target: DeviceId,
+        from: DeviceId,
+    },
     /// → room. Source finished releasing after a takeover.
     HandoffRelease {
         epoch: u32,
@@ -800,6 +808,7 @@ impl Msg {
         "handoffPrepare",
         "handoffReady",
         "handoffTakeover",
+        "handoffRequest",
         "handoffRelease",
         "scrobbleSubmitted",
         "scrobbleDedupeQuery",
@@ -845,6 +854,7 @@ impl Msg {
             Msg::HandoffPrepare { .. } => "handoffPrepare",
             Msg::HandoffReady { .. } => "handoffReady",
             Msg::HandoffTakeover { .. } => "handoffTakeover",
+            Msg::HandoffRequest { .. } => "handoffRequest",
             Msg::HandoffRelease { .. } => "handoffRelease",
             Msg::ScrobbleSubmitted { .. } => "scrobbleSubmitted",
             Msg::ScrobbleDedupeQuery { .. } => "scrobbleDedupeQuery",
@@ -1011,6 +1021,10 @@ mod tests {
             Msg::PrimeRequest {
                 track_id: "t".into(),
                 from: "a".into(),
+            },
+            Msg::HandoffRequest {
+                target: "b".into(),
+                from: "b".into(),
             },
             Msg::ScrobbleDedupeAnswer {
                 query_id: "q".into(),
