@@ -553,10 +553,14 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
         takeover: false,
     });
     w.run_for(2_000.0);
+    for d in &w.devices { eprintln!("DBG after play {} cur={:?} rev={} pending={} unsynced={} {:?}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count(), d.engine.has_unsynced(), d.engine); }
     w.perform(Action::Next { device: 1 });
     w.run_for(2_000.0);
+    for d in &w.devices { eprintln!("DBG after next1 {} cur={:?} rev={} pending={} {:?}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count(), d.engine); }
     w.perform(Action::Next { device: 2 });
     w.run_for(2_000.0);
+    for d in &w.devices { eprintln!("DBG after next2 {} cur={:?} rev={} pending={}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count()); for l in &d.log { eprintln!("  {l}"); } }
+    eprintln!("DBG tracks {t:?}");
     for d in &w.devices {
         assert_eq!(
             d.engine.document().current.as_ref().unwrap().track_id,
