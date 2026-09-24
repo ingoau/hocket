@@ -480,6 +480,7 @@ const STRINGS = {
   "col.track": "#",
   "col.love": "Love",
   "col.offline": "Offline",
+  "col.art": "Artwork",
 
   // Sort
   "sort.default": "Default",

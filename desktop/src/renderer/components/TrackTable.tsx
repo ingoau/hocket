@@ -1,7 +1,7 @@
 // Virtualised, keyboard-navigable, multi-select track table. Selection is
 // keyed by id; Ctrl+A selects the predicate ("all matching") using `total`.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget, SortOrder, Track } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -19,6 +19,8 @@ export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duratio
 interface Column {
   id: ColumnId;
   label: string;
+  /** Header text for screen readers when the visible header is empty (icon columns). */
+  sr?: string;
   width: string;
   sort?: SortOrder;
   num?: boolean;
@@ -26,7 +28,7 @@ interface Column {
 
 const COLUMNS: Record<ColumnId, Column> = {
   index: { id: "index", label: t("col.track"), width: "40px", num: true },
-  art: { id: "art", label: "", width: "34px" },
+  art: { id: "art", label: "", sr: t("col.art"), width: "34px" },
   title: { id: "title", label: t("col.title"), width: "minmax(140px, 3fr)", sort: "title" },
   artist: { id: "artist", label: t("col.artist"), width: "minmax(100px, 2fr)", sort: "artist" },
   album: { id: "album", label: t("col.album"), width: "minmax(100px, 2fr)", sort: "album" },
@@ -34,12 +36,36 @@ const COLUMNS: Record<ColumnId, Column> = {
   year: { id: "year", label: t("col.year"), width: "52px", sort: "year", num: true },
   genre: { id: "genre", label: t("col.genre"), width: "minmax(70px, 1fr)" },
   rating: { id: "rating", label: t("col.rating"), width: "92px", sort: "rating" },
-  love: { id: "love", label: "", width: "30px" },
+  love: { id: "love", label: "", sr: t("col.love"), width: "30px" },
   plays: { id: "plays", label: t("col.plays"), width: "52px", sort: "playCount", num: true },
   added: { id: "added", label: t("col.added"), width: "96px", sort: "dateAdded" },
   bpm: { id: "bpm", label: t("col.bpm"), width: "52px", sort: "bpm", num: true },
-  offline: { id: "offline", label: "", width: "22px" },
+  offline: { id: "offline", label: "", sr: t("col.offline"), width: "22px" },
 };
+
+/** Columns in the order they give way when the table is narrow (last goes first); the title never does. */
+const COLUMN_PRIORITY: ColumnId[] = ["title", "duration", "artist", "index", "art", "album", "rating", "love", "offline", "year", "plays", "genre", "added", "bpm"];
+
+function minWidth(c: ColumnId): number {
+  return Number(/(\d+)px/.exec(COLUMNS[c].width)?.[1] ?? 40);
+}
+
+/**
+ * The columns that fit `width` px (row padding and a scrollbar included):
+ * the lowest-priority columns are dropped until the minimum widths fit, so
+ * the table never scrolls sideways at narrow windows or 200% zoom.
+ */
+export function fitColumns(columns: readonly ColumnId[], width: number): ColumnId[] {
+  if (!width) return [...columns];
+  const kept = new Set(columns);
+  const need = () => [...kept].reduce((sum, c) => sum + minWidth(c) + 12, 24 + 12);
+  const dropOrder = [...columns].sort((a, b) => COLUMN_PRIORITY.indexOf(b) - COLUMN_PRIORITY.indexOf(a));
+  for (const c of dropOrder) {
+    if (need() <= width || kept.size <= 1) break;
+    if (c !== "title") kept.delete(c);
+  }
+  return columns.filter((c) => kept.has(c));
+}
 
 export interface TrackTableProps {
   /** Loaded tracks (may be a window of the total when paging). */
@@ -64,11 +90,26 @@ export interface TrackTableProps {
   emptyMessage?: string;
   playingTrackId?: string;
   testId?: string;
+  /** Accessible name of the grid (defaults to "Tracks"). */
+  label?: string;
 }
 
 export function TrackTable(props: TrackTableProps) {
-  const { tracks, total, columns, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId } = props;
+  const { tracks, total, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId } = props;
   const parentRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = tableRef.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const columns = useMemo(() => fitColumns(props.columns, width), [props.columns, width]);
+  /** Row to move DOM focus to once it is rendered (keyboard navigation). */
+  const pendingFocus = useRef<number | undefined>(undefined);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -76,7 +117,15 @@ export function TrackTable(props: TrackTableProps) {
   const typeBuf = useRef({ text: "", at: 0 });
   const dragFrom = useRef<number | undefined>(undefined);
 
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 12 });
+  // The focused row is always rendered so the grid keeps its one Tab stop while scrolled away.
+  const focusRef = useRef(focusIdx);
+  focusRef.current = focusIdx;
+  const rangeExtractor = useCallback((range: Range) => {
+    const base = defaultRangeExtractor(range);
+    const f = focusRef.current;
+    return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
+  }, []);
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 12, rangeExtractor });
   const items = rowVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!onNeedRange || !items.length) return;
@@ -95,6 +144,19 @@ export function TrackTable(props: TrackTableProps) {
     const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { ids: [...sel.ids] } };
     bridge().dispatch({ type: "setSelection", data: { target } });
   }, [setSelection, scope]);
+
+  const moveFocus = (i: number) => {
+    setFocusIdx(i);
+    pendingFocus.current = i;
+  };
+  useEffect(() => {
+    const i = pendingFocus.current;
+    if (i === undefined) return;
+    const el = parentRef.current?.querySelector<HTMLElement>(`[data-index="${i}"]`);
+    if (!el) return;
+    pendingFocus.current = undefined;
+    el.focus({ preventScroll: true });
+  });
 
   const click = (e: React.MouseEvent, i: number) => {
     const id = idAt(i);
@@ -142,7 +204,7 @@ export function TrackTable(props: TrackTableProps) {
     if (next !== undefined) {
       e.preventDefault();
       e.stopPropagation();
-      setFocusIdx(next);
+      moveFocus(next);
       rowVirtualizer.scrollToIndex(next, { align: "auto" });
       const id = idAt(next);
       if (id) publish(e.shiftKey ? selectRange(selection, id, loadedIds, true) : selectOnly(id));
@@ -180,7 +242,7 @@ export function TrackTable(props: TrackTableProps) {
       const idx = typeAhead(buf, labels, buf.length === 1 ? focusIdx : focusIdx - 1);
       if (idx !== undefined) {
         e.stopPropagation();
-        setFocusIdx(idx);
+        moveFocus(idx);
         rowVirtualizer.scrollToIndex(idx, { align: "auto" });
         const id = idAt(idx);
         if (id) publish(selectOnly(id));
@@ -189,23 +251,31 @@ export function TrackTable(props: TrackTableProps) {
   };
 
   const count = selectionCount(selection);
+  const label = props.label ?? t("a11y.tracksTable");
   return (
-    <div className="table" data-testid={props.testId ?? "track-table"}>
-      <div className="table-head" style={{ gridTemplateColumns: template }} role="row">
-        {columns.map((c) => {
-          const col = COLUMNS[c];
-          const sortable = !!col.sort && !!onSort;
-          const sorted = sortable && sort === col.sort;
-          return (
-            <div key={c} className={`th ${col.num ? "num" : ""} ${sortable ? "sortable" : ""} ${sorted ? "sorted" : ""}`} role="columnheader" aria-sort={sorted ? (descending ? "descending" : "ascending") : undefined} onClick={sortable ? () => onSort?.(col.sort as SortOrder, sorted ? !descending : false) : undefined}>
-              {col.label}
-              {sorted ? <Icon name={descending ? "chevronDown" : "chevronUp"} size={12} /> : null}
-            </div>
-          );
-        })}
+    <div ref={tableRef} className="table" role="grid" aria-label={count ? `${label}, ${t("selection.count", { count })}` : label} aria-rowcount={total + 1} aria-colcount={columns.length} aria-multiselectable="true" data-testid={props.testId ?? "track-table"}>
+      <div role="rowgroup" style={{ display: "contents" }}>
+        <div className="table-head" style={{ gridTemplateColumns: template }} role="row" aria-rowindex={1}>
+          {columns.map((c) => {
+            const col = COLUMNS[c];
+            const sortable = !!col.sort && !!onSort;
+            const sorted = sortable && sort === col.sort;
+            const text = col.label || (col.sr ? <span className="sr-only">{col.sr}</span> : null);
+            return (
+              <div key={c} className={`th ${col.num ? "num" : ""} ${sortable ? "sortable" : ""} ${sorted ? "sorted" : ""}`} role="columnheader" aria-sort={sorted ? (descending ? "descending" : "ascending") : undefined}>
+                {sortable ? (
+                  <button type="button" className="th-btn" onClick={() => onSort?.(col.sort as SortOrder, sorted ? !descending : false)}>
+                    {text}
+                    {sorted ? <Icon name={descending ? "chevronDown" : "chevronUp"} size={12} /> : null}
+                  </button>
+                ) : text}
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <div ref={parentRef} className="table-body" role="grid" aria-multiselectable="true" aria-rowcount={total} tabIndex={0} onKeyDown={onKey} aria-label={count ? t("selection.count", { count }) : undefined}>
-        {total === 0 ? <div className="empty">{props.emptyMessage ?? t("songs.empty")}</div> : null}
+      <div ref={parentRef} className="table-body" role="rowgroup" onKeyDown={onKey}>
+        {total === 0 ? <div className="empty" role="row"><div role="gridcell">{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
           {items.map((vi) => {
             const tr = tracks[vi.index];
@@ -218,8 +288,12 @@ export function TrackTable(props: TrackTableProps) {
                 className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""}`}
                 role="row"
                 aria-selected={selected}
-                aria-rowindex={vi.index + 1}
+                aria-rowindex={vi.index + 2}
+                aria-current={playing ? "true" : undefined}
+                tabIndex={focused ? 0 : -1}
+                data-index={vi.index}
                 style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size }}
+                onFocus={(e) => { if (e.target === e.currentTarget && vi.index !== focusIdx) setFocusIdx(vi.index); }}
                 onClick={(e) => click(e, vi.index)}
                 onDoubleClick={() => tr && onPlay(vi.index, tr)}
                 onContextMenu={(e) => onContext(e, vi.index)}
@@ -245,36 +319,38 @@ export function TrackTable(props: TrackTableProps) {
 function Cell({ col, track, index, playing, serverId }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string }) {
   const navigate = useApp((s) => s.navigate);
   const cls = COLUMNS[col].num ? "td num" : "td";
-  if (!track) return <div className={cls}>{col === "title" ? <span className="faint">…</span> : ""}</div>;
+  // Controls inside rows are not Tab stops: the row is (roving), and its
+  // actions are on the keyboard (Enter plays, 0–5 rate, Shift+F10 menu).
+  if (!track) return <div className={cls} role="gridcell">{col === "title" ? <span className="faint">…</span> : ""}</div>;
   switch (col) {
     case "index":
-      return <div className={cls}>{playing ? <Icon name="play" size={12} style={{ fill: "currentColor", color: "var(--accent)" }} /> : (track.trackNumber ?? index + 1)}</div>;
+      return <div className={cls} role="gridcell">{playing ? <><Icon name="play" size={12} style={{ fill: "currentColor", color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : (track.trackNumber ?? index + 1)}</div>;
     case "art":
-      return <div className="td"><Artwork id={track.coverArt} size={64} className="art" /></div>;
+      return <div className="td" role="gridcell"><Artwork id={track.coverArt} size={64} className="art" /></div>;
     case "title":
-      return <div className={`${cls} title`} title={track.title}>{track.title}{track.explicit ? <span className="badge" style={{ marginLeft: 6 }}>E</span> : null}</div>;
+      return <div className={`${cls} title`} role="gridcell" title={track.title}>{track.title}{track.explicit ? <span className="badge" style={{ marginLeft: 6 }}><span aria-hidden="true">E</span><span className="sr-only">{t("a11y.explicit")}</span></span> : null}</div>;
     case "artist":
-      return <div className={`${cls} sub`}><a href="#" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.artistId) navigate({ view: "artist", id: track.artistId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.artist ?? t("misc.unknownArtist")}</a></div>;
+      return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.artistId) navigate({ view: "artist", id: track.artistId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.artist ?? t("misc.unknownArtist")}</a></div>;
     case "album":
-      return <div className={`${cls} sub`}><a href="#" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.album ?? t("misc.unknownAlbum")}</a></div>;
+      return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.album ?? t("misc.unknownAlbum")}</a></div>;
     case "duration":
-      return <div className={cls}>{fmtTime(track.durationMs)}</div>;
+      return <div className={cls} role="gridcell">{fmtTime(track.durationMs)}</div>;
     case "year":
-      return <div className={cls}>{track.year ?? ""}</div>;
+      return <div className={cls} role="gridcell">{track.year ?? ""}</div>;
     case "genre":
-      return <div className={`${cls} sub`}>{track.genre ?? ""}</div>;
+      return <div className={`${cls} sub`} role="gridcell">{track.genre ?? ""}</div>;
     case "rating":
-      return <div className="td"><Stars value={track.rating} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div>;
+      return <div className="td" role="gridcell"><Stars value={track.rating} tabbable={false} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div>;
     case "love":
-      return <div className="td"><Heart on={track.loved} size={13} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /></div>;
+      return <div className="td" role="gridcell"><Heart on={track.loved} size={13} tabbable={false} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /></div>;
     case "plays":
-      return <div className={cls}>{track.playCount || ""}</div>;
+      return <div className={cls} role="gridcell">{track.playCount || ""}</div>;
     case "added":
-      return <div className={`${cls} sub`}>{fmtDate(track.created)}</div>;
+      return <div className={`${cls} sub`} role="gridcell">{fmtDate(track.created)}</div>;
     case "bpm":
-      return <div className={cls}>{track.sonic?.bpm ? Math.round(track.sonic.bpm) : ""}</div>;
+      return <div className={cls} role="gridcell">{track.sonic?.bpm ? Math.round(track.sonic.bpm) : ""}</div>;
     case "offline":
-      return <div className="td">{track.offline === "downloaded" ? <Icon name="download" size={12} className="offline" title={t("col.offline")} /> : null}</div>;
+      return <div className="td" role="gridcell">{track.offline === "downloaded" ? <Icon name="download" size={12} className="offline" title={t("col.offline")} /> : null}</div>;
   }
   void serverId;
   return null;
