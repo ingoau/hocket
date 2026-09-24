@@ -9,6 +9,7 @@ import { usePosition } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
+import { seekKeyTarget, seekValueText, volumeValueText } from "../lib/a11y";
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
@@ -62,7 +63,7 @@ export function PlayerBar() {
         {track ? (
           <div className="row" style={{ gap: 2, flex: "0 0 auto" }}>
             <Heart on={track.loved} onToggle={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} />
-            <Stars value={track.rating} size={12} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} />
+            <Stars value={track.rating} size={12} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} />
           </div>
         ) : null}
       </div>
@@ -88,7 +89,7 @@ export function PlayerBar() {
         <button type="button" className={`btn icon ${panels.rightOpen && !panels.lyricsCollapsed ? "on" : ""}`} aria-pressed={panels.rightOpen && !panels.lyricsCollapsed} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} data-testid="toggle-lyrics"><Icon name="lyrics" size={15} /></button>
         <button type="button" className={`btn icon ${fullscreen ? "on" : ""}`} aria-label={t("player.fullscreen")} title={`${t("player.fullscreen")} (F)`} onClick={() => setFullscreen(!fullscreen)} data-testid="toggle-fullscreen"><Icon name="fullscreen" size={15} /></button>
         <button type="button" className="btn icon" aria-label={t("player.miniPlayer")} title={`${t("player.miniPlayer")} (M)`} onClick={() => bridge().window.openMiniPlayer()}><Icon name="mini" size={15} /></button>
-        <button type="button" className={`btn icon ${panels.rightOpen ? "" : ""}`} aria-label={panels.rightOpen ? t("misc.close") : t("misc.more")} title={panels.rightOpen ? "Hide side panel" : "Show side panel"} onClick={() => setPanels({ rightOpen: !panels.rightOpen })}><Icon name={panels.rightOpen ? "chevronRight" : "chevronLeft"} size={15} /></button>
+        <button type="button" className="btn icon" aria-label={panels.rightOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} aria-expanded={panels.rightOpen} title={panels.rightOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} onClick={() => setPanels({ rightOpen: !panels.rightOpen })} data-testid="toggle-side-panel"><Icon name={panels.rightOpen ? "chevronRight" : "chevronLeft"} size={15} /></button>
       </div>
     </div>
   );
@@ -128,11 +129,23 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   }, [drag !== undefined, commit]);
   const shown = drag !== undefined ? drag * dur : pos;
   const pct = dur ? (shown / dur) * 100 : 0;
+  // Whole seconds only, so a focused slider is not re-announced every frame.
+  const seconds = Math.floor(shown / 1000);
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    const to = seekKeyTarget(e.key, shown, dur);
+    if (to === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();
+    bridge().dispatch({ type: "seekTo", data: { position_ms: Math.round(to) } });
+  };
   return (
     <div className={`seek ${compact ? "compact" : ""}`} data-testid="seek">
-      <span data-testid="seek-position">{fmtTime(shown)}</span>
-      <div ref={bar} className={`bar ${drag !== undefined ? "dragging" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={dur} aria-valuenow={Math.round(shown)} tabIndex={-1}
-        onMouseDown={(e) => { if (!dur) return; e.preventDefault(); setDrag(frac(e.clientX)); }}
+      <span data-testid="seek-position" aria-hidden="true">{fmtTime(shown)}</span>
+      <div ref={bar} className={`bar ${drag !== undefined ? "dragging" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
+        onKeyDown={onKey}
+        data-testid="seek-slider"
+        onMouseDown={(e) => { if (!dur) return; e.preventDefault(); (e.currentTarget as HTMLElement).focus({ preventScroll: true }); setDrag(frac(e.clientX)); }}
         onMouseMove={(e) => setHover(frac(e.clientX))}
         onMouseLeave={() => setHover(undefined)}>
         <div className="track">
@@ -141,7 +154,7 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
         </div>
         {hover !== undefined && dur ? <div className="hover-time" style={{ left: `${hover * 100}%` }}>{fmtTime(hover * dur)}</div> : null}
       </div>
-      <span>{fmtTime(dur)}</span>
+      <span aria-hidden="true">{fmtTime(dur)}</span>
     </div>
   );
 }
@@ -153,10 +166,19 @@ function Volume() {
   const toggle = () => {
     if (muted !== undefined) { set(muted); setMuted(undefined); } else { setMuted(volume); set(0); }
   };
+  // Arrows move 5 %, Page keys 20 %; the native 1 % step stays for the pointer.
+  const onKey = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : e.key === "PageUp" ? 0.2 : e.key === "PageDown" ? -0.2 : 0;
+    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMuted(undefined);
+    set(Math.round(Math.max(0, Math.min(1, volume + step)) * 100) / 100);
+  };
   return (
     <div className="volume">
-      <button type="button" className="btn icon sm" aria-label={t("player.mute")} onClick={toggle}><Icon name={volume === 0 ? "mute" : "volume"} size={14} /></button>
-      <input type="range" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} />
+      <button type="button" className="btn icon sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="mute"><Icon name={volume === 0 ? "mute" : "volume"} size={14} /></button>
+      <input type="range" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
     </div>
   );
 }

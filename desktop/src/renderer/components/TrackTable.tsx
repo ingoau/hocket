@@ -58,7 +58,8 @@ function minWidth(c: ColumnId): number {
 export function fitColumns(columns: readonly ColumnId[], width: number): ColumnId[] {
   if (!width) return [...columns];
   const kept = new Set(columns);
-  const need = () => [...kept].reduce((sum, c) => sum + minWidth(c) + 12, 24 + 12);
+  // Grid track minimums include the cells' padding; 24 px row padding, 10 px scrollbar.
+  const need = () => [...kept].reduce((sum, c) => sum + minWidth(c), 24 + 10);
   const dropOrder = [...columns].sort((a, b) => COLUMN_PRIORITY.indexOf(b) - COLUMN_PRIORITY.indexOf(a));
   for (const c of dropOrder) {
     if (need() <= width || kept.size <= 1) break;

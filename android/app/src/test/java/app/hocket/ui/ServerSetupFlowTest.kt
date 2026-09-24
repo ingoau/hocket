@@ -6,9 +6,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.nav.AppRoot
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,6 +69,44 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.error") == 1 }
         compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
+    }
+
+    private fun textOf(tag: String): String =
+        compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.EditableText)?.text ?: ""
+
+    @Test
+    fun thePasswordNeverGoesIntoTheSavedInstanceState() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        val restore = androidx.compose.ui.test.junit4.StateRestorationTester(compose)
+        restore.setContent {
+            app.hocket.ui.theme.HocketTheme(client = core.client) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalCoreClient provides core.client) {
+                    app.hocket.ui.screens.setup.ServerSetupScreen(existing = null, needsRelogin = false)
+                }
+            }
+        }
+        compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
+        compose.onNodeWithTag("setup.username").performTextInput("ada")
+        compose.onNodeWithTag("setup.password").performTextInput("secret")
+        assertEquals(6, textOf("setup.password").length)
+        // Activity recreation / process death: the Bundle keeps the address and user, never the password.
+        restore.emulateSavedInstanceStateRestore()
+        assertEquals("https://music.example.net", textOf("setup.url"))
+        assertEquals("ada", textOf("setup.username"))
+        assertEquals("", textOf("setup.password"))
+    }
+
+    @Test
+    fun onlyAPlainHttpAddressShowsTheCleartextWarning() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+        compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
+        assertEquals(0, compose.onAllNodesWithTagCount("setup.cleartextWarning"))
+        compose.onNodeWithTag("setup.url").performTextClearance()
+        compose.onNodeWithTag("setup.url").performTextInput("http://192.168.1.20:4533")
+        compose.onNodeWithTag("setup.cleartextWarning").performScrollTo().assertIsDisplayed()
     }
 }
 

@@ -34,13 +34,11 @@ import kotlinx.coroutines.launch
 class NativeCore private constructor(private val core: HocketCore) : CoreHandle {
     override val kind: CoreKind = CoreKind.Native
 
-    private val inbox = Channel<Event>(Channel.UNLIMITED)
-    private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 256)
-    override val events: SharedFlow<Event> = _events.asSharedFlow()
     private val pumpScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val pump = EventPump(pumpScope)
+    override val events: SharedFlow<Event> = pump.events
 
     init {
-        pumpScope.launch { for (event in inbox) _events.emit(event) }
         core.setListener(object : EventListener {
             override fun onEvent(eventJson: String) {
                 // Anything escaping here surfaces in Rust as a callback failure (the crate contains
@@ -55,7 +53,7 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
                     return
                 }
                 try {
-                    inbox.trySend(event)
+                    pump.offer(event)
                 } catch (t: Throwable) {
                     Log.w(TAG, "Dropping event ${event::class.simpleName}: ${t.javaClass.simpleName}")
                 }
@@ -84,7 +82,7 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
         } catch (e: Exception) {
             Log.e(TAG, "core shutdown failed", e)
         }
-        inbox.close()
+        pump.close()
         pumpScope.cancel()
         core.close()
     }
@@ -124,5 +122,28 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
             val configJson = HocketJson.json.encodeToString(CoreConfig.serializer(), config)
             return NativeCore(HocketCore(configJson))
         }
+    }
+}
+
+/**
+ * The hand-off from the core's actor thread to [events]: [offer] never blocks and never drops (an
+ * unbounded channel), and one coroutine forwards in order with a suspending `emit`, so a slow
+ * subscriber holds up this pump rather than the core, and nothing (`Started`, `ServersChanged`,
+ * `Backend`) is lost to back-pressure. Like any [SharedFlow] it replays nothing to late subscribers.
+ */
+internal class EventPump(scope: CoroutineScope) {
+    private val inbox = Channel<Event>(Channel.UNLIMITED)
+    private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 256)
+    val events: SharedFlow<Event> = _events.asSharedFlow()
+
+    init {
+        scope.launch { for (event in inbox) _events.emit(event) }
+    }
+
+    /** From any thread; false only once [close]d. */
+    fun offer(event: Event): Boolean = inbox.trySend(event).isSuccess
+
+    fun close() {
+        inbox.close()
     }
 }

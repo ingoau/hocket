@@ -20,7 +20,7 @@ export function Artists() {
   return (
     <div className="view" data-testid="view-artists">
       <div className="view-header"><h1>{t("artists.title")}</h1><span className="muted">{total}</span></div>
-      <AlbumGrid items={items} total={total} scope="artists" targetKind="artists" onOpen={(it) => navigate({ view: "artist", id: it.id })} onPlay={play} onNeedRange={onNeedRange} tileWidth={140} emptyMessage={t("artists.empty")} testId="artists-grid" />
+      <AlbumGrid items={items} total={total} scope="artists" targetKind="artists" onOpen={(it) => navigate({ view: "artist", id: it.id })} onPlay={play} onNeedRange={onNeedRange} tileWidth={140} emptyMessage={t("artists.empty")} testId="artists-grid" label={t("artists.title")} />
     </div>
   );
 }

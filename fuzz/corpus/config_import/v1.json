@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "exportedAt": 1.0,
+  "settings": [
+    {
+      "key": "ui.theme",
+      "value": "\"dark\"",
+      "scope": "deviceLocal",
+      "updatedAt": 1.0
+    }
+  ],
+  "filters": [],
+  "shortcuts": [],
+  "servers": [],
+  "secrets": {},
+  "audio": {
+    "replayGain": "auto",
+    "replayGainPreampDb": 0.0,
+    "normalisation": false,
+    "eq": {
+      "enabled": false,
+      "preampDb": 0.0,
+      "bands": [],
+      "preset": null
+    },
+    "gapless": true,
+    "outputDevice": null,
+    "exclusive": false
+  },
+  "autoplay": {
+    "chain": [
+      "sonicSimilarity",
+      "similarSongs",
+      "topSongs",
+      "random",
+      "savedFilter"
+    ],
+    "seedWindow": 5,
+    "minSimilarity": 0.5,
+    "exclusionWindow": 100,
+    "filterId": null
+  }
+}

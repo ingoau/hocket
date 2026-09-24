@@ -62,5 +62,12 @@ class ServiceLifecycleTest {
         assertFalse(PlaybackService.isLocalBind(guessed))
         assertFalse("Media3 controller binds are not clients", PlaybackService.isLocalBind(Intent("androidx.media3.session.MediaSessionService")))
         assertFalse(PlaybackService.isLocalBind(null))
+        val tokenOnlyInExtras = Intent(foreign).putExtra(PlaybackService.EXTRA_BIND_TOKEN, CoreHost.bindToken)
+        assertFalse("the token must be in the data too", PlaybackService.isLocalBind(tokenOnlyInExtras))
+        // The system caches onBind's answer per filterEquals (extras ignored): a foreign bind with
+        // the same action must never share the in-process bind's cache entry, either way round.
+        assertFalse(own.filterEquals(foreign))
+        assertFalse(own.filterEquals(guessed))
+        assertTrue(own.filterEquals(PlaybackServiceConnection.bindIntent(app)))
     }
 }

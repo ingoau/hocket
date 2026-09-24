@@ -35,7 +35,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
           <button type="button" className="btn icon" aria-label={t("filters.descending")} aria-pressed={desc} onClick={() => { setDesc(!desc); saveLocal("albums.desc", !desc); }}><Icon name={desc ? "arrowDown" : "arrowUp"} size={14} /></button>
         </div>
       </div>
-      <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={play} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} testId="albums-grid" />
+      <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={play} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} testId="albums-grid" label={title ?? t("albums.title")} />
     </div>
   );
 }

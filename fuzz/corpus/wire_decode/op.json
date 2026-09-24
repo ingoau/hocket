@@ -1,0 +1,1 @@
+{"protocolVersion":2,"msg":{"type":"op","data":{"base_revision":3,"op":{"type":"playTracks","data":{"server_id":"srv","track_ids":["t1","t2"],"start_index":1,"label":"x","shuffle":false,"save_outgoing":true}},"device_id":"d","op_id":"o","epoch":2,"at":1.0,"position_ms":0}}}

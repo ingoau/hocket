@@ -47,7 +47,10 @@ class PlaybackService : MediaSessionService() {
          * `Binder.getCallingUid()` cannot tell callers apart; the per-process token can.
          */
         fun isLocalBind(intent: Intent?, token: String = CoreHost.bindToken): Boolean =
-            intent?.action == ACTION_BIND_CORE && intent.getStringExtra(EXTRA_BIND_TOKEN) == token
+            intent?.action == ACTION_BIND_CORE && intent.getStringExtra(EXTRA_BIND_TOKEN) == token && intent.data == bindUri(token)
+
+        /** Makes the in-process bind intent distinct from any other under `Intent.filterEquals`. */
+        fun bindUri(token: String): android.net.Uri = android.net.Uri.parse("hocket-bind://core/$token")
     }
 
     inner class LocalBinder : Binder() {

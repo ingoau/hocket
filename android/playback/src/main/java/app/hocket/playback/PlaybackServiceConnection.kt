@@ -64,9 +64,15 @@ class PlaybackServiceConnection(private val context: Context) {
     companion object {
         private const val TAG = "PlaybackServiceConnection"
 
-        /** The in-process bind: action plus the per-process token that [PlaybackService.onBind] checks. */
+        /**
+         * The in-process bind: action plus the per-process token that [PlaybackService.onBind]
+         * checks. The token is also the intent's data: the system caches the binder `onBind`
+         * returned per `Intent.filterEquals` (which ignores extras), so without it a foreign bind
+         * with the same action that came first would have its (empty) answer handed to this one.
+         */
         fun bindIntent(context: Context): Intent = Intent(context, PlaybackService::class.java)
             .setAction(PlaybackService.ACTION_BIND_CORE)
+            .setData(PlaybackService.bindUri(CoreHost.bindToken))
             .putExtra(PlaybackService.EXTRA_BIND_TOKEN, CoreHost.bindToken)
     }
 }

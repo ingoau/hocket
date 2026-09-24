@@ -1,0 +1,1 @@
+{"protocolVersion":2,"msg":{"type":"settingsSync","data":{"settings":[{"key":"k","value":"\"v\"","scope":"accountSynced","updatedAt":1.0}]}}}

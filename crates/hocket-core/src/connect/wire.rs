@@ -1220,3 +1220,137 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod tmp_seed_dump {
+    use super::tests::{device, doc};
+    use super::*;
+    use crate::api::*;
+
+    #[test]
+    fn dump_fuzz_seeds() {
+        let root = std::path::Path::new("/home/user/hocket/fuzz/corpus");
+        let w = |dir: &str, name: &str, s: String| {
+            let d = root.join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(name), s).unwrap();
+        };
+        let hello = Msg::Hello {
+            device: device("a"),
+            protocol_min: 2,
+            protocol_max: 2,
+            scope: "https://nd|me".into(),
+            credential: Some(Credential {
+                server_url: "https://nd".into(),
+                username: "me".into(),
+                token: Some("t".into()),
+                salt: Some("s".into()),
+                api_key: None,
+                client: "hocket".into(),
+                api_version: "1.16.1".into(),
+            }),
+            session_id: Some("s1".into()),
+            session_revision: 3,
+            held_epoch: Some(1),
+            extra: HashMap::new(),
+        };
+        let op = Msg::Op {
+            base_revision: 3,
+            op: SessionOp::PlayTracks {
+                server_id: "srv".into(),
+                track_ids: vec!["t1".into(), "t2".into()],
+                start_index: 1,
+                label: "x".into(),
+                shuffle: false,
+                save_outgoing: true,
+            },
+            device_id: "d".into(),
+            op_id: "o".into(),
+            epoch: Some(2),
+            at: 1.0,
+            position_ms: 0,
+        };
+        let replace = Msg::OpCommitted {
+            op: SessionOp::Replace { document: doc() },
+            revision: 4,
+            device_id: "d".into(),
+            op_id: "o2".into(),
+            at: 2.0,
+            position_ms: 5,
+        };
+        let msgs = [
+            ("hello", hello),
+            ("op", op),
+            ("op_committed", replace),
+            ("document", Msg::Document { document: doc() }),
+            ("sync_request", Msg::SyncRequest),
+            ("clock_ping", Msg::ClockPing { t0: 1.5 }),
+            ("heartbeat", Msg::LeaseHeartbeat { epoch: 4, sent_at: 1.0 }),
+            (
+                "settings_sync",
+                Msg::SettingsSync {
+                    settings: vec![Setting {
+                        key: "k".into(),
+                        value: "\"v\"".into(),
+                        scope: SettingScope::AccountSynced,
+                        updated_at: 1.0,
+                    }],
+                },
+            ),
+        ];
+        for (name, m) in msgs {
+            w("wire_decode", &format!("{name}.json"), WireMessage::new(m).encode().unwrap());
+        }
+        w(
+            "wire_decode",
+            "unknown_with_extra.json",
+            r#"{"protocolVersion":7,"msg":{"type":"teleport","data":{"x":[1]}},"traceId":"abc"}"#.into(),
+        );
+        let cmds = vec![
+            Command::Start,
+            Command::SetVisibility { visible: true, focused: false },
+            Command::AddServer {
+                url: "https://nd".into(),
+                username: "me".into(),
+                password: Secret("pw".into()),
+                name: None,
+            },
+        ];
+        for (i, c) in cmds.iter().enumerate() {
+            w("api_json", &format!("command_{i}.json"), serde_json::to_string(c).unwrap());
+        }
+        let rule = FilterNode::Rule(FilterRule {
+            field: FilterField::Year,
+            op: FilterOp::InTheRange,
+            value: FilterValue::Range { low: 1990.0, high: 1999.0 },
+        });
+        let qs = vec![
+            Query::Snapshot,
+            Query::Tracks {
+                server_id: "srv".into(),
+                filter: Some(FilterNode::All(vec![rule.clone(), FilterNode::Any(vec![rule])])),
+                sort: SortOrder::Year,
+                descending: true,
+                page: Page { offset: 0, limit: 50 },
+            },
+            Query::Track { id: "t1".into() },
+        ];
+        for (i, q) in qs.iter().enumerate() {
+            w("api_json", &format!("query_{i}.json"), serde_json::to_string(q).unwrap());
+        }
+        let cfg = crate::settings::config::build_document(
+            crate::settings::config::ConfigInputs {
+                settings: vec![Setting {
+                    key: "ui.theme".into(),
+                    value: "\"dark\"".into(),
+                    scope: SettingScope::DeviceLocal,
+                    updated_at: 1.0,
+                }],
+                ..Default::default()
+            },
+            true,
+            1.0,
+        );
+        w("config_import", "v1.json", crate::settings::config::to_json(&cfg).unwrap());
+    }
+}
