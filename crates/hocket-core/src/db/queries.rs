@@ -879,16 +879,9 @@ impl Db {
         device_id: &str,
     ) -> DbResult<i64> {
         self.with_tx(|tx| {
-            tx.execute(
-                "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![server_id, track_id, played_at, played_ms, scrobbled as i64, device_id],
-            )?;
-            let id = tx.last_insert_rowid();
-            tx.execute(
-                "UPDATE tracks SET local_play_count = local_play_count + 1, local_last_played = ?3 WHERE server_id = ?1 AND id = ?2",
-                params![server_id, track_id, played_at],
-            )?;
-            Ok(id)
+            record_play_in(
+                tx, server_id, track_id, played_at, played_ms, scrobbled, device_id,
+            )
         })
     }
 
@@ -1280,6 +1273,30 @@ impl From<Vec<Value>> for WhereClause {
 
 #[allow(dead_code)]
 fn _assert_tosql(_: &dyn ToSql) {}
+
+/// [`Db::record_play`] inside the caller's transaction: a `play_history`
+/// row (returning its id) and the track's `local_play_count` /
+/// `local_last_played` bump. The one place these rows are written.
+pub fn record_play_in(
+    tx: &Connection,
+    server_id: &str,
+    track_id: &str,
+    played_at: f64,
+    played_ms: u32,
+    scrobbled: bool,
+    device_id: &str,
+) -> DbResult<i64> {
+    tx.execute(
+        "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![server_id, track_id, played_at, played_ms, scrobbled as i64, device_id],
+    )?;
+    let id = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE tracks SET local_play_count = local_play_count + 1, local_last_played = ?3 WHERE server_id = ?1 AND id = ?2",
+        params![server_id, track_id, played_at],
+    )?;
+    Ok(id)
+}
 
 #[cfg(test)]
 mod tests {

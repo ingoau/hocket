@@ -336,22 +336,14 @@ impl ScrobbleRecorder {
         also: impl FnOnce(&rusqlite::Transaction) -> DbResult<()>,
     ) -> DbResult<()> {
         self.db.with_tx(|tx| {
-            // Same rows as `Db::record_play`, inside this transaction.
-            tx.execute(
-                "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    server_id,
-                    track_id,
-                    played_at,
-                    played_ms,
-                    (verdict == Verdict::ScrobbledElsewhere) as i64,
-                    self.device_id
-                ],
-            )?;
-            let history_id = tx.last_insert_rowid();
-            tx.execute(
-                "UPDATE tracks SET local_play_count = local_play_count + 1, local_last_played = ?3 WHERE server_id = ?1 AND id = ?2",
-                rusqlite::params![server_id, track_id, played_at],
+            let history_id = crate::db::queries::record_play_in(
+                tx,
+                server_id,
+                track_id,
+                played_at,
+                played_ms,
+                verdict == Verdict::ScrobbledElsewhere,
+                &self.device_id,
             )?;
             if verdict == Verdict::Submit {
                 self.outbox.enqueue_in(
