@@ -4,18 +4,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RepeatMode } from "@core/api";
 import { t } from "@shared/strings";
-import { useApp } from "../store/app";
+import { toggleSidePanel, useApp } from "../store/app";
 import { usePosition } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
 import { seekKeyTarget, seekValueText, volumeValueText } from "../lib/a11y";
+import { NARROW, useMediaQuery } from "../lib/media";
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { Heart, Stars } from "./Stars";
 
-export function PlayerBar() {
+export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
   const transport = useApp((s) => s.transport);
   const queue = useApp((s) => s.queue);
@@ -23,7 +24,9 @@ export function PlayerBar() {
   const resume = useApp((s) => s.resumeOffer);
   const devices = useApp((s) => s.devices);
   const panels = useApp((s) => s.panels);
-  const setPanels = useApp((s) => s.setPanels);
+  const drawerOpen = useApp((s) => s.drawerOpen);
+  const narrow = useMediaQuery(NARROW);
+  const sideOpen = narrow ? drawerOpen : panels.rightOpen;
   const fullscreen = useApp((s) => s.fullscreen);
   const setFullscreen = useApp((s) => s.setFullscreen);
   const navigate = useApp((s) => s.navigate);
@@ -36,7 +39,7 @@ export function PlayerBar() {
   const remote = owner && !owner.isSelf ? owner.name : undefined;
 
   return (
-    <div className="player" role="region" aria-label={t("misc.nowPlaying")} data-testid="player-bar">
+    <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : resume ? (
         <div className="notice resume" data-testid="resume-offer">
           <span>{t("player.resume", { device: resume.deviceName, track: resume.track.title })}</span>
@@ -85,11 +88,11 @@ export function PlayerBar() {
         {batterySaver ? <span className="badge"><Icon name="battery" size={11} title={t("player.batterySaver")} /></span> : null}
         <Volume />
         <button type="button" className={`btn icon ${remote ? "on" : ""}`} aria-label={t("player.connect")} title={t("player.connect")} onClick={() => void executeAction("ui.playOn")} data-testid="connect-button"><Icon name="devices" size={15} /></button>
-        <button type="button" className={`btn icon ${panels.rightOpen && !panels.queueCollapsed ? "on" : ""}`} aria-pressed={panels.rightOpen && !panels.queueCollapsed} aria-label={t("player.queue")} title={`${t("player.queue")} (Q)`} onClick={() => void executeAction("ui.queue")} data-testid="toggle-queue"><Icon name="queue" size={15} /></button>
-        <button type="button" className={`btn icon ${panels.rightOpen && !panels.lyricsCollapsed ? "on" : ""}`} aria-pressed={panels.rightOpen && !panels.lyricsCollapsed} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} data-testid="toggle-lyrics"><Icon name="lyrics" size={15} /></button>
+        <button type="button" className={`btn icon ${sideOpen && !panels.queueCollapsed ? "on" : ""}`} aria-pressed={sideOpen && !panels.queueCollapsed} aria-label={t("player.queue")} title={`${t("player.queue")} (Q)`} onClick={() => void executeAction("ui.queue")} data-testid="toggle-queue"><Icon name="queue" size={15} /></button>
+        <button type="button" className={`btn icon ${sideOpen && !panels.lyricsCollapsed ? "on" : ""}`} aria-pressed={sideOpen && !panels.lyricsCollapsed} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} data-testid="toggle-lyrics"><Icon name="lyrics" size={15} /></button>
         <button type="button" className={`btn icon ${fullscreen ? "on" : ""}`} aria-label={t("player.fullscreen")} title={`${t("player.fullscreen")} (F)`} onClick={() => setFullscreen(!fullscreen)} data-testid="toggle-fullscreen"><Icon name="fullscreen" size={15} /></button>
         <button type="button" className="btn icon" aria-label={t("player.miniPlayer")} title={`${t("player.miniPlayer")} (M)`} onClick={() => bridge().window.openMiniPlayer()}><Icon name="mini" size={15} /></button>
-        <button type="button" className="btn icon" aria-label={panels.rightOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} aria-expanded={panels.rightOpen} title={panels.rightOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} onClick={() => setPanels({ rightOpen: !panels.rightOpen })} data-testid="toggle-side-panel"><Icon name={panels.rightOpen ? "chevronRight" : "chevronLeft"} size={15} /></button>
+        <button type="button" className="btn icon" aria-label={sideOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} aria-expanded={sideOpen} aria-controls="side-panel" title={sideOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} onClick={() => toggleSidePanel()} data-testid="toggle-side-panel"><Icon name={sideOpen ? "chevronRight" : "chevronLeft"} size={15} /></button>
       </div>
     </div>
   );

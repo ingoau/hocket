@@ -1,9 +1,12 @@
 // One scrollable timeline: history above, current, "Playing next", then
 // "Continuing from <context>". Drag-and-drop reorder (dnd-kit), Delete removes,
 // double-click jumps. Selection keyed by queue key.
+// Keyboard: a listbox with aria-activedescendant (one Tab stop); arrows move,
+// Enter plays from the item, Delete removes, Alt+Up/Down reorders (the
+// keyboard equivalent of dragging), Shift+F10 opens the item's menu.
 import { useCallback, useMemo, useRef, useState } from "react";
-import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { QueueEntry } from "@core/api";
 import { t } from "@shared/strings";
@@ -24,7 +27,8 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const setSelection = useApp((s) => s.setSelection);
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  // Pointer drag only: the keyboard reorders with Alt+Up/Down on the listbox.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const d = bridge().dispatch;
 
   const all = useMemo(() => [...queue.history, ...(queue.current ? [queue.current] : []), ...queue.playingNext, ...queue.upcoming], [queue]);
@@ -50,12 +54,20 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   };
   const onKey = (e: React.KeyboardEvent) => {
     const idx = focusKey ? keys.indexOf(focusKey) : -1;
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && focusKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const from = reorderable.indexOf(focusKey);
+      const to = from + (e.key === "ArrowDown" ? 1 : -1);
+      if (from >= 0 && to >= 0 && to < reorderable.length) d({ type: "moveQueueItem", data: { key: focusKey, to_index: to } });
+      return;
+    }
     if (e.key === "Delete" || e.key === "Backspace") {
       const ks = selectedKeys();
       if (ks.length) { e.stopPropagation(); d({ type: "removeQueueItems", data: { keys: ks } }); publish(EMPTY_SELECTION); }
       return;
     }
-    if (e.key === "Enter" && focusKey) { e.stopPropagation(); d({ type: "jumpToQueueItem", data: { key: focusKey } }); return; }
+    if (e.key === "Enter" && focusKey) { e.preventDefault(); e.stopPropagation(); d({ type: "jumpToQueueItem", data: { key: focusKey } }); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
       e.preventDefault();
       e.stopPropagation();
@@ -75,44 +87,64 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
 
   if (!queue.current && !all.length) return <EmptyState message={t("queue.empty")} testId="queue-empty" />;
 
+  const idPrefix = large ? "fsq" : "q";
+  const optionId = (key: string) => `${idPrefix}-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const row = (e: QueueEntry, kind: "history" | "current" | "next" | "upcoming") => (
-    <QueueRow key={e.item.key} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "next" || kind === "upcoming"}
+    <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "next" || kind === "upcoming"}
       onClick={(ev) => click(ev, e.item.key)} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => onContext(ev, e.item.key)} />
   );
+  const group = (key: string, label: React.ReactNode, entries: QueueEntry[], kind: "history" | "current" | "next" | "upcoming") =>
+    entries.length ? (
+      <div role="group" aria-labelledby={`${idPrefix}-grp-${key}`} key={key}>
+        <div className="queue-section" id={`${idPrefix}-grp-${key}`}>{label}</div>
+        {entries.map((e) => row(e, kind))}
+      </div>
+    ) : null;
+  const upcomingLabel = queue.contextLabel ? t("queue.continuingFrom", { context: queue.contextLabel }) : t("queue.upcoming");
+  // Focus with no cursor yet starts on the current item.
+  const onFocus = (e: React.FocusEvent) => {
+    if (e.target !== e.currentTarget || focusKey) return;
+    const k = queue.current?.item.key ?? keys[0];
+    if (k) setFocusKey(k);
+  };
+  const activeId = focusKey && keys.includes(focusKey) ? optionId(focusKey) : undefined;
   return (
-    <div ref={listRef} className="pane-body" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} tabIndex={0} onKeyDown={onKey} data-testid="queue-timeline">
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        {queue.history.length ? <div className="queue-section">{t("queue.history")}</div> : null}
-        {queue.history.map((e) => row(e, "history"))}
-        {queue.current ? <div className="queue-section">{t("queue.nowPlaying")}</div> : null}
-        {queue.current ? row(queue.current, "current") : null}
-        <SortableContext items={reorderable} strategy={verticalListSortingStrategy}>
-          {queue.playingNext.length ? <div className="queue-section row"><span className="grow">{t("queue.playingNext")}</span><button type="button" className="btn sm ghost" onClick={() => d({ type: "clearInsertions" })}>{t("queue.clearInsertions")}</button></div> : null}
-          {queue.playingNext.map((e) => row(e, "next"))}
-          {queue.upcoming.length ? <div className="queue-section">{queue.contextLabel ? t("queue.continuingFrom", { context: queue.contextLabel }) : t("queue.upcoming")}</div> : null}
-          {queue.upcoming.map((e) => row(e, "upcoming"))}
-        </SortableContext>
-        {queue.totalUpcoming > queue.upcoming.length ? <div className="queue-section" style={{ textTransform: "none", fontWeight: 400 }}>{t("queue.more", { count: queue.totalUpcoming - queue.upcoming.length })}</div> : null}
-      </DndContext>
+    <div className="queue-wrap">
+      {/* "Clear playing next" lives outside the listbox: a listbox holds options only. */}
+      {queue.playingNext.length ? <div className="queue-tools"><button type="button" className="btn sm ghost" onClick={() => d({ type: "clearInsertions" })}>{t("queue.clearInsertions")}</button></div> : null}
+      <div ref={listRef} className="pane-body" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} aria-describedby={`${idPrefix}-hint`} aria-activedescendant={activeId} tabIndex={0} onKeyDown={onKey} onFocus={onFocus} data-testid="queue-timeline">
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd} accessibility={{ container: document.body }}>
+          {group("history", t("queue.history"), queue.history, "history")}
+          {queue.current ? group("current", t("queue.nowPlaying"), [queue.current], "current") : null}
+          <SortableContext items={reorderable} strategy={verticalListSortingStrategy}>
+            {group("next", t("queue.playingNext"), queue.playingNext, "next")}
+            {group("upcoming", upcomingLabel, queue.upcoming, "upcoming")}
+          </SortableContext>
+        </DndContext>
+      </div>
+      {queue.totalUpcoming > queue.upcoming.length ? <div className="queue-section" style={{ textTransform: "none", fontWeight: 400 }}>{t("queue.more", { count: queue.totalUpcoming - queue.upcoming.length })}</div> : null}
+      <span id={`${idPrefix}-hint`} className="sr-only">{t("a11y.queueHint")}</span>
     </div>
   );
 }
 
-function QueueRow({ entry, kind, large, selected, focused, sortable, onClick, onDoubleClick, onContextMenu }: { entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
+function QueueRow({ id, entry, kind, large, selected, focused, sortable, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging ? "dragging" : ""} ${entry.item.unavailable ? "unavailable" : ""}`} role="option" aria-selected={selected} data-key={entry.item.key} data-testid={`queue-row-${kind}`} tabIndex={-1}
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging ? "dragging" : ""} ${entry.item.unavailable ? "unavailable" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-testid={`queue-row-${kind}`}
       onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
       {...(focused ? { "data-focused": true } : {})}>
-      {sortable ? <span className="grip" {...attributes} {...listeners} aria-label="Drag to reorder" style={{ display: "inline-flex" }}><Icon name="grip" size={14} /></span> : <span style={{ width: 14 }} />}
+      {/* Pointer drag handle; the keyboard reorders with Alt+Up/Down on the list. */}
+      {sortable ? <span className="grip" {...listeners} aria-hidden="true" style={{ display: "inline-flex" }}><Icon name="grip" size={14} /></span> : <span style={{ width: 14 }} aria-hidden="true" />}
       <Artwork id={entry.track.coverArt} size={64} className="art" />
       <div className="text">
         <div className="t1" style={large ? { fontSize: 15 } : undefined}>{entry.track.title}</div>
         <div className="t2">{sub}</div>
       </div>
       <span className="dur">{fmtTime(entry.track.durationMs)}</span>
+      {entry.item.unavailable ? <span className="sr-only">{t("queue.unavailable")}</span> : null}
     </div>
   );
 }

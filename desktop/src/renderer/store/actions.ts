@@ -6,7 +6,7 @@ import type { ActionTarget } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
-import { useApp, type DialogState, type ViewName } from "./app";
+import { isNarrow, useApp, type DialogState, type ViewName } from "./app";
 import { explicitIds } from "./selection";
 
 export interface ActionContext {
@@ -45,9 +45,22 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       app.focusSearch();
       return;
     case "toggleQueuePanel":
+      if (isNarrow()) {
+        // The drawer: open it on the queue, or close it when the queue is already showing.
+        const showing = app.drawerOpen && !app.panels.queueCollapsed;
+        app.setDrawerOpen(!showing);
+        if (!showing) app.setPanels({ queueCollapsed: false });
+        return;
+      }
       app.setPanels(app.panels.rightOpen && !app.panels.queueCollapsed ? { queueCollapsed: true } : { rightOpen: true, queueCollapsed: false });
       return;
     case "toggleLyrics":
+      if (isNarrow()) {
+        const showing = app.drawerOpen && !app.panels.lyricsCollapsed;
+        app.setDrawerOpen(!showing);
+        if (!showing) app.setPanels({ lyricsCollapsed: false });
+        return;
+      }
       app.setPanels(app.panels.rightOpen && !app.panels.lyricsCollapsed ? { lyricsCollapsed: true } : { rightOpen: true, lyricsCollapsed: false });
       return;
     case "toggleFullscreen":
@@ -57,6 +70,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       b.window.openMiniPlayer();
       return;
     case "navigateRecent":
+      if (isNarrow()) app.setDrawerOpen(true);
       app.setPanels({ rightOpen: true, queueCollapsed: false });
       app.setQueueTab("recent");
       return;
@@ -71,6 +85,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       else if (app.dialog) app.closeDialog();
       else if (app.paletteOpen) app.setPaletteOpen(false);
       else if (app.fullscreen) app.setFullscreen(false);
+      else if (app.drawerOpen && isNarrow()) app.setDrawerOpen(false);
       else app.clearSelection();
       return;
     case "selectAll":

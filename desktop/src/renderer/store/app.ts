@@ -72,6 +72,8 @@ export interface UiState {
   perf: "full" | "background" | "stopped";
   queueTab: "queue" | "recent";
   prefs: AppPrefs;
+  /** Narrow windows (and 200% zoom) show the side panel as a drawer, closed until asked for. */
+  drawerOpen: boolean;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -99,6 +101,7 @@ export interface AppStore extends CoreState, UiState {
   setPageVisible(visible: boolean): void;
   setQueueTab(tab: "queue" | "recent"): void;
   setPrefs(patch: Partial<AppPrefs>): void;
+  setDrawerOpen(open: boolean): void;
   setting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
   runAction(actionId: string, target?: ActionTarget): void;
@@ -127,6 +130,7 @@ export const useApp = create<AppStore>((set, get) => ({
   perf: "full",
   queueTab: "queue",
   prefs: { closeToTray: true },
+  drawerOpen: false,
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -215,6 +219,9 @@ export const useApp = create<AppStore>((set, get) => ({
   setPrefs(patch) {
     void bridge().prefs.set(patch).then((prefs) => set({ prefs }));
   },
+  setDrawerOpen(drawerOpen) {
+    set({ drawerOpen });
+  },
   setting<T>(key: string, fallback: T): T {
     return settingValue(get(), key, fallback);
   },
@@ -229,6 +236,18 @@ export const useApp = create<AppStore>((set, get) => ({
     bridge().dispatch({ type: "runAction", data: { action_id: actionId, target } });
   },
 }));
+
+/** Whether the window is in the narrow layout (lib/media.ts NARROW). */
+export function isNarrow(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches;
+}
+
+/** Show or hide the side panel: the in-flow panel normally, the drawer when narrow. */
+export function toggleSidePanel(open?: boolean): void {
+  const app = useApp.getState();
+  if (isNarrow()) app.setDrawerOpen(open ?? !app.drawerOpen);
+  else app.setPanels({ rightOpen: open ?? !app.panels.rightOpen });
+}
 
 /** Typed query helper: `await queryAs({ type: "album", data: { id } }, "albumDetail")`. */
 export async function queryAs<K extends Query["type"], R extends ResultDataKeys>(query: Extract<Query, { type: K }>, result: R): Promise<ResultData<R>> {

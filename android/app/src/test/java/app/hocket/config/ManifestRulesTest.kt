@@ -14,7 +14,7 @@ import org.w3c.dom.Element
  */
 class ManifestRulesTest {
     private fun file(path: String): File {
-        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
             File(dir, path).takeIf { it.exists() }?.let { return it }
             dir = dir.parentFile
@@ -57,9 +57,10 @@ class ManifestRulesTest {
 
     @Test
     fun noLegacyMediaButtonReceiverIsDeclared() {
-        val manifest = file("android/playback/src/main/AndroidManifest.xml").readText()
         // Media3 declares its own receiver; the exported legacy one let any app start playback.
-        assertFalse(manifest.contains("androidx.media.session.MediaButtonReceiver"))
-        assertFalse(Regex("<receiver\\b").containsMatchIn(manifest))
+        for (path in listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")) {
+            val receivers = parse(path).getElementsByTagName("receiver")
+            assertEquals("$path declares no broadcast receiver", 0, receivers.length)
+        }
     }
 }

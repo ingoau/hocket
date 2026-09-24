@@ -1016,7 +1016,12 @@ pub struct OutputDevice {
 pub struct MediaSource {
     pub key: QueueKey,
     pub track: TrackSummary,
-    /// `file://` for downloads/cache, `https://` stream URL otherwise (auth in query).
+    /// `file://` for downloads (and, for a backend without the
+    /// `core_stream` capability, cached streams); otherwise either
+    /// `hocket-stream://<token>` — an opaque, expiring capability the
+    /// backend reads through the core's stream reader (open at an offset,
+    /// read, close; no credentials involved) — or, for a backend without
+    /// that capability, the server's `https://` stream URL (auth in query).
     pub url: String,
     pub headers: HashMap<String, String>,
     pub mime_type: Option<String>,
@@ -1632,6 +1637,15 @@ pub enum Command {
         target: PinTarget,
     },
     ClearStreamCache,
+    /// What the platform's playback backend can do. `core_stream`: it reads
+    /// `hocket-stream://<token>` media sources through the core's stream
+    /// reader (`stream_open`/`stream_read`/`stream_close` on the core
+    /// handle) instead of fetching URLs itself. Default false for an
+    /// external backend (sources then carry the server URL as before); the
+    /// native backend always reads through the core.
+    SetBackendCapabilities {
+        core_stream: bool,
+    },
     SetStorageWarnThreshold {
         bytes: Option<f64>,
     },

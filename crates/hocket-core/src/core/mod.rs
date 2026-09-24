@@ -15,7 +15,7 @@ mod handlers;
 pub mod io;
 mod queries;
 mod state;
-pub mod stream_proxy;
+pub mod stream_reader;
 #[cfg(any(feature = "sim", test))]
 pub mod test_support;
 
@@ -169,7 +169,7 @@ pub enum Internal {
     Toast {
         message: String,
     },
-    /// The stream proxy cached a track, or cache entries were evicted or
+    /// The stream reader cached a track, or cache entries were evicted or
     /// removed after their reader let go: these tracks' offline state
     /// changed.
     StreamCacheChanged {
@@ -277,8 +277,8 @@ pub(crate) struct Deps {
     pub seed: Option<u64>,
     /// Drive time from the tick only (no wall-clock ticker task).
     pub manual_tick: bool,
-    /// How the loopback stream proxy reaches the server (`None` = reqwest).
-    pub stream_upstream: Option<Arc<dyn stream_proxy::StreamUpstream>>,
+    /// How the in-process stream reader reaches the server (`None` = reqwest).
+    pub stream_upstream: Option<Arc<dyn stream_reader::StreamUpstream>>,
 }
 
 impl Deps {
@@ -311,6 +311,8 @@ struct Inner {
     sinks: Arc<Mutex<Vec<Arc<dyn EventSink>>>>,
     /// Messages the actor has handled (test barrier bookkeeping).
     processed: Arc<AtomicU64>,
+    /// The in-process stream reader (`None` on the coordinator).
+    stream_reader: Option<stream_reader::StreamReader>,
 }
 
 impl Core {
@@ -360,6 +362,7 @@ impl Core {
                 deps,
             )?
         };
+        let stream_reader = actor.stream_reader.clone();
         let inner = Arc::new(Inner {
             config,
             runtime: runtime.clone(),
@@ -367,6 +370,7 @@ impl Core {
             tx: tx.clone(),
             sinks,
             processed,
+            stream_reader,
         });
         runtime.spawn(actor.run(rx));
         if !manual_tick {
@@ -470,6 +474,79 @@ impl Core {
     pub async fn query_json(&self, json: &str) -> Result<String, CoreError> {
         let q: Query = serde_json::from_str(json)?;
         Ok(serde_json::to_string(&self.query(q).await?)?)
+    }
+
+    // -- stream reader (backends with the `core_stream` capability) -------
+
+    fn reader(&self) -> Result<&stream_reader::StreamReader, stream_reader::StreamError> {
+        self.inner
+            .stream_reader
+            .as_ref()
+            .ok_or(stream_reader::StreamError::ShutDown)
+    }
+
+    /// Open a `hocket-stream://` media source at `offset`, returning at
+    /// most `length` bytes when given. See [`stream_reader`].
+    pub async fn stream_open(
+        &self,
+        url: &str,
+        offset: u64,
+        length: Option<u64>,
+    ) -> Result<stream_reader::StreamInfo, stream_reader::StreamError> {
+        self.reader()?.open(url, offset, length).await
+    }
+
+    /// Up to `max_bytes` from an open stream; empty = end of input.
+    pub async fn stream_read(
+        &self,
+        handle: u64,
+        max_bytes: usize,
+    ) -> Result<bytes::Bytes, stream_reader::StreamError> {
+        self.reader()?.read(handle, max_bytes).await
+    }
+
+    /// Close a stream (a read in progress fails with `Closed`). Never blocks.
+    pub fn stream_close(&self, handle: u64) {
+        if let Ok(r) = self.reader() {
+            r.close(handle);
+        }
+    }
+
+    /// [`Core::stream_open`] for FFI loader threads: runs on the core's
+    /// runtime and blocks the calling thread (never the actor). Never call
+    /// it from inside an async context.
+    pub fn stream_open_blocking(
+        &self,
+        url: &str,
+        offset: u64,
+        length: Option<u64>,
+    ) -> Result<stream_reader::StreamInfo, stream_reader::StreamError> {
+        let reader = self.reader()?.clone();
+        let url = url.to_string();
+        self.run_blocking(async move { reader.open(&url, offset, length).await })
+    }
+
+    /// [`Core::stream_read`] for FFI loader threads (see
+    /// [`Core::stream_open_blocking`]).
+    pub fn stream_read_blocking(
+        &self,
+        handle: u64,
+        max_bytes: usize,
+    ) -> Result<bytes::Bytes, stream_reader::StreamError> {
+        let reader = self.reader()?.clone();
+        self.run_blocking(async move { reader.read(handle, max_bytes).await })
+    }
+
+    fn run_blocking<T: Send + 'static>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, stream_reader::StreamError>> + Send + 'static,
+    ) -> Result<T, stream_reader::StreamError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.inner.runtime.spawn(async move {
+            let _ = tx.send(fut.await);
+        });
+        rx.recv()
+            .unwrap_or(Err(stream_reader::StreamError::ShutDown))
     }
 
     /// Deliver one tick to the actor (tests with `manual_tick`).

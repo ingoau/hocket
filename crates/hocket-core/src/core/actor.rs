@@ -120,10 +120,14 @@ pub(crate) struct Actor {
     pub jobs: JobQueue,
     pub outbox: Outbox,
     pub downloads: Downloads,
-    /// Loopback proxy platform players stream through (`None` on the
-    /// coordinator, or when binding failed: resolution then hands out the
-    /// server URL directly).
-    pub stream_proxy: Option<super::stream_proxy::StreamProxy>,
+    /// In-process reader players inside the process stream through
+    /// (`hocket-stream://`; `None` on the coordinator).
+    pub stream_reader: Option<super::stream_reader::StreamReader>,
+    /// Whether the playback backend reads `hocket-stream://` sources (the
+    /// native backend always; an external one once it says so with
+    /// `Command::SetBackendCapabilities`). Otherwise media sources carry
+    /// the server URL directly.
+    pub core_stream: bool,
     pub caches: Caches,
     pub scrobbler: Scrobbler,
     pub sleep: SleepTimerMachine,
@@ -253,38 +257,26 @@ impl Actor {
             &cache_dir,
             cfg.platform,
         );
-        let stream_proxy = if cfg.platform == Platform::Coordinator {
+        let stream_reader = if cfg.platform == Platform::Coordinator {
             None
         } else {
-            let upstream: Option<Arc<dyn super::stream_proxy::StreamUpstream>> =
+            let upstream: Option<Arc<dyn super::stream_reader::StreamUpstream>> =
                 match deps.stream_upstream.clone() {
                     Some(u) => Some(u),
-                    None => match super::stream_proxy::ReqwestUpstream::new() {
+                    None => match super::stream_reader::ReqwestUpstream::new() {
                         Ok(u) => Some(Arc::new(u)),
                         Err(e) => {
-                            tracing::error!(error = %e, "stream proxy http client");
+                            tracing::error!(error = %e, "stream reader http client");
                             None
                         }
                     },
                 };
             let notify_tx = tx.clone();
-            let notify: super::stream_proxy::CacheNotify = Arc::new(move |tracks| {
+            let notify: super::stream_reader::CacheNotify = Arc::new(move |tracks| {
                 let _ = notify_tx.send(ActorMsg::Internal(Internal::StreamCacheChanged { tracks }));
             });
-            upstream.and_then(|u| {
-                match super::stream_proxy::StreamProxy::start(
-                    &rt,
-                    downloads.clone(),
-                    clock.clone(),
-                    u,
-                    notify,
-                ) {
-                    Ok(p) => Some(p),
-                    Err(e) => {
-                        tracing::error!(error = %e, "stream proxy bind; streaming direct from the server");
-                        None
-                    }
-                }
+            upstream.map(|u| {
+                super::stream_reader::StreamReader::new(downloads.clone(), clock.clone(), u, notify)
             })
         };
         let caches = Caches::new(db.clone(), clock.clone(), &cache_dir);
@@ -332,12 +324,17 @@ impl Actor {
                         let ext = Arc::new(ExternalBackend::new(commands, sink));
                         (ext.clone() as Arc<dyn PlaybackBackend>, None, Some(ext))
                     }
-                    AudioMode::Native => (native_backend(&rt, &audio, sink), None, None),
+                    AudioMode::Native => (
+                        native_backend(&rt, &audio, sink, stream_reader.clone()),
+                        None,
+                        None,
+                    ),
                     AudioMode::None => (Arc::new(NullBackend::new()), None, None),
                 }
             }
         };
 
+        let core_stream = cfg.audio == AudioMode::Native;
         let volume: f64 = db
             .saved_state_get::<f64>("volume")
             .ok()
@@ -360,7 +357,8 @@ impl Actor {
             jobs,
             outbox,
             downloads,
-            stream_proxy,
+            stream_reader,
+            core_stream,
             caches,
             scrobbler: Scrobbler::new(clock.clone()),
             sleep: SleepTimerMachine::new(clock),
@@ -692,8 +690,8 @@ impl Actor {
             let _ = stop.send(());
         }
         let _ = self.backend.stop();
-        if let Some(p) = &self.stream_proxy {
-            p.stop();
+        if let Some(r) = &self.stream_reader {
+            r.stop();
         }
         tracing::info!("core stopped");
     }
@@ -1090,10 +1088,21 @@ fn native_backend(
     rt: &tokio::runtime::Handle,
     audio: &AudioSettings,
     sink: crate::audio::backend::ReportSink,
+    reader: Option<super::stream_reader::StreamReader>,
 ) -> Arc<dyn PlaybackBackend> {
-    use crate::audio::native::{NativeBackend, NativeConfig, OutputConfig, ReqwestFetcher};
+    use crate::audio::native::{
+        NativeBackend, NativeConfig, OutputConfig, RangeFetcher, ReqwestFetcher,
+    };
+    let http: Arc<dyn RangeFetcher> = Arc::new(ReqwestFetcher::default());
+    let fetcher: Arc<dyn RangeFetcher> = match reader {
+        Some(reader) => Arc::new(super::stream_reader::CoreStreamFetcher {
+            reader,
+            fallback: http,
+        }),
+        None => http,
+    };
     let cfg = NativeConfig {
-        fetcher: Arc::new(ReqwestFetcher::default()),
+        fetcher,
         runtime: rt.clone(),
         output: OutputConfig {
             device_id: audio.output_device.clone(),
@@ -1117,6 +1126,7 @@ fn native_backend(
     _rt: &tokio::runtime::Handle,
     _audio: &AudioSettings,
     _sink: crate::audio::backend::ReportSink,
+    _reader: Option<super::stream_reader::StreamReader>,
 ) -> Arc<dyn PlaybackBackend> {
     tracing::error!(
         "AudioMode::Native requested but the native-audio feature is off; playback disabled"

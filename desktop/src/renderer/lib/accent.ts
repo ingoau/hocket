@@ -1,27 +1,40 @@
 // Dynamic accent from artwork: average of the most saturated bucket of a
 // downscaled image, drawn on a canvas. Cheap (32x32) and cached per URL.
+import { brightestPixel, type Rgb } from "./contrast";
+
 const cache = new Map<string, string | undefined>();
+const brightCache = new Map<string, Rgb | undefined>();
+
+async function pixels(url: string): Promise<Uint8ClampedArray | undefined> {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = url;
+  await img.decode().catch(() => undefined);
+  if (!img.width) return undefined;
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return undefined;
+  ctx.drawImage(img, 0, 0, 32, 32);
+  return ctx.getImageData(0, 0, 32, 32).data;
+}
 
 export async function extractAccent(url: string): Promise<string | undefined> {
   if (cache.has(url)) return cache.get(url);
-  const p = (async () => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.decoding = "async";
-    img.src = url;
-    await img.decode().catch(() => undefined);
-    if (!img.width) return undefined;
-    const c = document.createElement("canvas");
-    c.width = 32;
-    c.height = 32;
-    const ctx = c.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return undefined;
-    ctx.drawImage(img, 0, 0, 32, 32);
-    const { data } = ctx.getImageData(0, 0, 32, 32);
-    return pickAccent(data);
-  })();
-  const v = await p;
+  const data = await pixels(url);
+  const v = data ? pickAccent(data) : undefined;
   cache.set(url, v);
+  return v;
+}
+
+/** The artwork's brightest colour: the worst case for white text over a background drawn from it. */
+export async function extractBrightest(url: string): Promise<Rgb | undefined> {
+  if (brightCache.has(url)) return brightCache.get(url);
+  const data = await pixels(url);
+  const v = data ? brightestPixel(data) : undefined;
+  brightCache.set(url, v);
   return v;
 }
 

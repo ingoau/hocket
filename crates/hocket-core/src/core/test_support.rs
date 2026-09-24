@@ -17,7 +17,7 @@ use crate::subsonic::SubsonicApi;
 use crate::util::Clock;
 
 use super::io::memory::MemoryNet;
-use super::stream_proxy::{StreamUpstream, UpstreamRequest, UpstreamResponse};
+use super::stream_reader::{StreamUpstream, UpstreamRequest, UpstreamResponse};
 use super::io::ConnectIo;
 use super::{BackendChoice, Core, CoreError, Deps, EventSink, LateSink, PollFn, PresetServer};
 
@@ -106,8 +106,8 @@ impl Core {
         Self::new_for_test_upstream(config, clock, opts, Arc::new(FakeUpstream::new()))
     }
 
-    /// [`Core::new_for_test_with`] with the server side of the loopback
-    /// stream proxy supplied by the test.
+    /// [`Core::new_for_test_with`] with the server side of the stream
+    /// reader supplied by the test.
     pub fn new_for_test_upstream(
         config: CoreConfig,
         clock: Arc<dyn Clock>,
@@ -217,7 +217,7 @@ pub struct TestCore {
     /// Every source the backend was handed (`load`, its `next`, `set_next`,
     /// `pre_buffer`), in order.
     pub sources: Arc<Mutex<Vec<MediaSource>>>,
-    /// What the stream proxy fetches from "the server".
+    /// What the stream reader fetches from "the server".
     pub upstream: Arc<FakeUpstream>,
     pub clock: Arc<SimTime>,
     pub server: FakeServer,
@@ -572,7 +572,7 @@ struct FakeUpstreamState {
     calls: Vec<UpstreamCall>,
 }
 
-/// In-memory server side of the stream proxy: serves registered media by
+/// In-memory server side of the stream reader: serves registered media by
 /// the `id` query parameter (or 64 KiB of deterministic bytes), honours
 /// `Range`, counts requests, and can stall, fail or answer with an error
 /// envelope per track.
@@ -663,7 +663,6 @@ impl StreamUpstream for FakeUpstream {
                     content_type: Some("application/json".into()),
                     content_length: Some(body.len() as u64),
                     content_range: None,
-                    accept_ranges: None,
                     body: futures::stream::iter([Ok(bytes::Bytes::from_static(body))]).boxed(),
                 });
             }
@@ -682,7 +681,6 @@ impl StreamUpstream for FakeUpstream {
                         content_type: None,
                         content_length: None,
                         content_range: Some(format!("bytes */{len}")),
-                        accept_ranges: Some("bytes".into()),
                         body: futures::stream::empty().boxed(),
                     })
                 }
@@ -714,7 +712,6 @@ impl StreamUpstream for FakeUpstream {
                 content_type: Some(content_type),
                 content_length,
                 content_range,
-                accept_ranges: Some("bytes".into()),
                 body,
             })
         })

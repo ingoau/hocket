@@ -11,6 +11,7 @@ import { Icon } from "./Icon";
 import { Tabs, tabPanelProps } from "./Tabs";
 import { bridge } from "../core/bridge";
 import { SK } from "@shared/settings-keys";
+import { NARROW, useMediaQuery } from "../lib/media";
 
 export function RightPanel() {
   const panels = useApp((s) => s.panels);
@@ -42,13 +43,17 @@ export function RightPanel() {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [widthDrag, setPanels]);
 
-  if (!panels.rightOpen) return null;
+  const narrow = useMediaQuery(NARROW);
+  const drawerOpen = useApp((s) => s.drawerOpen);
+  const setDrawerOpen = useApp((s) => s.setDrawerOpen);
+  if (narrow ? !drawerOpen : !panels.rightOpen) return null;
   const qc = panels.queueCollapsed;
   const lc = panels.lyricsCollapsed;
   const queueFlex = qc ? "0 0 32px" : lc ? "1 1 auto" : `${panels.splitRatio} 1 0`;
   const lyricsFlex = lc ? "0 0 32px" : qc ? "1 1 auto" : `${1 - panels.splitRatio} 1 0`;
   return (
-    <aside ref={ref} className="right-panel" aria-label={t("a11y.sidePanel")} data-testid="right-panel">
+    <aside ref={ref} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""}`} aria-label={t("a11y.sidePanel")} data-testid="right-panel"
+      onKeyDown={narrow ? (e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setDrawerOpen(false); document.querySelector<HTMLElement>('[data-testid="toggle-side-panel"]')?.focus(); } } : undefined}>
       <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={260} aria-valuemax={560} tabIndex={0}
         onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ rightWidth: Math.max(260, Math.min(560, panels.rightWidth + d)) }); }} />
       <section className={`pane ${qc ? "collapsed" : ""}`} style={{ flex: queueFlex }} aria-label={t("queue.title")} data-testid="queue-pane">
@@ -56,7 +61,7 @@ export function RightPanel() {
           <Tabs id="queue-tabs" selected={tab} onSelect={(k) => { setTab(k); if (qc) setPanels({ queueCollapsed: false }); }} tabs={[{ key: "queue", label: t("queue.title"), testId: "tab-queue" }, { key: "recent", label: t("queue.recent"), testId: "tab-recent" }]} />
           <span className="spacer" />
           {tab === "queue" && !qc ? <button type="button" className="btn icon sm" title={t("queue.clear")} aria-label={t("queue.clear")} onClick={() => bridge().dispatch({ type: "clearQueue" })}><Icon name="trash" size={13} /></button> : null}
-          <button type="button" className="btn icon sm" title={qc ? t("queue.expand") : t("queue.collapse")} aria-label={qc ? t("queue.expand") : t("queue.collapse")} onClick={() => setPanels({ queueCollapsed: !qc, lyricsCollapsed: !qc ? lc : false })} data-testid="collapse-queue"><Icon name={qc ? "chevronDown" : "chevronUp"} size={13} /></button>
+          <button type="button" className="btn icon sm" title={qc ? t("queue.expand") : t("queue.collapse")} aria-label={qc ? t("queue.expand") : t("queue.collapse")} aria-expanded={!qc} onClick={() => setPanels({ queueCollapsed: !qc, lyricsCollapsed: !qc ? lc : false })} data-testid="collapse-queue"><Icon name={qc ? "chevronDown" : "chevronUp"} size={13} /></button>
         </div>
         {!qc ? <div className="tab-panel" {...tabPanelProps("queue-tabs", tab)}>{tab === "queue" ? <QueuePanel /> : <SavedQueues />}</div> : null}
       </section>
@@ -67,7 +72,7 @@ export function RightPanel() {
         <div className="pane-head">
           <h2 className="pane-title">{t("lyrics.title")}</h2>
           <span className="spacer" />
-          <button type="button" className="btn icon sm" title={lc ? t("lyrics.expand") : t("lyrics.collapse")} aria-label={lc ? t("lyrics.expand") : t("lyrics.collapse")} onClick={() => setPanels({ lyricsCollapsed: !lc, queueCollapsed: !lc ? qc : false })} data-testid="collapse-lyrics"><Icon name={lc ? "chevronUp" : "chevronDown"} size={13} /></button>
+          <button type="button" className="btn icon sm" title={lc ? t("lyrics.expand") : t("lyrics.collapse")} aria-label={lc ? t("lyrics.expand") : t("lyrics.collapse")} aria-expanded={!lc} onClick={() => setPanels({ lyricsCollapsed: !lc, queueCollapsed: !lc ? qc : false })} data-testid="collapse-lyrics"><Icon name={lc ? "chevronUp" : "chevronDown"} size={13} /></button>
         </div>
         {!lc ? <LyricsPane /> : null}
       </section>

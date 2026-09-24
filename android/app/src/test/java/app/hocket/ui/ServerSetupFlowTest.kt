@@ -72,7 +72,7 @@ class ServerSetupFlowTest {
     }
 
     private fun textOf(tag: String): String =
-        compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.EditableText)?.text ?: ""
+        compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { null }?.text ?: ""
 
     @Test
     fun thePasswordNeverGoesIntoTheSavedInstanceState() {

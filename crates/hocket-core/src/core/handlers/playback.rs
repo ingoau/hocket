@@ -17,18 +17,21 @@ use crate::session::reducer::derive;
 impl Actor {
     // -- loading ----------------------------------------------------------------
 
-    /// Resolve a queue item to a media source: a downloaded file, or a
-    /// loopback proxy URL (stream cache or server; no credentials), with
+    /// Resolve a queue item to a media source: a downloaded file, or (for
+    /// a backend that reads through the core) a `hocket-stream://` URL
+    /// served from the stream cache or the server with no credentials in
+    /// it; otherwise the legacy cached file or server stream URL. With
     /// ReplayGain folded into `gain_db`.
     pub(crate) fn media_source_for(&self, key: &str, track: &Track) -> Option<MediaSource> {
         let api = self.api()?;
-        let proxy = self
-            .stream_proxy
+        let reader = self
+            .stream_reader
             .as_ref()
-            .map(|p| p as &dyn crate::downloads::StreamMinter);
+            .filter(|_| self.core_stream)
+            .map(|r| r as &dyn crate::downloads::StreamMinter);
         let mut source = match self
             .downloads
-            .resolve_with(api.as_ref(), key, track, proxy)
+            .resolve_with(api.as_ref(), key, track, reader)
         {
             Ok(s) => s,
             Err(e) => {

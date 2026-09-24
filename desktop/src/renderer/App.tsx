@@ -1,6 +1,6 @@
 // Main window shell: server setup as the entire first screen, otherwise the
 // sidebar / content / right panel / player bar layout.
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
@@ -22,6 +22,9 @@ import { Setup } from "./views/Setup";
 import { FullscreenPlayer } from "./views/FullscreenPlayer";
 import { executeAction } from "./store/actions";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
+import { accentTokens, type ThemeName } from "./lib/contrast";
+import { nowPlayingAnnouncement } from "./lib/a11y";
+import { NARROW, useMediaQuery } from "./lib/media";
 
 export function App() {
   const ready = useApp((s) => s.ready);
@@ -31,27 +34,37 @@ export function App() {
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
+  // A modal (dialog, palette, fullscreen player) makes the rest of the window inert:
+  // no focus, no pointer, hidden from assistive tech.
+  const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
+  const narrow = useMediaQuery(NARROW);
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
 
-  if (!ready) return <div className="setup"><div className="muted">{t("app.loading")}</div></div>;
+  if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
   if (!hasServer) return <Setup />;
+  const skip = (e: React.MouseEvent) => {
+    e.preventDefault();
+    document.getElementById("main")?.focus();
+  };
   return (
-    <div className="app" data-testid="app">
-      <div>
+    <div className={`app ${narrow ? "narrow" : ""}`} data-testid="app">
+      <header className="app-header" inert={modal}>
+        <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
-        {network?.kind === "offline" ? <div className="offline-banner">{t("misc.offline")}</div> : null}
+        {network?.kind === "offline" ? <div className="offline-banner" role="status">{t("misc.offline")}</div> : null}
         <TopBar />
-      </div>
-      <div className="app-body" style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
+      </header>
+      <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
-        <main className="content" data-testid="content">
+        <main className="content" id="main" tabIndex={-1} data-testid="content">
           <Router />
         </main>
         <RightPanel />
       </div>
-      <PlayerBar />
+      <PlayerBar inert={modal} />
+      <NowPlayingAnnouncer />
       {/* Covers the whole window (sidebar, panels and player bar included). */}
       {fullscreen ? <FullscreenPlayer /> : null}
       <ContextMenu />
@@ -62,6 +75,25 @@ export function App() {
   );
 }
 
+/**
+ * A polite live region that announces the track when it changes, and nothing
+ * else (never position ticks, lyrics lines or buffering).
+ */
+function NowPlayingAnnouncer() {
+  const id = useApp((s) => s.nowPlaying?.track.id);
+  const title = useApp((s) => s.nowPlaying?.track.title);
+  const artist = useApp((s) => s.nowPlaying?.track.artist);
+  const [text, setText] = useState("");
+  // What was already playing when the window opened is not a change: stay quiet.
+  const last = useRef<string | undefined>(id);
+  useEffect(() => {
+    if (id === last.current) return;
+    last.current = id;
+    if (id) setText(nowPlayingAnnouncement(title, artist));
+  }, [id, title, artist]);
+  return <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="now-playing-announcer">{text}</div>;
+}
+
 /** Theme (light/dark/system), accent colour setting and dynamic accent from artwork. */
 export function useTheme() {
   const theme = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
@@ -70,9 +102,14 @@ export function useTheme() {
   const cover = useApp((s) => s.nowPlaying?.track.coverArt);
   const accent = useApp((s) => s.accent);
   const setAccent = useApp((s) => s.setAccent);
+  const [resolved, setResolved] = useState<ThemeName>("light");
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => document.documentElement.setAttribute("data-theme", theme === "system" ? (mq.matches ? "dark" : "light") : theme);
+    const apply = () => {
+      const name: ThemeName = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
+      document.documentElement.setAttribute("data-theme", name);
+      setResolved(name);
+    };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
@@ -86,9 +123,17 @@ export function useTheme() {
     void resolveArtwork(cover, 64).then((url) => url && extractAccent(url)).then((c) => alive && setAccent(c));
     return () => { alive = false; };
   }, [dynamic, cover, setAccent]);
+  // Every accent-derived colour is contrast-checked for the theme (lib/contrast.ts).
   useEffect(() => {
-    document.documentElement.style.setProperty("--accent", accent ?? accentSetting);
-  }, [accent, accentSetting]);
+    const tokens = accentTokens(accent ?? accentSetting, resolved);
+    const style = document.documentElement.style;
+    style.setProperty("--accent", tokens.accent);
+    style.setProperty("--accent-fg", tokens.accentFg);
+    style.setProperty("--accent-text", tokens.accentText);
+    style.setProperty("--accent-inverse", tokens.accentInverse);
+    style.setProperty("--accent-tint", tokens.accentTint);
+    style.setProperty("--focus-ring", tokens.focusRing);
+  }, [accent, accentSetting, resolved]);
 }
 
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */

@@ -145,6 +145,10 @@ impl Actor {
             Command::Pin { target, transcode } => self.pin(target, transcode),
             Command::Unpin { target } => self.unpin(target),
             Command::ClearStreamCache => self.clear_stream_cache(),
+            Command::SetBackendCapabilities { core_stream } => {
+                let native = self.cfg.audio == AudioMode::Native;
+                self.core_stream = (core_stream || native) && self.stream_reader.is_some();
+            }
             Command::SetStorageWarnThreshold { bytes } => {
                 let v = match bytes {
                     Some(b) => serde_json::json!(b.max(0.0)),

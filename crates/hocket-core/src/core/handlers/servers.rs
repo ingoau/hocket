@@ -216,7 +216,7 @@ impl Actor {
         state.info = info;
         state.info.reachable = reachable;
         state.api = Some(api.clone());
-        if let Some(p) = &self.stream_proxy {
+        if let Some(p) = &self.stream_reader {
             p.set_api(Some(api.clone()));
         }
         state.client = client;
@@ -288,7 +288,7 @@ impl Actor {
         self.scope = None;
         self.last_doc = None;
         self.server = None;
-        if let Some(p) = &self.stream_proxy {
+        if let Some(p) = &self.stream_reader {
             p.set_api(None);
         }
         if let Err(e) = self.db.delete_server(&server_id) {

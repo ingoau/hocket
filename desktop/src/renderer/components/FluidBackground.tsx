@@ -1,21 +1,45 @@
 // Kawarp fluid background fed from the cached artwork via a CORS-clean <img>. Tint and
 // saturation tuned to sit behind AMLL's white lyric styling. Honours the
 // performance budget: stopped when hidden, ~24 fps unfocused, static blurred
-// still in battery saver or when the animated background is switched off.
+// still in battery saver, when the animated background is switched off, or
+// when the user prefers reduced motion.
+//
+// Contrast: a black scrim sits over the background, sized from the cover's
+// brightest colour so the fullscreen text colours (white and the 80 % white
+// muted text) reach 4.5:1 over any part of it. Until the cover is measured
+// the scrim assumes a white cover.
 import { useEffect, useRef, useState } from "react";
 import { Kawarp } from "@kawarp/core";
 import { useApp, useSetting } from "../store/app";
 import { useArtwork } from "./Artwork";
 import { SK } from "@shared/settings-keys";
+import { usePrefersReducedMotion } from "../lib/media";
+import { extractBrightest } from "../lib/accent";
+import { WHITE, scrimAlpha, type Rgb } from "../lib/contrast";
+
+/** Alpha of the fullscreen player's muted text (global.css `.fullscreen --fg-muted`). */
+export const FULLSCREEN_MUTED_ALPHA = 0.8;
+/** A little above 4.5:1: the fluid background is resampled and saturated, not the exact cover. */
+const TARGET = 4.8;
 
 export function FluidBackground({ coverArt }: { coverArt: string | undefined }) {
   const perf = useApp((s) => s.perf);
   const batterySaver = useApp((s) => s.batterySaver);
   const animatedSetting = useSetting(SK.displayAnimatedBackground, true);
+  const reducedMotion = usePrefersReducedMotion();
   const url = useArtwork(coverArt, 300);
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);
-  const animated = animatedSetting && !batterySaver;
+  const animated = animatedSetting && !batterySaver && !reducedMotion;
+  const [brightest, setBrightest] = useState<Rgb | undefined>(undefined);
+  useEffect(() => {
+    setBrightest(undefined);
+    if (!url) return;
+    let alive = true;
+    void extractBrightest(url).then((c) => alive && setBrightest(c));
+    return () => { alive = false; };
+  }, [url]);
+  const scrim = scrimAlpha(brightest ?? WHITE, FULLSCREEN_MUTED_ALPHA, TARGET);
   const [source, setSource] = useState<"none" | "artwork" | "gradient">("none");
 
   useEffect(() => {
@@ -97,6 +121,7 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     return () => clearInterval(id);
   }, [perf, animated]);
 
-  if (!animated) return url ? <img className="bg-still" src={url} alt="" /> : <div className="bg-still" style={{ background: "#1c1c28" }} />;
-  return <canvas ref={canvas} className="bg" data-testid="fluid-bg" data-source={source} />;
+  const shade = <div className="bg-shade" style={{ background: `rgba(0, 0, 0, ${scrim})` }} data-scrim={scrim} data-measured={brightest ? "true" : "false"} data-testid="fs-scrim" aria-hidden="true" />;
+  if (!animated) return <>{url ? <img className="bg-still" src={url} alt="" data-testid="fs-still" /> : <div className="bg-still" style={{ background: "#1c1c28" }} data-testid="fs-still" />}{shade}</>;
+  return <><canvas ref={canvas} className="bg" data-testid="fluid-bg" data-source={source} aria-hidden="true" />{shade}</>;
 }

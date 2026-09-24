@@ -81,6 +81,7 @@ pub mod keys {
     pub const CONNECT_ALLOW_INSECURE_COORDINATOR: &str = "connect.allowInsecureCoordinator";
     pub const STORAGE_WARN_THRESHOLD_BYTES: &str = "storage.warnThresholdBytes";
     pub const STORAGE_CACHE_MAX_BYTES: &str = "storage.cacheMaxBytes";
+    pub const STORAGE_PREFETCH_ON_MOBILE_DATA: &str = "storage.prefetchOnMobileData";
     pub const DOWNLOADS_TRANSCODE: &str = "downloads.transcode";
     pub const DOWNLOADS_WIFI_ONLY: &str = "downloads.wifiOnly";
     pub const SLEEP_DEFAULT_MINUTES: &str = "sleep.defaultMinutes";
@@ -394,6 +395,9 @@ pub static REGISTRY: &[SettingDef] = &[
         },
         || json!(2.0 * GIB),
     ),
+    def(STORAGE_PREFETCH_ON_MOBILE_DATA, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
     def(DOWNLOADS_TRANSCODE, Local, SettingKind::Bool, || {
         json!(false)
     }),
