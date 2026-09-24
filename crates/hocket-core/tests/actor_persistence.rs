@@ -96,6 +96,48 @@ async fn corrupt_settings_are_backed_up_reported_and_not_broadcast() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_v1_settings_document_is_backed_up_and_migrated() {
+    let t = TestCore::start("settings-v1", seeded_server(2, 100.0)).await;
+    t.core.shutdown().await;
+    // Version 1 stored the automatic stream-cache budget as 2 GiB.
+    let db = t.open_db();
+    let v1 = r#"{"version":1,"entries":{"storage.cacheMaxBytes":{"value":2147483648.0,"updatedAt":1.0,"scope":"deviceLocal"},"scrobble.enabled":{"value":false,"updatedAt":1.0,"scope":"accountSynced"}}}"#;
+    db.saved_state_set_raw("settings", v1, &WallClock).unwrap();
+    drop(db);
+    let TestCore {
+        clock, server, dir, ..
+    } = t;
+    let t = TestCore::start_in("settings-v1", server, None, 1, clock, dir).await;
+    let snap = t.snapshot().await;
+    let value = |key: &str| {
+        snap.settings
+            .iter()
+            .find(|s| s.key == key)
+            .map(|s| s.value.clone())
+    };
+    assert_eq!(value("storage.cacheMaxBytes").as_deref(), Some("null"));
+    assert_eq!(value("scrobble.enabled").as_deref(), Some("false"));
+    match t.query(Query::Storage).await {
+        QueryResult::Storage(s) => assert!(s.cache_budget_auto),
+        other => panic!("{other:?}"),
+    }
+    // The original is kept, and the migrated document is what is stored now.
+    let db = t.open_db();
+    assert_eq!(
+        db.saved_state_get_raw("settings.v1-backup")
+            .unwrap()
+            .as_deref(),
+        Some(v1)
+    );
+    let stored = db
+        .saved_state_get_raw("settings")
+        .unwrap()
+        .expect("settings");
+    assert!(stored.contains(r#""version":2"#), "{stored}");
+    assert!(!stored.contains("2147483648"), "{stored}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn started_is_emitted_once_and_snapshot_requests_emit_snapshot() {
     let t = TestCore::start("once", seeded_server(2, 100.0)).await;
     let started = |t: &TestCore| {

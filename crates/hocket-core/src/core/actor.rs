@@ -230,7 +230,26 @@ impl Actor {
         // start and synced settings are not broadcast until a user edit.
         let (settings, settings_corrupt) = match settings_store.load() {
             Ok(Some(json)) => match Settings::from_json(&json) {
-                Ok(s) => (s, None),
+                Ok(s) => {
+                    // An older document was migrated on load: keep the
+                    // original, then persist the migrated one.
+                    if let Some(v) = Settings::document_version(&json)
+                        .filter(|v| *v < crate::settings::SETTINGS_DOC_VERSION)
+                    {
+                        let key = format!("settings.v{v}-backup");
+                        match db.saved_state_set_raw(&key, &json, clock.as_ref()) {
+                            Ok(()) => {
+                                if let Err(e) = s.save(&settings_store) {
+                                    tracing::warn!(error = %e, "saving migrated settings");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "backing up settings before migrating")
+                            }
+                        }
+                    }
+                    (s, None)
+                }
                 Err(e) => {
                     let key = format!("settings.corrupt-{}", clock.now_ms() as i64);
                     let backed_up = db.saved_state_set_raw(&key, &json, clock.as_ref());

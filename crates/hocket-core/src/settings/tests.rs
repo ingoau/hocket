@@ -200,7 +200,7 @@ fn set_validate_reset_and_persist() {
     );
 
     // Unknown keys from a newer app survive a round trip, with their scope.
-    let doc = r#"{"version":2,"entries":{"future.key":{"value":42,"updatedAt":5.0,"scope":"accountSynced"},"queue.savedCap":{"value":999,"updatedAt":1.0}}}"#;
+    let doc = r#"{"version":3,"entries":{"future.key":{"value":42,"updatedAt":5.0,"scope":"accountSynced"},"queue.savedCap":{"value":999,"updatedAt":1.0}}}"#;
     let s = Settings::from_json(doc).unwrap();
     assert_eq!(s.get("future.key"), json!(42));
     assert_eq!(s.scope_of("future.key"), Some(SettingScope::AccountSynced));
@@ -444,7 +444,7 @@ fn v0_document_migrates_forward() {
         "customBlock": { "a": 1 }
     }"#;
     let doc = parse_document(v0).unwrap();
-    assert_eq!(doc.version, 1);
+    assert_eq!(doc.version, CONFIG_VERSION);
     assert_eq!(doc.exported_at, 5.0);
     let cap = doc
         .settings
@@ -644,4 +644,105 @@ fn external_lyrics_toggle_is_device_local() {
         )])
         .is_empty());
     assert!(!s.get_bool(keys::LYRICS_EXTERNAL_ENABLED));
+}
+
+/// Version 1 read `storage.cacheMaxBytes` equal to its old 2 GiB default as
+/// "automatic"; version 2 keeps automatic as `null`, so a user's own 2 GiB
+/// is a budget like any other.
+#[test]
+fn cache_budget_automatic_is_null_and_v1_documents_migrate() {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let mut s = Settings::new();
+    assert_eq!(
+        s.get(keys::STORAGE_CACHE_MAX_BYTES),
+        Value::Null,
+        "automatic by default"
+    );
+    s.set_json(keys::STORAGE_CACHE_MAX_BYTES, &(2.0 * GIB).to_string(), 1.0)
+        .unwrap();
+    assert_eq!(s.get_f64(keys::STORAGE_CACHE_MAX_BYTES), 2.0 * GIB);
+    // Survives a save and load (no migration at the current version).
+    let again = Settings::from_json(&s.to_json().unwrap()).unwrap();
+    assert_eq!(again.get_f64(keys::STORAGE_CACHE_MAX_BYTES), 2.0 * GIB);
+    s.set_json(keys::STORAGE_CACHE_MAX_BYTES, "null", 2.0)
+        .unwrap();
+    assert_eq!(s.get(keys::STORAGE_CACHE_MAX_BYTES), Value::Null);
+    s.set_json(keys::STORAGE_CACHE_MAX_BYTES, "1e9", 3.0)
+        .unwrap();
+    s.reset(keys::STORAGE_CACHE_MAX_BYTES, 4.0).unwrap();
+    assert_eq!(
+        s.get(keys::STORAGE_CACHE_MAX_BYTES),
+        Value::Null,
+        "reset is automatic"
+    );
+    assert!(
+        s.set_json(keys::STORAGE_CACHE_MAX_BYTES, "1", 5.0).is_err(),
+        "below the minimum"
+    );
+    assert!(
+        s.set_json(keys::DISPLAY_QUEUE_PANEL_SPLIT, "null", 5.0)
+            .is_err(),
+        "not nullable"
+    );
+
+    // A v1 document: 2 GiB (set, or reset to the old default) was automatic; other sizes stay.
+    let v1 = |bytes: f64| {
+        format!(
+            r#"{{"version":1,"entries":{{"storage.cacheMaxBytes":{{"value":{bytes},"updatedAt":7.0,"scope":"deviceLocal"}}}}}}"#
+        )
+    };
+    assert_eq!(Settings::document_version(&v1(1.0)), Some(1));
+    let migrated = Settings::from_json(&v1(2.0 * GIB)).unwrap();
+    assert_eq!(migrated.get(keys::STORAGE_CACHE_MAX_BYTES), Value::Null);
+    let kept = Settings::from_json(&v1(5e8)).unwrap();
+    assert_eq!(kept.get_f64(keys::STORAGE_CACHE_MAX_BYTES), 5e8);
+    let saved = migrated.to_json().unwrap();
+    assert_eq!(
+        Settings::document_version(&saved),
+        Some(SETTINGS_DOC_VERSION)
+    );
+    // A current document's 2 GiB is not migrated again.
+    let current = v1(2.0 * GIB).replace(
+        r#""version":1"#,
+        &format!(r#""version":{SETTINGS_DOC_VERSION}"#),
+    );
+    assert_eq!(
+        Settings::from_json(&current)
+            .unwrap()
+            .get_f64(keys::STORAGE_CACHE_MAX_BYTES),
+        2.0 * GIB
+    );
+
+    // Config backups: a v1 export carried every key, the automatic budget as 2 GiB.
+    let backup = |version: u32, value: &str| {
+        format!(
+            r#"{{"version":{version},"settings":[{{"key":"storage.cacheMaxBytes","value":"{value}","scope":"deviceLocal","updatedAt":1.0}}]}}"#
+        )
+    };
+    let budget = |doc: &crate::api::ConfigDocument| {
+        doc.settings
+            .iter()
+            .find(|s| s.key == keys::STORAGE_CACHE_MAX_BYTES)
+            .map(|s| s.value.clone())
+    };
+    let d = parse_document(&backup(1, "2147483648.0")).unwrap();
+    assert_eq!(d.version, CONFIG_VERSION);
+    assert_eq!(budget(&d).as_deref(), Some("null"));
+    let d = parse_document(&backup(1, "2147483648")).unwrap();
+    assert_eq!(budget(&d).as_deref(), Some("null"));
+    let d = parse_document(&backup(1, "500000000.0")).unwrap();
+    assert_eq!(budget(&d).as_deref(), Some("500000000.0"));
+    let d = parse_document(&backup(2, "2147483648.0")).unwrap();
+    assert_eq!(
+        budget(&d).as_deref(),
+        Some("2147483648.0"),
+        "a v2 2 GiB is the user's"
+    );
+    let mut s = Settings::new();
+    s.set_json(keys::STORAGE_CACHE_MAX_BYTES, "1e9", 1.0)
+        .unwrap();
+    let d = parse_document(&backup(1, "2147483648.0")).unwrap();
+    let out = s.import_settings(&d.settings, 2.0, true);
+    assert_eq!(out.applied, vec![keys::STORAGE_CACHE_MAX_BYTES]);
+    assert_eq!(s.get(keys::STORAGE_CACHE_MAX_BYTES), Value::Null);
 }

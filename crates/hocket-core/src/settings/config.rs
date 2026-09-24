@@ -14,7 +14,10 @@ use crate::api::{
 };
 
 /// Current document version.
-pub const CONFIG_VERSION: u32 = 1;
+///
+/// - 2: `storage.cacheMaxBytes` is `null` for an automatic stream-cache
+///   budget (a v1 document's 2 GiB meant automatic).
+pub const CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ConfigError {
@@ -99,6 +102,7 @@ pub fn parse_document(json: &str) -> Result<ConfigDocument, ConfigError> {
     while v < CONFIG_VERSION {
         obj = match v {
             0 => migrate_v0_to_v1(obj)?,
+            1 => migrate_v1_to_v2(obj),
             _ => {
                 return Err(ConfigError::Invalid(format!(
                     "no migration from version {v}"
@@ -201,6 +205,29 @@ fn migrate_v0_to_v1(mut obj: Map<String, Value>) -> Result<Map<String, Value>, C
     }
     obj.insert("version".into(), json!(1));
     Ok(obj)
+}
+
+/// v1 stored the automatic stream-cache budget as its old default, 2 GiB;
+/// v2 stores `null`, so a user-chosen 2 GiB is a budget of its own.
+fn migrate_v1_to_v2(mut obj: Map<String, Value>) -> Map<String, Value> {
+    if let Some(Value::Array(settings)) = obj.get_mut("settings") {
+        for s in settings.iter_mut().filter_map(Value::as_object_mut) {
+            if s.get("key").and_then(Value::as_str) != Some(super::keys::STORAGE_CACHE_MAX_BYTES) {
+                continue;
+            }
+            let Some(mut value) = s
+                .get("value")
+                .and_then(Value::as_str)
+                .and_then(|v| serde_json::from_str::<Value>(v).ok())
+            else {
+                continue;
+            };
+            super::migrate_cache_budget_v1(&mut value);
+            s.insert("value".into(), Value::String(value.to_string()));
+        }
+    }
+    obj.insert("version".into(), json!(2));
+    obj
 }
 
 #[cfg(test)]

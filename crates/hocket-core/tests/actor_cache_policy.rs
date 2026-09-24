@@ -336,6 +336,22 @@ async fn the_budget_is_automatic_until_set_and_data_saved_is_counted() {
     })
     .await;
     assert!(storage(&t).await.cache_budget_auto);
+    // A user-chosen 2 GiB (the automatic ceiling) is a fixed budget, not automatic.
+    t.run(Command::SetSetting {
+        key: "storage.cacheMaxBytes".into(),
+        value: (2.0 * 1024.0 * 1024.0 * 1024.0).to_string(),
+    })
+    .await;
+    let s = storage(&t).await;
+    assert!(!s.cache_budget_auto);
+    assert_eq!(s.cache_budget_bytes, 2.0 * 1024.0 * 1024.0 * 1024.0);
+    // `null` is automatic again.
+    t.run(Command::SetSetting {
+        key: "storage.cacheMaxBytes".into(),
+        value: "null".into(),
+    })
+    .await;
+    assert!(storage(&t).await.cache_budget_auto);
 
     // One fetch, two plays from disk.
     t.upstream.set_media("t0", vec![4u8; 100_000], "audio/flac");

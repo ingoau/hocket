@@ -1370,8 +1370,10 @@ pub struct StorageSummary {
     /// The stream cache's effective budget.
     #[serde(default)]
     pub cache_budget_bytes: f64,
-    /// `true` while `storage.cacheMaxBytes` was never set: the budget is
-    /// min(2 GiB, 10% of the cache volume's space), re-evaluated as it moves.
+    /// `true` while `storage.cacheMaxBytes` is `null` (its default; set it to
+    /// `null` or reset it to go back): the budget is min(2 GiB, 10% of the
+    /// cache volume's space), re-evaluated as it moves. Any number, 2 GiB
+    /// included, is a fixed budget.
     #[serde(default)]
     pub cache_budget_auto: bool,
     /// Bytes players read from downloads or the stream cache (since install).
