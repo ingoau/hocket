@@ -719,6 +719,14 @@ fn random_scenarios_lan_then_coordinator() {
     });
 }
 
+#[test]
+fn random_scenarios_lan_then_coordinator_with_a_hostile_peer() {
+    run_seeds_with(4000..4020, Topology::LanThenCoordinator, 30, |cfg| {
+        cfg.coordinator_returns_ms = 30_000.0 + (cfg.seed % 7) as f64 * 20_000.0;
+        cfg.hostile = true;
+    });
+}
+
 /// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1 | HOCKET_SIM_LAN_THEN_COORDINATOR=1] [HOCKET_SIM_HOSTILE=1] [HOCKET_SIM_ACTIONS=<n>] cargo test ... random_single_seed -- --nocapture`.
 /// The batches use 40 actions for coordinator seeds and 30 for LAN ones (60 for batch 3).
 #[test]
