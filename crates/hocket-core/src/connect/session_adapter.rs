@@ -297,7 +297,8 @@ mod tests {
     #[test]
     fn replace_keeps_identity_and_lease() {
         let r = RealReducer::default();
-        let mut base = crate::session::new_document("scope", "sid".into(), 0.0);
+        let empty = crate::session::new_document("scope", "sid".into(), 0.0);
+        let mut base = apply_op(&r, &empty, &ctx_op(3), &op_context("p", 1.0, 0), 3).unwrap();
         base.transport.lease.epoch = 7;
         let mut other = crate::session::new_document("other", "other-sid".into(), 0.0);
         other.autoplay = true;
@@ -314,6 +315,44 @@ mod tests {
         assert_eq!(out.revision, 4);
         assert!(out.autoplay);
         assert_eq!(out.transport.lease.epoch, 7);
+    }
+
+    #[test]
+    fn replace_onto_an_empty_document_takes_the_replacing_identity() {
+        let r = RealReducer::default();
+        let mut base = crate::session::new_document("scope", "room-sid".into(), 0.0);
+        base.transport.lease.epoch = 7;
+        let theirs = apply_op(
+            &r,
+            &crate::session::new_document("scope", "their-sid".into(), 0.0),
+            &ctx_op(3),
+            &op_context("p", 1.0, 0),
+            5,
+        )
+        .unwrap();
+        let op = SessionOp::Replace { document: theirs };
+        let ctx = op_context("o", 5.0, 0);
+        // Every replica applies the commit to the same (empty) base, so the
+        // room and all of its members agree on the adopted id.
+        let room = apply_op(&r, &base, &op, &ctx, 1).unwrap();
+        let member = apply_op(&r, &base, &op, &ctx, 1).unwrap();
+        assert_eq!(room, member);
+        assert_eq!(room.session_id, "their-sid");
+        assert_eq!(room.scope, "scope");
+        assert_eq!(room.revision, 1);
+        assert_eq!(room.transport.lease.epoch, 7);
+        // Only the first Replace names the session: the next one keeps it.
+        let later = apply_op(
+            &r,
+            &room,
+            &SessionOp::Replace {
+                document: crate::session::new_document("scope", "late-sid".into(), 0.0),
+            },
+            &ctx,
+            2,
+        )
+        .unwrap();
+        assert_eq!(later.session_id, "their-sid");
     }
 
     #[test]

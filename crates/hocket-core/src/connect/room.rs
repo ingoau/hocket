@@ -22,9 +22,7 @@ use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
     WireMessage,
 };
-use crate::connect::{
-    apply_op, doc_is_trivial, op_context, PeerId, ReducerHandle, SessionOp, LOOPBACK,
-};
+use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, SessionOp, LOOPBACK};
 use crate::util::Clock;
 
 /// A member that has sent nothing for this long is dropped. Clients ping
@@ -956,17 +954,16 @@ impl Room {
                 let at = if at > 0.0 { at } else { now };
                 let ctx = op_context(&op_id, at, position_ms);
                 let target = base_revision.saturating_add(1);
-                let mut doc = self.replica.document.clone();
-                let adopt_identity =
-                    matches!(op, SessionOp::Replace { .. }) && doc_is_trivial(&doc);
-                match apply_op(self.reducer.as_ref(), &doc, &op, &ctx, target) {
-                    Ok(next) => {
-                        doc = next;
-                        if adopt_identity {
-                            if let SessionOp::Replace { document } = &op {
-                                doc.session_id = document.session_id.clone();
-                            }
-                        }
+                // A Replace onto an empty room adopts the submitter's
+                // session id inside `apply_op`, identically on every replica.
+                match apply_op(
+                    self.reducer.as_ref(),
+                    &self.replica.document,
+                    &op,
+                    &ctx,
+                    target,
+                ) {
+                    Ok(doc) => {
                         self.replica.set_document(doc, now);
                         self.dirty = true;
                         self.send(

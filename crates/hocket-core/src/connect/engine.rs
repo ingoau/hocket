@@ -4138,6 +4138,67 @@ mod tests {
     }
 
     #[test]
+    fn a_member_of_an_empty_room_takes_the_session_id_of_the_first_replace() {
+        // Another device's real queue, under its own session id.
+        let (mut c, _) = engine("c");
+        c.handle(Input::LocalOp { op: play_op() });
+        let theirs = c.document().clone();
+        assert_eq!(theirs.session_id, "sid-c");
+
+        // b joins an empty coordinator room and adopts its (trivial) identity.
+        let (mut e, _) = engine("b");
+        let empty = crate::session::new_document("scope", "coordinator-session".into(), 0.0);
+        attach(&mut e, Some(replica_with(empty)), vec![dev("c")]);
+        assert_eq!(e.document().session_id, "coordinator-session");
+
+        // c pushes its queue into the room: every replica, b included, now
+        // carries c's session id, exactly as the room does.
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: SessionOp::Replace {
+                    document: theirs.clone(),
+                },
+                revision: 1,
+                device_id: "c".into(),
+                op_id: "c-9".into(),
+                at: 10_000.0,
+                position_ms: 0,
+            }),
+        });
+        assert_eq!(e.document().session_id, "sid-c");
+        assert_eq!(e.document().revision, 1);
+        assert_eq!(e.sync_base().unwrap().session_id, "sid-c");
+
+        // A reconnect to the unchanged room is a no-op, not "session moved on".
+        e.handle(Input::Disconnected { peer: "up".into() });
+        let mut room_doc = theirs;
+        room_doc.revision = 1;
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 10_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: Some(replica_with(room_doc)),
+                members: vec![dev("c")],
+                extra: Default::default(),
+            }),
+        });
+        assert!(
+            !outs
+                .iter()
+                .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })),
+            "an identical queue must not be filed: {outs:?}"
+        );
+        assert_eq!(e.document().session_id, "sid-c");
+        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
+    }
+
+    #[test]
     fn offline_ops_fast_forward_when_nobody_moved() {
         let (mut e, clock) = engine("a");
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);

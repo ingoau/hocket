@@ -186,6 +186,11 @@ pub fn seed_from(s: &str) -> u32 {
 /// Apply an op to a document at a given target revision: runs the reducer
 /// (handling [`SessionOp::Replace`] here so every reducer gets it for free),
 /// then pins `revision`, `sessionId` and `scope`.
+///
+/// A `Replace` onto a trivial document (an empty room) adopts the replacing
+/// document's `sessionId`: the first real queue in a room names the session.
+/// Every replica applies a commit to the same base, so the room, the
+/// submitter and every member all end up with the same id.
 pub fn apply_op(
     reducer: &dyn SessionReducer,
     doc: &SessionDocument,
@@ -193,8 +198,12 @@ pub fn apply_op(
     ctx: &OpContext,
     revision: u32,
 ) -> Result<SessionDocument, ReduceFailure> {
+    let mut session_id = doc.session_id.clone();
     let mut next = match op {
         SessionOp::Replace { document } => {
+            if doc_is_trivial(doc) {
+                session_id = document.session_id.clone();
+            }
             let mut d = document.clone();
             d.transport.lease = doc.transport.lease.clone();
             d
@@ -202,7 +211,7 @@ pub fn apply_op(
         other => reducer.apply(doc, other, ctx)?,
     };
     next.revision = revision;
-    next.session_id = doc.session_id.clone();
+    next.session_id = session_id;
     next.scope = doc.scope.clone();
     next.updated_at = ctx.now;
     Ok(next)

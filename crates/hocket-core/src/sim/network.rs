@@ -198,9 +198,27 @@ impl Network {
                 continue;
             }
             let c = self.conditions(&p.0, &p.1);
-            let at = self.last_release_at.max(now) + c.delay_ms;
+            let mut at = self.last_release_at.max(now) + c.delay_ms;
             self.last_release_at = at;
             let _ = link_idx_hint;
+            // A stream never reorders: the released frame lands behind
+            // everything already scheduled on its link in that direction,
+            // and anything sent after the heal queues behind it.
+            if let NetEvent::Message { peer, .. } = &event {
+                if let Some(link) = self
+                    .links
+                    .iter_mut()
+                    .find(|l| (l.a == to && &l.a_peer == peer) || (l.b == to && &l.b_peer == peer))
+                {
+                    let last = if link.a == to {
+                        &mut link.last_b_to_a
+                    } else {
+                        &mut link.last_a_to_b
+                    };
+                    at = at.max(*last);
+                    *last = at;
+                }
+            }
             self.enqueue(at, &to, event);
         }
     }
@@ -669,6 +687,68 @@ mod tests {
         n.connect(400.0, &mut rng, "a", &["wss://nope/".into()]);
         let evs = n.due(500.0);
         assert!(matches!(&evs[0], (_, NetEvent::ConnectFailed { .. })));
+    }
+
+    #[test]
+    fn frames_sent_right_after_a_heal_queue_behind_the_parked_ones() {
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let mut n = Network::new(Conditions {
+            delay_ms: 10.0,
+            jitter_ms: 0.0,
+            drop: 0.0,
+        });
+        n.bind("wss://c/", "c");
+        // A slow b<->c stream keeps a delivery in flight well past the heal.
+        n.set_conditions(
+            "b",
+            "c",
+            Conditions {
+                delay_ms: 500.0,
+                jitter_ms: 0.0,
+                drop: 0.0,
+            },
+        );
+        n.connect(0.0, &mut rng, "a", &["wss://c/".into()]);
+        n.connect(0.0, &mut rng, "b", &["wss://c/".into()]);
+        let evs = n.due(2_000.0);
+        let c_peer_for_a = evs
+            .iter()
+            .find_map(|(to, e)| match e {
+                NetEvent::Accepted { peer } if to == "c" => Some(peer.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let b_peer = evs
+            .iter()
+            .find_map(|(to, e)| match e {
+                NetEvent::Connected { peer, .. } if to == "b" => Some(peer.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let ping = |t0: f64| WireMessage::new(Msg::ClockPing { t0 });
+
+        n.partition("a", "c");
+        n.send(2_000.0, &mut rng, "c", &c_peer_for_a, ping(1.0));
+        n.send(2_000.0, &mut rng, "c", &c_peer_for_a, ping(2.0));
+        assert_eq!(n.in_flight(), 0, "parked while partitioned");
+        // Lands at 2600.
+        n.send(2_100.0, &mut rng, "b", &b_peer, ping(100.0));
+        // The heal and a fresh frame in the same instant: the fresh frame
+        // must not overtake the parked ones on the same stream.
+        n.heal("a", "c");
+        n.send(2_100.0, &mut rng, "c", &c_peer_for_a, ping(3.0));
+        let to_a: Vec<f64> = n
+            .due(10_000.0)
+            .into_iter()
+            .filter_map(|(to, e)| match e {
+                NetEvent::Message { msg, .. } if to == "a" => match msg.msg {
+                    Msg::ClockPing { t0 } => Some(t0),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(to_a, vec![1.0, 2.0, 3.0]);
     }
 
     #[test]

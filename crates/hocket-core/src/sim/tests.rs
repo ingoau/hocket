@@ -813,6 +813,41 @@ fn lan_hostile_seed_43_scrobbles_once_across_a_partition() {
     run_seeds_with(43..44, Topology::Lan, 30, |cfg| cfg.hostile = true);
 }
 
+/// Run one LAN-then-coordinator seed with a hostile peer exactly as
+/// `random_single_seed_from_env` does (the wide scans use it).
+fn run_lan_then_coordinator_hostile_seed(seed: u64) {
+    run_seeds_with(seed..seed + 1, Topology::LanThenCoordinator, 40, |cfg| {
+        cfg.coordinator_returns_ms = 30_000.0 + (cfg.seed % 7) as f64 * 20_000.0;
+        cfg.hostile = true;
+    });
+}
+
+/// LAN seed 2428: a device pushed its queue (`Replace`) into a room that was
+/// still empty. The room took on that device's session id, but the members
+/// already in it kept the old one; the next reconnect filed an identical
+/// queue as "session moved on". `apply_op` now adopts the id on every replica.
+#[test]
+fn lan_seed_2428_members_adopt_the_id_of_the_first_queue_in_an_empty_room() {
+    run_seeds(2428..2429, Topology::Lan, 30);
+}
+
+/// The same session-id split with the coordinator as the empty room (a fresh
+/// or expired coordinator replica); the hostile peer plays no part.
+#[test]
+fn lan_then_coordinator_hostile_seeds_members_adopt_the_id_of_the_first_queue() {
+    for seed in [851, 1142, 1291, 1441, 1485, 1904] {
+        run_lan_then_coordinator_hostile_seed(seed);
+    }
+}
+
+/// LAN-then-coordinator hostile seed 1375: frames parked by a partition were
+/// overtaken on heal by a frame sent in the same instant, which a real
+/// stream never does. The device then dropped the ack of its own accepted op.
+#[test]
+fn lan_then_coordinator_hostile_seed_1375_parked_frames_stay_in_order_on_heal() {
+    run_lan_then_coordinator_hostile_seed(1375);
+}
+
 /// Seeds with an open bug, excluded from the batches so the harness stays a
 /// gate for everything else. Reproduce one with `random_single_seed_from_env`.
 /// Empty at the moment; keep it that way.
