@@ -208,20 +208,23 @@ fun TrackRow(
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
-    SwipeActionBox(
-        startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
-        endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
-        // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
+    // The row (and the caller's modifier) stays the one merged accessibility item; only its content
+    // slides under the swipe.
+    SelectableRow(
+        selected, selectionActive, onClick, onToggleSelect, label,
         modifier = modifier,
-        enabled = swipe != null && !selectionActive,
+        // "playing, downloaded": the row's state, merged with its label into one item.
+        state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
+            .joinToString(", ").ifEmpty { null },
+        actions = actions,
+        clickLabel = stringResource(R.string.action_play),
     ) {
-        SelectableRow(
-            selected, selectionActive, onClick, onToggleSelect, label,
-            // "playing, downloaded": the row's state, merged with its label into one item.
-            state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
-                .joinToString(", ").ifEmpty { null },
-            actions = actions,
-            clickLabel = stringResource(R.string.action_play),
+        SwipeActionBox(
+            startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
+            endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
+            // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
+            enabled = swipe != null && !selectionActive,
+            swipeSurface = MaterialTheme.colorScheme.surface,
         ) {
             Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
