@@ -46,7 +46,7 @@ class RowSemanticsTest {
 
     @Test
     fun aTrackRowReadsAsOneItemWithItsStateAndTheRowMenuAsActions() {
-        val core = TestCore(startPlaying = false)
+        val core = TestCore()
         val opened = mutableListOf<String>()
         core.start()
         val track = core.fake.library.tracks.first { it.albumId != null && it.artistId != null }.toSummary().copy(loved = true, offline = app.hocket.core.api.OfflineState.None)
@@ -70,6 +70,8 @@ class RowSemanticsTest {
         fun run(label: String) = compose.onNodeWithTag("row").performCustomAction(compose, label)
         run("Play next")
         compose.waitUntil(5_000) { core.client.queue.value.playingNext.any { it.track.id == track.id } }
+        run("Add to queue")
+        compose.waitUntil(5_000) { core.client.queue.value.playingNext.count { it.track.id == track.id } + core.client.queue.value.upcoming.count { it.track.id == track.id } >= 2 }
         run("Go to album"); run("Go to artist")
         assertEquals(listOf("album:${track.albumId}", "artist:${track.artistId}"), opened)
         run("More options")
@@ -78,6 +80,8 @@ class RowSemanticsTest {
         compose.waitForIdle()
         compose.onNodeWithTag("rating").performSemanticsAction(SemanticsActions.SetProgress) { it(4f) }
         compose.waitUntil(5_000) { core.fake.library.track(track.id)?.rating == 4u }
+        compose.waitForIdle()
+        assertTrue("picking a rating closes the dialog", runCatching { compose.onNodeWithTag("rating").assertExists() }.isFailure)
     }
 
     @Test

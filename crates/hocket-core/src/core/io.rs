@@ -226,6 +226,13 @@ pub mod memory {
         next_peer: u64,
         /// Ports whose links are cut (both directions).
         down: Vec<u16>,
+        /// Links go through relays that [`MemoryNet::set_partitioned`] can
+        /// cut (see [`MemoryNet::new_partitionable`]).
+        relayed: bool,
+        /// Every device is cut off from every other: no connection opens.
+        partitioned: bool,
+        /// Cut switches of the live relayed links.
+        cuts: Vec<tokio::sync::watch::Sender<bool>>,
     }
 
     /// The shared hub. Clone the `Arc` into every core's [`MemoryIo`].
@@ -237,6 +244,30 @@ pub mod memory {
     impl MemoryNet {
         pub fn new() -> Arc<MemoryNet> {
             Arc::new(MemoryNet::default())
+        }
+
+        /// A network whose links [`MemoryNet::set_partitioned`] can cut while
+        /// they are open (each link runs through a relay task, so plain
+        /// networks keep their direct channels).
+        pub fn new_partitionable() -> Arc<MemoryNet> {
+            let net = MemoryNet::default();
+            net.hub.lock().relayed = true;
+            Arc::new(net)
+        }
+
+        /// Partition every device from every other (open links are cut and
+        /// no new connection opens; discovery adverts stay, as on a LAN
+        /// whose peers still see each other's mDNS but can't reach them),
+        /// or heal. Only on a [`MemoryNet::new_partitionable`] network.
+        pub fn set_partitioned(&self, partitioned: bool) {
+            let mut h = self.hub.lock();
+            assert!(h.relayed, "set_partitioned needs new_partitionable()");
+            h.partitioned = partitioned;
+            if partitioned {
+                for cut in h.cuts.drain(..) {
+                    let _ = cut.send(true);
+                }
+            }
         }
 
         /// I/O for one device on this network.
@@ -356,6 +387,55 @@ pub mod memory {
         }
     }
 
+    /// A sender whose messages reach `to` until the link is cut; then `to`
+    /// sees the link close.
+    fn relay(
+        to: mpsc::UnboundedSender<WireMessage>,
+        mut cut: tokio::sync::watch::Receiver<bool>,
+    ) -> mpsc::UnboundedSender<WireMessage> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<WireMessage>();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    m = rx.recv() => match m {
+                        Some(m) if !*cut.borrow() => {
+                            if to.send(m).is_err() {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    },
+                    _ = cut.changed() => break,
+                }
+            }
+        });
+        tx
+    }
+
+    /// A receiver fed from `from` until the link is cut.
+    fn relay_rx(
+        mut from: mpsc::UnboundedReceiver<WireMessage>,
+        mut cut: tokio::sync::watch::Receiver<bool>,
+    ) -> mpsc::UnboundedReceiver<WireMessage> {
+        let (tx, rx) = mpsc::unbounded_channel::<WireMessage>();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    m = from.recv() => match m {
+                        Some(m) if !*cut.borrow() => {
+                            if tx.send(m).is_err() {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    },
+                    _ = cut.changed() => break,
+                }
+            }
+        });
+        rx
+    }
+
     impl ConnectIo for MemoryIo {
         fn connect(
             &self,
@@ -377,6 +457,13 @@ pub mod memory {
                         continue;
                     };
                     let mut h = net.hub.lock();
+                    if h.partitioned {
+                        last = TransportError::Connect {
+                            url,
+                            error: "partitioned".into(),
+                        };
+                        continue;
+                    }
                     if h.down.contains(&port) {
                         last = TransportError::Connect {
                             url,
@@ -393,9 +480,19 @@ pub mod memory {
                     };
                     h.next_peer += 1;
                     let server_peer = format!("mem-{}", h.next_peer);
+                    let cut = h.relayed.then(|| {
+                        let (cut_tx, cut_rx) = tokio::sync::watch::channel(false);
+                        h.cuts.retain(|c| !c.is_closed());
+                        h.cuts.push(cut_tx);
+                        cut_rx
+                    });
                     drop(h);
                     let (a_tx, a_rx) = mpsc::unbounded_channel::<WireMessage>();
                     let (b_tx, b_rx) = mpsc::unbounded_channel::<WireMessage>();
+                    let (a_tx, b_rx) = match cut {
+                        Some(cut) => (relay(a_tx, cut.clone()), relay_rx(b_rx, cut)),
+                        None => (a_tx, b_rx),
+                    };
                     let server_side = Connection {
                         peer: server_peer,
                         url: format!("mem://{}", peer),

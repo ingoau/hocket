@@ -125,7 +125,7 @@ private fun DetailScaffold(
                     // Narrow screens (display size "largest") and large fonts stack the artwork above
                     // the header, so the rating, love and play buttons get the full width.
                     BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header")) {
-                        val stacked = maxWidth < 380.dp || LocalDensity.current.fontScale >= 1.5f
+                        val stacked = false
                         val art: @Composable () -> Unit = { Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(140.dp), if (roundArtwork) CircleShape else RoundedCornerShape(20.dp)) }
                         if (stacked) {
                             Column { art(); Spacer(Modifier.height(12.dp)); header() }

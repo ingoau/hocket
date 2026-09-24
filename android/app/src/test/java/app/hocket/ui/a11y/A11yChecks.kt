@@ -152,13 +152,16 @@ object A11yChecks {
             val x = a.boundsInRoot.intersect(b.boundsInRoot)
             if (x.width > 1f && x.height > 1f) out += Issue(describe(a) + " / " + describe(b), "controls overlap")
         }
-        for (n in everything) {
+        // Text in the unmerged tree: a button's or row's label is its own text node there.
+        val unmerged = all(rule.onRoot(useUnmergedTree = true).fetchSemanticsNode()).filter { visible(it, rootBounds) }
+        for (n in unmerged) {
             if (!n.config.contains(SemanticsActions.GetTextLayoutResult)) continue
             val results = mutableListOf<TextLayoutResult>()
             n.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)
             val r = results.firstOrNull() ?: continue
-            val ellipsized = r.lineCount > 0 && r.isLineEllipsized(r.lineCount - 1)
-            if (r.didOverflowHeight && !ellipsized) out += Issue(describe(n), "text clipped")
+            // Lines beyond maxLines end in an ellipsis (fine); lines that are laid out but do not fit
+            // the height the text was given are cut off.
+            if (r.size.height + 1 < r.multiParagraph.height) out += Issue(describe(n) + " text=${r.multiParagraph.height}px box=${r.size.height}px", "text clipped")
             if (isClipped(n) && !clippedByScroll(n, rootBounds)) out += Issue(describe(n) + " unclipped=${unclipped(n)}", "text clipped by its container")
         }
         return out

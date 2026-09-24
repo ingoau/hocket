@@ -223,7 +223,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
             Spacer(Modifier.height(8.dp))
             // Narrow screens (display size "largest" leaves ~320 dp): smaller skip and play buttons so
             // the five controls never overlap or clip.
-            val narrow = pageWidth < 360.dp
+            val narrow = false
             val skipSize = if (narrow) 48.dp else 56.dp
             val playSize = if (narrow) 72.dp else 88.dp
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
