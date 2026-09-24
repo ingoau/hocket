@@ -49,7 +49,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +91,8 @@ import app.hocket.NavBarPrefs
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.ui.LocalCoreClient
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableColumn
 
@@ -129,6 +135,50 @@ class ShellNavigator(
 )
 
 val LocalShellNavigator = staticCompositionLocalOf<ShellNavigator?> { null }
+
+/**
+ * Fires when the user taps the place that is already selected while its own root screen is showing
+ * (tapping it from a deeper screen pops back to that root instead). Root screens scroll their main
+ * list back to the top: [ScrollToTopOnReselect].
+ */
+val LocalTabReselected = staticCompositionLocalOf<SharedFlow<Unit>> { MutableSharedFlow() }
+
+/** Scrolls [state] back to the top when the current place's bar item is tapped again. */
+@Composable
+fun ScrollToTopOnReselect(state: LazyListState) {
+    val events = LocalTabReselected.current
+    LaunchedEffect(events, state) { events.collect { if (state.firstVisibleItemIndex > 12) state.scrollToItem(8); state.animateScrollToItem(0) } }
+}
+
+/** [ScrollToTopOnReselect] for grids. */
+@Composable
+fun ScrollToTopOnReselect(state: LazyGridState) {
+    val events = LocalTabReselected.current
+    LaunchedEffect(events, state) { events.collect { if (state.firstVisibleItemIndex > 24) state.scrollToItem(16); state.animateScrollToItem(0) } }
+}
+
+/** [ScrollToTopOnReselect] for plain scrolling columns. */
+@Composable
+fun ScrollToTopOnReselect(state: ScrollState) {
+    val events = LocalTabReselected.current
+    LaunchedEffect(events, state) { events.collect { state.animateScrollTo(0) } }
+}
+
+/** What tapping the already-selected place did ([reselectPlace]). */
+enum class Reselect { AtRoot, Popped, NotFound }
+
+/**
+ * Tapping the already-selected [item]: from a deeper screen, pops back to the place's own screen;
+ * on that screen already, reports [Reselect.AtRoot] so the caller can ask it to scroll to the top.
+ */
+fun NavHostController.reselectPlace(item: NavItem): Reselect {
+    val entries = currentBackStack.value.filter { it.destination !is NavGraph }
+    val top = entries.lastOrNull() ?: return Reselect.NotFound
+    if (item.isScreen(top.destination)) return Reselect.AtRoot
+    val root = entries.lastOrNull { item.isScreen(it.destination) } ?: return Reselect.NotFound
+    popBackStack(root.destination.id, inclusive = false)
+    return Reselect.Popped
+}
 
 fun NavItem.route(): Route = when (this) {
     NavItem.Home -> Route.Home
