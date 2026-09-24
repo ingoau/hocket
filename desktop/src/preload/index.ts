@@ -2,7 +2,7 @@
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
 import type { Command, Event, Query, QueryResult } from "@core/api";
-import type { AppMeta, AppPrefs, HocketBridge, OpenDialogRequest, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -49,9 +49,12 @@ const bridge: HocketBridge = {
   },
   dialog: {
     save: (req: SaveDialogRequest) => ipcRenderer.invoke(IPC.dialogSave, req) as Promise<string | undefined>,
-    open: (req: OpenDialogRequest) => ipcRenderer.invoke(IPC.dialogOpen, req) as Promise<string | undefined>,
-    writeTextFile: (path: string, text: string) => ipcRenderer.invoke(IPC.fileWrite, path, text) as Promise<void>,
-    readTextFile: (path: string) => ipcRenderer.invoke(IPC.fileRead, path) as Promise<string>,
+    saveText: (req: SaveDialogRequest & { text: string }) => ipcRenderer.invoke(IPC.dialogSaveText, req) as Promise<string | undefined>,
+    openText: (req: OpenDialogRequest) => ipcRenderer.invoke(IPC.dialogOpenText, req) as Promise<OpenedTextFile | undefined>,
+  },
+  config: {
+    export: (document: string) => ipcRenderer.invoke(IPC.configExport, document) as Promise<string | undefined>,
+    import: () => ipcRenderer.invoke(IPC.configImport) as Promise<boolean>,
   },
   clipboard: {
     writeText: (text: string) => ipcRenderer.send(IPC.clipboardWrite, text),

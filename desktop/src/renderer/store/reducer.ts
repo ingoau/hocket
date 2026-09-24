@@ -3,6 +3,7 @@
 import type {
   AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults,
 } from "@core/api";
+import { snapshotOf } from "@shared/core-handle";
 
 export interface CoreState {
   ready: boolean;
@@ -118,8 +119,14 @@ export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
 }
 
 export function reduce(state: CoreState, e: Event): CoreState {
+  // `started` (once, when Start completes) and `snapshot` (the answer to
+  // RequestSnapshot) both carry a full snapshot; older cores answer
+  // RequestSnapshot with a second `started`.
+  const snapshot = snapshotOf(e);
+  if (snapshot) return applySnapshot(state, snapshot);
   switch (e.type) {
     case "started":
+      // Handled above (snapshotOf); kept so the exhaustiveness check below stays.
       return applySnapshot(state, e.data.snapshot);
     case "serversChanged":
       return { ...state, servers: e.data.servers };
@@ -143,8 +150,11 @@ export function reduce(state: CoreState, e: Event): CoreState {
       // design.md "Global undo": a fresh mutation gets one toast with the single
       // Undo action. The core emits only UndoChanged for it (its own toasts are
       // "Undid …/Redid …"), so announce the newest entry here, once per id.
+      // Freshness is keyed on the top entry's id, never on the history length:
+      // the core caps the history it sends (HISTORY_SHEET_LIMIT, byte budget),
+      // so the length stops growing long before the user stops mutating.
       const top = e.data.state.history[0];
-      const fresh = top && e.data.state.canUndo && !state.announcedUndo.includes(top.id) && e.data.state.history.length > state.undo.history.length;
+      const fresh = top && e.data.state.canUndo && !state.announcedUndo.includes(top.id) && top.id !== state.undo.history[0]?.id;
       const toasts = fresh ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
       const announced = fresh ? [...state.announcedUndo, top.id].slice(-500) : state.announcedUndo;
       return { ...state, undo: e.data.state, toasts, announcedUndo: announced };

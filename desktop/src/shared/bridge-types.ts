@@ -13,6 +13,13 @@ export interface AppMeta {
   deviceName: string;
   dataDir: string;
   cacheDir: string;
+  /**
+   * Where server passwords go: "os" = encrypted by the OS keystore and
+   * replayed on the next start; "volatile" = kept in memory for this session
+   * only (no usable keystore, e.g. Linux without a keyring), so the user
+   * signs in again after a restart.
+   */
+  credentialStorage: "os" | "volatile";
 }
 
 export interface WindowState {
@@ -32,6 +39,12 @@ export interface SaveDialogRequest {
 export interface OpenDialogRequest {
   title: string;
   filters?: { name: string; extensions: string[] }[];
+}
+
+/** Result of `dialog.openText`: the file the user picked and its contents. */
+export interface OpenedTextFile {
+  path: string;
+  text: string;
 }
 
 /** Device-local app preferences the core registry doesn't define. */
@@ -69,10 +82,30 @@ export interface HocketBridge {
     openExternal(url: string): void;
   };
   dialog: {
+    /**
+     * Ask where a core-written file should go (Command.ExportNsp). The chosen
+     * path is the only one main will let the next `exportNsp` write to; the
+     * renderer never reads or writes files by path itself.
+     */
     save(req: SaveDialogRequest): Promise<string | undefined>;
-    open(req: OpenDialogRequest): Promise<string | undefined>;
-    writeTextFile(path: string, text: string): Promise<void>;
-    readTextFile(path: string): Promise<string>;
+    /** Ask where to save, then write `text` there in main. Resolves to the path, or undefined when cancelled. */
+    saveText(req: SaveDialogRequest & { text: string }): Promise<string | undefined>;
+    /** Ask which file to open, then read it in main. Undefined when cancelled. */
+    openText(req: OpenDialogRequest): Promise<OpenedTextFile | undefined>;
+  };
+  config: {
+    /**
+     * Export a `ConfigDocument`: main resolves any `keystore://` secret
+     * references from the OS credential store (after an explicit plain-text
+     * warning) and writes the file to a dialog-chosen path. Resolves to the
+     * path, or undefined when cancelled.
+     */
+    export(document: string): Promise<string | undefined>;
+    /**
+     * Pick a config file, confirm, add every server whose password the file
+     * carries, then import the rest. Resolves to true when an import was dispatched.
+     */
+    import(): Promise<boolean>;
   };
   clipboard: {
     writeText(text: string): void;
@@ -95,9 +128,10 @@ export const IPC = {
   shellShowItem: "hocket:shell:show-item",
   shellOpenExternal: "hocket:shell:open-external",
   dialogSave: "hocket:dialog:save",
-  dialogOpen: "hocket:dialog:open",
-  fileWrite: "hocket:file:write",
-  fileRead: "hocket:file:read",
+  dialogSaveText: "hocket:dialog:save-text",
+  dialogOpenText: "hocket:dialog:open-text",
+  configExport: "hocket:config:export",
+  configImport: "hocket:config:import",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
   prefsGet: "hocket:prefs:get",

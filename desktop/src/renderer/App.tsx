@@ -1,6 +1,8 @@
 // Main window shell: server setup as the entire first screen, otherwise the
 // sidebar / content / right panel / player bar layout.
 import { useEffect } from "react";
+import type { Command } from "@core/api";
+import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
@@ -87,21 +89,36 @@ export function useTheme() {
   }, [accent, accentSetting]);
 }
 
+/** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */
+async function confirmDeepLinkTrack(id: string): Promise<void> {
+  const b = bridge();
+  const serverId = useApp.getState().servers[0]?.id;
+  if (!serverId) return;
+  try {
+    const r = await b.query({ type: "track", data: { id } });
+    if (r.type !== "trackDetail" || !r.data || r.data.serverId !== serverId) return;
+    const command: Command = { type: "playNext", data: { server_id: serverId, track_ids: [id] } };
+    useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `deeplink-${id}`, message: t("toast.deepLinkTrack", { title: r.data.title }), actionLabel: t("toast.deepLinkPlay"), actionCommand: JSON.stringify(command), durationMs: 8000 } } });
+  } catch (err) {
+    console.warn("deep link track lookup failed", err);
+  }
+}
+
 function useDeepLinks() {
   const navigate = useApp((s) => s.navigate);
   useEffect(() => {
     const b = bridge();
     const offLink = b.onDeepLink((url) => {
-      try {
-        const u = new URL(url);
-        const [kind, id] = [u.hostname, u.pathname.replace(/^\//, "")];
-        if (kind === "album" && id) navigate({ view: "album", id });
-        else if (kind === "artist" && id) navigate({ view: "artist", id });
-        else if (kind === "playlist" && id) navigate({ view: "playlist", id });
-        else if (kind === "track" && id) b.dispatch({ type: "playNext", data: { server_id: useApp.getState().servers[0]?.id ?? "", track_ids: [id] } });
-      } catch (err) {
-        console.warn("bad deep link", url, err);
+      // Main already validated and canonicalised the link.
+      const link = parseDeepLink(url);
+      if (!link || link.kind === "open") return;
+      if (link.kind === "track") {
+        // Never mutate the queue on an external request: confirm with a
+        // toast, and only for a track the current server knows.
+        void confirmDeepLinkTrack(link.id);
+        return;
       }
+      navigate({ view: link.kind, id: link.id });
     });
     const offAction = b.onUiAction((id) => void executeAction(id));
     return () => { offLink(); offAction(); };

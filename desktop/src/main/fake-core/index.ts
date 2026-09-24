@@ -86,6 +86,12 @@ function permutation(n: number, seed: number, anchor: number | undefined): numbe
   return order;
 }
 
+/** Artwork ids are server-supplied strings; only a safe subset may name a cache file (never `../`). */
+export function safeArtworkId(id: string): string {
+  const clean = id.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 120);
+  return clean || "_";
+}
+
 export class FakeCore implements CoreHandle {
   readonly kind = "fake" as const;
   private listeners = new Set<(e: Event) => void>();
@@ -1656,7 +1662,8 @@ export class FakeCore implements CoreHandle {
       filters: this.filters,
       shortcuts: this.shortcuts().filter((s) => s.shortcut !== s.defaultShortcut),
       servers: this.servers,
-      secrets: includeSecrets ? Object.fromEntries(this.servers.map((s) => [s.id, "<password redacted in fake core>"])) : undefined,
+      // Like the core (settings/config.rs): opaque keystore references that main resolves.
+      secrets: includeSecrets ? Object.fromEntries(this.servers.map((s) => [`server:${s.id}:password`, `keystore://hocket/server/${s.id}/password`])) : undefined,
       audio: this.audio,
       autoplay: this.autoplaySettings,
     };
@@ -2144,7 +2151,7 @@ export class FakeCore implements CoreHandle {
 
   private artworkPath(id: string, size: number): string | undefined {
     const s = ARTWORK_SIZES.reduce((best, c) => (Math.abs(c - size) < Math.abs(best - size) ? c : best), 300);
-    const file = join(this.config.cacheDir, "images", `${id}-${s}.png`);
+    const file = join(this.config.cacheDir, "images", `${safeArtworkId(id)}-${s}.png`);
     if (!existsSync(file)) {
       try {
         writeFileSync(file, coverPng(coverSeed(id), Math.min(s, 300)));

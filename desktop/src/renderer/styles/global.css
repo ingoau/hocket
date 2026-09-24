@@ -364,6 +364,7 @@ h3 { font-size: var(--fs-lg); }
 .setup label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--fg-muted); }
 .setup .input { height: 34px; }
 .setup .error { color: var(--danger); font-size: var(--fs-sm); }
+.credential-warning { color: var(--fg); background: color-mix(in srgb, var(--danger) 12%, var(--bg-elev)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: var(--radius); padding: 8px 10px; font-size: var(--fs-sm); margin-bottom: 8px; }
 
 /* Settings */
 .settings { display: grid; grid-template-columns: 200px 1fr; min-height: 0; flex: 1; }

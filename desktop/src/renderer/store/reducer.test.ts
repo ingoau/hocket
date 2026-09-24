@@ -61,6 +61,29 @@ describe("reducer", () => {
     expect(s.toasts.map((t) => t.message)).toEqual(["Rate ★★★★", "Shuffle on"]);
   });
 
+  it("keeps announcing fresh undo entries once the core caps the history it sends", () => {
+    const entry = (id: string) => ({ id, label: `Mutation ${id}`, deviceId: "me", at: 1, note: undefined });
+    const cap = 50;
+    let s = initialCoreState;
+    let history: ReturnType<typeof entry>[] = [];
+    for (let i = 1; i <= cap + 10; i++) {
+      history = [entry(`u${i}`), ...history].slice(0, cap);
+      s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: history[0]!.label, canRedo: false, redoLabel: undefined, history } } });
+      expect(s.toasts.at(-1)?.message, `mutation ${i}`).toBe(`Mutation u${i}`);
+      // Re-sent unchanged (another window attaching): no second toast.
+      const before = s.toasts.length;
+      s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: history[0]!.label, canRedo: false, redoLabel: undefined, history } } });
+      expect(s.toasts.length).toBe(before);
+    }
+  });
+
+  it("applies a `snapshot` event (RequestSnapshot answer) like Started", () => {
+    const e = { type: "snapshot", data: { snapshot: { ...snapshot, transport: { ...snapshot.transport, volume: 0.25 } } } } as unknown as Event;
+    const s = reduce(initialCoreState, e);
+    expect(s.ready).toBe(true);
+    expect(s.transport.volume).toBe(0.25);
+  });
+
   it("keeps at most four toasts and can dismiss one", () => {
     let s = initialCoreState;
     for (let i = 0; i < 6; i++) {

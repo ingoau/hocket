@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
+import { CredentialWarning } from "../components/CredentialWarning";
 
 export function Setup() {
   const [url, setUrl] = useState("");
@@ -38,12 +39,14 @@ export function Setup() {
         <div className="brand">{t("app.name")}</div>
         <h2>{t("setup.title")}</h2>
         <div className="muted small">{t("setup.subtitle")}</div>
+        <CredentialWarning />
         <label>{t("setup.url")}<input className="input" type="url" placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /></label>
         <label>{t("setup.username")}<input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
         <label>{t("setup.password")}<input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" /></label>
         <label>{t("setup.name")}<input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
         {error ? <div className="error" role="alert" data-testid="setup-error">{error}</div> : null}
         <button type="submit" className="btn primary" disabled={busy} style={{ height: 34 }} data-testid="setup-connect">{busy ? t("setup.connecting") : t("setup.connect")}</button>
+        <button type="button" className="btn" onClick={() => void bridge().config.import().catch((err: unknown) => console.error("config import failed", err))} data-testid="setup-import">{t("setup.import")}</button>
       </form>
     </div>
   );

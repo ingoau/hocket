@@ -4,10 +4,14 @@
 //! Two classes cross the seam:
 //!
 //! - [`HocketCore`] wraps [`hocket_core::Core`]: `dispatch(commandJson)`,
-//!   `query(queryJson) -> Promise<string>`, `setListener(cb)`.
+//!   `query(queryJson) -> Promise<string>`, `setListener(cb)` and
+//!   `shutdown() -> Promise<void>` (resolves once the core has flushed).
 //! - [`media_session::MediaSession`] is the desktop `MediaSessionAdapter`
 //!   (docs/design.md "OS media session") over the `playwire` crate. It takes
 //!   a serialised `MediaSessionState` and hands back serialised `Command`s.
+//!
+//! Every export is `catch_unwind`: a Rust panic on a JS-thread path becomes a
+//! thrown JS error instead of aborting the Electron main process.
 
 mod media_session;
 
@@ -46,7 +50,7 @@ pub struct HocketCore {
 #[napi]
 impl HocketCore {
     /// `configJson` is a serialised `CoreConfig`.
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new(config_json: String) -> Result<Self> {
         let config =
             serde_json::from_str(&config_json).map_err(|e| Error::from_reason(e.to_string()))?;
@@ -56,32 +60,43 @@ impl HocketCore {
 
     /// Subscribe to events; `callback(eventJson)`. May be called more than once
     /// (UI + media session + tests); every listener receives every event.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn set_listener(&self, callback: JsonCallback) {
         self.core.add_sink(Arc::new(Bridge(callback)));
     }
 
-    /// Fire-and-forget `Command`. Errors only on malformed JSON or a shut-down core.
-    #[napi]
+    /// Fire-and-forget `Command`. Throws a JS error (never panics) on
+    /// malformed JSON or a shut-down core; the main process logs and drops it.
+    #[napi(catch_unwind)]
     pub fn dispatch(&self, command_json: String) -> Result<()> {
-        self.core
-            .dispatch_json(&command_json)
-            .map_err(|e| Error::from_reason(e.to_string()))
+        self.core.dispatch_json(&command_json).map_err(|e| {
+            tracing::warn!(target: "hocket_node", "dispatch rejected: {e}");
+            Error::from_reason(e.to_string())
+        })
     }
 
     /// `Query` in, `QueryResult` out, both JSON.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn query(&self, query_json: String) -> Result<String> {
         self.core
             .query_json(&query_json)
             .await
             .map_err(|e| Error::from_reason(e.to_string()))
     }
+
+    /// Flush and stop the core. Resolves once the actor has written the
+    /// session document, position, settings and sync base and stopped;
+    /// idempotent and resolves at once when the actor is already gone. The
+    /// main process awaits this (with its own timeout) before `app.exit`.
+    #[napi(catch_unwind)]
+    pub async fn shutdown(&self) {
+        self.core.shutdown().await;
+    }
 }
 
 /// Install a `tracing` subscriber writing to stderr. `level` is an `EnvFilter`
 /// directive such as `info` or `hocket_core=debug`. Idempotent.
-#[napi]
+#[napi(catch_unwind)]
 pub fn init_logging(level: String) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(level)
@@ -90,14 +105,14 @@ pub fn init_logging(level: String) {
 }
 
 /// Version of the addon crate (same as the workspace version).
-#[napi]
+#[napi(catch_unwind)]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
 /// `API_SCHEMA_VERSION` of the core the addon was built against; the app
 /// refuses to load an addon whose schema doesn't match its generated types.
-#[napi]
+#[napi(catch_unwind)]
 pub fn api_schema_version() -> u32 {
     hocket_core::api::API_SCHEMA_VERSION
 }

@@ -1,15 +1,19 @@
 // Electron main process entry. Owns the one core, the windows, the tray, the
 // media session and the OS signals the core needs (visibility, power,
 // network). No business logic lives here: everything is forwarded to the core.
-import { BrowserWindow, app, net, powerMonitor, protocol, session } from "electron";
+import { app, dialog, net, powerMonitor, protocol, session } from "electron";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Command, CoreConfig, Event } from "@core/api";
-import { API_SCHEMA_VERSION, APP_SCHEME, ART_SCHEME, DEV_SERVER_URL } from "@shared/constants";
+import { API_SCHEMA_VERSION, APP_SCHEME, ART_HOST, ART_SCHEME, DEV_SERVER_URL } from "@shared/constants";
 import { IPC } from "@shared/bridge-types";
-import { createCore } from "./core-host";
+import { snapshotOf } from "@shared/core-handle";
+import { formatDeepLink, parseDeepLink } from "@shared/deep-link";
+import { ArtworkRegistry } from "./artwork";
+import { createCore, NativeCoreUnavailable } from "./core-host";
 import { ServerCredentialStore } from "./credentials";
 import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
@@ -66,8 +70,21 @@ async function main(): Promise<void> {
     coordinatorListen: undefined,
   };
 
-  const { core, native } = createCore(config, { appRoot, forceFake, fakeTimeScale: Number(process.env.HOCKET_FAKE_TIMESCALE ?? "1") || 1 });
+  let created: ReturnType<typeof createCore>;
+  try {
+    // A packaged build never simulates: without the addon it says so and exits.
+    created = createCore(config, { appRoot, forceFake, requireNative: app.isPackaged, fakeTimeScale: Number(process.env.HOCKET_FAKE_TIMESCALE ?? "1") || 1 });
+  } catch (err) {
+    const message = err instanceof NativeCoreUnavailable ? err.message : `The Hocket core failed to start:\n${String(err)}`;
+    console.error("[core] fatal:", err);
+    dialog.showErrorBox("Hocket can't start", message);
+    app.exit(1);
+    return;
+  }
+  const { core, native } = created;
   const credentials = new ServerCredentialStore(userData);
+  mkdirSync(cacheDir, { recursive: true });
+  const artwork = new ArtworkRegistry(realpathSync(cacheDir));
 
   const windows = new Windows({
     appRoot,
@@ -86,7 +103,7 @@ async function main(): Promise<void> {
     core.dispatch({ type: "setVisibility", data: { visible: rendererVisible && pageVisible, focused } });
   };
 
-  installProtocols(appRoot, cacheDir, dataDir);
+  installProtocols(appRoot, artwork);
   installCsp(isDev);
   registerDeepLinks(isDev, appRoot);
 
@@ -111,6 +128,8 @@ async function main(): Promise<void> {
   installIpc({
     core,
     windows,
+    artwork,
+    credentials,
     meta: () => ({
       version: app.getVersion(),
       platform,
@@ -119,6 +138,7 @@ async function main(): Promise<void> {
       deviceName: config.deviceName,
       dataDir,
       cacheDir,
+      credentialStorage: credentials.storageKind,
     }),
     onCommand: (command: Command) => {
       credentials.intercept(command);
@@ -157,10 +177,15 @@ async function main(): Promise<void> {
       tray.update(lastNowPlaying, lastPlaying);
     }
     if (event.type === "nowPlayingChanged") lastNowPlaying = event.data.entry ? `${event.data.entry.track.title} · ${event.data.entry.track.artist ?? ""}` : undefined;
-    if (event.type === "started") {
-      // Replay stored credentials: the core never persists passwords.
+    const snapshot = snapshotOf(event);
+    if (snapshot && !replayed) {
+      // Replay stored credentials once per process: the core never persists
+      // passwords. Later snapshots (RequestSnapshot from a re-attaching
+      // renderer, whether the core answers with `snapshot` or a second
+      // `started`) must not add the server again.
+      replayed = true;
       for (const cmd of credentials.replayCommands()) core.dispatch(cmd);
-      applySettingsFromSnapshot(event.data.snapshot.settings);
+      applySettingsFromSnapshot(snapshot.settings);
       applyBattery();
       pushNetwork(net.isOnline());
     }
@@ -169,6 +194,7 @@ async function main(): Promise<void> {
   });
   let lastPlaying = false;
   let lastNowPlaying: string | undefined;
+  let replayed = false;
 
   // battery.autoEngage is a registry setting; mirror it so the power monitor can act before the UI attaches.
   const applySettingsFromSnapshot = (settings: { key: string; value: string }[]) => {
@@ -208,9 +234,18 @@ async function main(): Promise<void> {
     windows.showMain();
     windows.main?.webContents.send(IPC.uiAction, id);
   };
+  // Deep links (argv, open-url, MPRIS OpenUri) are parsed here; only a
+  // well-formed hocket:// link with a known host reaches a renderer, in
+  // canonical form. The renderer confirms before it touches the queue.
   const broadcastDeepLink = (url: string) => {
+    const link = parseDeepLink(url);
+    if (!link) {
+      console.warn("[main] ignoring malformed deep link", String(url).slice(0, 200));
+      return;
+    }
     windows.showMain();
-    for (const w of windows.all()) w.webContents.send(IPC.deepLink, url);
+    const canonical = formatDeepLink(link);
+    for (const w of windows.all()) w.webContents.send(IPC.deepLink, canonical);
   };
 
   app.on("second-instance", (_e, argv) => {
@@ -228,18 +263,33 @@ async function main(): Promise<void> {
     if (!(store.get("closeToTray") ?? true)) shutdown();
   });
 
+  // Quit is an awaited round trip: the core flushes (session document,
+  // position, settings, sync base) before the process exits. CoreHandle's
+  // shutdown() bounds the wait itself (SHUTDOWN_TIMEOUT_MS), so a stuck core
+  // can't hang the quit. Every quit path (tray, menu, window-all-closed,
+  // OS-initiated app.quit) funnels through before-quit.
   let shuttingDown = false;
+  let flushed = false;
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
     windows.quitting = true;
     mediaSession.dispose();
     tray.destroy();
-    void core.shutdown().finally(() => windows.destroyAll());
-    setTimeout(() => app.exit(0), 3000).unref();
+    void core
+      .shutdown()
+      .catch((err: unknown) => console.error("[core] shutdown failed", err))
+      .finally(() => {
+        flushed = true;
+        windows.destroyAll();
+        app.exit(0);
+      });
   };
-  app.on("before-quit", () => {
+  app.on("before-quit", (e) => {
     windows.quitting = true;
+    if (flushed) return;
+    e.preventDefault();
+    shutdown();
   });
 
   if (process.platform === "darwin") app.dock?.setIcon(appIcon(512));
@@ -253,8 +303,8 @@ async function main(): Promise<void> {
   console.log(`[main] Hocket ${app.getVersion()} · core=${core.kind} · schema=${API_SCHEMA_VERSION} · mediaSession=${mediaSession.status}`);
 }
 
-/** app:// serves the renderer bundle; hocket-art:// serves artwork files from the cache/data dirs only. */
-function installProtocols(appRoot: string, cacheDir: string, dataDir: string): void {
+/** app:// serves the renderer bundle; hocket-art:// serves artwork by token, only from the image cache. */
+function installProtocols(appRoot: string, artwork: ArtworkRegistry): void {
   const rendererDir = join(appRoot, "out", "renderer");
   protocol.handle(APP_SCHEME, (req) => {
     const url = new URL(req.url);
@@ -264,12 +314,11 @@ function installProtocols(appRoot: string, cacheDir: string, dataDir: string): v
     if (!file.startsWith(rendererDir + sep) && file !== rendererDir) return new Response("forbidden", { status: 403 });
     return net.fetch(pathToFileURL(file).toString());
   });
-  const allowedRoots = [resolve(cacheDir), resolve(dataDir), resolve(app.getPath("sessionData")), resolve(app.getPath("userData"))];
-  protocol.handle(ART_SCHEME, (req) => {
+  protocol.handle(ART_SCHEME, async (req) => {
     const url = new URL(req.url);
-    const encoded = url.pathname.replace(/^\/+/, "");
-    const file = resolve(decodeURIComponent(encoded));
-    if (!allowedRoots.some((root) => file === root || file.startsWith(root + sep))) return new Response("forbidden", { status: 403 });
+    if (url.host !== ART_HOST) return new Response("forbidden", { status: 403 });
+    const file = await artwork.resolve(url.pathname.replace(/^\/+/, ""));
+    if (!file) return new Response("not found", { status: 404 });
     return net.fetch(pathToFileURL(file).toString(), { headers: { "Cache-Control": "max-age=3600" } });
   });
 }
@@ -282,7 +331,7 @@ function installCsp(isDev: boolean): void {
     `style-src 'self' 'unsafe-inline'`,
     `img-src 'self' ${ART_SCHEME}: data: blob:`,
     `font-src 'self' data:`,
-    `connect-src 'self' ${ART_SCHEME}:${isDev ? ` ${DEV_SERVER_URL} ws://localhost:5178` : ""}`,
+    `connect-src 'self'${isDev ? ` ${DEV_SERVER_URL} ws://localhost:5178` : ""}`,
     `worker-src 'self' blob:`,
     `object-src 'none'`,
     `base-uri 'none'`,
@@ -299,6 +348,7 @@ function installCsp(isDev: boolean): void {
   app.on("web-contents-created", (_e, contents) => {
     contents.on("will-attach-webview", (e) => e.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // No window (main, mini, anchor) ever navigates away from the app bundle.
+    contents.on("will-navigate", (e) => e.preventDefault());
   });
-  void BrowserWindow;
 }

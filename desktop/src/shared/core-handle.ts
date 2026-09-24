@@ -1,6 +1,6 @@
 // The one interface the main process programs against. Both the native napi
 // addon (crates/hocket-node) and the TypeScript FakeCore implement it.
-import type { Command, Event, Query, QueryResult } from "@core/api";
+import type { Command, Event, Query, QueryResult, Snapshot } from "@core/api";
 
 export type CoreKind = "native" | "fake";
 
@@ -22,4 +22,16 @@ export function expectResult<K extends QueryResult["type"]>(result: QueryResult,
     throw new Error(`expected query result '${type}', got '${result.type}'`);
   }
   return (result as unknown as { data: ResultData<K> }).data;
+}
+
+/**
+ * The snapshot carried by an attach-style event: `started` (emitted once when
+ * `Start` completes) and `snapshot` (the answer to `RequestSnapshot`; older
+ * cores answer that with a second `started` instead). Anything else: undefined.
+ */
+export function snapshotOf(event: Event): Snapshot | undefined {
+  const e = event as { type: string; data?: { snapshot?: Snapshot } };
+  if (e.type !== "started" && e.type !== "snapshot") return undefined;
+  const snapshot = e.data?.snapshot;
+  return snapshot && typeof snapshot === "object" ? snapshot : undefined;
 }

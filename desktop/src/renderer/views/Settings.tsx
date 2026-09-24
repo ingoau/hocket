@@ -15,6 +15,7 @@ import { chordFromEvent, chordToString, formatChord, parseChord } from "../store
 import { useKeymap } from "../store/keyboard";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
+import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
@@ -91,6 +92,7 @@ function General() {
   return (
     <>
       <div className="section-title">{t("settings.servers")}</div>
+      <CredentialWarning />
       {servers.map((s) => (
         <div key={s.id} className="setting-row" data-testid="server-row">
           <div className="label">
@@ -506,32 +508,28 @@ function Shortcuts() {
 
 function Backup() {
   const exported = useApp((s) => s.exported);
-  const openDialog = useApp((s) => s.openDialog);
   const [secrets, setSecrets] = useState(false);
   const [pending, setPending] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!pending || exported?.kind !== "config" || exported.at < Number(pending)) return;
     const doc = exported.document;
     setPending(undefined);
-    void bridge().dialog.save({ title: t("dialog.exportConfig"), defaultPath: "hocket-config.json", filters: [{ name: "JSON", extensions: ["json"] }] }).then(async (path) => {
+    // Main resolves the keystore references (with a plain-text warning) and
+    // writes the file to a path the user picks; the page never sees a path.
+    void bridge().config.export(doc).then((path) => {
       if (!path) return;
-      await bridge().dialog.writeTextFile(path, doc);
       useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `cfg-${Date.now()}`, message: t("settings.configExported"), actionLabel: undefined, actionCommand: undefined, durationMs: 3000 } } });
-    });
+    }).catch((err: unknown) => console.error("config export failed", err));
   }, [exported, pending]);
-  const doImport = async () => {
-    const path = await bridge().dialog.open({ title: t("dialog.importConfig"), filters: [{ name: "JSON", extensions: ["json"] }] });
-    if (!path) return;
-    const text = await bridge().dialog.readTextFile(path);
-    openDialog({ kind: "confirm", title: t("settings.importConfig"), message: t("settings.importConfirm"), onConfirm: () => bridge().dispatch({ type: "importConfig", data: { document: text } }) });
-  };
+  // Main picks the file, confirms, adds any servers whose passwords the file carries, then imports.
+  const doImport = () => bridge().config.import().catch((err: unknown) => console.error("config import failed", err));
   return (
     <>
       <Row title={t("settings.exportConfig")} settingKey="backup">
-        <label className="switch small"><input type="checkbox" checked={secrets} onChange={(e) => setSecrets(e.target.checked)} /> {t("settings.exportConfigSecrets")}</label>
-        <button type="button" className="btn" onClick={() => { setPending(String(Date.now())); bridge().dispatch({ type: "exportConfig", data: { include_secrets: secrets } }); }}>{t("settings.exportConfig")}</button>
+        <label className="switch small"><input type="checkbox" checked={secrets} onChange={(e) => setSecrets(e.target.checked)} data-testid="export-secrets" /> {t("settings.exportConfigSecrets")}</label>
+        <button type="button" className="btn" onClick={() => { setPending(String(Date.now())); bridge().dispatch({ type: "exportConfig", data: { include_secrets: secrets } }); }} data-testid="export-config">{t("settings.exportConfig")}</button>
       </Row>
-      <Row title={t("settings.importConfig")} settingKey="backup"><button type="button" className="btn" onClick={() => void doImport()}>{t("settings.importConfig")}</button></Row>
+      <Row title={t("settings.importConfig")} settingKey="backup"><button type="button" className="btn" onClick={() => void doImport()} data-testid="import-config">{t("settings.importConfig")}</button></Row>
     </>
   );
 }

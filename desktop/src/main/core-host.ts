@@ -1,4 +1,6 @@
 // Loads the native napi addon (crates/hocket-node) or falls back to FakeCore.
+// The fallback is for development only: a packaged build without a working
+// addon fails loudly (see `createCore`) unless HOCKET_FAKE_CORE=1 asks for it.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Command, CoreConfig, Event, Query, QueryResult } from "@core/api";
@@ -12,6 +14,8 @@ export interface NativeModule {
     setListener(cb: (json: string) => void): void;
     dispatch(json: string): void;
     query(json: string): Promise<string>;
+    /** Resolves once the core has flushed and stopped (addons built before it existed lack it). */
+    shutdown?(): Promise<void>;
   };
   MediaSession: new (options: { name: string; desktopEntry?: string; hwnd?: number; trackIdPrefix?: string }, cb: (json: string) => void) => {
     setState(json: string): void;
@@ -57,10 +61,36 @@ export function loadNative(appRoot: string): LoadedNative | undefined {
   return undefined;
 }
 
-class NativeCoreHandle implements CoreHandle {
+/** How long a quit waits for the core's flush before exiting anyway. */
+export const SHUTDOWN_TIMEOUT_MS = 5000;
+
+/** Resolve when `p` settles or after `ms`, whichever comes first; never rejects. */
+export function settleWithin(p: Promise<unknown>, ms: number, onTimeout?: () => void): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      onTimeout?.();
+      resolve();
+    }, ms);
+    timer.unref?.();
+    p.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        console.error("[core] shutdown failed", err);
+        resolve();
+      },
+    );
+  });
+}
+
+export class NativeCoreHandle implements CoreHandle {
   readonly kind = "native" as const;
   private listeners = new Set<(e: Event) => void>();
   private core: InstanceType<NativeModule["HocketCore"]>;
+  private shuttingDown: Promise<void> | undefined;
 
   constructor(mod: NativeModule, config: CoreConfig) {
     this.core = new mod.HocketCore(JSON.stringify(config));
@@ -95,15 +125,42 @@ class NativeCoreHandle implements CoreHandle {
     return () => this.listeners.delete(listener);
   }
 
-  async shutdown(): Promise<void> {
-    this.core.dispatch(JSON.stringify({ type: "shutdown" } satisfies Command));
+  /**
+   * Awaited round trip: resolves once the core has flushed (session document,
+   * position, settings, sync base) and stopped, or after SHUTDOWN_TIMEOUT_MS.
+   * Idempotent; a second call joins the first.
+   */
+  shutdown(): Promise<void> {
+    if (this.shuttingDown) return this.shuttingDown;
+    let pending: Promise<unknown>;
+    try {
+      if (typeof this.core.shutdown === "function") {
+        pending = this.core.shutdown();
+      } else {
+        this.core.dispatch(JSON.stringify({ type: "shutdown" } satisfies Command));
+        pending = Promise.resolve();
+      }
+    } catch (err) {
+      pending = Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    this.shuttingDown = settleWithin(pending, SHUTDOWN_TIMEOUT_MS, () => console.error(`[core] shutdown did not complete within ${SHUTDOWN_TIMEOUT_MS} ms; exiting anyway`));
+    return this.shuttingDown;
   }
 }
 
 export interface CreateCoreOptions {
   appRoot: string;
   forceFake: boolean;
+  /** Packaged builds: a missing or unloadable addon is fatal rather than silently simulated. */
+  requireNative: boolean;
   fakeTimeScale?: number;
+}
+
+export class NativeCoreUnavailable extends Error {
+  constructor(public readonly candidates: string[]) {
+    super(`The Hocket core could not be loaded. Looked in:\n${candidates.join("\n")}\n\nThe app can't run without it; please reinstall.`);
+    this.name = "NativeCoreUnavailable";
+  }
 }
 
 export function createCore(config: CoreConfig, opts: CreateCoreOptions): { core: CoreHandle; native?: LoadedNative } {
@@ -114,6 +171,7 @@ export function createCore(config: CoreConfig, opts: CreateCoreOptions): { core:
       console.log(`[core] native addon ${native.module.coreVersion()} from ${native.path}`);
       return { core: new NativeCoreHandle(native.module, config), native };
     }
+    if (opts.requireNative) throw new NativeCoreUnavailable(nativeCandidates(opts.appRoot));
     console.warn("[core] native addon not found; using the fake core (run `pnpm gen` to build it)");
   }
   return { core: new FakeCore(config, { timeScale: opts.fakeTimeScale ?? 1 }) };

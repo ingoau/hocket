@@ -6,7 +6,7 @@
 // on Windows the session is anchored to a persistent hidden window's HWND.
 import type { Command, Event, MediaSessionState } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import { expectResult } from "@shared/core-handle";
+import { expectResult, snapshotOf } from "@shared/core-handle";
 import type { NativeModule } from "./core-host";
 
 interface AddonMessage {
@@ -24,12 +24,27 @@ export interface MediaSessionHostOptions {
   onOpenUri(uri: string): void;
 }
 
+/**
+ * Position to publish on a ticker tick. `takenAt` is session-clock time, so
+ * local `nowMs` is shifted by the Connect clock offset first; a duration of 0
+ * means "unknown" and never pins the position.
+ */
+export function tickPosition(state: MediaSessionState, nowMs: number, clockOffsetMs: number): number {
+  const p = state.position;
+  const elapsed = Math.max(0, nowMs + clockOffsetMs - p.takenAt);
+  const pos = Math.max(0, Math.round(p.positionMs + elapsed * p.rate));
+  const duration = state.metadata?.durationMs ?? 0;
+  return duration > 0 ? Math.min(pos, duration) : pos;
+}
+
 export class MediaSessionHost {
   private session: InstanceType<NativeModule["MediaSession"]> | undefined;
   private last: MediaSessionState | undefined;
   private ticker: NodeJS.Timeout | undefined;
   private artworkCache = new Map<string, string | undefined>();
   private unsubscribe: (() => void) | undefined;
+  /** Session clock minus local clock, from ConnectionChanged (0 when local). */
+  private clockOffsetMs = 0;
   readonly status: "attached" | "unavailable";
 
   constructor(private readonly opts: MediaSessionHostOptions) {
@@ -81,8 +96,12 @@ export class MediaSessionHost {
   }
 
   private onEvent(e: Event): void {
-    if (e.type === "started") this.publish(e.data.snapshot.mediaSession);
-    else if (e.type === "mediaSession") this.publish(e.data.state);
+    const snapshot = snapshotOf(e);
+    if (snapshot) {
+      this.clockOffsetMs = snapshot.connection.clockOffsetMs ?? 0;
+      this.publish(snapshot.mediaSession);
+    } else if (e.type === "mediaSession") this.publish(e.data.state);
+    else if (e.type === "connectionChanged") this.clockOffsetMs = e.data.state.clockOffsetMs ?? 0;
   }
 
   private publish(state: MediaSessionState): void {
@@ -123,10 +142,8 @@ export class MediaSessionHost {
     }
     if (!state.isPlaying || !state.metadata) return;
     this.ticker = setInterval(() => {
-      const p = state.position;
-      const pos = Math.max(0, Math.round(p.positionMs + (Date.now() - p.takenAt) * p.rate));
       try {
-        this.session?.setPosition(Math.min(pos, state.metadata?.durationMs ?? pos));
+        this.session?.setPosition(tickPosition(state, Date.now(), this.clockOffsetMs));
       } catch (err) {
         console.warn("[media-session] tick failed", err);
       }

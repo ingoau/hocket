@@ -55,7 +55,7 @@ enum Outgoing {
 }
 
 /// Whether the addon was built with the `media-session` feature.
-#[napi]
+#[napi(catch_unwind)]
 pub fn media_session_available() -> bool {
     cfg!(feature = "media-session")
 }
@@ -72,7 +72,7 @@ impl MediaSession {
     /// Attach to the OS media service. Fails with a descriptive error when the
     /// service is unavailable (no session bus, feature disabled, ...); the caller
     /// should log it and carry on without OS integration.
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new(options: MediaSessionOptions, callback: JsonCallback) -> Result<Self> {
         let inner = backend::attach(&options, callback)?;
         Ok(Self {
@@ -82,7 +82,7 @@ impl MediaSession {
     }
 
     /// Publish a full `MediaSessionState` (JSON). Idempotent; playwire diffs.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn set_state(&mut self, state_json: String) -> Result<()> {
         let state: MediaSessionState = serde_json::from_str(&state_json)
             .map_err(|e| Error::from_reason(format!("bad MediaSessionState: {e}")))?;
@@ -92,14 +92,14 @@ impl MediaSession {
 
     /// Republish the last state with an explicit position (one call per tick
     /// while playing). Cheap: no allocation beyond the playwire snapshot.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn set_position(&mut self, position_ms: u32) -> Result<()> {
         self.last.position.position_ms = position_ms;
         self.publish(Some(position_ms))
     }
 
     /// Release the OS session (close-to-quit). Safe to call twice.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn detach(&mut self) {
         if let Some(inner) = self.inner.as_mut() {
             inner.detach();
@@ -107,7 +107,7 @@ impl MediaSession {
         self.inner = None;
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn is_attached(&self) -> bool {
         self.inner.is_some()
     }

@@ -17,7 +17,17 @@ export function useKeymap(): Keymap {
   }, [shortcuts]);
 }
 
-const TEXT_ALLOWED = new Set(["openCommandPalette", "ui.escape"]);
+/**
+ * The only actions that fire while an editable field has focus. Everything
+ * else (including modifier chords: Alt+Arrow word navigation, Mod+Arrow line
+ * navigation, Mod+L, Mod+Z…) belongs to the field.
+ */
+export const TEXT_ALLOWED = new Set(["openCommandPalette", "ui.escape"]);
+
+/** Whether the global handler may run `id` when the event target is a text field. */
+export function firesInTextField(id: string): boolean {
+  return TEXT_ALLOWED.has(id);
+}
 
 export function useGlobalKeyboard(enabled = true): void {
   const keymap = useKeymap();
@@ -33,11 +43,7 @@ export function useGlobalKeyboard(enabled = true): void {
       const inText = isTextInput(e.target);
       const id = ids[0] as string;
       if (inText) {
-        // A focused text field owns undo/redo, select-all, arrows, digits, space...
-        const isPlainKey = !chord.mod && !chord.alt && !chord.ctrl && !chord.meta;
-        if (isPlainKey && id !== "ui.escape") return;
-        if (["undo", "redo", "redoAlt", "selectAll", "remove", "findInList"].includes(id)) return;
-        if (!TEXT_ALLOWED.has(id) && chord.key.length === 1 && !chord.mod) return;
+        if (!firesInTextField(id)) return;
         if (id === "ui.escape") {
           (e.target as HTMLElement).blur();
           return;

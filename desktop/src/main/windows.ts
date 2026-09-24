@@ -125,7 +125,7 @@ export class Windows {
       this.main = undefined;
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    win.webContents.on("will-navigate", (e) => e.preventDefault());
+    // will-navigate is denied for every WebContents in index.ts (web-contents-created).
     this.load(win, "main");
     return win;
   }

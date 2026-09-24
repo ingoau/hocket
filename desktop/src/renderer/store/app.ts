@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
 import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
-import { expectResult, type ResultData } from "@shared/core-handle";
+import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
@@ -259,9 +259,10 @@ export function connectStore(): () => void {
   };
   const offEvent = b.onEvent((e) => {
     useApp.getState().applyEvent(e);
-    if (e.type === "started") requestLyrics(e.data.snapshot.queue.current?.track.id);
-    if (e.type === "started" || (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps"))) recomputePerf();
-    if (e.type === "started") {
+    const snapshot = snapshotOf(e);
+    if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
+    if (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps")) recomputePerf();
+    if (snapshot) {
       recomputePerf();
       // Use the core's remembered split when this browser profile has none yet.
       const split = settingValue(useApp.getState(), SK.displayQueuePanelSplit, undefined as number | undefined);

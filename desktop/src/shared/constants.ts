@@ -6,8 +6,14 @@ export const API_SCHEMA_VERSION = 1;
 
 /** Custom protocol that serves the renderer bundle in production. */
 export const APP_SCHEME = "app";
-/** Custom protocol that serves artwork files resolved by Query.Artwork. */
+/**
+ * Custom protocol that serves artwork resolved by Query.Artwork. The renderer
+ * only ever sees opaque tokens (`hocket-art://art/<token>`): main maps a
+ * token to a file inside the image cache when it answers the query, so the
+ * page can't name a path.
+ */
 export const ART_SCHEME = "hocket-art";
+export const ART_HOST = "art";
 /** Reserved deep-link scheme (`hocket://album/<id>`, `hocket://open`). */
 export const DEEP_LINK_SCHEME = "hocket";
 
@@ -16,7 +22,7 @@ export const DEV_SERVER_URL = "http://localhost:5178";
 /** Fixed artwork cache sizes, per design.md "Player features → Caching". */
 export const ARTWORK_SIZES = { thumb: 64, grid: 300, full: 1000 } as const;
 
-/** Query.Artwork answers with a filesystem path; a `file://` URL is tolerated too. */
+/** The core answers Query.Artwork with a filesystem path; a `file://` URL is tolerated too. */
 export function artworkFilePath(pathOrUrl: string): string {
   if (!pathOrUrl.startsWith("file://")) return pathOrUrl;
   try {
@@ -29,7 +35,11 @@ export function artworkFilePath(pathOrUrl: string): string {
   }
 }
 
-export function artworkUrl(pathOrUrl: string | undefined): string | undefined {
-  if (!pathOrUrl) return undefined;
-  return `${ART_SCHEME}://file/${encodeURIComponent(artworkFilePath(pathOrUrl))}`;
+/** Tokens main hands out for artwork: 32 hex characters, nothing else is accepted. */
+export const ART_TOKEN_RE = /^[0-9a-f]{32}$/;
+
+/** URL for an artwork token returned (via main) by Query.Artwork. */
+export function artworkUrl(token: string | undefined): string | undefined {
+  if (!token || !ART_TOKEN_RE.test(token)) return undefined;
+  return `${ART_SCHEME}://${ART_HOST}/${token}`;
 }

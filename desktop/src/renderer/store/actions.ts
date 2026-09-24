@@ -6,7 +6,7 @@ import type { ActionTarget } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
-import { useApp, type ViewName } from "./app";
+import { useApp, type DialogState, type ViewName } from "./app";
 import { explicitIds } from "./selection";
 
 export interface ActionContext {
@@ -147,12 +147,15 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     }
     case "deletePlaylist": {
-      if (target.type !== "playlists") return;
+      if (target.type !== "playlists" || !target.data.ids.length) return;
+      // One confirm for the whole selection (a dialog per id would replace
+      // the previous one and only the last playlist would be deleted).
+      const names: string[] = [];
       for (const id of target.data.ids) {
         const r = await b.query({ type: "playlist", data: { id } });
-        const name = r.type === "playlistDetail" ? (r.data?.name ?? id) : id;
-        app.openDialog({ kind: "confirm", title: t("action.deletePlaylist"), message: t("dialog.deletePlaylist", { name }), confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => b.dispatch({ type: "deletePlaylist", data: { playlist_id: id } }) });
+        names.push(r.type === "playlistDetail" ? (r.data?.name ?? id) : id);
       }
+      app.openDialog(deletePlaylistsDialog(target.data.ids, names, (id) => b.dispatch({ type: "deletePlaylist", data: { playlist_id: id } })));
       return;
     }
     case "unpin": {
@@ -169,6 +172,12 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
     default:
       console.warn("[actions] unhandled ui action", actionId);
   }
+}
+
+/** The single confirm dialog for deleting `ids` (named `names`); confirming deletes every one. */
+export function deletePlaylistsDialog(ids: string[], names: string[], deleteOne: (id: string) => void): Extract<DialogState, { kind: "confirm" }> {
+  const message = ids.length === 1 ? t("dialog.deletePlaylist", { name: names[0] ?? ids[0] ?? "" }) : t("dialog.deletePlaylists", { n: ids.length, names: names.map((n) => `“${n}”`).join(", ") });
+  return { kind: "confirm", title: t("action.deletePlaylist"), message, confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => ids.forEach(deleteOne) };
 }
 
 async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
