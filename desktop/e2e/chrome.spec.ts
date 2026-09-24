@@ -173,4 +173,27 @@ test.describe("window chrome", () => {
       expect(bb.x + bb.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
     }
   });
+
+  test("the songs table fits the window beside the side panel, shows all five rating stars, and draws its cursor only while focused", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.getByTestId("nav-songs").click();
+    const row = page.getByTestId("track-row").first();
+    await expect(row).toBeVisible();
+    await page.waitForTimeout(200);
+    const body = page.locator(".table-body").first();
+    expect(await body.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+    const stars = await row.locator(".stars").evaluate((el) => {
+      const td = el.closest(".td")!;
+      const cell = td.getBoundingClientRect();
+      const last = el.lastElementChild!.getBoundingClientRect();
+      // Inside the content box: past it the cell draws a text-overflow ellipsis.
+      return { cellRight: cell.right - Number.parseFloat(getComputedStyle(td).paddingRight), lastRight: last.right, n: el.children.length };
+    });
+    expect(stars.n).toBe(5);
+    expect(stars.lastRight).toBeLessThanOrEqual(stars.cellRight);
+    await page.getByTestId("search-input").focus();
+    expect(await page.locator(".tr.focused").first().evaluate((el) => getComputedStyle(el).boxShadow).catch(() => "none")).toBe("none");
+  });
 });

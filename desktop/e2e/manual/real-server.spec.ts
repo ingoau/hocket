@@ -134,6 +134,11 @@ test.describe("real server (manual)", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
 
+      // The songs table, with the track playing.
+      await page.getByTestId("nav-songs").click();
+      await page.waitForTimeout(2000);
+      await shot("songs");
+
       // Settings. The server row (URL, user name) is masked.
       await page.getByTestId("nav-settings").click();
       await expect(page.getByTestId("view-settings")).toBeVisible();
