@@ -153,6 +153,12 @@ absent.
 - Now-playing sheet: `AnchoredDraggable` with a velocity-aware fling, scrim, corners morphing from
   pill to square, the artwork scaling from the 48 dp thumbnail to the hero; predictive back drags
   it down with the gesture.
+- Page navigation (`ui/nav/Transitions.kt`): pushes use a shared X axis, bar switches a short
+  fade-through. Predictive back (after Navic) scrubs its own transition on every screen: the page
+  shrinks into a rounded card that follows the finger away from the swipe edge while the previous
+  page slides in from a short offset; releasing finishes it, cancelling runs it back. Reduced
+  motion makes it a crossfade. Holding the bottom bar does nothing special: it is edited from
+  Settings > Customise or the account sheet.
 - Mini player: tap to expand, swipe left/right to skip with resistance past the threshold, a thin
   wavy progress line.
 - Hero artwork: horizontal swipe to skip (springs back); long-press toggles a whole-app dynamic
