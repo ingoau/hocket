@@ -240,6 +240,34 @@ impl Admission {
     }
 }
 
+/// Orders one scope's replica writes: every save request takes a
+/// generation, and a write only happens while it is still the latest
+/// request, under the scope's write lock. Two snapshots of a scope can then
+/// never land out of order (an older rename overwriting a newer file).
+#[derive(Default)]
+struct SaveSlot {
+    requested: AtomicU64,
+    write: Mutex<()>,
+}
+
+impl SaveSlot {
+    /// Register a new snapshot; returns its generation.
+    fn begin(&self) -> u64 {
+        self.requested.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Run `write` if `generation` is still the newest request (a newer one
+    /// will write its own, fresher snapshot). Returns whether it ran.
+    fn write_if_latest(&self, generation: u64, write: impl FnOnce()) -> bool {
+        let _guard = self.write.lock();
+        if self.requested.load(Ordering::SeqCst) != generation {
+            return false;
+        }
+        write();
+        true
+    }
+}
+
 /// Process-wide state shared by every connection.
 pub struct App {
     args: Args,
@@ -251,6 +279,8 @@ pub struct App {
     admission: Mutex<Admission>,
     /// Verification pings performed (tests assert on it).
     verifications: AtomicU64,
+    /// Write ordering per scope (see [`SaveSlot`]).
+    saves: Mutex<HashMap<String, Arc<SaveSlot>>>,
 }
 
 impl App {
@@ -269,6 +299,7 @@ impl App {
             connections: AtomicU64::new(0),
             admission: Mutex::new(Admission::default()),
             verifications: AtomicU64::new(0),
+            saves: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -459,14 +490,28 @@ impl App {
         to_verify
     }
 
-    /// Write a replica snapshot on the blocking pool.
+    /// The write-ordering slot for a scope.
+    fn save_slot(&self, scope: &str) -> Arc<SaveSlot> {
+        let mut saves = self.saves.lock();
+        if saves.len() > 1024 {
+            // Slots nobody is using (no write queued or running) can go.
+            saves.retain(|_, s| Arc::strong_count(s) > 1);
+        }
+        saves.entry(scope.to_string()).or_default().clone()
+    }
+
+    /// Write a replica snapshot on the blocking pool, never behind a newer one.
     fn save_off_lock(&self, scope: &str, replica: ReplicaState) {
         let store = self.store.clone();
+        let slot = self.save_slot(scope);
+        let generation = slot.begin();
         let scope = scope.to_string();
         let write = move || {
-            if let Err(e) = store.save(&scope, &replica) {
-                warn!(scope, error = %e, "replica save failed");
-            }
+            slot.write_if_latest(generation, || {
+                if let Err(e) = store.save(&scope, &replica) {
+                    warn!(scope, error = %e, "replica save failed");
+                }
+            });
         };
         match tokio::runtime::Handle::try_current() {
             Ok(h) => {
@@ -498,9 +543,13 @@ impl App {
                 .collect()
         };
         for (scope, replica) in snapshots {
-            if let Err(e) = self.store.save(&scope, &replica) {
-                warn!(scope, error = %e, "final replica save failed");
-            }
+            let slot = self.save_slot(&scope);
+            let generation = slot.begin();
+            slot.write_if_latest(generation, || {
+                if let Err(e) = self.store.save(&scope, &replica) {
+                    warn!(scope, error = %e, "final replica save failed");
+                }
+            });
         }
     }
 
@@ -841,6 +890,24 @@ mod tests {
         // a fragment cannot swallow the path
         let t = verify_target("http://127.0.0.1:4533#", true).await.unwrap();
         assert_eq!(t.url.path(), "/rest/ping.view");
+    }
+
+    #[test]
+    fn an_older_snapshot_never_overwrites_a_newer_one() {
+        let slot = SaveSlot::default();
+        let older = slot.begin();
+        let newer = slot.begin();
+        let mut written = vec![];
+        // the newer write happens to run first; the older one then must not
+        assert!(slot.write_if_latest(newer, || written.push(newer)));
+        assert!(!slot.write_if_latest(older, || written.push(older)));
+        assert_eq!(written, vec![newer]);
+        // a later request supersedes one that has not run yet
+        let a = slot.begin();
+        let b = slot.begin();
+        assert!(!slot.write_if_latest(a, || written.push(a)));
+        assert!(slot.write_if_latest(b, || written.push(b)));
+        assert_eq!(written, vec![newer, b]);
     }
 
     #[test]
