@@ -131,7 +131,8 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
 }
 
 /**
- * The lyrics as a list of whole lines. Synced: the active line carries
+ * The lyrics as a list of whole lines (focusable when shown, so the keyboard
+ * can scroll it). Synced: the active line carries
  * aria-current and (when shown) a static highlight, scrolled to without
  * animation. Background vocals are sub-lines of the line before them.
  */
@@ -147,7 +148,7 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
   let owner = -1;
   const owners = lines.map((l, i) => (l.isBG ? owner : (owner = i)));
   return (
-    <ol ref={ref} className={visuallyHidden ? "sr-only" : `lyrics-static ${variant}`} style={visuallyHidden ? undefined : { fontSize: `calc(${variant === "large" ? 24 : 15}px * ${size})` }} aria-label={t("a11y.lyricsList")} data-testid={visuallyHidden ? "lyrics-sr-list" : "lyrics-plain"}>
+    <ol ref={ref} className={visuallyHidden ? "sr-only" : `lyrics-static ${variant}`} style={visuallyHidden ? undefined : { fontSize: `calc(${variant === "large" ? 24 : 15}px * ${size})` }} aria-label={t("a11y.lyricsList")} tabIndex={visuallyHidden ? undefined : 0} data-testid={visuallyHidden ? "lyrics-sr-list" : "lyrics-plain"}>
       {lines.map((l, i) => {
         const current = synced && (i === active || (l.isBG && owners[i] === active));
         return (

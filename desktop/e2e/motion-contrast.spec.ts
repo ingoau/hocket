@@ -246,7 +246,10 @@ test.describe("motion, contrast and zoom", () => {
           if (cs.display === "none" || cs.visibility === "hidden") continue;
           if ((cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) out.push(`scrolls sideways: ${name(el)} (${el.scrollWidth} > ${el.clientWidth})`);
         }
-        const focusables = Array.from(document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"]), [role="slider"], [role="row"][tabindex], [role="gridcell"][tabindex]'));
+        // Keyboard controls: everything in the Tab order plus the current stop of each roving widget.
+        // (tabindex=-1 links and buttons inside rows and tiles are pointer shortcuts to what the row's
+        // menu offers; a truncated artist link in a narrow cell is text-overflow, not a clipped control.)
+        const focusables = Array.from(document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex], [role="slider"]')).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled);
         for (const el of focusables) {
           if (el.closest("[inert]") || el.closest(".sr-only") || el.classList.contains("skip-link")) continue;
           const r = el.getBoundingClientRect();

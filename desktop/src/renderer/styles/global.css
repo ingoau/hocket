@@ -458,7 +458,8 @@ button.qrow { width: 100%; }
 .setting-row .label .title > .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setting-row .control { display: flex; align-items: center; gap: 8px; }
 .setting-row.stacked { grid-template-columns: minmax(0, 1fr); }
-.eq { display: flex; flex-direction: column; gap: 8px; }
+.eq { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.eq > .row { flex-wrap: wrap; }
 .eq canvas { width: 100%; height: 220px; border-radius: var(--radius); background: var(--bg-sunken); display: block; touch-action: none; }
 .eq .bands { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; font-size: var(--fs-xs); color: var(--fg-muted); text-align: center; }
 .eq .band { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
@@ -569,13 +570,17 @@ button.qrow { width: 100%; }
   .nav-item.active, .tr.selected, .tile.selected, .qrow.selected, .qrow.current, .menu .mi.active, .menu .mi:hover, .palette .pi.active, .result-row.active, .lyrics-static .active {
     forced-color-adjust: none; background: Highlight; color: HighlightText;
   }
-  .table:focus-within .tr.focused, [role="grid"]:focus-within .tile.focused { outline: 2px dashed CanvasText; outline-offset: -2px; }
+  /* The cursor while focus is elsewhere in the list (e.g. on a rating inside a row). */
+  .table:focus-within .tr.focused:not(:focus), [role="grid"]:focus-within .tile.focused:not(:focus) { outline: 2px dashed CanvasText; outline-offset: -2px; }
   .menu, .dialog, .palette, .popover, .search-popover, .toast, .card, .rule-group, .right-panel.drawer { border: 1px solid CanvasText; }
   .seek .bar .track, .progress { border: 1px solid CanvasText; }
   .seek .bar .fill, .progress > div, .bars div { forced-color-adjust: none; background: Highlight; }
   .seek .bar .knob { forced-color-adjust: none; background: CanvasText; opacity: 1; }
   .stars .star.on svg, .heart.on svg { fill: CanvasText; }
   .tile .play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  /* Toasts are drawn inverted (--fg on --bg); in the system palette they are plain Canvas text. */
+  .toast { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+  .toast .btn { forced-color-adjust: none; color: LinkText; border: 1px solid ButtonText; }
   .fullscreen canvas.bg, .fullscreen .bg-still, .fullscreen .bg-shade { display: none; }
   .amll-host { display: none; }
   .overlay { background: transparent; }
