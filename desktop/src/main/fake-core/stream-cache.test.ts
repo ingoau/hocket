@@ -58,10 +58,10 @@ describe("FakeStreamCache", () => {
     expect(c.dataSavedBytes - before.saved).toBe(0);
   });
 
-  it("budget: automatic unless set to something other than the registry default", () => {
+  it("budget: automatic while unset (null); any chosen size, 2 GiB included, is fixed", () => {
     expect(FakeStreamCache.budget(undefined, 120 * GIB)).toEqual({ bytes: CACHE_MAX_DEFAULT, auto: true });
     expect(FakeStreamCache.budget(undefined, 5 * GIB)).toEqual({ bytes: Math.floor(0.5 * GIB), auto: true });
-    expect(FakeStreamCache.budget(CACHE_MAX_DEFAULT, 5 * GIB).auto).toBe(true);
+    expect(FakeStreamCache.budget(CACHE_MAX_DEFAULT, 5 * GIB)).toEqual({ bytes: CACHE_MAX_DEFAULT, auto: false });
     expect(FakeStreamCache.budget(4 * GIB, 5 * GIB)).toEqual({ bytes: 4 * GIB, auto: false });
     expect(trackBytes({ bitRate: 320, durationMs: 1000 })).toBe(40_000);
   });

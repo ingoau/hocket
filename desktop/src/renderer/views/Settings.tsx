@@ -353,8 +353,6 @@ function Connect() {
 }
 
 const GIB = 1024 ** 3;
-/** The registry default of storage.cacheMaxBytes: the core reads it as "automatic". */
-const CACHE_DEFAULT_BYTES = 2 * GIB;
 
 function Storage() {
   const storage = useApp((s) => s.storage);
@@ -403,10 +401,9 @@ function toGb(bytes: number): number {
 }
 
 /**
- * The stream cache budget: automatic (the setting unset; the core sizes it
- * from the volume and reports it) or a custom size in GB. The core treats a
- * value equal to the registry default (2 GiB) as automatic, so a custom
- * choice never starts there.
+ * The stream cache budget: automatic (storage.cacheMaxBytes null, its
+ * default; the core sizes it from the volume and reports it) or a custom size
+ * in GB, any size (2 GB included) being the user's own.
  */
 function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
   const set = useApp((s) => s.setSetting);
@@ -421,12 +418,12 @@ function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
   const choose = (mode: string) => {
     if (mode === "auto") {
       setCustom(false);
-      bridge().dispatch({ type: "resetSetting", data: { key: SK.storageCacheMaxBytes } });
+      set(SK.storageCacheMaxBytes, null);
       return;
     }
     setCustom(true);
-    let gb = toGb(budget || 4 * GIB);
-    if (gb * GIB === CACHE_DEFAULT_BYTES) gb = 4;
+    // Starts from the current (automatic) size, which may well be 2 GB.
+    const gb = toGb(budget || 4 * GIB);
     setDraft(String(gb));
     commit(gb);
   };

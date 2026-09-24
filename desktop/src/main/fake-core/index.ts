@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -21,7 +21,7 @@ import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
 import { FakeStreamCache, trackBytes } from "./stream-cache";
-import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_NOTHING, OFFLINE_NOTICE_SKIPPING } from "@shared/constants";
+import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/constants";
 
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
@@ -150,7 +150,8 @@ export class FakeCore implements CoreHandle {
   private sleepTimer: SleepTimer | undefined;
   private selection: ActionTarget = { type: "none" };
   private playHistory: PlayHistoryEntry[] = [];
-  private playerNotice: string | undefined;
+  /** The current PlayerNotice's code (the core's English message goes with it). */
+  private playerNotice: PlayerNoticeCode | undefined;
   private cache = new FakeStreamCache();
   /** Items skipped in a row because they can't play offline. */
   private offlineSkips = 0;
@@ -249,13 +250,17 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "pinsChanged", data: { pins: this.pins } });
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
+        this.emit({ type: "networkChanged", data: { network: this.network } });
         return;
       case "setNetworkState": {
         const wasOffline = this.isOffline();
+        const changed = JSON.stringify(this.network) !== JSON.stringify(cmd.data.state);
         this.network = cmd.data.state;
+        // Like the core: every change is announced (and replayed on attach).
+        if (changed) this.emit({ type: "networkChanged", data: { network: this.network } });
         if (wasOffline && !this.isOffline()) {
           this.offlineSkips = 0;
-          if (this.playerNotice === OFFLINE_NOTICE_SKIPPING || this.playerNotice === OFFLINE_NOTICE_NOTHING) this.setNotice(undefined);
+          if (this.playerNotice && OFFLINE_NOTICE_CODES.includes(this.playerNotice)) this.setNotice(undefined);
         }
         return;
       }
@@ -1104,8 +1109,8 @@ export class FakeCore implements CoreHandle {
     const s = this.session;
     if (s.current?.key === key) {
       s.current.unavailable = true;
-      this.playerNotice = `Couldn't play ${this.trackTitle(s.current.trackId)}, skipped`;
-      this.emit({ type: "playerNotice", data: { message: this.playerNotice } });
+      this.playerNotice = undefined;
+      this.setNotice("couldNotPlaySkipped", this.trackTitle(s.current.trackId));
       this.next(false);
     }
   }
@@ -1129,7 +1134,7 @@ export class FakeCore implements CoreHandle {
     const curTrack = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
     if (curTrack && play) this.cache.playStarted(curTrack);
     // The offline notices stay until something has played a moment (tick), like the core's clear on Playing.
-    if (cur && this.playerNotice && !cur.unavailable && this.playerNotice !== OFFLINE_NOTICE_SKIPPING) {
+    if (cur && this.playerNotice && !cur.unavailable && this.playerNotice !== "offlineSkipping") {
       this.setNotice(undefined);
     }
     this.emitNowPlaying();
@@ -1146,7 +1151,7 @@ export class FakeCore implements CoreHandle {
     if (!cur) {
       if (this.offlineSkips > 0) {
         this.offlineSkips = 0;
-        this.setNotice(OFFLINE_NOTICE_NOTHING);
+        this.setNotice("nothingAvailableOffline");
       }
       return false;
     }
@@ -1159,11 +1164,11 @@ export class FakeCore implements CoreHandle {
     if (this.offlineSkips > MAX_OFFLINE_SKIPS) {
       this.offlineSkips = 0;
       this.transport.position = { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false };
-      this.setNotice(OFFLINE_NOTICE_NOTHING);
+      this.setNotice("nothingAvailableOffline");
       this.emitTransport();
       return true;
     }
-    if (this.playerNotice !== OFFLINE_NOTICE_SKIPPING) this.setNotice(OFFLINE_NOTICE_SKIPPING);
+    if (this.playerNotice !== "offlineSkipping") this.setNotice("offlineSkipping");
     cur.unavailable = true;
     this.transport = { ...this.transport, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: play }, playedMs: 0 };
     // Skipped on the next turn, never from inside the load.
@@ -1209,7 +1214,7 @@ export class FakeCore implements CoreHandle {
     if (!cur || !this.transport.position.isPlaying) return;
     const pos = this.positionNow();
     this.transport.playedMs += 250;
-    if (this.transport.playedMs >= 3000 && this.playerNotice === OFFLINE_NOTICE_SKIPPING && !this.session.current?.unavailable) this.setNotice(undefined);
+    if (this.transport.playedMs >= 3000 && this.playerNotice === "offlineSkipping" && !this.session.current?.unavailable) this.setNotice(undefined);
     this.fillCache();
     if (this.sleepTimer?.endsAt !== undefined && Date.now() >= this.sleepTimer.endsAt) {
       this.sleepTimer = undefined;
@@ -1762,10 +1767,11 @@ export class FakeCore implements CoreHandle {
     }
   }
 
-  private setNotice(message: string | undefined): void {
-    if (this.playerNotice === message) return;
-    this.playerNotice = message;
-    this.emit({ type: "playerNotice", data: { message } });
+  /** A PlayerNotice as the core sends it: stable code, variable detail, English message. */
+  private setNotice(code: PlayerNoticeCode | undefined, detail?: string): void {
+    if (this.playerNotice === code && code !== "couldNotPlaySkipped") return;
+    this.playerNotice = code;
+    this.emit({ type: "playerNotice", data: { message: code ? noticeMessage(code, detail) : undefined, code, detail } });
   }
 
   // ---- Settings --------------------------------------------------------
@@ -1799,7 +1805,8 @@ export class FakeCore implements CoreHandle {
       ["connect.coordinatorUrl", null, "deviceLocal"],
       ["connect.lanDiscovery", true, "deviceLocal"],
       ["storage.warnThresholdBytes", 4 * 1024 ** 3, "deviceLocal"],
-      ["storage.cacheMaxBytes", 2 * 1024 ** 3, "deviceLocal"],
+      // null: an automatic budget; any number (2 GiB included) is the user's.
+      ["storage.cacheMaxBytes", null, "deviceLocal"],
       ["storage.prefetchOnMobileData", false, "deviceLocal"],
       ["downloads.transcode", false, "deviceLocal"],
       ["downloads.wifiOnly", true, "deviceLocal"],
@@ -2680,5 +2687,18 @@ export class FakeCore implements CoreHandle {
       return { [r.op]: { [r.field]: v } };
     };
     return JSON.stringify({ name: f.name, comment: "Exported from Hocket", ...(rule(f.root) as object), sort: f.sort === "default" ? undefined : f.sort, order: f.descending ? "desc" : "asc", limit: f.limit }, null, 2);
+  }
+}
+
+/** The core's English text for a notice (crates/hocket-core: cache.rs, playback.rs, session.rs). */
+function noticeMessage(code: PlayerNoticeCode, detail = ""): string {
+  switch (code) {
+    case "offlineSkipping": return "Offline: skipping tracks that aren't downloaded or cached";
+    case "nothingAvailableOffline": return "Nothing in the queue is available offline";
+    case "noServer": return "No server connection: add or reconnect your server";
+    case "playbackProblem": return `Playback problem: ${detail}`;
+    case "couldNotPlaySkipped": return `Couldn't play ${detail}, skipped`;
+    case "couldNotPlayStopped": return `Couldn't play ${detail}; stopped after 3 unplayable tracks`;
+    case "autoplayFoundNothing": return "Autoplay found nothing to add";
   }
 }

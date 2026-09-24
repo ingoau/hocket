@@ -531,6 +531,14 @@ const STRINGS = {
   // Misc
   "misc.loading": "Loading…",
   "misc.offline": "Offline",
+  // Player notices, by the core's PlayerNoticeCode ({detail}: a track title or the backend's message)
+  "notice.offlineSkipping": "Offline: skipping tracks that aren't downloaded or cached",
+  "notice.nothingAvailableOffline": "Nothing in the queue is available offline",
+  "notice.noServer": "No server connection: add or reconnect your server",
+  "notice.playbackProblem": "Playback problem: {detail}",
+  "notice.couldNotPlaySkipped": "Couldn't play {detail}, skipped",
+  "notice.couldNotPlayStopped": "Couldn't play {detail}; stopped after several unplayable tracks",
+  "notice.autoplayFoundNothing": "Autoplay found nothing to add",
   "misc.offlineShow": "Show what's available offline",
   "misc.unknownArtist": "Unknown artist",
   "misc.unknownAlbum": "Unknown album",

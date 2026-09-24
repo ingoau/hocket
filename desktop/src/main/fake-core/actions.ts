@@ -86,6 +86,7 @@ export const REGISTRY: RegistryEntry[] = [
 
   // Sidebar items (choose-and-order)
   { id: "navigateHome", label: "Home", icon: "home", category: "sidebar", targets: ["none"], surfaces: ["sidebar", "palette"] },
+  { id: "navigateLibrary", label: "Library", icon: "library", category: "sidebar", targets: ["none"], surfaces: ["sidebar", "palette"] },
   { id: "navigateAlbums", label: "Albums", icon: "album", category: "sidebar", targets: ["none"], surfaces: ["sidebar", "palette"] },
   { id: "navigateArtists", label: "Artists", icon: "artist", category: "sidebar", targets: ["none"], surfaces: ["sidebar", "palette"] },
   { id: "navigatePlaylists", label: "Playlists", icon: "playlist", category: "sidebar", targets: ["none"], surfaces: ["sidebar", "palette"] },

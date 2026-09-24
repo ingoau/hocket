@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BatteryMedium, Bug, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Cloud, CloudOff, Command, Copy, Disc3, Download, Ellipsis, ExternalLink, FastForward, Filter, Folder, GripVertical, HardDrive, Heart, HeartOff,
-  History, House, Infinity as InfinityIcon, Info, LayoutGrid, ListEnd, ListFilterPlus, ListMusic, ListPlus, ListStart, LoaderCircle,
+  History, House, Infinity as InfinityIcon, Info, LayoutGrid, Library, ListEnd, ListFilterPlus, ListMusic, ListPlus, ListStart, LoaderCircle,
   Maximize2, MicVocal, Minus, MonitorSmartphone, Moon, Music, Network, Pause, Pencil, PictureInPicture2, Pin, PinOff, Play, Plus,
   Redo2, Repeat, Repeat1, Rewind, RotateCcw, Search, Settings, Shuffle, SkipBack, SkipForward, Square, SquareCheck, Star, StarOff,
   Trash2, TriangleAlert, Undo2, User, Volume2, VolumeX, WifiOff, X,
@@ -21,7 +21,7 @@ const ICONS: Record<string, LucideIcon> = {
   heart: Heart, heartOff: HeartOff, star: Star, starOff: StarOff,
   queue: ListMusic, lyrics: MicVocal, fullscreen: Maximize2, mini: PictureInPicture2, devices: MonitorSmartphone,
   search: Search, command: Command, settings: Settings,
-  home: House, album: Disc3, artist: User, playlist: ListMusic, playlistAdd: ListPlus, song: Music, genre: LayoutGrid,
+  home: House, library: Library, album: Disc3, artist: User, playlist: ListMusic, playlistAdd: ListPlus, song: Music, genre: LayoutGrid,
   download: Download, downloadOff: CloudOff, cached: HardDrive, filter: Filter, filterAdd: ListFilterPlus, stats: ChartColumn, info: Info,
   remove: Minus, trash: Trash2, edit: Pencil, close: X, check: Check,
   chevronDown: ChevronDown, chevronRight: ChevronRight, chevronLeft: ChevronLeft, chevronUp: ChevronUp,
@@ -44,7 +44,7 @@ export const MATERIAL: Record<string, string> = {
   keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen",
   picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
   play_circle: "resume", close: "close", bug_report: "bug", home: "home", music_note: "song", category: "genre",
-  insights: "stats", settings: "settings", filter_alt: "filter", info: "info",
+  insights: "stats", settings: "settings", filter_alt: "filter", info: "info", library_music: "library",
 };
 
 export interface IconProps {

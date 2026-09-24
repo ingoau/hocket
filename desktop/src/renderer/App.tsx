@@ -26,7 +26,7 @@ import { accentTokens, type ThemeName } from "./lib/contrast";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
 import { Icon } from "./components/Icon";
-import { OFFLINE_NOTICES } from "@shared/constants";
+import { isOfflineNotice, noticeText } from "./lib/notice";
 
 export function App() {
   const ready = useApp((s) => s.ready);
@@ -83,7 +83,7 @@ export function App() {
  * of what plays. The live region stays mounted so a new notice is announced.
  */
 function OfflineBanner({ offline }: { offline: boolean }) {
-  const notice = useApp((s) => (s.playerNotice && OFFLINE_NOTICES.includes(s.playerNotice) ? s.playerNotice : undefined));
+  const notice = useApp((s) => (isOfflineNotice(s.playerNotice) ? noticeText(s.playerNotice) : undefined));
   const navigate = useApp((s) => s.navigate);
   const show = offline || !!notice;
   return (

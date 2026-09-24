@@ -250,6 +250,11 @@ test.describe("available offline", () => {
     await page.getByTestId("available-offline-table").getByTestId("track-row").first().locator(".td.title").dblclick();
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
     await expect(page.getByTestId("offline-banner-text")).toHaveText("Offline");
+    // Back online: the core's NetworkChanged takes the banner away.
+    await page.context().setOffline(false).catch(async () => {
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.session.enableNetworkEmulation({ offline: false }));
+    });
+    await expect(page.getByTestId("offline-banner")).toHaveCount(0);
   });
 });
 
@@ -276,10 +281,20 @@ test.describe("settings: storage", () => {
       await setTheme(page, theme);
       await expectNoViolations(page, `${theme} settings/storage`);
     }
-    // Custom: never starts at the default (the core would read 2 GiB as automatic).
+    const budget = () => page.evaluate(async () => {
+      const r = (await window.hocket.query({ type: "storage" })) as { data?: { cacheBudgetAuto?: boolean } };
+      const s = (await window.hocket.query({ type: "setting", data: { key: "storage.cacheMaxBytes" } })) as { data?: { value: string } };
+      return { auto: r.data?.cacheBudgetAuto, value: s.data?.value };
+    });
+    expect(await budget()).toEqual({ auto: true, value: "null" });
+    // Custom starts at the current size: 2 GB is a size of its own (null is automatic).
     await mode.selectOption("custom");
     const gb = page.getByTestId("cache-budget-gb");
-    await expect(gb).toHaveValue("4");
+    await expect(gb).toHaveValue("2");
+    await expect.poll(budget).toEqual({ auto: false, value: String(2 * 1024 ** 3) });
+    await expect(usage).toContainText("of 2.0 GB");
+    await gb.fill("4");
+    await gb.press("Enter");
     await expect(usage).toContainText("of 4.0 GB");
     // A small budget evicts complete entries.
     const before = await usage.textContent();
@@ -292,6 +307,7 @@ test.describe("settings: storage", () => {
     await mode.selectOption("auto");
     await expect(usage).toContainText("of 2.0 GB");
     await expect(gb).toHaveCount(0);
+    await expect.poll(budget).toEqual({ auto: true, value: "null" });
     await shot(page, "storage-after");
   });
 });

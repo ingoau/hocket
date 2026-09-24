@@ -8,7 +8,7 @@ import type { OfflineState, Track } from "@core/api";
 const KIB = 1024;
 const MIB = 1024 * KIB;
 const GIB = 1024 * MIB;
-/** The registry default of storage.cacheMaxBytes; a value equal to it means "automatic". */
+/** The ceiling of an automatic budget (storage.cacheMaxBytes null). */
 export const CACHE_MAX_DEFAULT = 2 * GIB;
 /** The core primes ~8 s, clamped to 256 KiB..1.5 MiB. */
 const PRIME_MIN = 256 * KIB;
@@ -153,9 +153,9 @@ export class FakeStreamCache {
     return n;
   }
 
-  /** The effective budget: a custom setting, else min(2 GiB, 10% of free space). */
+  /** The effective budget: the user's size (any, 2 GiB included), else (null) min(2 GiB, 10% of free space). */
   static budget(setting: number | undefined, freeBytes: number): { bytes: number; auto: boolean } {
-    if (setting !== undefined && setting > 0 && setting !== CACHE_MAX_DEFAULT) return { bytes: setting, auto: false };
+    if (setting !== undefined && setting > 0) return { bytes: setting, auto: false };
     return { bytes: Math.min(CACHE_MAX_DEFAULT, Math.floor(freeBytes * 0.1)), auto: true };
   }
 }

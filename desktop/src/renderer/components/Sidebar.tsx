@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "@shared/strings";
-import { NAV_VIEWS } from "@shared/keymap";
+import { NAV_VIEWS, sidebarPlaces } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { useApp, type ViewName } from "../store/app";
 import { useActions, useQuery } from "../store/queries";
@@ -35,10 +35,9 @@ export function Sidebar() {
   }, [dragging, setPanels]);
 
   const fallback = ["navigateHome", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateTracks", "navigateGenres", "navigateDownloads", "navigateFilters", "navigateStats"];
-  const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
-  const items = (navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
-    .filter((it) => it.id !== "navigateSettings")
-    .map((it) => ({ ...it, view: NAV_VIEWS[it.id] as ViewName | undefined }));
+  const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
+  const items = sidebarPlaces(navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
+    .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
   const isActive = (v: ViewName | undefined) => !!v && ((route.view === v && !(v === "downloads" && route.param === "offline")) || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
 
   return (

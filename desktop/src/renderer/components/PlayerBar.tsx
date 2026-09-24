@@ -14,7 +14,7 @@ import { NARROW, useMediaQuery } from "../lib/media";
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
-import { OFFLINE_NOTICES } from "@shared/constants";
+import { isOfflineNotice, noticeText } from "../lib/notice";
 import { Heart, Stars } from "./Stars";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
@@ -22,7 +22,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const transport = useApp((s) => s.transport);
   const queue = useApp((s) => s.queue);
   // The offline notices get the app-wide banner (App.tsx) instead.
-  const notice = useApp((s) => (s.playerNotice && !OFFLINE_NOTICES.includes(s.playerNotice) ? s.playerNotice : undefined));
+  const notice = useApp((s) => (isOfflineNotice(s.playerNotice) ? undefined : noticeText(s.playerNotice)));
   const resume = useApp((s) => s.resumeOffer);
   const devices = useApp((s) => s.devices);
   const panels = useApp((s) => s.panels);

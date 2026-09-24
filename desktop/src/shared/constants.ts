@@ -1,4 +1,5 @@
 // Constants shared between main, preload and renderer.
+import type { PlayerNoticeCode } from "@core/api";
 
 /** Must equal `API_SCHEMA_VERSION` in crates/hocket-core/src/api.rs. The main
  * process refuses a native addon reporting a different value. */
@@ -45,13 +46,11 @@ export function artworkUrl(token: string | undefined): string | undefined {
 }
 
 /**
- * PlayerNotice texts the core emits offline (crates/hocket-core/src/core/
+ * PlayerNotice codes the core emits offline (crates/hocket-core/src/core/
  * handlers/cache.rs); the renderer shows them as a banner with a way to the
  * "Available offline" list. FakeCore emits the same.
  */
-export const OFFLINE_NOTICE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached";
-export const OFFLINE_NOTICE_NOTHING = "Nothing in the queue is available offline";
-export const OFFLINE_NOTICES: readonly string[] = [OFFLINE_NOTICE_SKIPPING, OFFLINE_NOTICE_NOTHING];
+export const OFFLINE_NOTICE_CODES: readonly PlayerNoticeCode[] = ["offlineSkipping", "nothingAvailableOffline"];
 
 /** Built-in filters' ids (crates/hocket-core/src/filters/mod.rs `default_filters`). */
 export const BUILTIN_FILTER_PREFIX = "builtin:";

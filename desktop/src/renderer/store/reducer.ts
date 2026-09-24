@@ -4,6 +4,7 @@ import type {
   AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
+import type { PlayerNotice } from "../lib/notice";
 
 export interface CoreState {
   ready: boolean;
@@ -34,7 +35,8 @@ export interface CoreState {
   shortcuts: Shortcut[];
   /** Lyrics for the current track (or the last one that was current). */
   lyrics: { trackId: string; lyrics: Lyrics | undefined } | undefined;
-  playerNotice: string | undefined;
+  /** The player-bar notice (code, detail and the core's English text); undefined when cleared. */
+  playerNotice: PlayerNotice | undefined;
   toasts: Toast[];
   /** Bumped on LibraryChanged so views refetch. */
   libraryVersion: number;
@@ -163,13 +165,15 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "toast":
       return { ...state, toasts: [...state.toasts.filter((t) => t.id !== e.data.toast.id), e.data.toast].slice(-4) };
     case "playerNotice":
-      return { ...state, playerNotice: e.data.message };
+      return { ...state, playerNotice: e.data.message || e.data.code ? { message: e.data.message ?? undefined, code: e.data.code ?? undefined, detail: e.data.detail ?? undefined } : undefined };
     case "jobsChanged":
       return { ...state, jobs: e.data.jobs };
     case "problemsChanged":
       return { ...state, problems: e.data.problems };
     case "connectionChanged":
       return { ...state, connection: e.data.state };
+    case "networkChanged":
+      return { ...state, network: e.data.network ?? undefined };
     case "devicesChanged":
       return { ...state, devices: e.data.devices };
     case "handoffPickerChanged":

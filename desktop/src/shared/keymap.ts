@@ -73,8 +73,24 @@ export function canonicalActionId(id: string): string {
   return ACTION_ALIASES[id] ?? id;
 }
 
-/** Sidebar navigation ids → renderer views. */
+/**
+ * Sidebar navigation ids → renderer views. `navigateLibrary` is the phone's
+ * Library place (albums, artists, songs in one screen), which can reach this
+ * sidebar through the synced order; its nearest place here is Albums.
+ */
 export const NAV_VIEWS: Record<string, string> = {
-  navigateHome: "home", navigateTracks: "songs", navigateAlbums: "albums", navigateArtists: "artists", navigatePlaylists: "playlists",
+  navigateHome: "home", navigateLibrary: "albums", navigateTracks: "songs", navigateAlbums: "albums", navigateArtists: "artists", navigatePlaylists: "playlists",
   navigateGenres: "genres", navigateFilters: "filters", navigateDownloads: "downloads", navigateStats: "stats", navigateSettings: "settings",
 };
+
+/**
+ * The sidebar's places from the core's `sidebar` surface: Settings lives in
+ * the footer, each id gets its view, and a place is listed once (a synced
+ * order can name both navigateLibrary and navigateAlbums).
+ */
+export function sidebarPlaces<T extends { id: string }>(items: readonly T[]): (T & { view: string | undefined })[] {
+  return items
+    .filter((it) => it.id !== "navigateSettings")
+    .map((it) => ({ ...it, view: NAV_VIEWS[it.id] }))
+    .filter((it, i, all) => !it.view || all.findIndex((o) => o.view === it.view) === i);
+}

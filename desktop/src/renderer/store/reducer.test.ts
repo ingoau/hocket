@@ -41,10 +41,26 @@ describe("reducer", () => {
     expect(settingValue(s, "x", 0)).toBe(1);
     s = reduce(s, { type: "libraryChanged", data: { server_id: "s", tables: ["tracks"], ids: ["a"] } });
     expect(s.libraryVersion).toBe(1);
-    s = reduce(s, { type: "playerNotice", data: { message: "Couldn't play X, skipped" } });
-    expect(s.playerNotice).toContain("skipped");
+    s = reduce(s, { type: "playerNotice", data: { message: "Couldn't play X, skipped", code: "couldNotPlaySkipped", detail: "X" } });
+    expect(s.playerNotice).toEqual({ message: "Couldn't play X, skipped", code: "couldNotPlaySkipped", detail: "X" });
+    // An older core without a code still shows its message.
+    s = reduce(s, { type: "playerNotice", data: { message: "Something" } });
+    expect(s.playerNotice).toEqual({ message: "Something", code: undefined, detail: undefined });
+    s = reduce(s, { type: "playerNotice", data: {} });
+    expect(s.playerNotice).toBeUndefined();
     s = reduce(s, { type: "resumeOfferChanged", data: { offer: { deviceName: "Pixel", track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" }, positionMs: 10, lastSeen: 0 } } });
     expect(s.resumeOffer?.deviceName).toBe("Pixel");
+  });
+
+  it("follows the core's network state (NetworkChanged), not the browser's", () => {
+    let s = applySnapshot(initialCoreState, snapshot);
+    expect(s.network).toBeUndefined();
+    s = reduce(s, { type: "networkChanged", data: { network: { kind: "offline", metered: false, networkId: undefined } } });
+    expect(s.network?.kind).toBe("offline");
+    s = reduce(s, { type: "networkChanged", data: { network: { kind: "wifi", metered: false, networkId: "home" } } });
+    expect(s.network).toEqual({ kind: "wifi", metered: false, networkId: "home" });
+    s = reduce(s, { type: "networkChanged", data: {} });
+    expect(s.network).toBeUndefined();
   });
 
   it("announces a fresh undo entry with one Undo toast, never twice, and not on undo/redo", () => {
