@@ -1,7 +1,12 @@
 package app.hocket.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ripple
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -84,17 +89,26 @@ fun SelectableRow(
     state: String? = null,
     actions: List<CustomAccessibilityAction> = emptyList(),
     clickLabel: String? = null,
+    /** Shared with a child that draws the press ripple itself (grid cells ripple on the artwork only). */
+    interactionSource: MutableInteractionSource? = null,
+    /** False when a child draws the press indication from [interactionSource]. */
+    rowIndication: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val container by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, label = "rowSelected",
+    )
     val selectLabel = stringResource(R.string.a11y_select)
     val deselectLabel = stringResource(R.string.a11y_deselect)
     val openLabel = clickLabel ?: stringResource(R.string.a11y_open)
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        color = container,
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
+                interactionSource = interactionSource,
+                indication = if (rowIndication) ripple() else null,
                 onClick = { if (selectionActive) onToggleSelect() else onClick() },
                 onClickLabel = if (!selectionActive) openLabel else if (selected) deselectLabel else selectLabel,
                 onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onToggleSelect() },
@@ -201,8 +215,8 @@ fun TrackRow(
             leading?.invoke()
             if (showArtwork) {
                 Box(Modifier.size(48.dp)) {
-                    Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
-                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                    Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
                         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                     }
                 }
@@ -266,20 +280,34 @@ fun AlbumCard(
 ) {
     val artist = album.artist ?: stringResource(R.string.unknown_artist)
     val label = stringResource(R.string.row_album_a11y, album.name, artist)
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
+    val interaction = remember { MutableInteractionSource() }
+    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp)) {
             Box {
-                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f), RoundedCornerShape(16.dp))
+                // The press ripple is drawn on the cover only (Navic): the text below stays calm.
+                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text(album.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            GridCellText(album.name, artist)
         }
     }
 }
+
+/**
+ * The two text lines under a grid or carousel cell: a title of up to two lines (always two lines
+ * tall, so cells in a row and their loading skeletons line up) and a one-line subtitle.
+ */
+@Composable
+fun GridCellText(title: String, subtitle: String) {
+    Text(title, style = GridTitleStyle, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+internal val GridTitleStyle: androidx.compose.ui.text.TextStyle
+    @Composable get() = MaterialTheme.typography.titleSmallEmphasized
 
 @Composable
 fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
@@ -305,7 +333,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
     ).joinToString(", ")
     SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
+            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -342,8 +370,8 @@ fun Badge(text: String, modifier: Modifier = Modifier, container: androidx.compo
 
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
-    Row(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
         action?.invoke()
     }
 }

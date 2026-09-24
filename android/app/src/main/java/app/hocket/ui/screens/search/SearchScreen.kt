@@ -96,7 +96,11 @@ fun SearchScreen(nav: NavHostController) {
     LaunchedEffect(Unit) {
         client.searchResults.collect { r -> if (r.fromServer && r.query == query.trim()) { remote = r; pendingRemote = false } }
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    // The keyboard comes up on the first visit only; coming back to the tab keeps the results in view.
+    var focusedOnce by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!focusedOnce) { focusedOnce = true; runCatching { focus.requestFocus() } }
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
