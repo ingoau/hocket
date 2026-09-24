@@ -27,8 +27,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, Ms, PositionStamp, QueueKey,
-    SavedQueue, SessionDocument, Setting, TrackId, TransportLease, TransportState, UndoEntry,
+    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms,
+    PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+    TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -39,8 +40,8 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason,
-    ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, PlaylistEdit, RefuseReason,
+    RejectReason, ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
     apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp,
@@ -296,6 +297,12 @@ pub enum Input {
         before_revision: u32,
         before: Option<SessionDocument>,
     },
+    /// This device changed ratings, loves or playlists: tell the other
+    /// devices in the room (fire and forget; nothing is sent while alone).
+    LibraryEdited {
+        items: Vec<LibraryItemState>,
+        playlists: Vec<PlaylistEdit>,
+    },
 
     Tick,
 }
@@ -415,6 +422,13 @@ pub enum Output {
         entry: UndoEntry,
         before_revision: u32,
         before: Option<SessionDocument>,
+    },
+    /// Another device changed ratings, loves or playlists: apply to the
+    /// mirror (never to the outbox: the sender owns the server write).
+    LibraryEditReceived {
+        from: DeviceId,
+        items: Vec<LibraryItemState>,
+        playlists: Vec<PlaylistEdit>,
     },
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
@@ -1248,6 +1262,16 @@ impl Engine {
                     before_revision,
                     before,
                 });
+            }
+            Input::LibraryEdited { items, playlists } => {
+                if !items.is_empty() || !playlists.is_empty() {
+                    let device_id = self.cfg.device.id.clone();
+                    self.upstream_send(Msg::LibraryEdited {
+                        device_id,
+                        items,
+                        playlists,
+                    });
+                }
             }
             Input::Tick => self.on_tick(),
         }
@@ -2549,6 +2573,19 @@ impl Engine {
                         entry,
                         before_revision,
                         before,
+                    });
+                }
+            }
+            Msg::LibraryEdited {
+                device_id,
+                items,
+                playlists,
+            } => {
+                if device_id != self.cfg.device.id {
+                    self.out.push(Output::LibraryEditReceived {
+                        from: device_id,
+                        items,
+                        playlists,
                     });
                 }
             }

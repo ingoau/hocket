@@ -153,4 +153,6 @@ pub(crate) struct PendingCas {
     pub outcome: crate::undo::CasOutcome,
     pub label: String,
     pub redo: bool,
+    /// Rated or loved items the undo touches, announced once it completes.
+    pub items: Vec<(crate::api::LibraryItemKind, String)>,
 }

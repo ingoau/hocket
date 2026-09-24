@@ -491,6 +491,11 @@ impl Actor {
                     });
                 }
             }
+            Output::LibraryEditReceived {
+                from,
+                items,
+                playlists,
+            } => self.on_library_edit_received(from, items, playlists),
             Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.log(level, message),
         }

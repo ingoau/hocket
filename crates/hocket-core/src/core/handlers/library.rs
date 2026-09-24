@@ -8,6 +8,8 @@ use futures::future::BoxFuture;
 
 use crate::api::*;
 use crate::autoplay::{AutoplayError, AutoplaySource, ScoredTrack};
+use crate::connect::engine::Input;
+use crate::connect::wire::PlaylistEdit;
 use crate::core::actor::Actor;
 use crate::core::state::PendingCas;
 use crate::core::{ActorMsg, Internal};
@@ -48,6 +50,195 @@ impl Actor {
             });
         }
         self.schedule_flush();
+        self.emit_queue();
+    }
+
+    // -- telling this device's screens and the other devices ---------------------------
+
+    /// An item's rating and love as the mirror holds them now.
+    fn item_state(&self, kind: LibraryItemKind, id: &str) -> Option<LibraryItemState> {
+        let (rating, loved) = match kind {
+            LibraryItemKind::Track => self
+                .db
+                .track(id)
+                .ok()
+                .flatten()
+                .map(|t| (t.rating, t.loved))?,
+            LibraryItemKind::Album => self
+                .db
+                .album(id)
+                .ok()
+                .flatten()
+                .map(|a| (a.rating, a.loved))?,
+            LibraryItemKind::Artist => (0, self.db.artist(id).ok().flatten()?.loved),
+        };
+        Some(LibraryItemState {
+            kind,
+            id: id.to_string(),
+            rating,
+            loved,
+        })
+    }
+
+    /// Ratings or loves changed in the mirror: `LibraryItemsChanged` for
+    /// the screens here, and the new values to the other devices in the
+    /// Connect room (which apply them to their mirrors and tell theirs).
+    pub(crate) fn announce_items(&mut self, targets: &[(LibraryItemKind, String)]) {
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
+        let mut items: Vec<LibraryItemState> = vec![];
+        for (kind, id) in targets {
+            if items.iter().any(|i| i.kind == *kind && &i.id == id) {
+                continue;
+            }
+            if let Some(state) = self.item_state(*kind, id) {
+                items.push(state);
+            }
+        }
+        if items.is_empty() {
+            return;
+        }
+        self.emit(Event::LibraryItemsChanged {
+            server_id,
+            items: items.clone(),
+            from_device: None,
+        });
+        self.engine_input(Input::LibraryEdited {
+            items,
+            playlists: vec![],
+        });
+    }
+
+    /// Playlists changed in the mirror: `PlaylistChanged` for the screens
+    /// here and the mirror's row (and, with `with_tracks`, its order) to the
+    /// other devices. A playlist the mirror no longer has goes out deleted.
+    pub(crate) fn announce_playlists(&mut self, ids: &[PlaylistId], with_tracks: bool) {
+        let Some(server_id) = self.server_id() else {
+            return;
+        };
+        let mut edits: Vec<PlaylistEdit> = vec![];
+        for id in ids {
+            if edits.iter().any(|e| &e.playlist_id == id) {
+                continue;
+            }
+            let playlist = self.db.playlist(id).ok().flatten();
+            let track_ids = match (&playlist, with_tracks) {
+                (Some(_), true) => self.db.playlist_track_ids(id).ok(),
+                _ => None,
+            };
+            edits.push(PlaylistEdit {
+                playlist_id: id.clone(),
+                playlist,
+                track_ids,
+            });
+        }
+        for e in &edits {
+            self.emit(Event::PlaylistChanged {
+                server_id: server_id.clone(),
+                playlist_id: e.playlist_id.clone(),
+                playlist: e.playlist.clone(),
+                from_device: None,
+            });
+        }
+        if !edits.is_empty() {
+            self.engine_input(Input::LibraryEdited {
+                items: vec![],
+                playlists: edits,
+            });
+        }
+    }
+
+    /// Another signed-in device changed ratings, loves or playlists (and
+    /// queued the server write itself): overwrite the mirror, never the
+    /// outbox, and tell the screens here exactly as for a local change.
+    pub(crate) fn on_library_edit_received(
+        &mut self,
+        from: DeviceId,
+        items: Vec<LibraryItemState>,
+        playlists: Vec<PlaylistEdit>,
+    ) {
+        let Some(sid) = self.server_id() else {
+            return;
+        };
+        let applied = self.db.with_tx(|tx| {
+            for it in &items {
+                let rating = it.rating.min(5);
+                match it.kind {
+                    LibraryItemKind::Track => tx.execute(
+                        "UPDATE tracks SET rating = ?3, loved = ?4 WHERE server_id = ?1 AND id = ?2",
+                        rusqlite::params![sid, it.id, rating, it.loved as i64],
+                    )?,
+                    LibraryItemKind::Album => tx.execute(
+                        "UPDATE albums SET rating = ?3, loved = ?4 WHERE server_id = ?1 AND id = ?2",
+                        rusqlite::params![sid, it.id, rating, it.loved as i64],
+                    )?,
+                    LibraryItemKind::Artist => tx.execute(
+                        "UPDATE artists SET loved = ?3 WHERE server_id = ?1 AND id = ?2",
+                        rusqlite::params![sid, it.id, it.loved as i64],
+                    )?,
+                };
+            }
+            for p in &playlists {
+                match &p.playlist {
+                    None => {
+                        tx.execute(
+                            "DELETE FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2",
+                            [&sid, &p.playlist_id],
+                        )?;
+                        tx.execute(
+                            "DELETE FROM playlists WHERE server_id = ?1 AND id = ?2",
+                            [&sid, &p.playlist_id],
+                        )?;
+                    }
+                    Some(pl) => {
+                        // The sender's row, under our own server id.
+                        let mut pl = pl.clone();
+                        pl.id = p.playlist_id.clone();
+                        pl.server_id = sid.clone();
+                        crate::db::queries::upsert_playlists_in(tx, std::slice::from_ref(&pl), 0)?;
+                        if let Some(ids) = &p.track_ids {
+                            crate::db::queries::set_playlist_tracks_in(tx, &sid, &pl.id, ids)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = applied {
+            self.log("warn", format!("library edit from {from}: {e}"));
+            return;
+        }
+        let mut ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+        if !items.is_empty() {
+            self.emit(Event::LibraryItemsChanged {
+                server_id: sid.clone(),
+                items,
+                from_device: Some(from.clone()),
+            });
+        }
+        for p in &playlists {
+            ids.push(p.playlist_id.clone());
+            self.emit(Event::PlaylistChanged {
+                server_id: sid.clone(),
+                playlist_id: p.playlist_id.clone(),
+                playlist: self.db.playlist(&p.playlist_id).ok().flatten(),
+                from_device: Some(from.clone()),
+            });
+        }
+        let mut tables = vec!["tracks", "albums", "artists"];
+        if !playlists.is_empty() {
+            tables.extend(["playlists", "playlist_tracks"]);
+        }
+        self.emit(Event::LibraryChanged {
+            server_id: sid,
+            tables: tables.into_iter().map(String::from).collect(),
+            ids,
+        });
+        if !playlists.is_empty() {
+            self.reconcile_playlist_pins();
+        }
+        // Now playing, the queue and the OS media session show the new values.
         self.emit_queue();
     }
 
@@ -118,7 +309,12 @@ impl Actor {
             }
         }
         let n = items.len();
+        let announced: Vec<(LibraryItemKind, String)> = items
+            .iter()
+            .filter_map(|i| announced_item(&i.target))
+            .collect();
         self.push_remote_undo("rate", rate_label(rating, n), items);
+        self.announce_items(&announced);
         self.after_library_mutation(vec!["tracks", "albums"], ids);
         if !love_targets.is_empty() {
             // Rating → love bridge: one-way, only above the threshold.
@@ -167,6 +363,10 @@ impl Actor {
             });
         }
         let n = items.len();
+        let announced: Vec<(LibraryItemKind, String)> = items
+            .iter()
+            .filter_map(|i| announced_item(&i.target))
+            .collect();
         let label = if loved { "Love" } else { "Unlove" };
         self.push_remote_undo(
             "love",
@@ -177,6 +377,7 @@ impl Actor {
             },
             items,
         );
+        self.announce_items(&announced);
         self.after_library_mutation(vec!["tracks", "albums"], ids);
     }
 
@@ -213,6 +414,7 @@ impl Actor {
                 set: RemoteValue::Loved(loved),
             }],
         );
+        self.announce_items(&[(LibraryItemKind::Artist, artist_id.clone())]);
         self.after_library_mutation(vec!["artists"], vec![artist_id]);
     }
 
@@ -252,6 +454,7 @@ impl Actor {
             },
             None,
         );
+        self.announce_playlists(std::slice::from_ref(&playlist_id), false);
         self.after_library_mutation(vec!["playlists"], vec![playlist_id]);
     }
 
@@ -312,6 +515,7 @@ impl Actor {
                 }],
             );
         }
+        self.announce_playlists(std::slice::from_ref(&playlist_id), false);
         self.after_library_mutation(vec!["playlists"], vec![playlist_id]);
     }
 
@@ -388,6 +592,7 @@ impl Actor {
                 items,
             );
         }
+        self.announce_playlists(std::slice::from_ref(&playlist_id), true);
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
@@ -446,6 +651,7 @@ impl Actor {
                 items,
             );
         }
+        self.announce_playlists(std::slice::from_ref(&playlist_id), true);
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
@@ -496,6 +702,7 @@ impl Actor {
                 }],
             );
         }
+        self.announce_playlists(std::slice::from_ref(&playlist_id), true);
         self.after_library_mutation(vec!["playlists", "playlist_tracks"], vec![playlist_id]);
     }
 
@@ -614,12 +821,17 @@ impl Actor {
         redo: bool,
     ) {
         let total = mutations.len();
+        let items = mutations
+            .iter()
+            .filter_map(|m| announced_item(&m.target))
+            .collect();
         self.pending_cas.insert(
             entry_id.to_string(),
             PendingCas {
                 outcome: CasOutcome::new(total),
                 label: label.to_string(),
                 redo,
+                items,
             },
         );
         if total == 0 {
@@ -732,6 +944,8 @@ impl Actor {
         let Some(p) = self.pending_cas.remove(entry_id) else {
             return;
         };
+        // Undone (or skipped: the mirror may have learnt the server's value).
+        self.announce_items(&p.items);
         let note = p.outcome.note();
         self.undo.set_note(entry_id, note.clone());
         let verb = if p.redo { "Redid" } else { "Undid" };
@@ -1486,6 +1700,17 @@ fn cas_target_key(m: &CasMutation) -> Option<String> {
         (RemoteTarget::Artist { id }, RemoteValue::Loved(_)) => format!("loved:artist:{id}"),
         _ => return None,
     })
+}
+
+/// The rated or loved item a remote undo target names (playlists are
+/// announced by the playlist paths themselves).
+fn announced_item(target: &RemoteTarget) -> Option<(LibraryItemKind, String)> {
+    match target {
+        RemoteTarget::Track { id } => Some((LibraryItemKind::Track, id.clone())),
+        RemoteTarget::Album { id } => Some((LibraryItemKind::Album, id.clone())),
+        RemoteTarget::Artist { id } => Some((LibraryItemKind::Artist, id.clone())),
+        _ => None,
+    }
 }
 
 fn cas_target(m: &CasMutation) -> Option<CasTarget> {
