@@ -1,6 +1,10 @@
 package app.hocket.ui.queue
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,6 +66,9 @@ import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.TrackRow
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+
+/** How long after the user last scrolled the queue it stops following the current track. */
+private const val USER_SCROLL_GRACE_MS = 8_000L
 
 /** Queue / Recent / History share one panel (design: saved queues, global undo on Android). */
 @Composable
@@ -138,9 +145,31 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
             haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
         }
     }
+    // Follow the current track, but never fight the user: no auto-scroll while a finger is on the
+    // list or for a while after they last scrolled it (Metrolist/Navic leave a browsed queue alone).
+    var lastUserScroll by remember { mutableLongStateOf(0L) }
+    var userDragging by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { i ->
+            when (i) {
+                is DragInteraction.Start -> { userDragging = true; lastUserScroll = SystemClock.uptimeMillis() }
+                is DragInteraction.Stop, is DragInteraction.Cancel -> { userDragging = false; lastUserScroll = SystemClock.uptimeMillis() }
+            }
+        }
+    }
+    var firstScroll by remember { mutableStateOf(true) }
     LaunchedEffect(queue.current?.item?.key) {
         val idx = rows.indexOfFirst { it is Row.Item && it.section == Row.Section.Current }
-        if (idx > 0) listState.animateScrollToItem((idx - 1).coerceAtLeast(0))
+        if (idx <= 0) return@LaunchedEffect
+        val target = (idx - 1).coerceAtLeast(0)
+        when {
+            // Opening the queue: start at the current track, without an animation.
+            firstScroll -> listState.scrollToItem(target)
+            userDragging || listState.isScrollInProgress -> {}
+            SystemClock.uptimeMillis() - lastUserScroll < USER_SCROLL_GRACE_MS -> {}
+            else -> listState.animateScrollToItem(target)
+        }
+        firstScroll = false
     }
     Box(modifier) {
         LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 120.dp), modifier = Modifier.fillMaxSize().testTag("queue.list")) {
@@ -173,7 +202,10 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
                                     if (draggable && index > 0) add(CustomAccessibilityAction(moveUpLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index - 1)); true })
                                     if (draggable && index >= 0 && index < movable.lastIndex) add(CustomAccessibilityAction(moveDownLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index + 1)); true })
                                 }
-                                Column(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).alpha(if (row.section == Row.Section.History) 0.55f else 1f)) {
+                                // Transparent at rest (the player's backdrop shows through); an opaque
+                                // surface only while swiped, to cover the remove background.
+                                val swipeSurface = MaterialTheme.colorScheme.surfaceContainerHighest
+                                Column(Modifier.drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) }.alpha(if (row.section == Row.Section.History) 0.55f else 1f)) {
                                     TrackRow(entry.track, onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) }, onMore = { sheetFor = entry },
                                         actionTarget = Commands.queueItems(listOf(entry.item.key)), extraActions = extra,
                                         selected = selecting && selection.contains(entry.item.key), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
