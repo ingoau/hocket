@@ -123,6 +123,23 @@ class CoreClient(
     val errors: SharedFlow<EventErrorInner> = _errors.asSharedFlow()
     private val _libraryChanged = MutableSharedFlow<EventLibraryChangedInner>(extraBufferCapacity = 16)
     val libraryChanged: SharedFlow<EventLibraryChangedInner> = _libraryChanged.asSharedFlow()
+    private val _libraryItemsChanged = MutableSharedFlow<EventLibraryItemsChangedInner>(extraBufferCapacity = 16)
+    /**
+     * Ratings and loves as they stand now (set here, undone, or set on another signed-in device):
+     * patch held copies with [LibraryPatches]. A `libraryChanged` follows for lists.
+     */
+    val libraryItemsChanged: SharedFlow<EventLibraryItemsChangedInner> = _libraryItemsChanged.asSharedFlow()
+    private val _playlistChanged = MutableSharedFlow<EventPlaylistChangedInner>(extraBufferCapacity = 16)
+    /** A playlist's row now (`null` = deleted), from here or another device. */
+    val playlistChanged: SharedFlow<EventPlaylistChangedInner> = _playlistChanged.asSharedFlow()
+    private val _libraryGeneration = MutableStateFlow(0)
+    /**
+     * Bumped on every `LibraryChanged` (which the core also sends after each `LibraryItemsChanged`
+     * and `PlaylistChanged`). Key refetches on this rather than on [libraryChanged]'s last value:
+     * two identical payloads in a row (rating the same track twice, the same change arriving from
+     * another device) are equal and would not restart a `LaunchedEffect`.
+     */
+    val libraryGeneration: StateFlow<Int> = _libraryGeneration.asStateFlow()
     private val _exports = MutableSharedFlow<Event>(extraBufferCapacity = 4)
     /** `NspExported` and `ConfigExported`, for the share sheet. */
     val exports: SharedFlow<Event> = _exports.asSharedFlow()
@@ -315,7 +332,21 @@ class CoreClient(
                 albumPages.invalidate { it.serverId == sid }
                 artistPages.invalidate { it.serverId == sid }
                 playlistTrackPages.invalidate()
+                _libraryGeneration.update { it + 1 }
                 _libraryChanged.tryEmit(event.data)
+            }
+            is Event.LibraryItemsChanged -> {
+                val items = event.data.items
+                // The core re-emits these when the item is queued; patching now keeps the player
+                // and the queue in step with the rows that change below.
+                _queue.update { LibraryPatches.queue(it, items) }
+                _nowPlaying.update { e -> e?.let { LibraryPatches.entry(it, items) } }
+                _libraryItemsChanged.tryEmit(event.data)
+            }
+            is Event.PlaylistChanged -> {
+                val id = event.data.playlist_id
+                playlistTrackPages.invalidate { it.playlistId == id }
+                _playlistChanged.tryEmit(event.data)
             }
             is Event.SearchResults -> _searchResults.tryEmit(event.data.results)
             is Event.SessionChanged -> {
