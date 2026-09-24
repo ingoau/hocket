@@ -198,18 +198,17 @@ impl Actor {
             .collect()
     }
 
-    /// The stream cache's budget: `storage.cacheMaxBytes` when the user set
-    /// it, otherwise (never set, or reset to its default) sized from the
-    /// cache volume. Enforced at once when it shrank.
+    /// The stream cache's budget: `storage.cacheMaxBytes` when the user
+    /// chose a size (any size, the old 2 GiB default included), otherwise
+    /// (`null`, the default) sized from the cache volume. Enforced at once
+    /// when it shrank.
     pub(crate) fn apply_cache_budget(&mut self) {
         let before = self.downloads.cache_budget();
-        let default = crate::settings::lookup(keys::STORAGE_CACHE_MAX_BYTES)
-            .and_then(|d| (d.default)().as_f64());
         let user = self
             .settings
-            .is_set(keys::STORAGE_CACHE_MAX_BYTES)
-            .then(|| self.settings.get_f64(keys::STORAGE_CACHE_MAX_BYTES))
-            .filter(|b| *b > 0.0 && Some(*b) != default);
+            .get(keys::STORAGE_CACHE_MAX_BYTES)
+            .as_f64()
+            .filter(|b| *b > 0.0);
         match user {
             Some(b) => {
                 self.downloads.set_cache_budget(b);

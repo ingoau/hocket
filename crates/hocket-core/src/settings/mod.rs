@@ -75,7 +75,23 @@ impl SettingsStore for MemoryStore {
 }
 
 /// Persisted schema version of the settings document.
-pub const SETTINGS_DOC_VERSION: u32 = 1;
+///
+/// - 2: `storage.cacheMaxBytes` is `null` for an automatic stream-cache
+///   budget. Version 1 read its old default (2 GiB) as automatic, so a
+///   stored 2 GiB migrates to `null`.
+pub const SETTINGS_DOC_VERSION: u32 = 2;
+
+/// The 2 GiB that version 1 stored for an automatic stream-cache budget.
+const V1_CACHE_MAX_DEFAULT: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
+
+/// A stored `storage.cacheMaxBytes` equal to its version-1 default meant
+/// "automatic" then; it is `null` now. Shared by the settings document and
+/// config-backup migrations.
+pub(crate) fn migrate_cache_budget_v1(value: &mut Value) {
+    if value.as_f64() == Some(V1_CACHE_MAX_DEFAULT) {
+        *value = Value::Null;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Entry {
@@ -141,12 +157,23 @@ impl Settings {
         let mut s = Settings {
             entries: doc.entries,
         };
+        if doc.version < 2 {
+            if let Some(e) = s.entries.get_mut(keys::STORAGE_CACHE_MAX_BYTES) {
+                migrate_cache_budget_v1(&mut e.value);
+            }
+        }
         // Drop stored values that no longer validate (older bounds, etc.).
         s.entries.retain(|k, e| match lookup(k) {
             Some(def) => validate(def, &e.value).is_ok(),
             None => true,
         });
         Ok(s)
+    }
+
+    /// The schema version of a stored document (`None` when it does not
+    /// parse): below [`SETTINGS_DOC_VERSION`], loading it migrates.
+    pub fn document_version(json: &str) -> Option<u32> {
+        serde_json::from_str::<Document>(json).ok().map(|d| d.version)
     }
 
     /// Scope of a key: registry first, then whatever the stored entry says.

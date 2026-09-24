@@ -15,10 +15,11 @@ pub enum SettingKind {
         min: i64,
         max: i64,
     },
-    /// Float in `[min, max]`.
+    /// Float in `[min, max]`; `null` allowed when `nullable`.
     Float {
         min: f64,
         max: f64,
+        nullable: bool,
     },
     /// Free text; `None` allowed when `nullable`.
     Text {
@@ -344,7 +345,11 @@ pub static REGISTRY: &[SettingDef] = &[
     def(
         DISPLAY_QUEUE_PANEL_SPLIT,
         Local,
-        SettingKind::Float { min: 0.0, max: 1.0 },
+        SettingKind::Float {
+            min: 0.0,
+            max: 1.0,
+            nullable: false,
+        },
         || json!(0.5),
     ),
     json_def(
@@ -383,17 +388,21 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Float {
             min: 0.0,
             max: 1.0e15,
+            nullable: false,
         },
         || json!(4.0 * GIB),
     ),
+    // `null` (the default) is automatic: sized from the cache volume's free
+    // space. Any number, 2 GiB included, is the user's own budget.
     def(
         STORAGE_CACHE_MAX_BYTES,
         Local,
         SettingKind::Float {
             min: 64.0 * 1024.0 * 1024.0,
             max: 1.0e15,
+            nullable: true,
         },
-        || json!(2.0 * GIB),
+        || Value::Null,
     ),
     def(
         STORAGE_PREFETCH_ON_MOBILE_DATA,
@@ -467,7 +476,8 @@ pub fn validate(def: &SettingDef, value: &Value) -> Result<(), String> {
                 return Err(format!("must be between {min} and {max}"));
             }
         }
-        SettingKind::Float { min, max } => {
+        SettingKind::Float { nullable, .. } if value.is_null() && *nullable => {}
+        SettingKind::Float { min, max, .. } => {
             let n = value.as_f64().ok_or("expected a number")?;
             if !n.is_finite() || n < *min || n > *max {
                 return Err(format!("must be between {min} and {max}"));
