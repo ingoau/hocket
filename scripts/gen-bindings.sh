@@ -11,7 +11,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 API="$ROOT/crates/hocket-core/src/api.rs"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
-command -v typeshare >/dev/null || cargo install typeshare-cli
+# Never installs anything implicitly: a missing tool fails with the command to run.
+command -v typeshare >/dev/null || { echo "error: typeshare is not installed; run 'cargo install typeshare-cli'" >&2; exit 1; }
 
 mkdir -p "$ROOT/desktop/src/core" "$ROOT/android/core/src/main/java/app/hocket/core/api"
 typeshare "$API" --lang=typescript --output-file="$ROOT/desktop/src/core/api.ts"

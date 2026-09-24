@@ -1,7 +1,9 @@
 //! Minimal UniFFI surface: JSON in, JSON out, events via a callback interface.
 //! Kotlin types come from `typeshare` (see `android/core-api`), not from UniFFI.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+use std::time::Duration;
 
 use hocket_core::api::Event;
 use hocket_core::{Core, CoreError};
@@ -34,8 +36,14 @@ struct Bridge(Arc<dyn EventListener>);
 
 impl hocket_core::EventSink for Bridge {
     fn on_event(&self, event: Event) {
-        if let Ok(json) = serde_json::to_string(&event) {
-            self.0.on_event(json);
+        let Ok(json) = serde_json::to_string(&event) else {
+            return;
+        };
+        // The sink is called synchronously on the actor task. UniFFI turns an unexpected exception
+        // from the Kotlin listener into a panic here, which would kill the actor; contain it so one
+        // bad event on the app side cannot take the core down with it.
+        if catch_unwind(AssertUnwindSafe(|| self.0.on_event(json))).is_err() {
+            tracing::error!(target: "hocket_android", "event listener failed; event dropped");
         }
     }
 }
@@ -69,6 +77,15 @@ impl HocketCore {
     /// Serialised `Query` → serialised `QueryResult`.
     pub async fn query(&self, query_json: String) -> Result<String, HocketError> {
         Ok(self.core.query_json(&query_json).await?)
+    }
+
+    /// Flush and stop the core (session document, position, settings, sync base), blocking the
+    /// calling thread for at most `timeout_ms`. Returns `true` when the flush completed in time.
+    /// Idempotent. Blocks: call it from a worker thread, never from the main thread, and free the
+    /// object afterwards.
+    pub fn shutdown(&self, timeout_ms: u64) -> bool {
+        self.core
+            .shutdown_blocking(Duration::from_millis(timeout_ms))
     }
 }
 
