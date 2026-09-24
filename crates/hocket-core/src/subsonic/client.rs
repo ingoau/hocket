@@ -649,7 +649,15 @@ impl SubsonicApi for Client {
     fn lyrics_by_song_id(&self, id: &str) -> ApiFuture<'_, Vec<StructuredLyrics>> {
         let id = id.to_string();
         Box::pin(async move {
-            let r = self.call("getLyricsBySongId", &[("id", id)]).await?;
+            // OpenSubsonic songLyrics v2 (Navidrome ≥ 0.63) only returns
+            // `agents`/`cueLine` (syllable timing) when asked with
+            // `enhanced=true`; a v1 server ignores the parameter.
+            let r = self
+                .call(
+                    "getLyricsBySongId",
+                    &[("id", id), ("enhanced", "true".to_string())],
+                )
+                .await?;
             Ok(r.lyrics_list
                 .map(|l| l.structured_lyrics)
                 .unwrap_or_default())

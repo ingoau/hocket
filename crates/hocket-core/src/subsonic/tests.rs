@@ -20,6 +20,7 @@ const EXTENSIONS: &str = include_str!("fixtures/extensions.json");
 const SEARCH3: &str = include_str!("fixtures/search3.json");
 const SEARCH3_EMPTY: &str = include_str!("fixtures/search3_empty.json");
 const LYRICS_V2: &str = include_str!("fixtures/lyrics_v2.json");
+const LYRICS_ENHANCED: &str = include_str!("fixtures/lyrics_enhanced.json");
 const PLAYLIST: &str = include_str!("fixtures/playlist.json");
 const PLAYLISTS: &str = include_str!("fixtures/playlists.json");
 const SONIC: &str = include_str!("fixtures/sonic_similar.json");
@@ -282,6 +283,88 @@ async fn structured_lyrics_v2_round_trip() {
     assert!(!l[1].synced);
     assert_eq!(l[1].lang, "und");
     assert!(l[1].line[0].start.is_none());
+}
+
+/// OpenSubsonic songLyrics v2 only includes `agents`/`cueLine` when the
+/// request carries `enhanced=true` (Navidrome ≥ 0.63; a v1 server ignores
+/// it). Without it every answer is line-level and the syllable tier never
+/// appears. The fixture is a real Navidrome 0.64 answer: 44 lines, 57 cue
+/// lines (13 background-vocal ones under a `bg` agent), inclusive byte
+/// offsets, and it adapts the same way the actor does it (through the
+/// `lyrics::raw` types) to syllable lyrics with the bg lines as sub-voices.
+#[tokio::test]
+async fn lyrics_request_asks_for_enhanced_and_parses_navidrome_cue_lines() {
+    use crate::api::LyricsTier;
+    let t = FakeTransport::new();
+    t.on_endpoint("getLyricsBySongId", FakeReply::Json(LYRICS_ENHANCED.into()));
+    let c = client(&t);
+    let l = c.lyrics_by_song_id("s1").await.unwrap();
+    let req = &t.requests_to("getLyricsBySongId")[0];
+    assert_eq!(query_param(req, "id").as_deref(), Some("s1"));
+    assert_eq!(query_param(req, "enhanced").as_deref(), Some("true"));
+
+    assert_eq!(l.len(), 1);
+    let e = &l[0];
+    assert!(e.synced);
+    assert_eq!(e.kind.as_deref(), Some("main"));
+    assert_eq!(e.line.len(), 44);
+    assert_eq!(e.cue_line.len(), 57);
+    let agents: Vec<(&str, &str)> = e
+        .agents
+        .iter()
+        .map(|a| (a.id.as_str(), a.role.as_str()))
+        .collect();
+    assert_eq!(agents, vec![("v1", "main"), ("__nd_bg__|v1", "bg")]);
+    assert_eq!(
+        e.cue_line
+            .iter()
+            .filter(|c| c.agent_id.as_deref() == Some("__nd_bg__|v1"))
+            .count(),
+        13
+    );
+    let first = &e.cue_line[0];
+    assert_eq!(first.index, 0);
+    assert_eq!((first.start, first.end), (Some(13750), Some(15350)));
+    assert_eq!(first.cue[0].value, "I");
+    assert_eq!(
+        (first.cue[0].byte_start, first.cue[0].byte_end),
+        (Some(0), Some(0))
+    );
+    assert_eq!(first.cue[5].value, "ti");
+    assert_eq!(first.cue[6].value, "tle");
+    assert_eq!(
+        (first.cue[6].byte_start, first.cue[6].byte_end),
+        (Some(21), Some(23))
+    );
+
+    // The actor's conversion path: serde round-trip into the lyrics types.
+    let raw: Vec<crate::lyrics::raw::StructuredLyrics> =
+        serde_json::from_value(serde_json::to_value(&l).unwrap()).unwrap();
+    let adapted = crate::lyrics::adapt_list("s1", &raw, crate::api::LyricsSource::Server).unwrap();
+    assert_eq!(adapted.tier, LyricsTier::Syllable);
+    assert_eq!(adapted.lines.len(), 57);
+    assert_eq!(adapted.lines.iter().filter(|x| x.background).count(), 13);
+    assert_eq!(adapted.lines[0].syllables.len(), 7);
+    assert!(adapted.lines[0].syllables[5].joined, "ti+tle");
+    assert!(!adapted.lines[0].syllables[0].joined, "I lost");
+    assert_eq!(adapted.lines[3].text, "(Yeah, yeah)");
+    assert!(adapted.lines[3].background);
+}
+
+/// The in-process fake (actor tests) serves cue lines the way a server asked
+/// with `enhanced=true` does.
+#[tokio::test]
+async fn fake_server_serves_enhanced_cue_lines() {
+    use super::fake::FakeServer;
+    let s = FakeServer::new("srv", "alice");
+    s.set_lyrics_json("t", LYRICS_ENHANCED).unwrap();
+    let l = s.lyrics_by_song_id("t").await.unwrap();
+    assert_eq!(l.len(), 1);
+    assert_eq!(l[0].cue_line.len(), 57);
+    assert_eq!(l[0].agents.len(), 2);
+    assert!(l[0].cue_line[0].cue.iter().all(|c| c.start.is_some()));
+    assert!(s.lyrics_by_song_id("other").await.unwrap().is_empty());
+    assert!(s.set_lyrics_json("bad", "not json").is_err());
 }
 
 #[tokio::test]

@@ -173,6 +173,20 @@ impl FakeServer {
         self.state.lock().media.insert(song_id.into(), bytes);
     }
 
+    /// Serves a recorded `getLyricsBySongId` answer (the full
+    /// `subsonic-response` envelope, e.g. a `fixtures/lyrics_*.json`) for a
+    /// song. Like a real OpenSubsonic server asked with `enhanced=true`, the
+    /// fake hands back every `agents`/`cueLine` in the document, so a
+    /// syllable-tier fixture reaches the actor as syllable lyrics.
+    pub fn set_lyrics_json(&self, song_id: &str, envelope: &str) -> SubsonicResult<()> {
+        let entries = super::client::parse_envelope(envelope.as_bytes())?
+            .lyrics_list
+            .map(|l| l.structured_lyrics)
+            .unwrap_or_default();
+        self.state.lock().lyrics.insert(song_id.into(), entries);
+        Ok(())
+    }
+
     /// The next `n` calls fail with `err`.
     pub fn fail_next(&self, err: SubsonicError, n: usize) {
         let mut st = self.state.lock();
