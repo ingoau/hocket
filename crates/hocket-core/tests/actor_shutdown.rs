@@ -155,8 +155,12 @@ mod owned_runtime {
     /// panics the runtime would otherwise swallow).
     static PANICS: AtomicUsize = AtomicUsize::new(0);
 
-    fn count_panics() {
+    /// Installs the counting hook, serialises the tests in this module (the
+    /// counter is process-wide) and resets the count.
+    fn count_panics() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
         static HOOK: Once = Once::new();
+        let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         HOOK.call_once(|| {
             let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
@@ -164,6 +168,8 @@ mod owned_runtime {
                 previous(info);
             }));
         });
+        PANICS.store(0, Ordering::SeqCst);
+        guard
     }
 
     fn config(dir: &std::path::Path) -> CoreConfig {
@@ -268,7 +274,7 @@ mod owned_runtime {
 
     #[test]
     fn last_handle_dropped_anywhere_after_shutdown_from_anywhere() {
-        count_panics();
+        let _serial = count_panics();
         let other = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -324,7 +330,7 @@ mod owned_runtime {
     /// inside the core's own runtime or another one.
     #[test]
     fn last_handle_dropped_in_a_runtime_without_shutdown() {
-        count_panics();
+        let _serial = count_panics();
         let other = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -360,7 +366,7 @@ mod owned_runtime {
     /// the last one.
     #[test]
     fn shutdown_blocking_then_immediate_drop() {
-        count_panics();
+        let _serial = count_panics();
         for _ in 0..30 {
             let dir = tempfile::tempdir().unwrap();
             let core = Core::new(config(dir.path())).expect("core");

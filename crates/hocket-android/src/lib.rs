@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hocket_core::api::Event;
+use hocket_core::core::stream_reader;
 use hocket_core::{Core, CoreError};
 
 uniffi::setup_scaffolding!();
@@ -22,6 +23,80 @@ impl From<CoreError> for HocketError {
     fn from(e: CoreError) -> Self {
         HocketError::Failed {
             reason: e.to_string(),
+        }
+    }
+}
+
+/// A failed stream call, mirroring the core's `stream_reader::StreamError`. Payloads never carry a
+/// URL (the core strips it from network errors), so the Kotlin exception is safe to log.
+#[derive(Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+pub enum StreamError {
+    /// The `hocket-stream://` token is unknown or expired: the player should ask the core to
+    /// resolve the queue item again.
+    #[error("unknown or expired stream token")]
+    UnknownToken,
+    #[error("unknown stream handle")]
+    UnknownHandle,
+    #[error("too many open streams")]
+    TooManyHandles,
+    #[error("no server connection")]
+    NoServer,
+    #[error("offset is past the end of the stream")]
+    RangeNotSatisfiable,
+    #[error("server answered HTTP {code}")]
+    Status { code: u16 },
+    #[error("server sent an error instead of audio")]
+    ErrorEnvelope,
+    #[error("network: {reason}")]
+    Network { reason: String },
+    #[error("io: {reason}")]
+    Io { reason: String },
+    #[error("stream closed")]
+    Closed,
+    #[error("core is shut down")]
+    ShutDown,
+}
+
+impl From<stream_reader::StreamError> for StreamError {
+    fn from(e: stream_reader::StreamError) -> Self {
+        use stream_reader::StreamError as E;
+        match e {
+            E::UnknownToken => StreamError::UnknownToken,
+            E::UnknownHandle => StreamError::UnknownHandle,
+            E::TooManyHandles => StreamError::TooManyHandles,
+            E::NoServer => StreamError::NoServer,
+            E::RangeNotSatisfiable => StreamError::RangeNotSatisfiable,
+            E::Status(code) => StreamError::Status { code },
+            E::ErrorEnvelope => StreamError::ErrorEnvelope,
+            E::Network(reason) => StreamError::Network { reason },
+            E::Io(reason) => StreamError::Io { reason },
+            E::Closed => StreamError::Closed,
+            E::ShutDown => StreamError::ShutDown,
+        }
+    }
+}
+
+/// What `stream_open` returned.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct StreamInfo {
+    pub handle: u64,
+    /// Where the first byte read comes from (always the requested offset).
+    pub offset: u64,
+    /// Size of the whole resource, when known (a transcode may not know it).
+    pub total_length: Option<u64>,
+    /// Bytes this handle returns before end of input, when known.
+    pub length: Option<u64>,
+    pub content_type: Option<String>,
+}
+
+impl From<stream_reader::StreamInfo> for StreamInfo {
+    fn from(i: stream_reader::StreamInfo) -> Self {
+        StreamInfo {
+            handle: i.handle,
+            offset: i.offset,
+            total_length: i.total_length,
+            length: i.length,
+            content_type: i.content_type,
         }
     }
 }
@@ -77,6 +152,35 @@ impl HocketCore {
     /// Serialised `Query` → serialised `QueryResult`.
     pub async fn query(&self, query_json: String) -> Result<String, HocketError> {
         Ok(self.core.query_json(&query_json).await?)
+    }
+
+    // -- stream reader (ExoPlayer's `HocketStreamDataSource`) -------------------------------------
+    //
+    // All three BLOCK the calling thread: call them from ExoPlayer's loader threads, never from the
+    // main thread and never from inside a tokio runtime. The work runs on the core's own runtime.
+
+    /// Open a `hocket-stream://<token>` media source at `offset`, returning at most `length` bytes
+    /// when given.
+    pub fn stream_open(
+        &self,
+        url: String,
+        offset: u64,
+        length: Option<u64>,
+    ) -> Result<StreamInfo, StreamError> {
+        Ok(self.core.stream_open_blocking(&url, offset, length)?.into())
+    }
+
+    /// Up to `max_bytes` (capped by the core at 256 KiB) from an open stream. Empty = end of input.
+    pub fn stream_read(&self, handle: u64, max_bytes: u32) -> Result<Vec<u8>, StreamError> {
+        Ok(self
+            .core
+            .stream_read_blocking(handle, max_bytes as usize)?
+            .to_vec())
+    }
+
+    /// Close a stream; a read in progress on it fails with `Closed`. Never blocks. Idempotent.
+    pub fn stream_close(&self, handle: u64) {
+        self.core.stream_close(handle);
     }
 
     /// Flush and stop the core (session document, position, settings, sync base), blocking the
@@ -190,6 +294,61 @@ mod ffi_tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(panics_matching("Cannot drop a runtime"), 0);
+    }
+
+    /// The blocking stream surface from a plain (non-runtime) thread, the way ExoPlayer's loader
+    /// threads call it: an unknown token is `UnknownToken` (the DataSource turns that into a
+    /// re-resolve), an unknown handle is `UnknownHandle`, and close is idempotent.
+    #[test]
+    fn stream_calls_block_off_runtime_and_map_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = core(dir.path());
+        c.dispatch(r#"{"type":"start"}"#.into()).unwrap();
+        let worker = {
+            let c = c.clone();
+            std::thread::spawn(move || {
+                let open = c.stream_open("hocket-stream://no-such-token".into(), 0, None);
+                let read = c.stream_read(4242, 1024);
+                c.stream_close(4242);
+                c.stream_close(4242);
+                (open, read)
+            })
+        };
+        let (open, read) = worker.join().expect("no panic on the loader thread");
+        assert_eq!(open, Err(StreamError::UnknownToken));
+        assert_eq!(read, Err(StreamError::UnknownHandle));
+        assert!(c.shutdown(10_000));
+    }
+
+    #[test]
+    fn every_core_stream_error_maps_one_to_one() {
+        use hocket_core::core::stream_reader::StreamError as E;
+        let cases = [
+            (E::UnknownToken, StreamError::UnknownToken),
+            (E::UnknownHandle, StreamError::UnknownHandle),
+            (E::TooManyHandles, StreamError::TooManyHandles),
+            (E::NoServer, StreamError::NoServer),
+            (E::RangeNotSatisfiable, StreamError::RangeNotSatisfiable),
+            (E::Status(503), StreamError::Status { code: 503 }),
+            (E::ErrorEnvelope, StreamError::ErrorEnvelope),
+            (
+                E::Network("reset".into()),
+                StreamError::Network {
+                    reason: "reset".into(),
+                },
+            ),
+            (
+                E::Io("disk".into()),
+                StreamError::Io {
+                    reason: "disk".into(),
+                },
+            ),
+            (E::Closed, StreamError::Closed),
+            (E::ShutDown, StreamError::ShutDown),
+        ];
+        for (core_err, ffi_err) in cases {
+            assert_eq!(StreamError::from(core_err), ffi_err);
+        }
     }
 
     struct FailingListener(AtomicUsize);
