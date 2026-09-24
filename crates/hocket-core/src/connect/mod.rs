@@ -52,19 +52,30 @@
 //!    with `session::saved::snapshot`, upsert it locally and report it back
 //!    through `Input::SavedQueuesChanged`. Never merge it.
 //! 7. **Supply the LAN key.** Set [`EngineConfig::lan_key`] to
-//!    `Some(auth::derive_lan_key(&scope, &password))` (the scope from
-//!    [`wire::scope_key`], the password the user entered for that server)
-//!    before building the engine, and rebuild it when the password changes.
-//!    LAN rooms admit only devices that prove knowledge of this key and a
-//!    device only follows a LAN leader that proves it back ([`auth`]); with
-//!    `None` the engine neither serves nor follows LAN peers. The
-//!    credential is sent only to a coordinator (`ConnectionTier::Coordinator`)
-//!    and only over `wss://` (or `ws://` to loopback, or anywhere when
+//!    `Some(auth::derive_lan_key(&wire::scope_key(&server_url, &username), &password))`
+//!    — the account password the user typed, never the wire credential:
+//!    the Subsonic token is minted with a per-device random salt, so only
+//!    the password is the same on every device of the account (the key is
+//!    PBKDF2-HMAC-SHA256, [`auth::KEY_ROUNDS`] rounds, salt
+//!    `"hocket-lan-v1|" || scope`). Derive it once per `AddServer` (it costs
+//!    a few ms), keep it in memory with the server, and push a new one with
+//!    [`Input::SetLanKey`] when the password changes (`None` closes the
+//!    LAN). LAN rooms admit only devices that prove knowledge of this key
+//!    and a device only follows a LAN leader that proves it back
+//!    ([`auth`]); with `None` the engine neither serves nor follows LAN
+//!    peers and advertises nothing. The credential is sent only to a
+//!    coordinator (`ConnectionTier::Coordinator`) and only when
+//!    [`auth::coordinator_url_check`] passes: `wss://`, or `ws://` to the
+//!    loopback, or `ws://` to a private host when
 //!    [`EngineConfig::allow_insecure_coordinator`] is set from the
-//!    `connect.allowInsecureCoordinator` setting) — never in a LAN `Hello`.
-//! 8. **Persist [`Engine::known_scrobbled`]** next to the sync base and hand
-//!    it back through [`Engine::restore_known_scrobbled`] on start, so a
-//!    LAN leader that restarts still answers dedupe queries correctly.
+//!    `connect.allowInsecureCoordinator` setting
+//!    ([`Input::SetAllowInsecureCoordinator`] on change) — never in a LAN
+//!    `Hello`.
+//! 8. **Persist [`Engine::known_scrobbled`]** next to the sync base (it is
+//!    small: at most 500 `(track, startedAt, device)` triples) and hand it
+//!    back through [`Engine::restore_known_scrobbled`] right after
+//!    [`Engine::new`], so a LAN leader that restarts still answers dedupe
+//!    queries correctly.
 //!
 //! Everything in [`wire`] is the protocol; [`room`] is the coordinator role;
 //! [`replica`] its store; [`lease`], [`clock`], [`election`], [`auth`] are

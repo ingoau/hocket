@@ -540,9 +540,6 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     w.run_for(10_000.0);
     let serving = w.devices.iter().filter(|d| d.engine.is_serving()).count();
     assert_eq!(serving, 1, "the LAN elected a room while the coordinator is down");
-    for d in &w.devices {
-        eprintln!("DBG {} serving={} connected={} leader={:?} state={:?}", d.id, d.engine.is_serving(), d.engine.is_connected(), d.engine.lan_leader(), d.engine.connection_state());
-    }
     let t = tracks(&w, 5);
     w.perform(Action::PlayTracks {
         device: 0,
@@ -553,14 +550,10 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
         takeover: false,
     });
     w.run_for(2_000.0);
-    for d in &w.devices { eprintln!("DBG after play {} cur={:?} rev={} pending={} unsynced={} {:?}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count(), d.engine.has_unsynced(), d.engine); }
     w.perform(Action::Next { device: 1 });
     w.run_for(2_000.0);
-    for d in &w.devices { eprintln!("DBG after next1 {} cur={:?} rev={} pending={} {:?}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count(), d.engine); }
     w.perform(Action::Next { device: 2 });
     w.run_for(2_000.0);
-    for d in &w.devices { eprintln!("DBG after next2 {} cur={:?} rev={} pending={}", d.id, d.engine.document().current.as_ref().map(|c| c.track_id.clone()), d.engine.document().revision, d.engine.pending_count()); for l in &d.log { eprintln!("  {l}"); } }
-    eprintln!("DBG tracks {t:?}");
     for d in &w.devices {
         assert_eq!(
             d.engine.document().current.as_ref().unwrap().track_id,
@@ -569,9 +562,10 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
             d.id
         );
     }
-    // the coordinator returns at 40 s; everyone moves back to it
+    // the coordinator returns at 40 s; the devices retry it a minute after
+    // their last failure and everyone moves back to it
     w.run_until(start + 41_000.0);
-    w.run_for(20_000.0);
+    w.run_for(45_000.0);
     for d in &w.devices {
         assert!(d.engine.is_connected(), "{} back on the coordinator", d.id);
         assert!(d.engine.lan_leader().is_none(), "{} left the LAN room", d.id);

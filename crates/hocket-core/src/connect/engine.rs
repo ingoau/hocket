@@ -2206,8 +2206,13 @@ impl Engine {
         }
         self.upstream_ready = true;
         self.last_error = None;
-        if remote {
+        if via_coordinator {
+            // Only the coordinator itself clears its failure count: a LAN
+            // welcome must not make the next election try it again at once
+            // (that flaps between the LAN room and a dead coordinator).
             self.coordinator_failures = 0;
+        }
+        if remote {
             // Provisional offset from the welcome; real pings replace it.
             self.offset.reset();
             self.provisional_offset = Some(session_clock_ms - now);

@@ -22,7 +22,10 @@ class LyricsCursorTest {
 
     @Test
     fun beforeFirstLineIsEmpty() {
-        assertEquals(LyricsCursor.EMPTY, LyricsCursor.at(syllableDoc, 500))
+        val c = LyricsCursor.at(syllableDoc, 500)
+        assertEquals(LyricsCursor.NONE, c.lineIndex)
+        assertTrue(c.activeLines.isEmpty())
+        assertEquals(500L, c.effectiveMs)
     }
 
     @Test
@@ -51,7 +54,7 @@ class LyricsCursorTest {
         // The core's rule (lyrics/cursor.rs): a positive offset makes the lyrics appear later, so the
         // audio position is compared as if it were earlier. +500 at 1200 is still before the first line.
         val later = syllableDoc.copy(offsetMs = 500)
-        assertEquals(LyricsCursor.EMPTY, LyricsCursor.at(later, 1200))
+        assertEquals(LyricsCursor.NONE, LyricsCursor.at(later, 1200).lineIndex)
         assertEquals(0, LyricsCursor.at(later, 1600).lineIndex)
         assertEquals(1100L, LyricsCursor.at(later, 1600).effectiveMs)
         // A negative offset shows them earlier.
@@ -120,7 +123,9 @@ class LyricsCursorTest {
         val c = LyricsCursor.at(doc, 3600)
         assertEquals("latest start wins regardless of position in the list", 1, c.lineIndex)
         assertEquals(listOf(0, 1, 2), c.activeLines)
-        assertEquals(2, LyricsCursor.at(doc, 4800).lineIndex)
+        // The bg line has ended but still has the latest start: it stays primary (the core's rule; the
+        // renderer focuses the main voice through activeLines), and only the two main lines are active.
+        assertEquals(1, LyricsCursor.at(doc, 4800).lineIndex)
         assertEquals(listOf(0, 2), LyricsCursor.at(doc, 4800).activeLines)
     }
 

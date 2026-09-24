@@ -29,8 +29,10 @@ The generated Kotlin and the `.so` are gitignored; the build scripts produce the
 AGP 9.4 with the Kotlin Gradle plugin kept on (`android.builtInKotlin=false`) because the
 serialization and Compose compiler plugins ride on it.
 
-Without the native library (no `jniLibs` for the running ABI) the app runs against `FakeCore` and a
-debug-only banner says so. `CoreHost.forceFake` selects the fake explicitly (UI tests).
+Without the native library (no `jniLibs` for the running ABI) a debuggable build runs against
+`FakeCore` and a banner says so; a release build never falls back to fake data: `CoreHost.fatalError`
+is set and the UI shows a fatal screen with a "reset app data" action (`FatalErrorScreen`).
+`CoreHost.forceFake` selects the fake explicitly (UI tests).
 
 ## How bindings work
 
@@ -72,8 +74,17 @@ the one core for the process through `CoreHost`:
   Media3. Playback resumption from the system is refused (resuming is always explicit).
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
   `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
-- The service stops itself after five idle minutes with no bound client. The app binds with
-  `ACTION_BIND_CORE` to obtain the `CoreHandle`; `HocketApp` builds the single `CoreClient`.
+- The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported
+  for Media3) only while some UI is started (`ForegroundBinder` on `ProcessLifecycleOwner`), with a
+  plain `startService` (never `startForegroundService`: Media3 promotes the service itself once
+  something plays). The service stops itself after five idle minutes with no UI bound, and goes
+  when the task is swiped away while idle. `HocketApp` builds the single `CoreClient` for the
+  delivered handle while `CoreHost` still runs it.
+- `CoreHost` owns the core's lifetime: `Started` (once per core) triggers the one keystore
+  credential replay (`AddServer` per stored login); `RequestSnapshot` re-emits state as `Snapshot`
+  and never replays. A setup login is stored only once the core reports the server reachable with
+  it, dropped on an auth error, and removed before `RemoveServer` on sign-out. Shutdown flushes the
+  core on a worker thread (`NativeCore.close` blocks for the flush, bounded).
 
 `CoreClient` folds events into `StateFlow`s per snapshot piece, extrapolates position (a 60 Hz
 `WhileSubscribed` ticker that runs only while a screen collecting it is resumed), keeps keyed page

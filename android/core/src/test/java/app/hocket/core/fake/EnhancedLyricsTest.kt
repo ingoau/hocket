@@ -43,8 +43,11 @@ class EnhancedLyricsTest {
         val syl = EnhancedLyrics.syllablesFrom(cl)
         assertEquals(listOf("na", "ïve", "summer"), syl.map { it.text })
         assertEquals(listOf(true, false, false), syl.map { it.joined })
-        // An offset inside a multi-byte char is not a char boundary: no gap, fall back to the cue's own whitespace.
-        assertNull(EnhancedLyrics.byteGap(text, RawCue(0, 300, "na", 0, 2), RawCue(300, 600, "ve", 4, 5)))
+        // Offsets in bytes: the gap between "na" (0..1) and "ve" (4..5) is the two-byte "ï".
+        assertEquals("ï", EnhancedLyrics.byteGap(text, RawCue(0, 300, "na", 0, 1), RawCue(300, 600, "ve", 4, 5)))
+        // An offset inside a multi-byte char (byte 3 is the second byte of "ï") is not a char
+        // boundary: no gap, fall back to the cue's own whitespace.
+        assertNull(EnhancedLyrics.byteGap(text, RawCue(0, 300, "na", 0, 1), RawCue(300, 600, "ve", 3, 5)))
     }
 
     @Test

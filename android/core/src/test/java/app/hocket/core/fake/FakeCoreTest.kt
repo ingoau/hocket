@@ -52,6 +52,7 @@ class FakeCoreTest {
         core.dispatchAndWait(Command.RequestSnapshot)
         core.dispatchAndWait(Command.Start)
         core.dispatchAndWait(Command.RequestSnapshot)
+        advanceUntilIdle()
         assertEquals("Started exactly once", 1, seen.count { it is Event.Started })
         assertEquals("every later re-emit is a Snapshot", 3, seen.count { it is Event.Snapshot })
         assertEquals(seen.indexOfFirst { it is Event.Started }, seen.indexOfFirst { it is Event.Started || it is Event.Snapshot })

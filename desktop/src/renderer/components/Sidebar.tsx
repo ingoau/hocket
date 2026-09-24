@@ -69,7 +69,7 @@ export function Sidebar() {
           <span>{t("nav.settings")}</span>
         </a>
       </div>
-      <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuenow={panels.sidebarWidth} data-testid="sidebar-resize" />
+      <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuenow={panels.sidebarWidth} data-testid="sidebar-resize" />
     </nav>
   );
 }
