@@ -124,7 +124,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.LineHeightStyle
 import app.hocket.ui.components.RatingStars
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentWidth
 
 /**
  * The full player (the owner's mockup, made Material 3 Expressive). Top to bottom:
@@ -133,7 +133,7 @@ import androidx.compose.foundation.layout.offset
  * - the mode area: the big artwork in [PlayerMode.Artwork], or Lyrics / Queue / About in its place;
  * - notices (resume offer, a problem, autoplay's reason, remote playback, the sleep timer);
  * - the title row: a small thumbnail slot (non-artwork modes), title, "artist • album" links, and
- *   add to playlist and the More sheet (which holds the sleep timer); the rating in artwork mode;
+ *   add to playlist and the More sheet (which holds the rating and the sleep timer);
  * - the wavy seek bar with elapsed / total, the transport, and the Lyrics / Queue / About pills.
  *
  * There is ONE artwork ([PlayerArtwork]), drawn over the page and moved in a graphics layer between
@@ -209,7 +209,12 @@ internal fun FullPlayer(
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (more && track != null) ActionSheet(Commands.tracks(listOf(track.id)), track.title, track.artist, onDismiss = { more = false },
         onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } },
-        extraTop = { SleepTimerMenuRow(onClick = { more = false; sleepSheet = true }) })
+        extraTop = {
+            // As in Navic: the rating across the top of the song menu, then the sleep timer.
+            RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 32.dp, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).padding(vertical = 4.dp))
+            SleepTimerMenuRow(onClick = { more = false; sleepSheet = true })
+        })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
@@ -383,7 +388,8 @@ private fun PlayerControls(
 @Composable
 private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, hero: HeroGeometry, onMore: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
-    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+    // The bottom 12 dp is the room the artist links' trimmed touch targets reach into.
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp)) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         // The thumbnail slot: laid out at its full size, reporting a width that opens with the mode.
         Box(
@@ -406,12 +412,14 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
             val goArtist = stringResource(R.string.action_go_to_artist)
             val goAlbum = stringResource(R.string.action_go_to_album)
             // The links keep their 48 dp touch height, but the row tucks up under the title so the
-            // text sits close to it (the target overlaps the title's line box, not its text).
+            // text sits close to it (the target overlaps the title's line box and the space below).
             Row(
                 Modifier.layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
+                    // Trim the target's slack above and below the text alike, so the block's
+                    // height is the text's and it centres against the thumbnail and buttons.
                     val pull = 12.dp.roundToPx().coerceAtMost(placeable.height / 4)
-                    layout(placeable.width, placeable.height - pull) { placeable.place(0, -pull) }
+                    layout(placeable.width, placeable.height - 2 * pull) { placeable.place(0, -pull) }
                 },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -429,10 +437,6 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
         }
         IconButton(onClick = onAddTo, modifier = Modifier.testTag("player.addToPlaylist")) { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist)) }
         IconButton(onClick = onMore, modifier = Modifier.testTag("player.more")) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
-    }
-    // The rating, in artwork mode (the other modes keep it in About, one place at a time).
-    if (!compact) {
-        RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 22.dp, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.offset(x = (-4).dp))
     }
     }
 }
