@@ -27,6 +27,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.components.ActionRow
+import app.hocket.ui.components.LabelledSlider
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import app.hocket.ui.components.ChoiceRow
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -121,10 +126,13 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         val cap = savedCap.int ?: 10
         var dragging by remember(cap) { mutableFloatStateOf(cap.toFloat()) }
         val shown = dragging.roundToInt()
-        SettingRow(stringResource(R.string.settings_saved_cap), if (shown == 0) stringResource(R.string.settings_saved_cap_zero) else stringResource(R.string.saved_cap, shown), savedCap.scope, tag = "queue.savedCap")
-        Slider(
+        val capLabel = stringResource(R.string.settings_saved_cap)
+        val capValue = if (shown == 0) stringResource(R.string.settings_saved_cap_zero) else stringResource(R.string.saved_cap, shown)
+        SettingRow(capLabel, capValue, savedCap.scope, tag = "queue.savedCap")
+        LabelledSlider(
             value = dragging, onValueChange = { dragging = it }, onValueChangeFinished = { client.dispatch(Commands.setSavedQueueCap(dragging.roundToInt())) },
-            valueRange = 0f..50f, steps = 49, modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
+            valueRange = 0f..50f, steps = 49, label = capLabel, valueText = capValue,
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
         val minutes = sleepMinutes.int ?: 30

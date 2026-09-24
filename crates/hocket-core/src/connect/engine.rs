@@ -2484,7 +2484,6 @@ impl Engine {
                 }) = self.scrobble_queries.remove(&query_id)
                 {
                     let me = self.cfg.device.id.clone();
-                    eprintln!("TMPDBG {me} answer {track_id}@{started_at} dup={duplicate} loop={from_loopback}");
                     self.learn_scrobbled(&track_id, started_at, &me);
                     self.out.push(Output::Scrobble {
                         track_id,
@@ -3528,11 +3527,7 @@ impl Engine {
         // may be reaching its threshold over there as well, so it is only
         // judged by a room both can reach (or after the long grace).
         let mut since = now;
-        if let Some(i) = self
-            .restored_waits
-            .iter()
-            .position(|(t, s, _)| same(t, *s))
-        {
+        if let Some(i) = self.restored_waits.iter().position(|(t, s, _)| same(t, *s)) {
             // Asked again after a restart: the wait goes on where it was.
             since = self.restored_waits.remove(i).2;
         }
@@ -3770,15 +3765,14 @@ impl Engine {
         // still bring the verdict).
         let grace = self.cfg.scrobble_grace_ms;
         let shared_grace = self.cfg.shared_scrobble_grace_ms;
-        let (mut expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) =
-            self.deferred_scrobbles.drain(..).partition(|d| {
-                now - d.since
-                    >= if d.shared {
-                        shared_grace
-                    } else {
-                        grace
-                    }
-            });
+        // A restored wait nobody asked about again within its grace (the
+        // outbox lost the play): nothing is left to decide.
+        self.restored_waits
+            .retain(|(_, _, since)| now - since < shared_grace);
+        let (mut expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) = self
+            .deferred_scrobbles
+            .drain(..)
+            .partition(|d| now - d.since >= if d.shared { shared_grace } else { grace });
         self.deferred_scrobbles = keep;
         // So are claims our own room kept unconfirmed that long (members
         // that never echo, say): the claim stands without them.
@@ -3803,7 +3797,6 @@ impl Engine {
             }
         }
         for d in expired {
-            eprintln!("TMPDBG {} expired {}@{} shared={} since={} now={now}", self.cfg.device.id, d.track_id, d.started_at, d.shared, d.since);
             let me = self.cfg.device.id.clone();
             self.learn_scrobbled(&d.track_id, d.started_at, &me);
             self.unreported_scrobbles
@@ -5837,8 +5830,16 @@ mod tests {
     fn alone_defers_shared_but_not_origin(e: &mut Engine, shared: EpochMs) {
         e.handle(Input::DisconnectCoordinator);
         assert!(!e.is_connected());
-        assert_eq!(reach(e, "t", shared), Vec::<bool>::new(), "shared: deferred");
-        assert_eq!(reach(e, "origin", 900_000.0), vec![true], "origin: judged alone");
+        assert_eq!(
+            reach(e, "t", shared),
+            Vec::<bool>::new(),
+            "shared: deferred"
+        );
+        assert_eq!(
+            reach(e, "origin", 900_000.0),
+            vec![true],
+            "origin: judged alone"
+        );
     }
 
     #[test]
@@ -5849,7 +5850,9 @@ mod tests {
             peer: "up".into(),
             msg: takeover_msg(5_000.0),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 5_000.0)));
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 5_000.0)
+        ));
         alone_defers_shared_but_not_origin(&mut b, 5_000.0);
     }
 
@@ -5893,7 +5896,9 @@ mod tests {
                 },
             }),
         });
-        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 7_000.0)));
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 7_000.0)
+        ));
         alone_defers_shared_but_not_origin(&mut e, 7_000.0);
     }
 

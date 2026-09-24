@@ -203,7 +203,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
         // collapse/dismiss actions are the accessible way out).
         if (progress > 0f) {
-            Box(Modifier.fillMaxSize().alpha(progress * 0.6f).background(Color.Black).let { if (progress > 0.5f) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it }.clearAndSetSemantics { })
+            // clearAndSetSemantics first: semantics modifiers after it on the same node (the click)
+            // would otherwise survive.
+            Box(Modifier.fillMaxSize().clearAndSetSemantics { }.alpha(progress * 0.6f).background(Color.Black).let { if (progress > 0.5f) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it })
         }
 
         // Content inside the sheet scrolls; whatever it does not consume (dragging down at the top,

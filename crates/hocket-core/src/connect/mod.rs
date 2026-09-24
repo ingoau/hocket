@@ -75,7 +75,20 @@
 //!    small: at most 500 `(track, startedAt, device)` triples) and hand it
 //!    back through [`Engine::restore_known_scrobbled`] right after
 //!    [`Engine::new`], so a LAN leader that restarts still answers dedupe
-//!    queries correctly.
+//!    queries correctly. The same list carries this device's *shared*
+//!    plays still waiting for a verdict (`awaitingSince` set): persist it
+//!    whenever a `ScrobbleReached` is left unanswered, and after a restart
+//!    ask again (`ScrobbleReached`) for every play the outbox holds without
+//!    a verdict, so the wait resumes instead of the play being judged alone.
+//! 9. **Scrobbles of shared plays.** A play that started on this device and
+//!    never moved is judged as before. A play this device took over or
+//!    resumed (or handed away and got back) is *shared*: another device may
+//!    reach its threshold too, so while no room both can reach is available
+//!    (the coordinator, or a LAN room with a proven peer) its verdict waits,
+//!    up to [`engine::DEFAULT_SHARED_SCROBBLE_GRACE_MS`], then it is judged
+//!    locally. Submit every scrobble with the play's `startedAt` as the
+//!    Subsonic `time` (the identity every holder shares), never the time
+//!    this device resumed it.
 //!
 //! Everything in [`wire`] is the protocol; [`room`] is the coordinator role;
 //! [`replica`] its store; [`lease`], [`clock`], [`election`], [`auth`] are

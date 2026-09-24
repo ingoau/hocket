@@ -60,7 +60,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -271,4 +271,4 @@ private fun NoticeLine(text: String, color: Color) {
 
 /** A text that navigates: labelled click, at least a 48 dp touch target, content vertically centred. */
 private fun Modifier.textLink(label: String, onClick: () -> Unit): Modifier =
-    this.minimumInteractiveComponentSize().clickable(onClickLabel = label, onClick = onClick).wrapContentHeight(Alignment.CenterVertically)
+    this.clickable(onClickLabel = label, onClick = onClick).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically)

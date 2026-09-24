@@ -63,7 +63,18 @@ import app.hocket.core.api.TranscodingProfile
 import app.hocket.core.fake.FakeCore
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ChoiceRow
+import app.hocket.ui.components.LabelledSlider
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import app.hocket.ui.nav.NavItem
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -85,8 +96,8 @@ fun AudioSettingsScreen(nav: NavHostController) {
         val preampValue = stringResource(R.string.settings_db, audio.replayGainPreampDb)
         SettingRow(preampLabel, preampValue)
         // Spoken as "Preamp, +3.0 dB" rather than a bare percentage.
-        Slider(value = audio.replayGainPreampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGainPreampDb = it.toDouble()))) }, valueRange = -15f..15f,
-            modifier = Modifier.padding(horizontal = 16.dp).semantics { contentDescription = preampLabel; stateDescription = preampValue })
+        LabelledSlider(value = audio.replayGainPreampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGainPreampDb = it.toDouble()))) }, valueRange = -15f..15f,
+            label = preampLabel, valueText = preampValue, modifier = Modifier.padding(horizontal = 16.dp))
         SwitchRow(stringResource(R.string.settings_normalisation), audio.normalisation, { client.dispatch(Commands.setAudioSettings(audio.copy(normalisation = it))) })
         SwitchRow(stringResource(R.string.settings_gapless), audio.gapless, { client.dispatch(Commands.setAudioSettings(audio.copy(gapless = it))) })
         SettingsSection(stringResource(R.string.settings_eq))
@@ -96,8 +107,8 @@ fun AudioSettingsScreen(nav: NavHostController) {
         SettingRow(eqPreampLabel, eqPreampValue) {
             TextButton(onClick = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(bands = audio.eq.bands.map { it.copy(gainDb = 0.0) }, preampDb = 0.0, preset = null)))) }) { Text(stringResource(R.string.settings_eq_reset)) }
         }
-        Slider(value = audio.eq.preampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(preampDb = it.toDouble())))) }, valueRange = -12f..12f,
-            modifier = Modifier.padding(horizontal = 16.dp).semantics { contentDescription = eqPreampLabel; stateDescription = eqPreampValue })
+        LabelledSlider(value = audio.eq.preampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(preampDb = it.toDouble())))) }, valueRange = -12f..12f,
+            label = eqPreampLabel, valueText = eqPreampValue, modifier = Modifier.padding(horizontal = 16.dp))
         val bands = audio.eq.bands.ifEmpty { FakeCore.defaultBands() }
         EqEditor(bands, enabled = audio.eq.enabled) { new -> client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(bands = new, preset = null)))) }
         if (outputs.isNotEmpty()) {
@@ -116,8 +127,21 @@ fun EqEditor(bands: List<EqBand>, enabled: Boolean, onChange: (List<EqBand>) -> 
     Row(Modifier.fillMaxWidth().height(220.dp).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         working.forEachIndexed { i, band ->
             val label = if (band.frequencyHz >= 1000) "${(band.frequencyHz / 1000).toInt()}k" else band.frequencyHz.toInt().toString()
-            val desc = stringResource(R.string.settings_eq_band_a11y, label, band.gainDb)
-            Column(Modifier.weight(1f).fillMaxHeight().semantics { contentDescription = desc }, horizontalAlignment = Alignment.CenterHorizontally) {
+            val bandLabel = stringResource(R.string.settings_eq_band_label, label)
+            val value = stringResource(R.string.settings_db, band.gainDb)
+            // The drag is pointer-only; for a screen reader each band is an adjustable control
+            // (swipe up/down steps it by 1 dB).
+            Column(Modifier.weight(1f).fillMaxHeight().clearAndSetSemantics {
+                contentDescription = bandLabel
+                stateDescription = value
+                progressBarRangeInfo = ProgressBarRangeInfo(band.gainDb.toFloat(), -12f..12f, steps = 23)
+                if (enabled) setProgress(bandLabel) { g ->
+                    val next = working.toMutableList().also { it[i] = it[i].copy(gainDb = g.toDouble().coerceIn(-12.0, 12.0)) }
+                    working = next
+                    onChange(next)
+                    true
+                } else disabled()
+            }, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(stringResource(R.string.settings_db, band.gainDb).removePrefix("+0.0 dB").ifEmpty { "0" }, style = MaterialTheme.typography.labelSmall)
                 Box(Modifier.weight(1f).width(28.dp).pointerInput(enabled, i) {
                     if (!enabled) return@pointerInput
@@ -243,16 +267,40 @@ private fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled:
         order = order.toMutableList().apply { add(to.index, removeAt(from.index)) }
         haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
     }
-    LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height((all.size * 52).dp), userScrollEnabled = false) {
-        itemsIndexed(order, key = { _, id -> id }) { _, id ->
+    val moveUp = stringResource(R.string.a11y_move_up)
+    val moveDown = stringResource(R.string.a11y_move_down)
+    LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height((all.size * 56).dp), userScrollEnabled = false) {
+        itemsIndexed(order, key = { _, id -> id }) { index, id ->
             ReorderableItem(reorderable, key = id) { _ ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = id in enabledSet, onCheckedChange = { on ->
-                        val next = if (on) order.filter { it in enabledSet || it == id } else order.filter { it in enabledSet && it != id }
-                        if (next.size >= minEnabled) onChange(next)
-                    })
+                val checked = id in enabledSet
+                fun toggle(on: Boolean) {
+                    val next = if (on) order.filter { it in enabledSet || it == id } else order.filter { it in enabledSet && it != id }
+                    if (next.size >= minEnabled) onChange(next)
+                }
+                fun move(to: Int) {
+                    val moved = order.toMutableList().apply { add(to, removeAt(index)) }
+                    order = moved
+                    onChange(moved.filter { it in enabledSet })
+                }
+                // One item per action: the row toggles it (role checkbox), and moving it up or down
+                // is an action, the accessible alternative to the drag handle.
+                Row(
+                    Modifier.fillMaxWidth()
+                        .toggleable(value = checked, role = Role.Checkbox, onValueChange = ::toggle)
+                        .semantics {
+                            customActions = buildList {
+                                if (checked && index > 0) add(CustomAccessibilityAction(moveUp) { move(index - 1); true })
+                                if (checked && index + 1 < order.size && order[index + 1] in enabledSet) add(CustomAccessibilityAction(moveDown) { move(index + 1); true })
+                            }
+                        }
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = checked, onCheckedChange = null)
+                    Spacer(Modifier.width(12.dp))
                     Text(id, modifier = Modifier.weight(1f))
-                    Icon(Icons.Filled.DragHandle, stringResource(R.string.playlist_reorder_handle), modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
+                    Icon(Icons.Filled.DragHandle, null, modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
                 }
             }
         }

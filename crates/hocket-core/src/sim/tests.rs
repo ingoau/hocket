@@ -752,10 +752,11 @@ fn a_play_held_by_two_isolated_devices_scrobbles_once() {
     let mut w = World::new(cfg);
     w.run_for(5_000.0);
     let (a, b) = (0, 1);
-    // t0 is 20 s: its scrobble point is at 10 s
+    // t0 is 20 s: its scrobble point is at 10 s (and nothing follows it,
+    // so each side's queue simply ends)
     w.perform(Action::PlayTracks {
         device: a,
-        tracks: vec!["t0".into(), "t1".into()],
+        tracks: vec!["t0".into()],
     });
     w.perform(Action::ClaimTransport {
         device: a,
@@ -783,17 +784,20 @@ fn a_play_held_by_two_isolated_devices_scrobbles_once() {
     w.run_for(20_000.0);
     let started_at = w.devices[b].scrobbles_reached[0].1;
     assert_eq!(
-        w.devices[a].scrobbles_reached,
-        w.devices[b].scrobbles_reached,
+        w.devices[a].scrobbles_reached, w.devices[b].scrobbles_reached,
         "both reached the same play, apart"
     );
     // well past the ordinary grace, still apart: nobody submits alone
     w.run_for(20.0 * 60_000.0);
-    assert_eq!(w.server.count("t0", started_at), 0, "{:?}", w.server.scrobbles);
+    assert_eq!(
+        w.server.count("t0", started_at),
+        0,
+        "{:?}",
+        w.server.scrobbles
+    );
     // the partition heals: the common room decides, once
     w.run_for(15.0 * 60_000.0);
     w.finish();
-    for d in &w.devices { for l in &d.log { eprintln!("TMPLOG {l}"); } } // TMPDBG
     assert_eq!(
         w.server.count("t0", started_at),
         1,

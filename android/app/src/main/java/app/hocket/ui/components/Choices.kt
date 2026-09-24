@@ -7,8 +7,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 /**
@@ -45,5 +52,44 @@ fun ActionRow(actions: List<Pair<String, () -> Unit>>, modifier: Modifier = Modi
             val spoken = describe?.invoke(i)
             androidx.compose.material3.OutlinedButton(onClick = onClick, modifier = if (spoken != null) Modifier.semantics { contentDescription = spoken } else Modifier) { Text(label, maxLines = 1) }
         }
+    }
+}
+
+/**
+ * A slider with a spoken label and value ("Preamp, +3.0 dB" rather than a bare percentage) in a
+ * 48 dp tall slot. The expressive slider itself is 44 dp, below the minimum target, so the slot is
+ * the accessibility node: it carries the range and the adjust action (snapped to [steps]) and the
+ * slider inside is drawn and dragged only.
+ */
+@Composable
+fun LabelledSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    label: String,
+    valueText: String,
+    modifier: Modifier = Modifier,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0,
+    onValueChangeFinished: (() -> Unit)? = null,
+) {
+    androidx.compose.foundation.layout.Box(
+        modifier.heightIn(min = 48.dp).clearAndSetSemantics {
+            contentDescription = label
+            stateDescription = valueText
+            progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(valueRange), valueRange, steps)
+            setProgress(label) { target ->
+                var v = target.coerceIn(valueRange)
+                if (steps > 0) {
+                    val step = (valueRange.endInclusive - valueRange.start) / (steps + 1)
+                    v = valueRange.start + kotlin.math.round((v - valueRange.start) / step) * step
+                }
+                onValueChange(v)
+                onValueChangeFinished?.invoke()
+                true
+            }
+        },
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        androidx.compose.material3.Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = steps, onValueChangeFinished = onValueChangeFinished, modifier = Modifier.fillMaxWidth())
     }
 }

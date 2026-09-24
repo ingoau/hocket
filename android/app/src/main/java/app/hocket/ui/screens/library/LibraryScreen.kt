@@ -43,6 +43,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -111,6 +116,8 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
     var jobs by remember { mutableStateOf(false) }
     var detail by rememberSaveable(stateSaver = detailSaver) { mutableStateOf<DetailTarget?>(null) }
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val onLabel = stringResource(R.string.settings_on)
+    val offLabel = stringResource(R.string.settings_off)
     fun open(target: DetailTarget) {
         if (wide) detail = target else when (target) {
             is DetailTarget.Album -> nav.navigate(Route.Album(target.id))
@@ -124,7 +131,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
         topBar = {
             Column {
                 MediumFlexibleTopAppBar(
-                    title = { Text(stringResource(R.string.nav_library)) },
+                    title = { Text(stringResource(R.string.nav_library), modifier = Modifier.semantics { heading() }) },
                     actions = {
                         Box {
                             IconButton(onClick = { sortMenu = true }) { Icon(Icons.Filled.Sort, stringResource(R.string.action_sort)) }
@@ -132,9 +139,12 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                                 val options = if (pager.currentPage == 3) listOf(SortOrder.Title, SortOrder.Artist, SortOrder.Album, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Duration, SortOrder.Bpm, SortOrder.Energy, SortOrder.Random)
                                 else listOf(SortOrder.Default, SortOrder.Artist, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Random)
                                 options.forEach { o ->
-                                    DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(Icons.Filled.Check, null) }, onClick = { sort = o; sortMenu = false })
+                                    // The check mark is drawn only; the chosen order is announced as "selected".
+                                    DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(Icons.Filled.Check, null) }, onClick = { sort = o; sortMenu = false },
+                                        modifier = Modifier.semantics { selected = sort == o })
                                 }
-                                DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(Icons.Filled.Check, null) }, onClick = { descending = !descending; sortMenu = false })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(Icons.Filled.Check, null) }, onClick = { descending = !descending; sortMenu = false },
+                                    modifier = Modifier.semantics { stateDescription = if (descending) onLabel else offLabel })
                             }
                         }
                         JobsIndicator(onClick = { jobs = true })
@@ -206,7 +216,7 @@ private fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, op
             if (album == null) {
                 app.hocket.ui.components.ArtworkPlaceholder(null, Modifier.fillMaxWidth().padding(6.dp).aspectRatio(1f))
             } else {
-                AlbumCard(album, onClick = { open(DetailTarget.Album(album.id)) }, selected = selecting && selection.contains(album.id), selectionActive = selecting,
+                AlbumCard(album, onClick = { open(DetailTarget.Album(album.id)) }, modifier = Modifier.testTag("library.album"), selected = selecting && selection.contains(album.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Albums, album.id) })
             }
         }

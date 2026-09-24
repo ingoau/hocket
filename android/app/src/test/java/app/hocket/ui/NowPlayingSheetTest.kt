@@ -168,7 +168,7 @@ class NowPlayingSheetTest {
         try {
             val height = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().size.height.toFloat()
             fun open() {
-                if (!sheetOpen()) compose.onNodeWithTag("miniPlayer").performSemanticsAction(SemanticsActions.OnClick)
+                if (!sheetOpen()) compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
                 advanceUntil("the sheet to open") { sheetOpen() }
                 openTab(tab)
                 advanceUntil("$tag to show") { displayed(tag) }

@@ -905,7 +905,14 @@ impl Actor {
         let Some(server_id) = self.server_id() else {
             return;
         };
-        let started_local = if self.playback.started_at == started_at {
+        // The play's ORIGINAL start (its identity, on the session clock), not
+        // when this device resumed it: every device that ever submits this
+        // play sends the same Subsonic `time`, so a duplicate that slips
+        // past the session's dedupe (a device judging alone after the
+        // grace) collapses into one downstream.
+        let played_at = if started_at > 0.0 {
+            started_at
+        } else if self.playback.started_at == started_at {
             self.playback.started_local
         } else {
             self.now() - f64::from(played_ms)
@@ -917,7 +924,7 @@ impl Actor {
         {
             let action = ScrobbleAction::Submit {
                 track_id: track_id.clone(),
-                started_at: started_local,
+                started_at: played_at,
                 played_ms,
             };
             if let Err(e) = self.recorder().apply(&server_id, &action) {
@@ -931,7 +938,7 @@ impl Actor {
             if let Err(e) = self.db.record_play(
                 &server_id,
                 &track_id,
-                started_local,
+                played_at,
                 played_ms,
                 !allowed,
                 &self.cfg.device_id,

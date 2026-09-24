@@ -438,6 +438,7 @@
     <string name="settings_eq_enabled">Equalizer on</string>
     <string name="settings_eq_preamp">EQ preamp</string>
     <string name="settings_eq_band_a11y">%1$s: %2$+.1f dB</string>
+    <string name="settings_eq_band_label">Equaliser band %1$s</string>
     <string name="settings_eq_reset">Flat</string>
     <string name="settings_db">%1$+.1f dB</string>
     <string name="settings_section_transcoding">Transcoding</string>

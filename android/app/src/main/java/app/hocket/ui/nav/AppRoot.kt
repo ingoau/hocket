@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -278,10 +280,15 @@ private fun MainShell() {
             var navBarHeightPx by remember { mutableIntStateOf(0) }
             val systemBottomPx = WindowInsets.navigationBars.getBottom(density)
             val bottomInsetPx = if (wide) systemBottomPx else navBarHeightPx
+            // While the full player covers the screen, what is behind it (the page, the navigation
+            // bar and rail) leaves the accessibility tree, as a modal would: TalkBack must not wander
+            // into content nobody can see.
+            val covered by remember(sheet) { derivedStateOf { sheet.progress >= 0.6f } }
+            val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
             fun go(item: NavItem) {
                 nav.navigate(item.route()) { popUpTo(nav.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true }
             }
-            Row(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
                 if (wide) {
                     val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
                     ModalWideNavigationRail(state = railState, hideOnCollapse = false) {
@@ -328,7 +335,8 @@ private fun MainShell() {
                         .zIndex(20f)
                         .onSizeChanged { navBarHeightPx = it.height }
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        .testTag("navBar"),
+                        .testTag("navBar")
+                        .then(hiddenWhenCovered),
                 ) {
                     items.forEach { item ->
                         val selected = item.matches(routeName)

@@ -136,6 +136,54 @@ async fn queue_is_shared_and_handoff_moves_transport_with_position() {
     assert_eq!(subs.len(), 1, "one scrobble across the handoff: {subs:?}");
 }
 
+/// The Subsonic `time` of a scrobble is the play's ORIGINAL start, not when
+/// the submitting device resumed it: whichever device ends up submitting a
+/// play sends the same timestamp, so duplicates (a device judging alone
+/// after the grace) collapse into one downstream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handed_off_play_is_scrobbled_with_its_original_start_time() {
+    let (a, b) = pair().await;
+    let started = a.clock.now_ms();
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+    // A long pause: "resumed at minus played" would land 20 s late.
+    a.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 20_000.0).await;
+    a.run(Command::Play).await;
+    TestCore::run_all_for(&[&a, &b], 30_000.0).await;
+    a.run(Command::OpenHandoffPicker).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    a.run(Command::HandoffTo {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    TestCore::run_all_for(&[&a, &b], 90_000.0).await;
+    let subs: Vec<_> = a
+        .server
+        .scrobbles()
+        .into_iter()
+        .filter(|s| s.submission && s.id == "t0")
+        .collect();
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    let time = subs[0].time_ms.expect("a submission carries its time");
+    // Session clock vs the shared test clock: a LAN offset estimate of a
+    // few ms at most.
+    assert!(
+        (time - started).abs() < 1_000.0,
+        "submitted with the original start {started}, got {time}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn synced_settings_merge_last_write_wins() {
     let (a, b) = pair().await;

@@ -209,7 +209,6 @@ impl std::fmt::Debug for Room {
     }
 }
 
-impl RoomConfig { fn lan_auth_dbg(&self) -> String { match &self.lan_auth { LanAuth::Key { device_id, .. } => device_id.clone(), _ => "coord".into() } } } // TMPDBG
 impl Room {
     /// A room around a persisted replica, or a fresh one.
     pub fn new(
@@ -429,7 +428,6 @@ impl Room {
         let claim = self
             .replica
             .claim_scrobble(&track_id, started_at, device_id, now);
-        eprintln!("TMPDBG room[{}] query from {device_id} via {peer} {track_id}@{started_at} -> {claim:?} log={:?}", self.cfg.lan_auth_dbg(), self.replica.scrobbles.iter().map(|r| (r.track_id.clone(), r.device_id.clone())).collect::<Vec<_>>());
         self.dirty = true;
         if peer == LOOPBACK && claim == ScrobbleClaim::New && self.has_remote_members() {
             self.unconfirmed.push(UnconfirmedScrobble {
