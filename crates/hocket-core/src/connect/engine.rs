@@ -1697,10 +1697,19 @@ impl Engine {
                 }
                 h.their_nonce = Some(nonce.clone());
             }
-            Msg::Refuse { .. } | Msg::Bye { .. } => {
-                // A refusal before we said anything means our keys differ.
+            Msg::Refuse {
+                reason: RefuseReason::Unauthorised,
+                ..
+            } => {
+                // Refused before we said anything but a nonce: it has no key
+                // for this scope, or not ours.
                 self.reject_lan_leader("it refused our challenge");
                 return true;
+            }
+            Msg::Refuse { .. } | Msg::Bye { .. } => {
+                // Not serving right now (mid-election, full): an ordinary
+                // loss, handled with backoff like any other, not a rogue.
+                return false;
             }
             other => {
                 self.reject_lan_leader(&format!("sent {} before proving itself", other.name()));

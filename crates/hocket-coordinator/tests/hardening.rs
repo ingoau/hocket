@@ -211,16 +211,8 @@ async fn the_verify_proxy_never_fetches_private_addresses_by_default() {
         "ftp://music.example/".into(),
     ] {
         let got = exchange(&url, vec![hello(&scope, Some(credential(&named, "good-token")))]).await;
-        assert!(
-            matches!(
-                got.first(),
-                Some(Msg::Refuse {
-                    reason: RefuseReason::Unauthorised,
-                    ..
-                })
-            ),
-            "{named}: {got:?}"
-        );
+        // Refused either way: a scope mismatch before the check, or the check.
+        assert!(matches!(got.first(), Some(Msg::Refuse { .. })), "{named}: {got:?}");
     }
     assert_eq!(app.verification_count(), 0, "no ping was ever sent");
     assert_eq!(subsonic.pings.load(Ordering::SeqCst), 0);
@@ -329,7 +321,7 @@ async fn oversized_frames_end_the_socket() {
 async fn one_address_cannot_open_connections_without_bound() {
     let mut args = Args::for_tests();
     args.per_ip_connections = 2;
-    args.per_ip_rate = 3;
+    args.per_ip_rate = 2;
     let (_app, url, _stop) = start(args).await;
     let a = tokio_tungstenite::connect_async(&url).await.unwrap();
     let b = tokio_tungstenite::connect_async(&url).await.unwrap();

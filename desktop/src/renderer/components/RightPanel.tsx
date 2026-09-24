@@ -48,7 +48,7 @@ export function RightPanel() {
   const lyricsFlex = lc ? "0 0 32px" : qc ? "1 1 auto" : `${1 - panels.splitRatio} 1 0`;
   return (
     <aside ref={ref} className="right-panel" data-testid="right-panel">
-      <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => setWidthDrag({ x: e.clientX, w: panels.rightWidth })} role="separator" aria-orientation="vertical" aria-label="Resize side panel" />
+      <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label="Resize side panel" />
       <section className={`pane ${qc ? "collapsed" : ""}`} style={{ flex: queueFlex }} aria-label={t("queue.title")} data-testid="queue-pane">
         <div className="pane-head">
           <div className="tabs" role="tablist">
@@ -61,7 +61,7 @@ export function RightPanel() {
         </div>
         {!qc ? (tab === "queue" ? <QueuePanel /> : <SavedQueues />) : null}
       </section>
-      {!qc && !lc ? <div className={`resize-handle h ${drag ? "dragging" : ""}`} onMouseDown={() => setDrag(true)} role="separator" aria-orientation="horizontal" aria-label="Resize queue and lyrics" aria-valuenow={Math.round(panels.splitRatio * 100)} data-testid="panel-divider" /> : null}
+      {!qc && !lc ? <div className={`resize-handle h ${drag ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="horizontal" aria-label="Resize queue and lyrics" aria-valuenow={Math.round(panels.splitRatio * 100)} data-testid="panel-divider" /> : null}
       <section className={`pane ${lc ? "collapsed" : ""}`} style={{ flex: lyricsFlex }} aria-label={t("lyrics.title")} data-testid="lyrics-pane">
         <div className="pane-head">
           <span className="small" style={{ fontWeight: 600 }}>{t("lyrics.title")}</span>

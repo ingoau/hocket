@@ -25,25 +25,39 @@ test.describe("lyrics", () => {
     // that AMLL animates one at a time from each syllable's start to end.
     const active = host.locator('[class*="lyricLine"][class*="active"]:not([class*="lyricBgLine"])').first();
     await expect(active).toBeVisible({ timeout: 10_000 });
+    // AMLL wraps each word in a span; syllables that belong to one word are
+    // separate spans inside that wrapper. "title" is one word of two syllables.
     const words = active.locator('[class*="lyricMainLine"] > span');
-    await expect.poll(() => words.count()).toBeGreaterThan(2);
-    const texts = (await words.allTextContents()).map((t) => t.trim()).filter(Boolean);
-    expect(texts).toEqual(["I", "lost", "my", "rank", "and", "ti", "tle"]);
-    // Word-level sync: every word carries its own mask sweep (a running Web
-    // Animation), and the syllables of "title" are two adjacent spans.
-    const sweeping = await words.evaluateAll((els) => els.map((el) => ({ mask: (el as HTMLElement).style.maskImage !== "", animations: el.getAnimations().length })));
-    expect(sweeping.length).toBeGreaterThan(2);
+    await expect.poll(() => words.count()).toBe(6);
+    expect((await words.allTextContents()).map((t) => t.trim())).toEqual(["I", "lost", "my", "rank", "and", "title"]);
+    const syllables = active.locator('[class*="lyricMainLine"] span:not(:has(span))');
+    expect((await syllables.allTextContents()).map((t) => t.trim())).toEqual(["I", "lost", "my", "rank", "and", "ti", "tle"]);
+    // Word-level sync: every syllable carries its own mask sweep driven by a
+    // Web Animation from that syllable's start to its end.
+    const sweeping = await syllables.evaluateAll((els) => els.map((el) => ({ mask: (el as HTMLElement).style.maskImage !== "", animations: el.getAnimations().length })));
+    expect(sweeping).toHaveLength(7);
     expect(sweeping.every((w) => w.mask)).toBe(true);
-    expect(sweeping.filter((w) => w.animations > 0).length).toBeGreaterThan(2);
-    const [ti, tle] = await words.evaluateAll((els) => els.slice(-2).map((el) => el.getBoundingClientRect()));
+    expect(sweeping.filter((w) => w.animations > 0).length).toBeGreaterThan(4);
+    const [ti, tle] = await syllables.evaluateAll((els) => els.slice(-2).map((el) => el.getBoundingClientRect()));
     expect(Math.abs(tle!.left - ti!.right)).toBeLessThan(4);
     // The background vocal is an AMLL background sub-line, not a main line.
-    const bg = host.locator('[class*="lyricBgLine"]', { hasText: "Yeah" }).first();
-    await expect(bg).toBeAttached();
-    expect(await host.locator('[class*="lyricLine"]:not([class*="lyricBgLine"])', { hasText: "(Yeah, yeah)" }).count()).toBe(0);
+    const lineKinds = await host.evaluate((root) => {
+      const out: { bg: boolean; text: string }[] = [];
+      for (const el of root.querySelectorAll("[class]")) {
+        const classes = [...el.classList];
+        if (!classes.some((c) => c.endsWith("_lyricLine"))) continue;
+        out.push({ bg: classes.some((c) => c.endsWith("_lyricBgLine")), text: (el.textContent ?? "").replace(/\s+/g, " ").trim() });
+      }
+      return out;
+    });
+    expect(lineKinds.filter((l) => l.bg && l.text === "(Yeah, yeah)").length).toBe(2);
+    expect(lineKinds.filter((l) => !l.bg && l.text === "(Yeah, yeah)").length).toBe(0);
+    expect(lineKinds.filter((l) => l.bg).length).toBe(4);
+    // 16 main lines (+ AMLL's own bottom spacer line).
+    expect(lineKinds.filter((l) => !l.bg && l.text).length).toBe(16);
     // The one cue-less line is a single word (line tier for that line only).
     const plain = host.locator('[class*="lyricLine"]', { hasText: "We've seen it several times" }).first();
-    expect(await plain.locator('[class*="lyricMainLine"] > span').count()).toBe(1);
+    expect(await plain.locator('[class*="lyricMainLine"] span:not(:has(span))').count()).toBe(1);
   });
 
   test("in-window lyrics are viewport-sized and follow the device-local size preference", async ({ hocket }) => {

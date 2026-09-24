@@ -56,11 +56,11 @@ use tracing::{debug, info, warn};
 
 use hocket_core::connect::auth::ip_is_private;
 use hocket_core::connect::replica::{
-    FileReplicaStore, MemoryReplicaStore, ReplicaState, ReplicaStore,
+    FileReplicaStore, MemoryReplicaStore, ReplicaError, ReplicaStore,
 };
 use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
-use hocket_core::connect::wire::{Credential, Msg, RefuseReason, WireMessage};
+use hocket_core::connect::wire::{Credential, Msg, RefuseReason, ReplicaState, WireMessage};
 use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
@@ -130,8 +130,8 @@ impl Args {
             max_members: 8,
             allow_private_servers: true,
             max_connections: 4096,
-            per_ip_connections: 32,
-            per_ip_rate: 60,
+            per_ip_connections: 1024,
+            per_ip_rate: 1_000_000,
         }
     }
 }
@@ -227,15 +227,14 @@ impl Admission {
         if let Some(e) = self.per_ip.get_mut(&ip) {
             e.live = e.live.saturating_sub(1);
         }
-        // Forget idle addresses so the map never grows with the internet.
+        // Forget idle addresses so the map never grows with the internet
+        // (an address seen more than a minute ago has a full bucket again).
         if self.per_ip.len() > 4096 {
-            let per_minute = 1.0;
             self.per_ip.retain(|_, e| {
                 e.live > 0
                     || e.last_refill
                         .map(|t| t.elapsed() < Duration::from_secs(60))
                         .unwrap_or(false)
-                    || e.tokens < per_minute
             });
         }
     }
@@ -360,9 +359,11 @@ impl App {
         } else {
             let store = self.store.clone();
             let s = scope.to_string();
-            tokio::task::spawn_blocking(move || store.load(&s))
-                .await
-                .unwrap_or_else(|e| Err(hocket_core::connect::replica::ReplicaError::Io(e.into())))
+            Some(
+                tokio::task::spawn_blocking(move || store.load(&s))
+                    .await
+                    .unwrap_or_else(|e| Err(ReplicaError::Io(e.into()))),
+            )
         };
         let mut rooms = self.rooms.lock();
         let state = rooms
@@ -374,7 +375,7 @@ impl App {
     fn open_room(
         &self,
         scope: &str,
-        restored: Option<Result<Option<ReplicaState>, hocket_core::connect::replica::ReplicaError>>,
+        restored: Option<Result<Option<ReplicaState>, ReplicaError>>,
     ) -> RoomState {
         let replica = match restored {
             Some(Ok(r)) => r,
@@ -387,7 +388,8 @@ impl App {
         let mut cfg = RoomConfig::new(scope.to_string());
         cfg.verify = !self.args.no_verify;
         cfg.max_members = self.args.max_members;
-        info!(scope, restored = replica.is_some(), "room opened");
+        // Debug, not info: anyone can name a scope in a Hello.
+        debug!(scope, restored = replica.is_some(), "room opened");
         RoomState {
             room: Room::new(cfg, Arc::new(WallClock), RealReducer::shared(), replica),
             senders: HashMap::new(),
