@@ -22,6 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.core.SettingKeys
 import app.hocket.core.client.CoreClient
+import app.hocket.ui.a11y.LocalReducedMotion
+import app.hocket.ui.a11y.rememberReducedMotion
 
 /** The accent colour taken from the playing artwork, provided by the now-playing sheet while it is open. */
 val LocalArtworkSeed = compositionLocalOf<Color?> { null }
@@ -57,7 +59,8 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
             else -> baseScheme(dark, context, dynamicColour)
         }
     }
-    CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed) {
+    val reducedMotion = rememberReducedMotion()
+    CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed, LocalReducedMotion provides reducedMotion) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
             motionScheme = MotionScheme.expressive(),

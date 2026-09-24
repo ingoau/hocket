@@ -45,8 +45,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
+import app.hocket.ui.a11y.Spoken
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -91,6 +98,10 @@ fun PlayPauseButton(playing: Boolean, onToggle: () -> Unit, modifier: Modifier =
 /**
  * Wavy progress with drag-to-seek: while dragging, the wave flattens, the thumb follows the finger
  * and a time bubble floats above it. The seek is dispatched on release.
+ *
+ * Accessibility: one adjustable node, "Playback position, 1 minute 32 seconds of 3 minutes 32
+ * seconds", with a range in whole seconds (so it changes at most once a second, never per frame)
+ * and `setProgress` for the screen reader's adjust gestures (steps of 5% of the track).
  */
 @Composable
 fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier) {
@@ -101,9 +112,24 @@ fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (L
     var widthPx by remember { mutableFloatStateOf(1f) }
     val fraction = if (dragging) dragFraction else if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val shownMs = if (dragging) (dragFraction * durationMs).toLong() else positionMs
-    val desc = stringResource(R.string.player_seek_a11y, formatClock(shownMs), formatClock(durationMs))
-    val scope = rememberCoroutineScope()
-    Column(modifier.fillMaxWidth().semantics { contentDescription = desc }) {
+    val label = stringResource(R.string.player_seek_a11y)
+    val resources = LocalContext.current.resources
+    // Whole seconds: the semantics (and anything announced from them) move once a second at most.
+    val positionS = (shownMs / 1000).coerceAtLeast(0)
+    val durationS = (durationMs / 1000).coerceAtLeast(0)
+    val state = remember(positionS, durationS) { Spoken.position(resources, positionS * 1000, durationS * 1000) }
+    Column(
+        modifier.fillMaxWidth().clearAndSetSemantics {
+            contentDescription = label
+            stateDescription = state
+            progressBarRangeInfo = ProgressBarRangeInfo(positionS.toFloat().coerceAtMost(durationS.toFloat()), 0f..durationS.toFloat().coerceAtLeast(1f), steps = 0)
+            setProgress(label) { value ->
+                if (durationMs <= 0) return@setProgress false
+                onSeek((value.coerceIn(0f, durationS.toFloat()) * 1000).toLong())
+                true
+            }
+        }.testTag("player.seekBar"),
+    ) {
         Box(Modifier.fillMaxWidth().height(28.dp)) {
             if (dragging) {
                 val x = (dragFraction * widthPx).roundToInt()
@@ -148,5 +174,4 @@ fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (L
             Text(formatClock(durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    LaunchedEffect(Unit) { scope.launch { } }
 }

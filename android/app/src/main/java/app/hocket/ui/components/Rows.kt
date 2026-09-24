@@ -29,19 +29,32 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hocket.R
+import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.Commands
+import app.hocket.core.api.ActionTarget
+import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.LocalDetailNavigator
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Genre
@@ -49,7 +62,15 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.TrackSummary
 
-/** Long-press enters selection mode; tap toggles while selection is active (design: lists). */
+/**
+ * Long-press enters selection mode; tap toggles while selection is active (design: lists).
+ *
+ * Accessibility: the row is one item. [label] is its whole description (children's text is merged
+ * but the description wins, so nothing is read twice; icons inside rows carry no description of
+ * their own, their meaning is in [label] or [state]). [state] is read after the label ("playing");
+ * [actions] are the row menu as custom actions, so a screen-reader user never needs the long-press,
+ * the swipe or the drag handle. The click has a label ("Play", "Select", "Deselect").
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SelectableRow(
@@ -59,24 +80,81 @@ fun SelectableRow(
     onToggleSelect: () -> Unit,
     label: String,
     modifier: Modifier = Modifier,
+    state: String? = null,
+    actions: List<CustomAccessibilityAction> = emptyList(),
+    clickLabel: String? = null,
     content: @Composable () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
-    val selectedDesc = stringResource(R.string.row_selected, label)
-    val selectDesc = stringResource(R.string.row_select, label)
+    val selectLabel = stringResource(R.string.a11y_select)
+    val deselectLabel = stringResource(R.string.a11y_deselect)
+    val openLabel = clickLabel ?: stringResource(R.string.a11y_open)
     Surface(
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = { if (selectionActive) onToggleSelect() else onClick() },
+                onClickLabel = if (!selectionActive) openLabel else if (selected) deselectLabel else selectLabel,
                 onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onToggleSelect() },
+                onLongClickLabel = if (selected) deselectLabel else selectLabel,
             )
             .semantics(mergeDescendants = true) {
-                this.selected = selected
-                contentDescription = if (selected) selectedDesc else if (selectionActive) selectDesc else label
+                contentDescription = label
+                if (selectionActive) this.selected = selected
+                if (state != null) stateDescription = state
+                if (actions.isNotEmpty()) customActions = actions
             },
     ) { content() }
+}
+
+/** The spoken description of a track row: "Tally, twenty one pilots, 3:32, loved, downloaded". */
+@Composable
+fun trackLabel(track: TrackSummary): String {
+    val artist = track.artist ?: stringResource(R.string.unknown_artist)
+    return listOfNotNull(
+        stringResource(R.string.row_track_a11y, track.title, artist, formatClock(track.durationMs)),
+        if (track.loved) stringResource(R.string.row_state_loved) else null,
+        when (track.offline) {
+            OfflineState.Downloaded -> stringResource(R.string.row_state_downloaded)
+            OfflineState.Cached -> stringResource(R.string.row_state_cached)
+            else -> null
+        },
+    ).joinToString(", ")
+}
+
+/**
+ * The row menu as accessibility actions: play next, add to queue, go to album / artist (when a
+ * [LocalDetailNavigator] is present), download or remove the download, rate (a dialog), and the full
+ * menu. [target] is what the row menu acts on (queue rows pass their queue item).
+ */
+@Composable
+fun trackRowActions(track: TrackSummary, target: ActionTarget, onRate: () -> Unit, onMore: (() -> Unit)?, extra: List<CustomAccessibilityAction> = emptyList()): List<CustomAccessibilityAction> {
+    val client = LocalCoreClient.current
+    val nav = LocalDetailNavigator.current
+    val playNext = stringResource(R.string.action_play_next)
+    val addToQueue = stringResource(R.string.a11y_add_to_queue)
+    val goAlbum = stringResource(R.string.action_go_to_album)
+    val goArtist = stringResource(R.string.action_go_to_artist)
+    val download = stringResource(R.string.action_download)
+    val removeDownload = stringResource(R.string.action_remove_download)
+    val rate = stringResource(R.string.action_rate)
+    val more = stringResource(R.string.action_more)
+    return remember(track, target, nav, onMore, extra, playNext) {
+        buildList {
+            add(CustomAccessibilityAction(playNext) { client.dispatch(Commands.runAction(ActionIds.PLAY_NEXT, target)); true })
+            add(CustomAccessibilityAction(addToQueue) { client.dispatch(Commands.runAction(ActionIds.PLAY_LATER, target)); true })
+            addAll(extra)
+            if (nav != null) {
+                track.albumId?.let { id -> add(CustomAccessibilityAction(goAlbum) { nav.openAlbum(id); true }) }
+                track.artistId?.let { id -> add(CustomAccessibilityAction(goArtist) { nav.openArtist(id); true }) }
+            }
+            if (track.offline == OfflineState.Downloaded) add(CustomAccessibilityAction(removeDownload) { client.dispatch(Commands.runAction(ActionIds.UNPIN, target)); true })
+            else add(CustomAccessibilityAction(download) { client.dispatch(Commands.runAction(ActionIds.DOWNLOAD, target)); true })
+            add(CustomAccessibilityAction(rate) { onRate(); true })
+            if (onMore != null) add(CustomAccessibilityAction(more) { onMore(); true })
+        }
+    }
 }
 
 @Composable
@@ -92,16 +170,29 @@ fun TrackRow(
     nowPlaying: Boolean = false,
     showArtwork: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
+    /** What the row's accessibility actions act on (default: this track). */
+    actionTarget: ActionTarget? = null,
+    /** Row-specific accessibility actions (the queue's move and remove), added to the row menu's. */
+    extraActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
-    val label = stringResource(R.string.row_track_a11y, track.title, artist, formatClock(track.durationMs))
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
+    val label = trackLabel(track)
+    var rating by remember { mutableStateOf(false) }
+    val target = actionTarget ?: Commands.tracks(listOf(track.id))
+    // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
+    val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
+    SelectableRow(
+        selected, selectionActive, onClick, onToggleSelect, label, modifier,
+        state = if (nowPlaying) stringResource(R.string.row_state_playing) else null,
+        actions = actions,
+        clickLabel = stringResource(R.string.action_play),
+    ) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             leading?.invoke()
             if (showArtwork) {
                 Box(Modifier.size(48.dp)) {
                     Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
-                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).semantics { }, contentAlignment = Alignment.Center) {
+                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
                         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                     }
                 }
@@ -110,35 +201,40 @@ fun TrackRow(
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (nowPlaying) {
-                        Icon(Icons.Filled.GraphicEq, stringResource(R.string.row_now_playing), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OfflineBadge(track.offline)
+                    OfflineBadge(track.offline, describe = false)
                     Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (track.loved) {
-                Icon(Icons.Filled.Favorite, stringResource(R.string.player_loved), tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
             }
-            Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             trailing?.invoke()
             if (onMore != null) {
-                IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
+                IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
             }
         }
     }
+    if (rating) {
+        val client = LocalCoreClient.current
+        RatingDialog(current = track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false }, onDismiss = { rating = false })
+    }
 }
 
+/** Downloaded / cached marker. [describe] false inside rows, whose label already says it. */
 @Composable
-fun OfflineBadge(state: OfflineState) {
+fun OfflineBadge(state: OfflineState, describe: Boolean = true) {
     when (state) {
-        OfflineState.Downloaded -> { Icon(Icons.Filled.OfflinePin, stringResource(R.string.badge_downloaded), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
-        OfflineState.Cached -> { Icon(Icons.Filled.DownloadDone, stringResource(R.string.badge_cached), tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
+        OfflineState.Downloaded -> { Icon(Icons.Filled.OfflinePin, if (describe) stringResource(R.string.badge_downloaded) else null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
+        OfflineState.Cached -> { Icon(Icons.Filled.DownloadDone, if (describe) stringResource(R.string.badge_cached) else null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
         else -> Unit
     }
 }
@@ -187,7 +283,11 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier
 
 @Composable
 fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
-    val label = stringResource(R.string.row_playlist_a11y, playlist.name, playlist.songCount.toInt())
+    val label = listOfNotNull(
+        stringResource(R.string.row_playlist_a11y, playlist.name, playlist.songCount.toInt()),
+        if (playlist.isSmart) stringResource(R.string.badge_smart) else null,
+        when (playlist.offline) { OfflineState.Downloaded -> stringResource(R.string.row_state_downloaded); OfflineState.Cached -> stringResource(R.string.row_state_cached); else -> null },
+    ).joinToString(", ")
     SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
@@ -195,7 +295,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
             Column(Modifier.weight(1f)) {
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OfflineBadge(playlist.offline)
+                    OfflineBadge(playlist.offline, describe = false)
                     Text(stringResource(R.string.library_count_songs, playlist.songCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (playlist.isSmart) Badge(stringResource(R.string.badge_smart))
                 }
@@ -228,7 +328,7 @@ fun Badge(text: String, modifier: Modifier = Modifier, container: androidx.compo
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
     Row(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
         action?.invoke()
     }
 }

@@ -66,6 +66,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.ActionIds
@@ -138,7 +140,7 @@ fun ActionSheet(
     var rating by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.navigationBarsPadding()) {
-            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp))
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp)) }
             Spacer(Modifier.height(8.dp))
             extraTop?.invoke()
@@ -175,12 +177,7 @@ fun ActionSheet(
         PlaylistPicker(target = target, onDismiss = { playlistPicker = false; onDismiss() })
     }
     if (rating) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { rating = false },
-            title = { Text(stringResource(R.string.action_rate)) },
-            text = { RatingStars(rating = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false; onDismiss() }) },
-            confirmButton = { TextButton(onClick = { rating = false }) { Text(stringResource(R.string.action_cancel)) } },
-        )
+        RatingDialog(current = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false; onDismiss() }, onDismiss = { rating = false })
     }
 }
 

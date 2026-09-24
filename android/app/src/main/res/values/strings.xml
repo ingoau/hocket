@@ -13,6 +13,7 @@
     <string name="action_back">Back</string>
     <string name="action_close">Close</string>
     <string name="action_more">More options</string>
+    <string name="action_more_for">More options for %1$s</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_ok">OK</string>
     <string name="action_save">Save</string>
@@ -149,7 +150,17 @@
     <string name="selection_mode">Selection mode</string>
     <string name="row_select">Select %1$s</string>
     <string name="row_selected">%1$s, selected</string>
-    <string name="row_track_a11y">%1$s by %2$s, %3$s</string>
+    <string name="row_track_a11y">%1$s, %2$s, %3$s</string>
+    <string name="row_state_playing">playing</string>
+    <string name="row_state_loved">loved</string>
+    <string name="row_state_downloaded">downloaded</string>
+    <string name="row_state_cached">available offline</string>
+    <string name="a11y_select">Select</string>
+    <string name="a11y_deselect">Deselect</string>
+    <string name="a11y_open">Open</string>
+    <string name="a11y_add_to_queue">Add to queue</string>
+    <string name="a11y_move_up">Move up</string>
+    <string name="a11y_move_down">Move down</string>
     <string name="row_album_a11y">Album %1$s by %2$s</string>
     <string name="row_artist_a11y">Artist %1$s, %2$d albums</string>
     <string name="row_playlist_a11y">Playlist %1$s, %2$d songs</string>
@@ -178,7 +189,8 @@
     <string name="artist_biography">About</string>
     <string name="genre_albums">Albums</string>
     <string name="genre_songs">Songs</string>
-    <string name="rating_stars">Rating: %1$d of 5</string>
+    <string name="rating_stars">Rating</string>
+    <string name="rating_none">Not rated</string>
     <string name="rating_set">Rate %1$d stars</string>
     <string name="rating_clear">Clear rating</string>
 
@@ -193,7 +205,9 @@
     <string name="search_server_pending">Asking the server…</string>
 
     <!-- Player -->
-    <string name="player_mini_a11y">Now playing: %1$s by %2$s. Tap to open, swipe to skip.</string>
+    <string name="player_mini_a11y">Now playing: %1$s by %2$s</string>
+    <string name="player_sheet_title">Now playing</string>
+    <string name="player_track_a11y">%1$s by %2$s</string>
     <string name="player_expand">Open now playing</string>
     <string name="player_collapse">Close now playing</string>
     <string name="player_tab_now_playing">Now playing</string>
@@ -202,7 +216,8 @@
     <string name="player_tab_recent">Recent</string>
     <string name="player_tab_history">History</string>
     <string name="player_seek">Seek</string>
-    <string name="player_seek_a11y">Position %1$s of %2$s</string>
+    <string name="player_seek_a11y">Playback position</string>
+    <string name="player_seek_state">%1$s of %2$s</string>
     <string name="player_artwork_a11y">Artwork for %1$s</string>
     <string name="player_shuffle_on">Shuffle on</string>
     <string name="player_shuffle_off">Shuffle off</string>
@@ -299,7 +314,13 @@
     <string name="lyrics_source_server">From the server</string>
     <string name="lyrics_source_external">From an external source</string>
     <string name="lyrics_source_embedded">Embedded in the file</string>
-    <string name="lyrics_line_a11y">Lyric line: %1$s. Tap to seek.</string>
+    <string name="lyrics_page_a11y">Lyrics</string>
+    <string name="lyrics_seek_here">Play from this line</string>
+    <string name="lyrics_state_current">current line</string>
+    <string name="lyrics_state_background">background vocal</string>
+    <string name="lyrics_offset_earlier">Show lyrics 0.1 seconds earlier</string>
+    <string name="lyrics_offset_reset">Reset lyrics timing</string>
+    <string name="lyrics_offset_later">Show lyrics 0.1 seconds later</string>
     <string name="lyrics_fetch">Look up lyrics</string>
     <string name="lyrics_instrumental">♪</string>
 
@@ -525,4 +546,21 @@
     <string name="error_details">Details</string>
     <string name="year_and_count">%1$d · %2$d tracks</string>
     <string name="dot_separator"> · </string>
+    <plurals name="a11y_rating_state">
+        <item quantity="one">%1$d of 5 stars</item>
+        <item quantity="other">%1$d of 5 stars</item>
+    </plurals>
+    <plurals name="a11y_hours">
+        <item quantity="one">%1$d hour</item>
+        <item quantity="other">%1$d hours</item>
+    </plurals>
+    <plurals name="a11y_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
+    <plurals name="a11y_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
+    <string name="settings_db_value">%1$+.1f dB</string>
 </resources>

@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
+import app.hocket.ui.a11y.Contrast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -15,7 +16,9 @@ import kotlin.math.abs
 /**
  * Seed-colour extraction and a compact tonal scheme builder, kept in the app (no Material Kolor):
  * the seed's hue drives primary, hue+40 secondary, hue+90 tertiary; tones follow the Material 3 role
- * table (40/80 primary, 90/30 containers, near-neutral surfaces tinted by the seed).
+ * table (40/80 primary, 90/30 containers, near-neutral surfaces tinted by the seed). HSL lightness is
+ * not perceptual (a yellow at L 0.40 is far brighter than a blue), so every text/on-colour pair is
+ * then nudged until it meets WCAG AA ([accessible]): 4.5:1 for text roles, 3:1 for the outline.
  */
 object ArtworkColors {
     /** Reads a downsampled bitmap from a local path and returns a vibrant seed, or null. */
@@ -41,7 +44,39 @@ object ArtworkColors {
         return Color(ColorUtils.HSLToColor(floatArrayOf(hue, 0.55f, 0.55f)))
     }
 
-    fun scheme(seed: Color, dark: Boolean): ColorScheme {
+    fun scheme(seed: Color, dark: Boolean): ColorScheme = accessible(tonalScheme(seed, dark), dark)
+
+    /**
+     * Moves foreground roles (never surfaces) until each meets its contrast target against every
+     * surface it is drawn on: primary/secondary/tertiary (text and icons on surfaces, and under their
+     * on-colours), on-surface roles, on-container roles, the inverse pair and the outline.
+     */
+    fun accessible(s: ColorScheme, dark: Boolean): ColorScheme {
+        val surfaces = listOf(s.background, s.surface, s.surfaceVariant, s.surfaceContainerLowest, s.surfaceContainerLow, s.surfaceContainer, s.surfaceContainerHigh, s.surfaceContainerHighest)
+        // Light: foregrounds get darker; dark: lighter. On-colours of accents go the other way.
+        val fgDarken = !dark
+        val primary = Contrast.ensure(s.primary, surfaces + s.onPrimary, darken = fgDarken)
+        val secondary = Contrast.ensure(s.secondary, surfaces + s.onSecondary, darken = fgDarken)
+        val tertiary = Contrast.ensure(s.tertiary, surfaces + s.onTertiary, darken = fgDarken)
+        return s.copy(
+            primary = primary,
+            onPrimary = Contrast.ensure(s.onPrimary, listOf(primary), darken = !fgDarken),
+            secondary = secondary,
+            onSecondary = Contrast.ensure(s.onSecondary, listOf(secondary), darken = !fgDarken),
+            tertiary = tertiary,
+            onTertiary = Contrast.ensure(s.onTertiary, listOf(tertiary), darken = !fgDarken),
+            onPrimaryContainer = Contrast.ensure(s.onPrimaryContainer, listOf(s.primaryContainer), darken = fgDarken),
+            onSecondaryContainer = Contrast.ensure(s.onSecondaryContainer, listOf(s.secondaryContainer), darken = fgDarken),
+            onTertiaryContainer = Contrast.ensure(s.onTertiaryContainer, listOf(s.tertiaryContainer), darken = fgDarken),
+            onBackground = Contrast.ensure(s.onBackground, surfaces, darken = fgDarken),
+            onSurface = Contrast.ensure(s.onSurface, surfaces, darken = fgDarken),
+            onSurfaceVariant = Contrast.ensure(s.onSurfaceVariant, surfaces, darken = fgDarken),
+            inverseOnSurface = Contrast.ensure(s.inverseOnSurface, listOf(s.inverseSurface), darken = !fgDarken),
+            outline = Contrast.ensure(s.outline, surfaces, min = Contrast.LARGE_TEXT, darken = fgDarken),
+        )
+    }
+
+    private fun tonalScheme(seed: Color, dark: Boolean): ColorScheme {
         val hsl = FloatArray(3).also { ColorUtils.colorToHSL(seed.toArgb(), it) }
         val hue = hsl[0]
         val sat = hsl[1].coerceIn(0.35f, 0.75f)

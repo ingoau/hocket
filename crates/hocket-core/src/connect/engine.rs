@@ -55,6 +55,16 @@ pub const DEFAULT_PREBUFFER_TIMEOUT_MS: f64 = 60_000.0;
 /// Scrobbles reached while cut off from the room wait this long for the
 /// dedupe log before being submitted on local judgement.
 pub const DEFAULT_SCROBBLE_GRACE_MS: f64 = 600_000.0;
+/// A *shared* play (one this device resumed or took over from another
+/// device, or handed away and got back) reached while no authority is
+/// reachable waits this long before being judged locally: another device
+/// may hold the same play and judge it too, so only a room both can reach
+/// (the coordinator, or a LAN room with a proven peer) may decide it.
+pub const DEFAULT_SHARED_SCROBBLE_GRACE_MS: f64 = 3_600_000.0;
+/// How many play identities seen on other devices are remembered.
+const SHARED_PLAYS_CAP: usize = 256;
+/// Cap on pending shared verdicts persisted through [`Engine::known_scrobbled`].
+const PENDING_SHARED_CAP: usize = 64;
 /// An attached upstream that says nothing for this long is dead.
 pub const DEFAULT_UPSTREAM_IDLE_MS: f64 = 30_000.0;
 /// A scrobble dedupe query without an answer is asked again after this long.
@@ -109,6 +119,8 @@ pub struct EngineConfig {
     pub prebuffer_fanout: usize,
     pub prebuffer_timeout_ms: f64,
     pub scrobble_grace_ms: f64,
+    /// Grace for shared plays (see [`DEFAULT_SHARED_SCROBBLE_GRACE_MS`]).
+    pub shared_scrobble_grace_ms: f64,
     pub upstream_idle_ms: f64,
     pub backoff: Backoff,
     /// Require credential verification of inbound LAN peers (the host must
@@ -138,6 +150,7 @@ impl EngineConfig {
             prebuffer_fanout: DEFAULT_PREBUFFER_FANOUT,
             prebuffer_timeout_ms: DEFAULT_PREBUFFER_TIMEOUT_MS,
             scrobble_grace_ms: DEFAULT_SCROBBLE_GRACE_MS,
+            shared_scrobble_grace_ms: DEFAULT_SHARED_SCROBBLE_GRACE_MS,
             upstream_idle_ms: DEFAULT_UPSTREAM_IDLE_MS,
             backoff: Backoff::default(),
             verify_lan_peers: false,
@@ -166,6 +179,12 @@ pub struct KnownScrobble {
     pub track_id: TrackId,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
+    /// Set on an entry that is *not* a scrobble: a shared play of this
+    /// device whose verdict is still deferred (waiting since this local
+    /// time). It rides the same persisted list so a restart keeps waiting
+    /// for an authority instead of judging the play on its own at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_since: Option<EpochMs>,
 }
 
 /// What the actor feeds the engine.
@@ -489,6 +508,9 @@ struct DeferredScrobble {
     track_id: TrackId,
     started_at: EpochMs,
     since: EpochMs,
+    /// A shared play: waits for a room another holder can reach too, and
+    /// for the longer grace.
+    shared: bool,
 }
 
 /// An outstanding dedupe query.
@@ -501,6 +523,7 @@ struct ScrobbleQuery {
     /// When this device started waiting for a verdict on the pair: the
     /// grace for a claim our own room keeps unconfirmed counts from here.
     since: EpochMs,
+    shared: bool,
 }
 
 /// The Connect engine. One per core.
@@ -574,6 +597,15 @@ pub struct Engine {
     /// seeds our own room's dedupe log when we host it (LAN leadership moves
     /// the room between devices; the log must move with the session).
     known_scrobbled: Vec<(TrackId, EpochMs, DeviceId)>,
+    /// `startedAt` of every play identity this device has seen another
+    /// device hold (its stamps, a handoff either way, a resume). A play of
+    /// ours with one of these is *shared*: another device may reach its
+    /// scrobble threshold too. Newest last, bounded.
+    shared_plays: VecDeque<EpochMs>,
+    /// Shared plays whose verdict was still deferred when the state was
+    /// persisted: `(track, startedAt, waiting since)`, until the outbox asks
+    /// about them again.
+    restored_waits: Vec<(TrackId, EpochMs, EpochMs)>,
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
 
@@ -697,6 +729,8 @@ impl Engine {
             scrobble_queries: BTreeMap::new(),
             unreported_scrobbles: vec![],
             known_scrobbled: vec![],
+            shared_plays: VecDeque::new(),
+            restored_waits: vec![],
             saved_queues: vec![],
             settings: vec![],
             lan_peers: vec![],
@@ -765,9 +799,46 @@ impl Engine {
                 track_id: track_id.clone(),
                 started_at,
                 device_id: device_id.clone(),
+                awaiting_since: None,
             });
         }
         let excess = out.len().saturating_sub(500);
+        out.drain(..excess);
+        out.extend(self.pending_shared());
+        out
+    }
+
+    /// Our shared plays still waiting for a verdict, as persistable entries.
+    fn pending_shared(&self) -> Vec<KnownScrobble> {
+        let me = &self.cfg.device.id;
+        let mut out: Vec<KnownScrobble> = vec![];
+        let waiting = self
+            .deferred_scrobbles
+            .iter()
+            .filter(|d| d.shared)
+            .map(|d| (&d.track_id, d.started_at, d.since))
+            .chain(
+                self.scrobble_queries
+                    .values()
+                    .filter(|q| q.shared)
+                    .map(|q| (&q.track_id, q.started_at, q.since)),
+            )
+            .chain(self.restored_waits.iter().map(|(t, s, w)| (t, *s, *w)));
+        for (track_id, started_at, since) in waiting {
+            if out
+                .iter()
+                .any(|k| &k.track_id == track_id && (k.started_at - started_at).abs() < 1000.0)
+            {
+                continue;
+            }
+            out.push(KnownScrobble {
+                track_id: track_id.clone(),
+                started_at,
+                device_id: me.clone(),
+                awaiting_since: Some(since),
+            });
+        }
+        let excess = out.len().saturating_sub(PENDING_SHARED_CAP);
         out.drain(..excess);
         out
     }
@@ -779,10 +850,19 @@ impl Engine {
     /// to submit (killed between the room's answer and the submission), and
     /// the outbox asking again must hear "yours" from the room rather than
     /// "already done" from us.
+    ///
+    /// Entries marked `awaiting_since` are not scrobbles but shared plays
+    /// whose verdict was still deferred: they stay shared, and when the
+    /// outbox asks about them again their wait resumes where it was.
     pub fn restore_known_scrobbled(&mut self, known: Vec<KnownScrobble>) {
         let me = self.cfg.device.id.clone();
         let mut seed: Vec<(TrackId, EpochMs, DeviceId)> = vec![];
         for k in known {
+            if let Some(since) = k.awaiting_since {
+                self.mark_shared(k.started_at);
+                self.restored_waits.push((k.track_id, k.started_at, since));
+                continue;
+            }
             if k.device_id != me {
                 self.learn_scrobbled(&k.track_id, k.started_at, &k.device_id);
             }
@@ -1101,6 +1181,8 @@ impl Engine {
             Input::PreBufferFailed { key } => self.on_prebuffer_result(key, false),
             Input::ResumeHere => {
                 if let Some(r) = self.resume.clone() {
+                    // Resuming another device's play: it is shared.
+                    self.mark_shared(r.started_at);
                     self.pending_take = Some(TakeInfo {
                         key: r.key,
                         track_id: r.track_id,
@@ -1257,11 +1339,20 @@ impl Engine {
     fn announce_known_scrobbles(&mut self) {
         // Our own room's log too: a LAN leader carries what its members
         // scrobbled to the coordinator it joins.
-        let known: Vec<KnownScrobble> = self.known_scrobbled().into_iter().rev().take(64).collect();
+        // (Pending shared plays ride the persisted list too; they were not
+        // scrobbled and are never announced.)
+        let known: Vec<KnownScrobble> = self
+            .known_scrobbled()
+            .into_iter()
+            .filter(|k| k.awaiting_since.is_none())
+            .rev()
+            .take(64)
+            .collect();
         for KnownScrobble {
             track_id,
             started_at,
             device_id,
+            ..
         } in known
         {
             self.upstream_send(Msg::ScrobbleSubmitted {
@@ -1364,6 +1455,68 @@ impl Engine {
                 .push((track_id.to_string(), started_at, device_id.to_string()));
             if self.known_scrobbled.len() > 500 {
                 self.known_scrobbled.remove(0);
+            }
+        }
+    }
+
+    /// Another device held (or is about to hold) the play started at
+    /// `started_at`: if this device reaches its threshold, the play is
+    /// shared. Keyed by the start alone (the track is not always known where
+    /// the evidence arrives); two plays started within a second of each
+    /// other at worst both count as shared, which only delays a verdict.
+    fn mark_shared(&mut self, started_at: EpochMs) {
+        if started_at <= 0.0 || self.is_shared(started_at) {
+            return;
+        }
+        self.shared_plays.push_back(started_at);
+        while self.shared_plays.len() > SHARED_PLAYS_CAP {
+            self.shared_plays.pop_front();
+        }
+    }
+
+    fn is_shared(&self, started_at: EpochMs) -> bool {
+        self.shared_plays
+            .iter()
+            .any(|s| (s - started_at).abs() < 1000.0)
+    }
+
+    /// Whether a shared play may be judged now: only by a room another
+    /// holder of the play could reach as well. That is a remote room we are
+    /// attached to (the coordinator, or a LAN leader that proved the key),
+    /// or our own room while it serves at least one proven member it heard
+    /// from recently. Our own room alone is never enough: a device that
+    /// took the play over from us may be in a room of its own right now.
+    fn shared_authoritative(&self) -> bool {
+        if !self.upstream_authoritative() {
+            return false;
+        }
+        if self.is_connected() {
+            return true;
+        }
+        let me = &self.cfg.device.id;
+        self.remote.is_none()
+            && !self.inbound.is_empty()
+            && self.room.member_device_ids().iter().any(|id| id != me)
+    }
+
+    /// Whether a deferred verdict may be asked for now.
+    fn may_ask(&self, shared: bool) -> bool {
+        if shared {
+            self.shared_authoritative()
+        } else {
+            self.upstream_authoritative()
+        }
+    }
+
+    /// Ask for every deferred verdict that may be asked for now; the rest
+    /// (shared plays without a common authority) keep waiting.
+    fn flush_deferred(&mut self) {
+        let deferred = std::mem::take(&mut self.deferred_scrobbles);
+        for d in deferred {
+            if self.may_ask(d.shared) {
+                self.query_scrobble(d.track_id, d.started_at, d.since, d.shared);
+            } else {
+                self.deferred_scrobbles.push(d);
             }
         }
     }
@@ -1594,10 +1747,7 @@ impl Engine {
         // Only our own room's verdicts count now; if we lost our members
         // recently they wait for them (or the grace) instead.
         if self.upstream_authoritative() && self.flush_deferred_at.is_none() {
-            let deferred = std::mem::take(&mut self.deferred_scrobbles);
-            for d in deferred {
-                self.query_scrobble(d.track_id, d.started_at, d.since);
-            }
+            self.flush_deferred();
         }
     }
 
@@ -1649,7 +1799,10 @@ impl Engine {
             self.deferred_scrobbles.push(DeferredScrobble {
                 track_id: q.track_id,
                 started_at: q.started_at,
-                since: now,
+                // A shared play keeps counting from its first wait: the
+                // long grace must not restart on every flap.
+                since: if q.shared { q.since } else { now },
+                shared: q.shared,
             });
         }
         // Pending ops will never be acked by the room that's gone: confirm them
@@ -2136,6 +2289,9 @@ impl Engine {
                 if device_id == self.cfg.device.id {
                     return;
                 }
+                // Another device holds this play: should it ever come to us
+                // (handoff, resume, a takeover of a loaded play) it is shared.
+                self.mark_shared(started_at);
                 self.remote_transport.position = position.clone();
                 self.remote_transport.played_ms = played_ms;
                 let device_name = self
@@ -2279,6 +2435,8 @@ impl Engine {
                     return;
                 }
                 let Some(lease) = lease else { return };
+                // Taken over mid-play: the play started on `from`.
+                self.mark_shared(started_at);
                 if scrobbled {
                     self.learn_scrobbled_from_peer(&track_id, started_at, &from);
                 }
@@ -2597,6 +2755,7 @@ impl Engine {
             if let Some(stamp) = &rep.last_stamp {
                 if stamp.device_id != self.cfg.device.id {
                     self.last_remote_stamp = Some(stamp.clone());
+                    self.mark_shared(stamp.started_at);
                 }
             }
             for r in &rep.scrobbles {
@@ -2652,10 +2811,7 @@ impl Engine {
                 });
             }
             self.announce_known_scrobbles();
-            let deferred = std::mem::take(&mut self.deferred_scrobbles);
-            for d in deferred {
-                self.query_scrobble(d.track_id, d.started_at, d.since);
-            }
+            self.flush_deferred();
         }
         self.emit_devices();
         self.emit_connection();
@@ -3063,6 +3219,7 @@ impl Engine {
                 self.detached = false;
             }
             if let Some(t) = self.pending_take.take() {
+                self.mark_shared(t.started_at);
                 self.stamp = Some(CurrentStamp {
                     key: Some(t.key.clone()),
                     track_id: Some(t.track_id.clone()),
@@ -3293,6 +3450,8 @@ impl Engine {
         }
         let position_ms = extrapolate(&stamp.position, self.now_session_ms());
         let from = self.cfg.device.id.clone();
+        // The play moves away: if it ever comes back here it is shared.
+        self.mark_shared(stamp.started_at);
         self.upstream_send(Msg::HandoffTakeover {
             from,
             target: device_id,
@@ -3363,18 +3522,39 @@ impl Engine {
             return;
         }
         let now = self.now_local_ms();
-        if self.upstream_authoritative() {
-            self.query_scrobble(track_id, started_at, now);
+        // A play that ORIGINATED here and never moved is ours alone to judge
+        // (today's rules). A play another device held too is *shared*: it
+        // may be reaching its threshold over there as well, so it is only
+        // judged by a room both can reach (or after the long grace).
+        let mut since = now;
+        if let Some(i) = self
+            .restored_waits
+            .iter()
+            .position(|(t, s, _)| same(t, *s))
+        {
+            // Asked again after a restart: the wait goes on where it was.
+            since = self.restored_waits.remove(i).2;
+        }
+        let shared = self.is_shared(started_at);
+        if self.may_ask(shared) {
+            self.query_scrobble(track_id, started_at, since, shared);
         } else {
             self.deferred_scrobbles.push(DeferredScrobble {
                 track_id,
                 started_at,
-                since: now,
+                since,
+                shared,
             });
         }
     }
 
-    fn query_scrobble(&mut self, track_id: TrackId, started_at: EpochMs, since: EpochMs) {
+    fn query_scrobble(
+        &mut self,
+        track_id: TrackId,
+        started_at: EpochMs,
+        since: EpochMs,
+        shared: bool,
+    ) {
         let query_id = self.next_op_id();
         let now = self.now_local_ms();
         self.scrobble_queries.insert(
@@ -3384,6 +3564,7 @@ impl Engine {
                 started_at,
                 sent_at: now,
                 since,
+                shared,
             },
         );
         let device_id = self.cfg.device.id.clone();
@@ -3436,6 +3617,7 @@ impl Engine {
                     track_id: q.track_id,
                     started_at: q.started_at,
                     since: q.since,
+                    shared: q.shared,
                 });
             }
         }
@@ -3567,26 +3749,35 @@ impl Engine {
             self.retry_scrobble_queries(now);
             // Deferred verdicts go to our own room a beat after it became
             // authoritative again, so returning members' announcements land first.
-            if !self.deferred_scrobbles.is_empty() && self.flush_deferred_at.is_none() {
+            let flushable = self
+                .deferred_scrobbles
+                .iter()
+                .any(|d| self.may_ask(d.shared));
+            if flushable && self.flush_deferred_at.is_none() {
                 self.flush_deferred_at = Some(now + 2_000.0);
             }
             if self.flush_deferred_at.map(|t| now >= t).unwrap_or(false) {
                 self.flush_deferred_at = None;
-                let deferred = std::mem::take(&mut self.deferred_scrobbles);
-                for d in deferred {
-                    self.query_scrobble(d.track_id, d.started_at, d.since);
-                }
+                self.flush_deferred();
             }
         } else {
             self.flush_deferred_at = None;
         }
 
-        // Deferred scrobbles past the grace period: local judgement.
+        // Deferred scrobbles past the grace period: local judgement, so
+        // nothing is lost (shared plays wait longer: another holder may
+        // still bring the verdict).
         let grace = self.cfg.scrobble_grace_ms;
-        let (mut expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) = self
-            .deferred_scrobbles
-            .drain(..)
-            .partition(|d| now - d.since >= grace);
+        let shared_grace = self.cfg.shared_scrobble_grace_ms;
+        let (mut expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) =
+            self.deferred_scrobbles.drain(..).partition(|d| {
+                now - d.since
+                    >= if d.shared {
+                        shared_grace
+                    } else {
+                        grace
+                    }
+            });
         self.deferred_scrobbles = keep;
         // So are claims our own room kept unconfirmed that long (members
         // that never echo, say): the claim stands without them.
@@ -3605,6 +3796,7 @@ impl Engine {
                         track_id: q.track_id,
                         started_at: q.started_at,
                         since: q.since,
+                        shared: q.shared,
                     });
                 }
             }
@@ -3654,6 +3846,7 @@ mod tests {
                 track_id: "t1".into(),
                 started_at: 1_000.0,
                 device_id: "d1".into(),
+                awaiting_since: None,
             }],
         };
         let back: PersistedConnectState =

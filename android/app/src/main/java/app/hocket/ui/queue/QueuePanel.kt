@@ -19,8 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.SecondaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +44,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
@@ -65,10 +68,12 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun QueuePanel(modifier: Modifier = Modifier) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
-            val labels = listOf(stringResource(R.string.player_tab_queue), stringResource(R.string.player_tab_recent), stringResource(R.string.player_tab_history))
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                labels.forEachIndexed { i, label -> toggleableItem(checked = tab == i, label = label, onCheckedChange = { tab = i }) }
+        // Scrollable tabs: at large font sizes the labels keep their size and the row scrolls,
+        // instead of a button group pushing items into an (empty) overflow.
+        val labels = listOf(stringResource(R.string.player_tab_queue), stringResource(R.string.player_tab_recent), stringResource(R.string.player_tab_history))
+        SecondaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 16.dp, containerColor = androidx.compose.ui.graphics.Color.Transparent) {
+            labels.forEachIndexed { i, label ->
+                Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label, maxLines = 1) }, modifier = Modifier.testTag("queue.tab.$i"))
             }
         }
         when (tab) {
@@ -104,6 +109,9 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
     val nextLabel = stringResource(R.string.queue_playing_next)
     val continuingLabel = queue.contextLabel?.let { stringResource(R.string.queue_continuing, it) } ?: stringResource(R.string.queue_up_next)
     val autoplayLabel = stringResource(R.string.queue_autoplay_section)
+    val removeLabel = stringResource(R.string.action_remove_from_queue)
+    val moveUpLabel = stringResource(R.string.a11y_move_up)
+    val moveDownLabel = stringResource(R.string.a11y_move_down)
     val rows: List<Row> = remember(queue, historyLabel, nowLabel, nextLabel, continuingLabel, autoplayLabel) {
         buildList {
             if (queue.history.isNotEmpty()) { add(Row.Header("h", historyLabel)); queue.history.forEach { add(Row.Item(it, Row.Section.History)) } }
@@ -138,7 +146,7 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
         LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 120.dp), modifier = Modifier.fillMaxSize().testTag("queue.list")) {
             items(rows, key = { r -> when (r) { is Row.Header -> "hdr:" + r.id; is Row.Item -> r.entry.item.key } }) { row ->
                 when (row) {
-                    is Row.Header -> androidx.compose.material3.Text(row.text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    is Row.Header -> androidx.compose.material3.Text(row.text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() })
                     is Row.Item -> {
                         val entry = row.entry
                         val draggable = row.section == Row.Section.Next || row.section == Row.Section.Upcoming
@@ -152,17 +160,26 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
                                 enableDismissFromEndToStart = row.section != Row.Section.Current,
                                 backgroundContent = {
                                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp), contentAlignment = if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
-                                        Icon(Icons.Filled.Delete, stringResource(R.string.queue_swipe_remove), tint = MaterialTheme.colorScheme.onErrorContainer)
+                                        // Decorative: the row's "Remove from queue" action is the accessible path.
+                                        Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
                                     }
                                 },
                             ) {
                                 val why = (entry.item.source as? QueueSource.Autoplay)?.data?.reason
+                                // Accessible alternatives to the swipe (remove) and the drag handle (move).
+                                val index = movable.indexOf(entry.item.key)
+                                val extra = buildList {
+                                    if (row.section != Row.Section.Current) add(CustomAccessibilityAction(removeLabel) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); true })
+                                    if (draggable && index > 0) add(CustomAccessibilityAction(moveUpLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index - 1)); true })
+                                    if (draggable && index >= 0 && index < movable.lastIndex) add(CustomAccessibilityAction(moveDownLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index + 1)); true })
+                                }
                                 Column(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).alpha(if (row.section == Row.Section.History) 0.55f else 1f)) {
                                     TrackRow(entry.track, onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) }, onMore = { sheetFor = entry },
+                                        actionTarget = Commands.queueItems(listOf(entry.item.key)), extraActions = extra,
                                         selected = selecting && selection.contains(entry.item.key), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
                                         nowPlaying = row.section == Row.Section.Current,
                                         trailing = if (draggable) ({
-                                            Icon(Icons.Filled.DragHandle, stringResource(R.string.queue_drag_handle), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            Icon(Icons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(start = 8.dp).draggableHandle(onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) }, onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) }))
                                         }) else null)
                                     if (entry.item.unavailable == true) Text(stringResource(R.string.queue_unavailable), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp))

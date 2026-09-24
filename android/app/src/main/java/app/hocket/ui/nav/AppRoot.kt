@@ -257,8 +257,9 @@ fun navItems(): List<NavItem> {
     return remember(ids) { if (ids.isEmpty()) NavItem.DEFAULT else NavItem.fromIds(ids) }
 }
 
-/** Bottom content inset for scrolling screens: the mini player floats over the last rows. */
-val BottomContentInset: Dp = NowPlayingSheetState.MINI_HEIGHT + 32.dp
+/** Bottom content inset for scrolling screens: the mini player (taller at large font sizes) floats over the last rows. */
+val BottomContentInset: Dp
+    @Composable get() = app.hocket.ui.player.miniPlayerHeight() + 32.dp
 
 @Composable
 private fun MainShell() {
@@ -298,15 +299,26 @@ private fun MainShell() {
                 }
                 // Content ends above the navigation bar; only the mini player floats over it.
                 Box(Modifier.weight(1f).fillMaxSize().padding(bottom = with(density) { bottomInsetPx.toDp() })) {
-                    AppNavHost(nav, Modifier.fillMaxSize())
+                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }) }
+                    CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
+                        AppNavHost(nav, Modifier.fillMaxSize())
+                    }
                 }
             }
+            val navigator = remember(nav, sheet) {
+                app.hocket.ui.DetailNavigator(
+                    openAlbum = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
+                    openArtist = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Artist(id)) },
+                )
+            }
+            CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
             NowPlayingSheet(
                 state = sheet,
                 bottomInset = with(density) { bottomInsetPx.toDp() },
                 onOpenAlbum = { nav.navigate(Route.Album(it)) },
                 onOpenArtist = { nav.navigate(Route.Artist(it)) },
             )
+            }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
                 // sheet expands and the full player takes the screen.

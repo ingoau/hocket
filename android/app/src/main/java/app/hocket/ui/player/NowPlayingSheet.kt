@@ -57,7 +57,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.expand
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -143,6 +149,17 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed) {
 fun rememberNowPlayingSheetState(): NowPlayingSheetState = remember { NowPlayingSheetState() }
 
 /**
+ * The mini player's height: [NowPlayingSheetState.MINI_HEIGHT] at the default font size, taller when
+ * the user's font scale makes its two lines of text (title, artist) need more, so they never clip.
+ */
+@Composable
+fun miniPlayerHeight(): Dp {
+    val typography = MaterialTheme.typography
+    val text = with(LocalDensity.current) { (typography.bodyLarge.lineHeight.toDp() + typography.bodySmall.lineHeight.toDp()) }
+    return maxOf(NowPlayingSheetState.MINI_HEIGHT, text + 24.dp)
+}
+
+/**
  * Mini player bar that expands into the full player with a physics-based drag: velocity-aware settle,
  * a scrim, corners morphing from a pill to square, and the artwork scaling from the 48 dp thumbnail
  * to full width as the sheet opens. Inside: a pager for Now playing / Queue / Lyrics.
@@ -160,7 +177,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val navPx = with(density) { bottomInset.toPx() }
         val maxHeightPx = constraints.maxHeight.toFloat()
         val maxWidthPx = constraints.maxWidth
-        val collapsedOffset = maxHeightPx - with(density) { NowPlayingSheetState.MINI_HEIGHT.toPx() } - navPx
+        val miniHeight = miniPlayerHeight()
+        val collapsedOffset = maxHeightPx - with(density) { miniHeight.toPx() } - navPx
         LaunchedEffect(collapsedOffset, density) {
             state.collapsedOffset = collapsedOffset
             state.velocityThreshold = with(density) { NowPlayingSheetState.VELOCITY_THRESHOLD.toPx() }
@@ -182,9 +200,10 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             }
         }
 
-        // Scrim behind the sheet.
+        // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
+        // collapse/dismiss actions are the accessible way out).
         if (progress > 0f) {
-            Box(Modifier.fillMaxSize().alpha(progress * 0.6f).background(Color.Black).let { if (progress > 0.5f) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it })
+            Box(Modifier.fillMaxSize().alpha(progress * 0.6f).background(Color.Black).let { if (progress > 0.5f) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it }.clearAndSetSemantics { })
         }
 
         // Content inside the sheet scrolls; whatever it does not consume (dragging down at the top,
@@ -213,7 +232,13 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Sheet content is themed from the artwork while open (dynamic colour on the now-playing screen).
         val artworkSeed by artworkSeed(entry?.track?.coverArt)
         val sheetScheme = remember(artworkSeed, dark) { artworkSeed?.let { ArtworkColors.scheme(it, dark) } }
-        val expandedDesc = stringResource(R.string.player_expand)
+        val sheetTitle = stringResource(R.string.player_sheet_title)
+        val collapseLabel = stringResource(R.string.player_collapse)
+        val expandLabel = stringResource(R.string.player_expand)
+        val expanded = state.isExpanded
+        // The full player is hidden from accessibility until it is the visible part of the sheet,
+        // and the mini bar is gone by then: exactly one of them is in the tree at any time.
+        val fullPlayerAccessible = progress >= FULL_PLAYER_A11Y_PROGRESS
         Box(
             Modifier
                 .fillMaxWidth()
@@ -223,7 +248,18 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 .clip(RoundedCornerShape(topStart = corner, topEnd = corner))
                 .nestedScroll(nested)
                 .anchoredDraggable(state.draggable, Orientation.Vertical, flingBehavior = fling)
-                .semantics { contentDescription = expandedDesc }
+                // The drag has non-gesture equivalents: expand from the mini player, and collapse or
+                // dismiss the open sheet (also the collapse button and back).
+                .semantics {
+                    isTraversalGroup = true
+                    if (expanded) {
+                        paneTitle = sheetTitle
+                        collapse(collapseLabel) { scope.launch { state.collapse() }; true }
+                        dismiss(collapseLabel) { scope.launch { state.collapse() }; true }
+                    } else {
+                        expand(expandLabel) { scope.launch { state.expand() }; true }
+                    }
+                }
                 .testTag("nowPlaying.sheet"),
         ) {
             val content: @Composable () -> Unit = {
@@ -231,15 +267,22 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     Box(Modifier.fillMaxSize()) {
                         val pager = rememberPagerState { 3 }
                         // Full player, fading in as the sheet opens.
-                        Column(Modifier.fillMaxSize().alpha(((progress - 0.35f) / 0.65f).coerceIn(0f, 1f)).statusBarsPadding()) {
+                        Column(Modifier.fillMaxSize().alpha(((progress - 0.35f) / 0.65f).coerceIn(0f, 1f)).then(if (fullPlayerAccessible) Modifier else Modifier.clearAndSetSemantics { }).statusBarsPadding()) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { scope.launch { state.collapse() } }) { Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse)) }
-                                PrimaryTabRow(selectedTabIndex = pager.currentPage, modifier = Modifier.weight(1f), containerColor = Color.Transparent) {
+                                IconButton(onClick = { scope.launch { state.collapse() } }, modifier = Modifier.testTag("player.collapse")) { Icon(Icons.Filled.KeyboardArrowDown, collapseLabel) }
+                                val tabs: @Composable () -> Unit = {
                                     listOf(R.string.player_tab_now_playing, R.string.player_tab_queue, R.string.player_tab_lyrics).forEachIndexed { i, res ->
-                                        Tab(selected = pager.currentPage == i, modifier = Modifier.testTag("player.tab.$i"), onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
+                                        Tab(selected = pager.currentPage == i, modifier = Modifier.testTag("player.tab.$i"), onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res), maxLines = 1) })
                                     }
                                 }
-                                Box(Modifier.size(48.dp))
+                                // Large fonts: the tabs keep their text size and scroll rather than
+                                // squeezing three labels into a third of the row each.
+                                if (LocalDensity.current.fontScale > 1.3f) {
+                                    PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, modifier = Modifier.weight(1f), containerColor = Color.Transparent, edgePadding = 0.dp) { tabs() }
+                                } else {
+                                    PrimaryTabRow(selectedTabIndex = pager.currentPage, modifier = Modifier.weight(1f), containerColor = Color.Transparent) { tabs() }
+                                    Box(Modifier.size(48.dp))
+                                }
                             }
                             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0, userScrollEnabled = progress > 0.9f) { page ->
                                 when (page) {
@@ -250,8 +293,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                             }
                         }
                         // Mini bar, fading out.
-                        if (progress < 0.6f) {
-                            Box(Modifier.fillMaxWidth().height(NowPlayingSheetState.MINI_HEIGHT).alpha(1f - (progress / 0.5f).coerceIn(0f, 1f))) {
+                        if (progress < FULL_PLAYER_A11Y_PROGRESS) {
+                            Box(Modifier.fillMaxWidth().height(miniHeight).alpha(1f - (progress / 0.5f).coerceIn(0f, 1f))) {
                                 MiniPlayerBar(onExpand = { scope.launch { state.expand() } })
                             }
                         }
@@ -263,7 +306,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         val artTop = lerp(8.dp, 112.dp, progress)
                         if (pager.currentPage == 0 || progress < 0.95f) {
                             Box(Modifier.offset(x = artLeft, y = artTop).size(artSize)) {
-                                HeroArtwork(entry?.track?.coverArt, entry?.track?.title, artSize, interactive = progress > 0.95f, onPreviewToggle = { seed ->
+                                HeroArtwork(entry?.track?.coverArt, entry?.track?.title, artSize, interactive = progress > 0.95f, describe = fullPlayerAccessible, onPreviewToggle = { seed ->
                                     seedState.seed = if (seedState.seed == null) seed else null
                                 })
                             }
@@ -275,6 +318,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         }
     }
 }
+
+/** Sheet progress from which the full player (not the mini bar) is what accessibility sees. */
+private const val FULL_PLAYER_A11Y_PROGRESS = 0.6f
 
 /** Resolves the artwork's seed colour: palette from the cached file, else the id-derived placeholder hue. */
 @Composable
