@@ -53,7 +53,6 @@ import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
@@ -82,7 +81,7 @@ fun SearchScreen(nav: NavHostController) {
     var requestCounter by remember { mutableIntStateOf(0) }
     var minHeightPx by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
-    var sheetFor by remember { mutableStateOf<app.hocket.core.api.TrackSummary?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
 
     LaunchedEffect(Unit) {
         snapshotFlow { query }.debounce(120).collect { q ->
@@ -126,7 +125,7 @@ fun SearchScreen(nav: NavHostController) {
                 if (results.tracks.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_songs)) }
                     items(results.tracks, key = { "t" + it.id }) { t ->
-                        TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { sheetFor = t })
+                        TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) })
                     }
                 }
                 if (results.albums.isNotEmpty()) {
@@ -151,14 +150,13 @@ fun SearchScreen(nav: NavHostController) {
                     if (pendingRemote) Text(stringResource(R.string.search_server_pending), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
                 }
                 remote?.let { r ->
-                    items(r.tracks, key = { "rt" + it.id }) { t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { sheetFor = t }) }
+                    items(r.tracks, key = { "rt" + it.id }) { t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }) }
                     if (r.albums.isNotEmpty()) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
                     items(r.artists, key = { "rar" + it.id }) { ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }) }
                 }
             }
         }
     }
-    sheetFor?.let { t -> ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { id -> { nav.navigate(Route.Album(id)) } }, onGoToArtist = t.artistId?.let { id -> { nav.navigate(Route.Artist(id)) } }) }
 }
 
 

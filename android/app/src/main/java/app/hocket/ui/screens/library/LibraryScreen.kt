@@ -347,7 +347,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
-    var sheetFor by remember { mutableStateOf<app.hocket.core.api.Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     val listLabel = stringResource(if (offlineOnly) R.string.available_offline else R.string.library_songs)
     LaunchedEffect(key, state.generation) { client.trackPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Tracks) client.setSelectionTotal(state.total) }
@@ -383,14 +383,10 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
                     // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
                     val ctx = Commands.adHocContext(serverId, listLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
                     client.dispatch(Commands.playContext(ctx, startIndex = state.pages.toSortedMap().values.flatten().indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
-                }, onMore = { sheetFor = track }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
+                }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
             } else TrackRowSkeleton()
         }
-    }
-    sheetFor?.let { t ->
-        ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null },
-            onGoToAlbum = t.albumId?.let { id -> { nav.navigate(Route.Album(id)) } }, onGoToArtist = t.artistId?.let { id -> { nav.navigate(Route.Artist(id)) } })
     }
 }
 
