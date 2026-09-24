@@ -44,21 +44,21 @@ export function Sidebar() {
       <div className="sidebar-scroll">
         <div className="section-title">{t("nav.library")}</div>
         {items.map((it) => (
-          <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
+          <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
             <Icon name={it.icon} size={15} />
             <span>{it.label}</span>
           </a>
         ))}
         {filters.length ? <div className="section-title">{t("nav.savedFilters")}</div> : null}
         {filters.map((f) => (
-          <a key={f.id} href="#" className={`nav-item ${route.view === "filter" && route.id === f.id ? "active" : ""}`} onClick={(e) => { e.preventDefault(); navigate({ view: "filter", id: f.id }); }}>
+          <a key={f.id} href="#" className={`nav-item ${route.view === "filter" && route.id === f.id ? "active" : ""}`} aria-current={route.view === "filter" && route.id === f.id ? "page" : undefined} title={f.name} onClick={(e) => { e.preventDefault(); navigate({ view: "filter", id: f.id }); }}>
             <Icon name="filter" size={15} />
             <span>{f.name}</span>
           </a>
         ))}
         {(playlists ?? []).length ? <div className="section-title">{t("nav.playlistsSection")}</div> : null}
         {(playlists ?? []).map((p) => (
-          <a key={p.id} href="#" className={`nav-item ${route.view === "playlist" && route.id === p.id ? "active" : ""}`} onClick={(e) => { e.preventDefault(); navigate({ view: "playlist", id: p.id }); }} onContextMenu={(e) => void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} title={p.isSmart ? t("playlists.smart") : undefined}>
+          <a key={p.id} href="#" className={`nav-item ${route.view === "playlist" && route.id === p.id ? "active" : ""}`} aria-current={route.view === "playlist" && route.id === p.id ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "playlist", id: p.id }); }} onContextMenu={(e) => void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} title={p.isSmart ? `${p.name} · ${t("playlists.smart")}` : p.name}>
             <Icon name={p.isSmart ? "filter" : "playlist"} size={15} />
             <span>{p.name}</span>
           </a>
@@ -66,12 +66,14 @@ export function Sidebar() {
       </div>
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">
-        <a href="#" className={`nav-item ${route.view === "settings" ? "active" : ""}`} aria-current={route.view === "settings" ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings" }); }} data-testid="nav-settings">
+        <a href="#" className={`nav-item ${route.view === "settings" ? "active" : ""}`} aria-current={route.view === "settings" ? "page" : undefined} title={t("nav.settings")} onClick={(e) => { e.preventDefault(); navigate({ view: "settings" }); }} data-testid="nav-settings">
           <Icon name="settings" size={15} />
           <span>{t("nav.settings")}</span>
         </a>
       </div>
-      <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuenow={panels.sidebarWidth} data-testid="sidebar-resize" />
+      <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidebar")} aria-valuenow={panels.sidebarWidth} aria-valuemin={160} aria-valuemax={360} tabIndex={0}
+        onKeyDown={(e) => { const d = e.key === "ArrowRight" ? 16 : e.key === "ArrowLeft" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ sidebarWidth: Math.max(160, Math.min(360, panels.sidebarWidth + d)) }); }}
+        data-testid="sidebar-resize" />
     </nav>
   );
 }

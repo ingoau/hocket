@@ -8,6 +8,7 @@ import { SavedQueues } from "./SavedQueues";
 import { LyricsView } from "./LyricsView";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
+import { Tabs, tabPanelProps } from "./Tabs";
 import { bridge } from "../core/bridge";
 import { SK } from "@shared/settings-keys";
 
@@ -47,24 +48,24 @@ export function RightPanel() {
   const queueFlex = qc ? "0 0 32px" : lc ? "1 1 auto" : `${panels.splitRatio} 1 0`;
   const lyricsFlex = lc ? "0 0 32px" : qc ? "1 1 auto" : `${1 - panels.splitRatio} 1 0`;
   return (
-    <aside ref={ref} className="right-panel" data-testid="right-panel">
-      <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label="Resize side panel" />
+    <aside ref={ref} className="right-panel" aria-label={t("a11y.sidePanel")} data-testid="right-panel">
+      <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={260} aria-valuemax={560} tabIndex={0}
+        onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ rightWidth: Math.max(260, Math.min(560, panels.rightWidth + d)) }); }} />
       <section className={`pane ${qc ? "collapsed" : ""}`} style={{ flex: queueFlex }} aria-label={t("queue.title")} data-testid="queue-pane">
         <div className="pane-head">
-          <div className="tabs" role="tablist">
-            <button type="button" role="tab" aria-selected={tab === "queue"} className={`tab ${tab === "queue" ? "active" : ""}`} onClick={() => { setTab("queue"); if (qc) setPanels({ queueCollapsed: false }); }} data-testid="tab-queue">{t("queue.title")}</button>
-            <button type="button" role="tab" aria-selected={tab === "recent"} className={`tab ${tab === "recent" ? "active" : ""}`} onClick={() => { setTab("recent"); if (qc) setPanels({ queueCollapsed: false }); }} data-testid="tab-recent">{t("queue.recent")}</button>
-          </div>
+          <Tabs id="queue-tabs" selected={tab} onSelect={(k) => { setTab(k); if (qc) setPanels({ queueCollapsed: false }); }} tabs={[{ key: "queue", label: t("queue.title"), testId: "tab-queue" }, { key: "recent", label: t("queue.recent"), testId: "tab-recent" }]} />
           <span className="spacer" />
           {tab === "queue" && !qc ? <button type="button" className="btn icon sm" title={t("queue.clear")} aria-label={t("queue.clear")} onClick={() => bridge().dispatch({ type: "clearQueue" })}><Icon name="trash" size={13} /></button> : null}
           <button type="button" className="btn icon sm" title={qc ? t("queue.expand") : t("queue.collapse")} aria-label={qc ? t("queue.expand") : t("queue.collapse")} onClick={() => setPanels({ queueCollapsed: !qc, lyricsCollapsed: !qc ? lc : false })} data-testid="collapse-queue"><Icon name={qc ? "chevronDown" : "chevronUp"} size={13} /></button>
         </div>
-        {!qc ? (tab === "queue" ? <QueuePanel /> : <SavedQueues />) : null}
+        {!qc ? <div className="tab-panel" {...tabPanelProps("queue-tabs", tab)}>{tab === "queue" ? <QueuePanel /> : <SavedQueues />}</div> : null}
       </section>
-      {!qc && !lc ? <div className={`resize-handle h ${drag ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="horizontal" aria-label="Resize queue and lyrics" aria-valuenow={Math.round(panels.splitRatio * 100)} data-testid="panel-divider" /> : null}
+      {!qc && !lc ? <div className={`resize-handle h ${drag ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="horizontal" aria-label={t("a11y.resizeSplit")} aria-valuenow={Math.round(panels.splitRatio * 100)} aria-valuemin={15} aria-valuemax={85} tabIndex={0}
+        onKeyDown={(e) => { const d = e.key === "ArrowDown" ? 0.05 : e.key === "ArrowUp" ? -0.05 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ splitRatio: Math.round(Math.max(0.15, Math.min(0.85, panels.splitRatio + d)) * 100) / 100 }); }}
+        data-testid="panel-divider" /> : null}
       <section className={`pane ${lc ? "collapsed" : ""}`} style={{ flex: lyricsFlex }} aria-label={t("lyrics.title")} data-testid="lyrics-pane">
         <div className="pane-head">
-          <span className="small" style={{ fontWeight: 600 }}>{t("lyrics.title")}</span>
+          <h2 className="pane-title">{t("lyrics.title")}</h2>
           <span className="spacer" />
           <button type="button" className="btn icon sm" title={lc ? t("lyrics.expand") : t("lyrics.collapse")} aria-label={lc ? t("lyrics.expand") : t("lyrics.collapse")} onClick={() => setPanels({ lyricsCollapsed: !lc, queueCollapsed: !lc ? qc : false })} data-testid="collapse-lyrics"><Icon name={lc ? "chevronUp" : "chevronDown"} size={13} /></button>
         </div>

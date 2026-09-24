@@ -651,6 +651,82 @@ fn lan_leader_restart_keeps_the_scrobble_dedupe_log() {
     w.assert_ok();
 }
 
+/// The interleaving behind LAN hostile seed 43: the LAN leader plays a
+/// track and is cut off from its members a moment before the play reaches
+/// its scrobble point. It still heard from them within
+/// `MEMBER_QUIET_MS`, so it used to trust its own room and scrobble; the
+/// members never learned of it, took the play over on their side of the
+/// partition and scrobbled it again. Now the leader's claim waits for a
+/// member to echo it, is withdrawn once the leader notices it is alone,
+/// and after the heal it finds the other side's scrobble instead.
+#[test]
+fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
+    let mut cfg = WorldConfig::new(21);
+    cfg.devices = 3;
+    cfg.topology = Topology::Lan;
+    cfg.keep_logs = true;
+    let mut w = World::new(cfg);
+    w.run_for(5_000.0);
+    let leader = w
+        .devices
+        .iter()
+        .position(|d| d.engine.is_serving())
+        .expect("the LAN elected a room");
+    let member = (leader + 1) % 3;
+    // t0 is 20 s: its scrobble point is at 10 s
+    w.perform(Action::PlayTracks {
+        device: leader,
+        tracks: vec!["t0".into(), "t1".into()],
+    });
+    w.perform(Action::ClaimTransport {
+        device: leader,
+        takeover: false,
+    });
+    w.run_for(8_800.0);
+    assert!(w.server.scrobbles.is_empty());
+    // cut off 1.2 s before the scrobble point, silently (no disconnects)
+    w.perform(Action::Partition {
+        device: leader,
+        duration_ms: 90_000.0,
+    });
+    w.run_for(2_000.0);
+    assert_eq!(
+        w.devices[leader].scrobbles_reached.len(),
+        1,
+        "the leader reached t0's scrobble point after the cut"
+    );
+    assert!(
+        w.server.scrobbles.is_empty(),
+        "the leader waits for a member to acknowledge its claim: {:?}",
+        w.server.scrobbles
+    );
+    // the other side regroups and takes the play over, past its scrobble point
+    w.run_for(35_000.0);
+    w.perform(Action::ResumeHere { device: member });
+    w.run_for(20_000.0);
+    let started_at = w.devices[leader].scrobbles_reached[0].1;
+    assert_eq!(
+        w.server.count("t0", started_at),
+        1,
+        "the other side scrobbled the play it took over: {:?}",
+        w.server.scrobbles
+    );
+    w.finish();
+    assert_eq!(
+        w.server.count("t0", started_at),
+        1,
+        "t0 scrobbled once: {:?}",
+        w.server.scrobbles
+    );
+    w.assert_ok();
+}
+
+/// LAN hostile seed 43 (see the test above for the interleaving it found).
+#[test]
+fn lan_hostile_seed_43_scrobbles_once_across_a_partition() {
+    run_seeds_with(43..44, Topology::Lan, 30, |cfg| cfg.hostile = true);
+}
+
 /// Seeds with an open bug, excluded from the batches so the harness stays a
 /// gate for everything else. Reproduce one with `random_single_seed_from_env`.
 /// Empty at the moment; keep it that way.

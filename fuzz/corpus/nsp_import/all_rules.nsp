@@ -1,0 +1,1 @@
+{"name": "Nineties rock", "comment": "x", "all": [{"inTheRange": {"year": [1990, 1999]}}, {"contains": {"genre": "rock"}}, {"gt": {"rating": 3}}, {"inTheLast": {"lastPlayed": 30}}, {"is": {"loved": true}}, {"any": [{"startsWith": {"title": "A"}}, {"endsWith": {"artist": "s"}}]}], "sort": "-year,title", "order": "desc", "limit": 50}

@@ -1,0 +1,1 @@
+{"any": [{"before": {"dateAdded": "2020-01-01"}}, {"after": {"lastPlayed": "2024-02-29"}}, {"notInTheLast": {"dateAdded": 7}}, {"isNot": {"compilation": "false"}}, {"inPlaylist": {"id": "pl1"}}], "sort": "random"}

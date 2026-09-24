@@ -1,0 +1,1 @@
+{"lyricsList": {"structuredLyrics": [{"lang": "xxx", "synced": true, "line": [{"start": 0, "value": "a b"}, {"start": 500, "value": "c"}], "cueLine": [{"value": "a b", "cue": [{"start": 0, "value": "a "}, {"start": 200, "value": "b"}]}, {"value": "c", "cue": [{"start": 500, "end": 900, "value": "c"}]}]}]}}

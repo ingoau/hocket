@@ -49,7 +49,7 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
                 val event = try {
                     HocketJson.decodeEvent(eventJson)
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Dropping undecodable event ${eventType(eventJson)}: ${t.javaClass.simpleName}: ${t.message?.substringBefore("JSON input")?.trim()}")
+                    Log.w(TAG, undecodable(eventJson, t))
                     return
                 }
                 try {
@@ -93,6 +93,13 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
 
         @Volatile
         private var available: Boolean? = null
+
+        /**
+         * The log line for an event that did not decode: its type and the error without the JSON
+         * excerpt kotlinx appends (for `Backend.Load` that excerpt is the stream URL with its token).
+         */
+        internal fun undecodable(json: String, t: Throwable): String =
+            "Dropping undecodable event ${eventType(json)}: ${t.javaClass.simpleName}: ${t.message?.substringBefore("JSON input")?.trim()}"
 
         /** The `"type"` tag of an event JSON without decoding it (for log lines only). */
         internal fun eventType(json: String): String =

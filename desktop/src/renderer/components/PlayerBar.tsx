@@ -81,8 +81,8 @@ export function PlayerBar() {
       </div>
 
       <div className="right">
-        {sleep ? <span className="badge" title={t("player.sleepTimer")}><Icon name="sleep" size={11} /></span> : null}
-        {batterySaver ? <span className="badge" title={t("player.batterySaver")}><Icon name="battery" size={11} /></span> : null}
+        {sleep ? <span className="badge"><Icon name="sleep" size={11} title={t("player.sleepTimer")} /></span> : null}
+        {batterySaver ? <span className="badge"><Icon name="battery" size={11} title={t("player.batterySaver")} /></span> : null}
         <Volume />
         <button type="button" className={`btn icon ${remote ? "on" : ""}`} aria-label={t("player.connect")} title={t("player.connect")} onClick={() => void executeAction("ui.playOn")} data-testid="connect-button"><Icon name="devices" size={15} /></button>
         <button type="button" className={`btn icon ${panels.rightOpen && !panels.queueCollapsed ? "on" : ""}`} aria-pressed={panels.rightOpen && !panels.queueCollapsed} aria-label={t("player.queue")} title={`${t("player.queue")} (Q)`} onClick={() => void executeAction("ui.queue")} data-testid="toggle-queue"><Icon name="queue" size={15} /></button>

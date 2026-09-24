@@ -5,3 +5,5 @@ Cargo.lock
 # libFuzzer's working corpora. Only the hand-picked seeds under corpus/ are
 # committed; run with a scratch corpus dir first (see docs/ARCHITECTURE.md).
 work/
+logs/
+run.sh

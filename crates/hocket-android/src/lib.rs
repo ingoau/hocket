@@ -131,31 +131,40 @@ pub fn core_version() -> String {
 mod fixtures;
 
 #[cfg(test)]
-mod shutdown_tests {
+mod ffi_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Once};
+    use std::sync::{Arc, Mutex, Once};
 
     use super::*;
 
-    /// Panics on any thread (the runtime's workers included), counted by a process-wide hook.
-    static PANICS: AtomicUsize = AtomicUsize::new(0);
+    /// Messages of panics on any thread (the runtime's workers included), from a process-wide hook.
+    static PANICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     static HOOK: Once = Once::new();
 
-    fn count_panics() {
+    fn record_panics() {
         HOOK.call_once(|| {
             let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
-                PANICS.fetch_add(1, Ordering::SeqCst);
+                PANICS.lock().unwrap().push(info.to_string());
                 previous(info);
             }));
         });
+    }
+
+    fn panics_matching(needle: &str) -> usize {
+        PANICS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.contains(needle))
+            .count()
     }
 
     fn core(dir: &std::path::Path) -> Arc<HocketCore> {
         let config = serde_json::json!({
             "dataDir": dir.join("data").to_string_lossy(),
             "cacheDir": dir.join("cache").to_string_lossy(),
-            "deviceId": "shutdown-test",
+            "deviceId": "ffi-test",
             "deviceName": "test",
             "platform": "android",
             "appVersion": "0.0.0-test",
@@ -166,9 +175,10 @@ mod shutdown_tests {
 
     /// `NativeCore.close()`: shut down, then free the handle straight away. The last reference to
     /// the core (and its tokio runtime) must never be dropped on one of the runtime's own workers.
+    /// The race is timing-dependent, hence the repetitions.
     #[test]
     fn shutdown_then_free_never_drops_the_runtime_on_its_own_worker() {
-        count_panics();
+        record_panics();
         for _ in 0..24 {
             let dir = tempfile::tempdir().unwrap();
             let c = core(dir.path());
@@ -179,10 +189,43 @@ mod shutdown_tests {
             // Give a worker that would have dropped the runtime the chance to do (and panic) so.
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(
-            PANICS.load(Ordering::SeqCst),
-            0,
-            "a thread panicked during shutdown"
+        assert_eq!(panics_matching("Cannot drop a runtime"), 0);
+    }
+
+    struct FailingListener(AtomicUsize);
+
+    impl EventListener for FailingListener {
+        fn on_event(&self, _event_json: String) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            // What UniFFI does with an unexpected exception from the Kotlin callback.
+            panic!("listener failure (expected in this test)");
+        }
+    }
+
+    /// A listener that throws must not kill the actor: every later event is still offered to it
+    /// and the core keeps answering.
+    #[test]
+    fn a_failing_listener_never_takes_the_core_down() {
+        record_panics();
+        let dir = tempfile::tempdir().unwrap();
+        let c = core(dir.path());
+        let listener = Arc::new(FailingListener(AtomicUsize::new(0)));
+        c.set_listener(listener.clone());
+        c.dispatch(r#"{"type":"start"}"#.into()).unwrap();
+        let first = futures::executor::block_on(c.query(r#"{"type":"servers"}"#.into()));
+        assert!(
+            first.is_ok(),
+            "the actor answers after a failing callback: {first:?}"
         );
+        let seen = listener.0.load(Ordering::SeqCst);
+        assert!(seen > 0, "Start emitted events to the listener");
+        c.dispatch(r#"{"type":"requestSnapshot"}"#.into()).unwrap();
+        let second = futures::executor::block_on(c.query(r#"{"type":"snapshot"}"#.into()));
+        assert!(second.is_ok());
+        assert!(
+            listener.0.load(Ordering::SeqCst) > seen,
+            "later events still reach it"
+        );
+        assert!(c.shutdown(10_000));
     }
 }
