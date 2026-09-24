@@ -29,6 +29,9 @@ object A11yChecks {
         override fun toString() = "$problem: $node"
     }
 
+    /** Below this a control has been squeezed by its row (the smallest intended one is 32 dp). */
+    const val SQUEEZED_DP = 32f
+
     fun actionable(n: SemanticsNode): Boolean = with(n.config) {
         contains(SemanticsActions.OnClick) || contains(SemanticsActions.OnLongClick) || contains(SemanticsActions.SetProgress) || contains(SemanticsProperties.ToggleableState)
     }
@@ -152,8 +155,22 @@ object A11yChecks {
             val x = a.boundsInRoot.intersect(b.boundsInRoot)
             if (x.width > 1f && x.height > 1f) out += Issue(describe(a) + " / " + describe(b), "controls overlap")
         }
-        // Text in the unmerged tree: a button's or row's label is its own text node there.
-        val unmerged = all(rule.onRoot(useUnmergedTree = true).fetchSemanticsNode()).filter { visible(it, rootBounds) }
+        // The unmerged tree: every control and text node on its own (a button's label, the stars
+        // inside the rating item), including parts that are hidden from accessibility.
+        val unmergedAll = all(rule.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        // Squeezed controls: a row with more than fits hands the last children what is left, so a
+        // fixed-size button quietly shrinks (to nothing, even) instead of overflowing.
+        val density = rule.density.density
+        for (n in unmergedAll) {
+            if (!(n.config.contains(SemanticsActions.OnClick) || n.config.contains(SemanticsProperties.ToggleableState))) continue
+            val p = n.positionInRoot
+            if (p.x < rootBounds.left || p.x >= rootBounds.right || p.y < rootBounds.top || p.y >= rootBounds.bottom) continue
+            if (n.boundsInRoot.isEmpty && n.size.width > 0 && n.size.height > 0) continue // clipped away by a scroller or pager
+            if (n.size.width < SQUEEZED_DP * density - 1 || n.size.height < SQUEEZED_DP * density - 1) {
+                if (!(isClipped(n) && clippedByScroll(n, rootBounds))) out += Issue(describe(n) + " size=${n.size.width / density}x${n.size.height / density}dp", "control squeezed")
+            }
+        }
+        val unmerged = unmergedAll.filter { visible(it, rootBounds) }
         for (n in unmerged) {
             if (!n.config.contains(SemanticsActions.GetTextLayoutResult)) continue
             val results = mutableListOf<TextLayoutResult>()

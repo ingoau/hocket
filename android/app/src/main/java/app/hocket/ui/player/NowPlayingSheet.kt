@@ -156,7 +156,7 @@ fun rememberNowPlayingSheetState(): NowPlayingSheetState = remember { NowPlaying
 fun miniPlayerHeight(): Dp {
     val typography = MaterialTheme.typography
     val text = with(LocalDensity.current) { (typography.bodyLarge.lineHeight.toDp() + typography.bodySmall.lineHeight.toDp()) }
-    return NowPlayingSheetState.MINI_HEIGHT
+    return maxOf(NowPlayingSheetState.MINI_HEIGHT, text + 24.dp)
 }
 
 /**
