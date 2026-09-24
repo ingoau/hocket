@@ -37,7 +37,7 @@ export function AlbumDetail({ id }: { id: string }) {
           </div>
           <div className="actions">
             <button type="button" className="btn primary" onClick={() => play()} {...primer.bind(list[0]?.id)} data-testid="album-play"><Icon name="play" size={14} style={{ fill: "currentColor" }} /> {t("album.play")}</button>
-            <button type="button" className="btn" onClick={() => play(0, true)}><Icon name="shuffle" size={14} /> {t("album.shuffle")}</button>
+            <button type="button" className="btn tonal" onClick={() => play(0, true)}><Icon name="shuffle" size={14} /> {t("album.shuffle")}</button>
             {a ? <Heart on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
             {a ? <Stars value={a.rating} label={t("a11y.ratingOf", { title: a.name })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "album", data: { id: a.id } }], rating: r } })} /> : null}
             <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } })} data-testid="album-more"><Icon name="more" /></button>
