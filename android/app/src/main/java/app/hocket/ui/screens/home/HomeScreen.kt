@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.home
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -54,6 +56,19 @@ import app.hocket.ui.components.JobsIndicator
 import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.AlbumStripSkeleton
+import app.hocket.ui.components.CarouselItemWidth
+import app.hocket.ui.components.GridArtCorner
+import app.hocket.ui.components.GridCellText
+import app.hocket.ui.components.ListArtCorner
+import app.hocket.ui.components.SectionHeaderSkeleton
+import app.hocket.ui.components.ShimmerHost
+import app.hocket.ui.components.TrackRowSkeleton
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.ripple
+import androidx.compose.ui.draw.clip
 import app.hocket.ui.nav.Route
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,14 +78,18 @@ fun HomeScreen(nav: NavHostController) {
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
-    val recent by produceState<List<PlayHistoryEntry>>(emptyList(), libraryGen, client.nowPlaying.collectAsStateWithLifecycle().value) {
-        value = (client.query(Queries.recentlyPlayed(20)) as? QueryResult.History)?.data ?: emptyList()
+    // History changes when a new track starts, not on every now-playing update (rating, position,
+    // state): key the re-query on the track id only. null until the first answer, so loading
+    // shows skeletons instead of a false "nothing here yet".
+    val nowPlayingId = client.nowPlaying.collectAsStateWithLifecycle().value?.track?.id
+    val recent by produceState<List<PlayHistoryEntry>?>(null, libraryGen, nowPlayingId) {
+        value = (client.query(Queries.recentlyPlayed(20)) as? QueryResult.History)?.data ?: value ?: emptyList()
     }
-    val added by produceState<List<Album>>(emptyList(), libraryGen) {
-        value = (client.query(Queries.albums(serverId, Page(0u, 20u), SortOrder.DateAdded, descending = true)) as? QueryResult.Albums)?.data?.items ?: emptyList()
+    val added by produceState<List<Album>?>(null, libraryGen) {
+        value = (client.query(Queries.albums(serverId, Page(0u, 20u), SortOrder.DateAdded, descending = true)) as? QueryResult.Albums)?.data?.items ?: value ?: emptyList()
     }
-    val played by produceState<List<Album>>(emptyList(), libraryGen) {
-        value = (client.query(Queries.albums(serverId, Page(0u, 20u), SortOrder.PlayCount, descending = true)) as? QueryResult.Albums)?.data?.items?.filter { it.playCount > 0u } ?: emptyList()
+    val played by produceState<List<Album>?>(null, libraryGen) {
+        value = (client.query(Queries.albums(serverId, Page(0u, 20u), SortOrder.PlayCount, descending = true)) as? QueryResult.Albums)?.data?.items?.filter { it.playCount > 0u } ?: value ?: emptyList()
     }
     val saved by client.savedQueues.collectAsStateWithLifecycle()
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -79,36 +98,54 @@ fun HomeScreen(nav: NavHostController) {
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.home_greeting)) }, subtitle = { Text(server?.name ?: "") }, actions = { JobsIndicator(onClick = { jobs = true }); AccountButton() }, scrollBehavior = scroll) },
     ) { padding ->
-        if (recent.isEmpty() && added.isEmpty()) {
-            EmptyState(stringResource(R.string.empty_home_title), stringResource(R.string.empty_home_body), Modifier.padding(padding), stringResource(R.string.nav_library)) { nav.navigate(Route.Library()) }
+        val recentList = recent
+        val addedList = added
+        val playedList = played
+        val loading = recentList == null || addedList == null
+        if (!loading && recentList.isEmpty() && addedList.isEmpty()) {
+            // Only the top: the shell already keeps content clear of the navigation bar.
+            EmptyState(stringResource(R.string.empty_home_title), stringResource(R.string.empty_home_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.nav_library)) { nav.navigate(Route.Library()) }
             return@Scaffold
         }
         val continueLabel = stringResource(R.string.home_continue)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
-            if (recent.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.home_continue)) }
-                items(recent.take(5), key = { "r" + it.playedAt + it.track.id }) { entry ->
-                    TrackRow(entry.track, onClick = { client.dispatch(Commands.playTracks(serverId, recent.map { it.track.id }.distinct(), recent.map { it.track.id }.distinct().indexOf(entry.track.id), continueLabel)) },
-                        trailing = { Text(entryAgo(entry), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp)) })
+        val listState = rememberLazyListState()
+        ScrollToTopOnReselect(listState)
+        ShimmerHost {
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+                if (loading) {
+                    item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
+                    items(5, key = { "sk.r$it" }, contentType = { "rowSkeleton" }) { TrackRowSkeleton() }
+                    item(key = "sk.h2", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
+                    item(key = "sk.s", contentType = "stripSkeleton") { AlbumStripSkeleton() }
+                    return@LazyColumn
                 }
-            }
-            if (played.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.home_recently_played)) }
-                item { AlbumStrip(played) { nav.navigate(Route.Album(it.id)) } }
-            }
-            if (added.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.home_recently_added)) }
-                item { AlbumStrip(added) { nav.navigate(Route.Album(it.id)) } }
-            }
-            if (saved.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.home_saved_queues)) { TextButton(onClick = { nav.navigate(Route.SavedQueues) }) { Text(stringResource(R.string.home_see_all)) } } }
-                items(saved.take(3), key = { it.id }) { sq ->
-                    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Artwork(sq.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(sq.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (recentList.isNotEmpty()) {
+                    val ids = recentList.map { it.track.id }.distinct()
+                    item(key = "h.continue", contentType = "header") { SectionHeader(stringResource(R.string.home_continue), Modifier.animateItem()) }
+                    items(recentList.take(5), key = { "r" + it.playedAt + it.track.id }, contentType = { "track" }) { entry ->
+                        TrackRow(entry.track, onClick = { client.dispatch(Commands.playTracks(serverId, ids, ids.indexOf(entry.track.id), continueLabel)) },
+                            modifier = Modifier.animateItem(),
+                            trailing = { Text(entryAgo(entry), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp)) })
+                    }
+                }
+                if (!playedList.isNullOrEmpty()) {
+                    item(key = "h.played", contentType = "header") { SectionHeader(stringResource(R.string.home_recently_played), Modifier.animateItem()) }
+                    item(key = "s.played", contentType = "strip") { AlbumStrip(playedList, Modifier.animateItem()) { nav.navigate(Route.Album(it.id)) } }
+                }
+                if (addedList.isNotEmpty()) {
+                    item(key = "h.added", contentType = "header") { SectionHeader(stringResource(R.string.home_recently_added), Modifier.animateItem()) }
+                    item(key = "s.added", contentType = "strip") { AlbumStrip(addedList, Modifier.animateItem()) { nav.navigate(Route.Album(it.id)) } }
+                }
+                if (saved.isNotEmpty()) {
+                    item(key = "h.saved", contentType = "header") { SectionHeader(stringResource(R.string.home_saved_queues), Modifier.animateItem()) { TextButton(onClick = { nav.navigate(Route.SavedQueues) }) { Text(stringResource(R.string.home_see_all)) } } }
+                    items(saved.take(3), key = { "q" + it.id }, contentType = { "saved" }) { sq ->
+                        Row(Modifier.animateItem().fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)) }.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Artwork(sq.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(sq.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -121,15 +158,20 @@ fun HomeScreen(nav: NavHostController) {
 @Composable
 private fun entryAgo(entry: PlayHistoryEntry): String = app.hocket.ui.components.formatAgo(entry.playedAt)
 
+/**
+ * A horizontal carousel of albums (Navic): 150 dp covers 12 dp apart inside a 16 dp margin, a
+ * two-line title and the artist under each. The press ripple is drawn on the cover only.
+ */
 @Composable
-fun AlbumStrip(albums: List<Album>, onClick: (Album) -> Unit) {
-    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+fun AlbumStrip(albums: List<Album>, modifier: Modifier = Modifier, onClick: (Album) -> Unit) {
+    LazyRow(modifier, contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.id }) { album ->
-            Column(Modifier.width(140.dp).clickable { onClick(album) }) {
-                Artwork(album.coverArt, ArtworkSizes.GRID, stringResource(R.string.row_album_a11y, album.name, album.artist ?: ""), Modifier.size(140.dp), RoundedCornerShape(16.dp))
+            val interaction = remember { MutableInteractionSource() }
+            Column(Modifier.animateItem().width(CarouselItemWidth).clickable(interaction, indication = null) { onClick(album) }) {
+                Artwork(album.coverArt, ArtworkSizes.GRID, stringResource(R.string.row_album_a11y, album.name, album.artist ?: ""),
+                    Modifier.size(CarouselItemWidth).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 Spacer(Modifier.height(6.dp))
-                Text(album.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(album.artist ?: stringResource(R.string.unknown_artist), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                GridCellText(album.name, album.artist ?: stringResource(R.string.unknown_artist))
             }
         }
     }

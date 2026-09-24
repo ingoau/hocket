@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -52,7 +54,7 @@ import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ActionSheet
-import app.hocket.ui.components.AlbumCard
+import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.PlaylistRow
@@ -96,7 +98,11 @@ fun SearchScreen(nav: NavHostController) {
     LaunchedEffect(Unit) {
         client.searchResults.collect { r -> if (r.fromServer && r.query == query.trim()) { remote = r; pendingRemote = false } }
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    // The keyboard comes up on the first visit only; coming back to the tab keeps the results in view.
+    var focusedOnce by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!focusedOnce) { focusedOnce = true; runCatching { focus.requestFocus() } }
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -113,7 +119,9 @@ fun SearchScreen(nav: NavHostController) {
         val empty = results.tracks.isEmpty() && results.albums.isEmpty() && results.artists.isEmpty() && results.playlists.isEmpty()
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = BottomContentInset)) {
+            val listState = rememberLazyListState()
+            ScrollToTopOnReselect(listState)
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = BottomContentInset)) {
                 if (empty && remote == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), "") }
                 if (results.tracks.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_songs)) }
@@ -123,9 +131,7 @@ fun SearchScreen(nav: NavHostController) {
                 }
                 if (results.albums.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_albums)) }
-                    items(results.albums, key = { "a" + it.id }) { a ->
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) { Box(Modifier.fillMaxWidth(0.4f)) { AlbumCard(a, onClick = { nav.navigate(Route.Album(a.id)) }) } }
-                    }
+                    item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> nav.navigate(Route.Album(a.id)) } }
                 }
                 if (results.artists.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_artists)) }
@@ -146,7 +152,7 @@ fun SearchScreen(nav: NavHostController) {
                 }
                 remote?.let { r ->
                     items(r.tracks, key = { "rt" + it.id }) { t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { sheetFor = t }) }
-                    items(r.albums, key = { "ra" + it.id }) { a -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) { Box(Modifier.fillMaxWidth(0.4f)) { AlbumCard(a, onClick = { nav.navigate(Route.Album(a.id)) }) } } }
+                    if (r.albums.isNotEmpty()) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
                     items(r.artists, key = { "rar" + it.id }) { ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }) }
                 }
             }

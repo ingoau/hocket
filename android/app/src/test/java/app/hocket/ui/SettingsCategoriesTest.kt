@@ -1,6 +1,7 @@
 package app.hocket.ui
 
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
@@ -90,7 +91,7 @@ class SettingsCategoriesTest {
 
         val seen = ArrayList<String>()
         for (category in SettingsCategory.entries) {
-            compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().assertIsDisplayed().performClick()
+            compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().assertIsDisplayed().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("settings.screen").assertExists() }.isSuccess }
             val rows = rowsOnScreen()
             val old = screenCategories[category]
@@ -118,7 +119,7 @@ class SettingsCategoriesTest {
         compose.openSettingsFromAccount()
         compose.onNodeWithTag("settings.category.account").performClick()
         compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("setting.server.remove").assertExists() }.isSuccess }
-        compose.onNodeWithTag("setting.server.remove").performScrollTo().performClick()
+        compose.onNodeWithTag("setting.server.remove").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.waitForIdle()
         // The confirmation dialog is up and the server is still there.
         compose.onNodeWithTag("confirm.ok").assertIsDisplayed()
@@ -132,7 +133,7 @@ class SettingsCategoriesTest {
     }
 
     private fun open(category: SettingsCategory) {
-        compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().performClick()
+        compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("settings.screen").assertExists() }.isSuccess }
         compose.waitForIdle()
     }

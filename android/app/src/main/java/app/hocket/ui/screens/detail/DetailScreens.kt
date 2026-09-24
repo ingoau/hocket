@@ -85,6 +85,13 @@ import app.hocket.ui.components.RatingStars
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.ShimmerHost
+import app.hocket.ui.components.SkeletonLine
+import app.hocket.ui.components.TrackRowSkeleton
+import app.hocket.ui.components.skeleton
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.hocket.ui.components.formatDurationWords
 import app.hocket.ui.nav.Route
 import app.hocket.ui.screens.home.AlbumStrip
@@ -104,10 +111,17 @@ fun DetailPane(nav: NavHostController, target: DetailTarget?) {
     }
 }
 
+/**
+ * A detail page: a large flexible top bar, the artwork and header, then [content]. While [loading]
+ * (the page's first answer has not arrived) the bar is already there, with the title as a skeleton
+ * when it is not known yet, and the header and rows are skeletons of the same size, so opening a
+ * page never shows a blank screen and nothing jumps when the data lands.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DetailScaffold(
-    nav: NavHostController, embedded: Boolean, title: String, subtitle: String?, coverArt: String?, roundArtwork: Boolean = false,
+    nav: NavHostController, embedded: Boolean, title: String?, subtitle: String?, coverArt: String?, roundArtwork: Boolean = false,
+    loading: Boolean = false,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     header: @Composable () -> Unit,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
@@ -117,36 +131,69 @@ private fun DetailScaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(title, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() }) }, subtitle = subtitle?.let { { Text(it, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
+                title = {
+                    if (title == null) SkeletonLine(Modifier.width(200.dp), 24.dp)
+                    else Text(title, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                },
+                subtitle = subtitle?.let { { Text(it, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
                 navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = actions, scrollBehavior = scroll,
             )
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
-            LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-                item {
-                    // Narrow screens (display size "largest") and large fonts stack the artwork above
-                    // the header, so the rating, love and play buttons get the full width.
-                    BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header")) {
-                        val stacked = maxWidth < 380.dp || LocalDensity.current.fontScale >= 1.5f
-                        val art: @Composable () -> Unit = { Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(140.dp), if (roundArtwork) CircleShape else RoundedCornerShape(20.dp)) }
-                        if (stacked) {
-                            Column { art(); Spacer(Modifier.height(12.dp)); header() }
-                        } else {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                art()
-                                Spacer(Modifier.width(16.dp))
-                                Column(Modifier.weight(1f)) { header() }
+            ShimmerHost {
+                LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+                    if (loading) {
+                        detailSkeleton(roundArtwork)
+                        return@LazyColumn
+                    }
+                    item(key = "header", contentType = "header") {
+                        // Narrow screens (display size "largest") and large fonts stack the artwork above
+                        // the header, so the rating, love and play buttons get the full width.
+                        BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header")) {
+                            val stacked = maxWidth < 380.dp || LocalDensity.current.fontScale >= 1.5f
+                            val art: @Composable () -> Unit = { Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(DetailArtSize), if (roundArtwork) CircleShape else RoundedCornerShape(DetailArtCorner)) }
+                            if (stacked) {
+                                Column { art(); Spacer(Modifier.height(12.dp)); header() }
+                            } else {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    art()
+                                    Spacer(Modifier.width(16.dp))
+                                    Column(Modifier.weight(1f)) { header() }
+                                }
                             }
                         }
                     }
+                    content()
                 }
-                content()
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
+}
+
+private val DetailArtSize = 140.dp
+private val DetailArtCorner = 16.dp
+
+/** The loading page: a header the size of the real one (art, three lines, the play buttons) and a column of rows. */
+private fun androidx.compose.foundation.lazy.LazyListScope.detailSkeleton(roundArtwork: Boolean = false, rows: Int = 8) {
+    item(key = "skeleton.header", contentType = "skeletonHeader") {
+        Row(Modifier.fillMaxWidth().padding(16.dp).clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(DetailArtSize).skeleton(if (roundArtwork) CircleShape else RoundedCornerShape(DetailArtCorner)))
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SkeletonLine(Modifier.fillMaxWidth(0.7f), 14.dp)
+                SkeletonLine(Modifier.fillMaxWidth(0.5f), 14.dp)
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.width(88.dp).height(40.dp).skeleton(CircleShape))
+                    Box(Modifier.width(104.dp).height(40.dp).skeleton(CircleShape))
+                }
+            }
+        }
+    }
+    items(rows, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
 }
 
 /** How long an album page stays resumed and on screen before its first track is primed. */
@@ -179,12 +226,19 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     PrimeAlbumOnDwell(id)
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
     var album by remember { mutableStateOf<Album?>(null) }
-    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(id, libraryGen) {
-        album = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
-        tracks = (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data ?: emptyList()
+        val a = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
+        val t = (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data
+        // Both at once, so the header and its rows land together.
+        album = a ?: album
+        tracks = t ?: tracks ?: emptyList()
     }
-    val a = album ?: return
+    val a = album
+    if (a == null) {
+        DetailScaffold(nav, embedded, null, null, null, loading = true, header = {}) {}
+        return
+    }
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
@@ -205,7 +259,9 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         Spacer(Modifier.height(8.dp))
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
-        itemsIndexed(tracks, key = { _, t -> t.id }) { i, t ->
+        val list = tracks
+        if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
+        else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = t }, showArtwork = false,
                 leading = { Text((t.trackNumber?.toInt() ?: (i + 1)).toString(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(32.dp)) },
                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) }, nowPlaying = nowPlaying?.track?.id == t.id)
@@ -232,12 +288,19 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     var top by remember { mutableStateOf<List<Track>>(emptyList()) }
     LaunchedEffect(id, libraryGen) {
-        artist = (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data
-        server?.id?.let { sid -> albums = (client.query(Queries.albums(sid, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items ?: emptyList() }
-        top = (client.query(Queries.artistTopSongs(id, 10)) as? QueryResult.TrackList)?.data ?: emptyList()
+        val ar = (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data
+        val al = server?.id?.let { sid -> (client.query(Queries.albums(sid, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
+        val t = (client.query(Queries.artistTopSongs(id, 10)) as? QueryResult.TrackList)?.data
+        // Everything at once, so the sections do not pop in one after another.
+        albums = al ?: albums
+        top = t ?: top
+        artist = ar ?: artist
     }
-    val ar = artist ?: return
-    val wide = LocalWideLayout.current
+    val ar = artist
+    if (ar == null) {
+        DetailScaffold(nav, embedded, null, null, null, roundArtwork = true, loading = true, header = {}) {}
+        return
+    }
     val context = Commands.artistContext(ar.serverId, ar.id, ar.name)
     var sheetFor by remember { mutableStateOf<Track?>(null) }
     DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, header = {
@@ -246,31 +309,56 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         }
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
-        ar.biography?.let { bio -> item { SectionHeader(stringResource(R.string.artist_biography)); Text(bio, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) } }
+        ar.biography?.let { bio -> item(key = "bio") { SectionHeader(stringResource(R.string.artist_biography)); Text(bio, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) } }
         if (top.isNotEmpty()) {
-            item { SectionHeader(stringResource(R.string.artist_top_songs)) }
-            itemsIndexed(top, key = { _, t -> "top" + t.id }) { i, t ->
+            item(key = "h.top") { SectionHeader(stringResource(R.string.artist_top_songs)) }
+            itemsIndexed(top, key = { _, t -> "top" + t.id }, contentType = { _, _ -> "track" }) { i, t ->
                 TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, top.map { it.id }, i, ar.name)) }, onMore = { sheetFor = t })
             }
         }
-        item { SectionHeader(stringResource(R.string.artist_albums)) }
-        item { AlbumStrip(albums) { if (wide && embedded) nav.navigate(Route.Album(it.id)) else nav.navigate(Route.Album(it.id)) } }
+        if (albums.isNotEmpty()) {
+            item(key = "h.albums") { SectionHeader(stringResource(R.string.artist_albums)) }
+            item(key = "albums") { AlbumStrip(albums) { nav.navigate(Route.Album(it.id)) } }
+        }
     }
     sheetFor?.let { t -> ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } }) }
 }
 
-/** Playlists: drag-reorder with haptics unless smart (read-only: no reorder, no manual add). */
+/** One playlist row: its track and a key that stays with it while the list is reordered. */
+@androidx.compose.runtime.Immutable
+internal data class PlaylistEntry(val key: String, val track: Track)
+
+/** Keys by id plus occurrence ("id#0", "id#1" for a track listed twice), never by position. */
+internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
+    val seen = HashMap<String, Int>()
+    return tracks.map { t -> val n = seen.merge(t.id, 1, Int::plus)!! - 1; PlaylistEntry("${t.id}#$n", t) }
+}
+
+/**
+ * Playlists: drag-reorder with haptics unless smart (read-only: no reorder, no manual add).
+ *
+ * A drag moves rows locally only; the one move from where the row was picked up to where it was
+ * dropped goes to the core on release. Re-queries that land during a drag, or that started before
+ * the last committed move, are dropped, so the list never jumps under the finger.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
     var playlist by remember { mutableStateOf<Playlist?>(null) }
-    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
+    var dragKey by remember { mutableStateOf<String?>(null) }
+    var dragFrom by remember { mutableIntStateOf(-1) }
+    var commits by remember { mutableIntStateOf(0) }
     LaunchedEffect(id, libraryGen) {
-        playlist = (client.query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
-        tracks = (client.query(Queries.playlistTracks(id, Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items ?: emptyList()
+        val startedAt = commits
+        val pl = (client.query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
+        val t = (client.query(Queries.playlistTracks(id, Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items
+        playlist = pl ?: playlist
+        if (dragKey == null && commits == startedAt) entries = t?.let(::playlistEntries) ?: entries ?: emptyList()
     }
-    val p = playlist ?: return
+    val p = playlist
     val haptics = LocalHapticFeedback.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
@@ -278,68 +366,99 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val selecting = selection.active && kind == SelectionKind.Tracks
     var sheetFor by remember { mutableStateOf<Pair<Int, Track>?>(null) }
     var playlistSheet by remember { mutableStateOf(false) }
-    val context = Commands.playlistContext(p.serverId, p.id, p.name)
     val listState = rememberLazyListState()
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
-        val fromIdx = from.index - 1; val toIdx = to.index - 1 // header item offset
+        val list = entries ?: return@rememberReorderableLazyListState
+        val fromIdx = list.indexOfFirst { it.key == from.key }
+        val toIdx = list.indexOfFirst { it.key == to.key }
         if (fromIdx >= 0 && toIdx >= 0) {
-            tracks = tracks.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
-            client.dispatch(Commands.playlistMove(p.id, fromIdx, toIdx))
+            entries = list.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
             haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
         }
+    }
+    fun commitDrag() {
+        val key = dragKey ?: return
+        val to = entries?.indexOfFirst { it.key == key } ?: -1
+        if (p != null && dragFrom >= 0 && to >= 0 && to != dragFrom) {
+            commits++
+            client.dispatch(Commands.playlistMove(p.id, dragFrom, to))
+        }
+        dragKey = null
+        dragFrom = -1
     }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
-            LargeFlexibleTopAppBar(title = { Text(p.name, maxLines = 2) }, subtitle = { Text(p.owner?.let { stringResource(R.string.playlist_by, it) } ?: "") },
+            LargeFlexibleTopAppBar(
+                title = { if (p == null) SkeletonLine(Modifier.width(200.dp), 24.dp) else Text(p.name, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() }) },
+                subtitle = { Text(p?.owner?.let { stringResource(R.string.playlist_by, it) } ?: "") },
                 navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-                actions = { IconButton(onClick = { playlistSheet = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) } }, scrollBehavior = scroll)
+                actions = { if (p != null) IconButton(onClick = { playlistSheet = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) } }, scrollBehavior = scroll)
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
-            LazyColumn(state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-                item(key = "header") {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Artwork(p.coverArt, ArtworkSizes.GRID, p.name, Modifier.size(140.dp), RoundedCornerShape(20.dp))
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                if (p.isSmart) Badge(stringResource(R.string.badge_smart))
-                                if (p.isSmart || !p.isMine) Badge(stringResource(R.string.badge_read_only))
-                                if (p.public) Badge(stringResource(R.string.playlist_public))
+            ShimmerHost {
+                LazyColumn(state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+                    if (p == null) {
+                        detailSkeleton()
+                        return@LazyColumn
+                    }
+                    val context = Commands.playlistContext(p.serverId, p.id, p.name)
+                    item(key = "header", contentType = "header") {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Artwork(p.coverArt, ArtworkSizes.GRID, p.name, Modifier.size(DetailArtSize), RoundedCornerShape(DetailArtCorner))
+                            Spacer(Modifier.width(16.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (p.isSmart) Badge(stringResource(R.string.badge_smart))
+                                    if (p.isSmart || !p.isMine) Badge(stringResource(R.string.badge_read_only))
+                                    if (p.public) Badge(stringResource(R.string.playlist_public))
+                                }
+                                Text(stringResource(R.string.album_tracks_count, p.songCount.toInt(), formatDurationWords(p.durationMs.toLong())), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                p.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                                if (p.isSmart) Text(stringResource(R.string.smart_playlist_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
                             }
-                            Text(stringResource(R.string.album_tracks_count, p.songCount.toInt(), formatDurationWords(p.durationMs.toLong())), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            p.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                            if (p.isSmart) Text(stringResource(R.string.smart_playlist_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+                        }
+                    }
+                    val list = entries
+                    if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
+                    else itemsIndexed(list, key = { _, e -> e.key }, contentType = { _, _ -> "track" }) { i, e ->
+                        val t = e.track
+                        val editable = !p.isSmart && p.isMine
+                        ReorderableItem(reorderable, key = e.key, enabled = editable) { dragging ->
+                            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = i to t },
+                                selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
+                                nowPlaying = nowPlaying?.track?.id == t.id,
+                                trailing = if (editable) ({
+                                    Icon(Icons.Filled.DragHandle, stringResource(R.string.playlist_reorder_handle), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(start = 8.dp).draggableHandle(
+                                            onDragStarted = {
+                                                dragKey = e.key
+                                                dragFrom = entries?.indexOfFirst { it.key == e.key } ?: -1
+                                                haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                            },
+                                            onDragStopped = { commitDrag(); haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) },
+                                        ))
+                                }) else null)
                         }
                     }
                 }
-                itemsIndexed(tracks, key = { i, t -> "$i:${t.id}" }) { i, t ->
-                    val editable = !p.isSmart && p.isMine
-                    ReorderableItem(reorderable, key = "$i:${t.id}", enabled = editable) { dragging ->
-                        TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = i to t },
-                            selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
-                            nowPlaying = nowPlaying?.track?.id == t.id,
-                            trailing = if (editable) ({
-                                Icon(Icons.Filled.DragHandle, stringResource(R.string.playlist_reorder_handle), tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 8.dp).draggableHandle(onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) }, onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) }))
-                            }) else null)
-                    }
-                }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
-    sheetFor?.let { (i, t) ->
-        ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } },
-            extraTop = if (!p.isSmart && p.isMine) ({
-                androidx.compose.material3.TextButton(onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))); sheetFor = null }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(stringResource(R.string.action_remove_from_playlist)) }
-            }) else null)
+    if (p != null) {
+        sheetFor?.let { (i, t) ->
+            ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } },
+                extraTop = if (!p.isSmart && p.isMine) ({
+                    androidx.compose.material3.TextButton(onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))); sheetFor = null }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(stringResource(R.string.action_remove_from_playlist)) }
+                }) else null)
+        }
+        if (playlistSheet) ActionSheet(Commands.playlists(listOf(p.id)), p.name, p.owner, onDismiss = { playlistSheet = false })
     }
-    if (playlistSheet) ActionSheet(Commands.playlists(listOf(p.id)), p.name, p.owner, onDismiss = { playlistSheet = false })
 }
 
 @Composable
@@ -348,22 +467,33 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var albums by remember { mutableStateOf<List<Album>?>(null) }
+    var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(name, libraryGen) {
-        albums = (client.query(Queries.albums(serverId, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items ?: emptyList()
-        tracks = (client.query(Queries.tracks(serverId, Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items ?: emptyList()
+        val al = (client.query(Queries.albums(serverId, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items
+        val t = (client.query(Queries.tracks(serverId, Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items
+        albums = al ?: albums ?: emptyList()
+        tracks = t ?: tracks ?: emptyList()
     }
     val context = Commands.genreContext(serverId, name)
     var sheetFor by remember { mutableStateOf<Track?>(null) }
-    if (albums.isEmpty() && tracks.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    DetailScaffold(nav, embedded, name, stringResource(R.string.library_count_songs, tracks.size), albums.firstOrNull()?.coverArt, header = {
+    val al = albums
+    val tr = tracks
+    // The genre's name is known up front: the bar shows it at once, the rest loads under it.
+    DetailScaffold(nav, embedded, name, tr?.let { stringResource(R.string.library_count_songs, it.size) }, al?.firstOrNull()?.coverArt, loading = al == null || tr == null, header = {
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
-        item { SectionHeader(stringResource(R.string.genre_albums)) }
-        item { AlbumStrip(albums) { nav.navigate(Route.Album(it.id)) } }
-        item { SectionHeader(stringResource(R.string.genre_songs)) }
-        itemsIndexed(tracks, key = { _, t -> t.id }) { i, t ->
+        if (al == null || tr == null) return@DetailScaffold
+        if (al.isEmpty() && tr.isEmpty()) {
+            item(key = "empty") { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)) }
+            return@DetailScaffold
+        }
+        if (al.isNotEmpty()) {
+            item(key = "h.albums") { SectionHeader(stringResource(R.string.genre_albums)) }
+            item(key = "albums") { AlbumStrip(al) { nav.navigate(Route.Album(it.id)) } }
+        }
+        item(key = "h.songs") { SectionHeader(stringResource(R.string.genre_songs)) }
+        itemsIndexed(tr, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = t })
         }
     }

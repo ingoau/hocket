@@ -88,7 +88,7 @@ import app.hocket.ui.components.EmptyState
  * smoothly, the fluid background stands still and the position is sampled 4 times a second.
  */
 @Composable
-fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
+fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val lyricsMap by client.lyrics.collectAsStateWithLifecycle()
@@ -123,7 +123,8 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
 
     val pageLabel = stringResource(R.string.lyrics_page_a11y)
     Box(modifier.fillMaxSize().semantics { contentDescription = pageLabel; isTraversalGroup = true }.testTag("lyrics.page")) {
-        LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
+        // Inside the full player (embedded) the player's own artwork gradient shows through.
+        if (!embedded) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
         if (trackId == null) { EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body)); return@Box }
         if (fetchedFor == trackId && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -136,15 +137,16 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
         }
         val doc = lyrics ?: return@Box
         Column(Modifier.fillMaxSize()) {
-            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f))
-            OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
+            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f),
+                padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
+            OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) }, systemBarPadding = !embedded)
         }
     }
 }
 
 @Composable
-private fun OffsetControl(doc: Lyrics, onOffset: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun OffsetControl(doc: Lyrics, onOffset: (Int) -> Unit, systemBarPadding: Boolean = true) {
+    Row(Modifier.fillMaxWidth().then(if (systemBarPadding) Modifier.navigationBarsPadding() else Modifier).padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         val tier = stringResource(when (doc.tier) { LyricsTier.Syllable -> R.string.lyrics_tier_syllable; LyricsTier.Line -> R.string.lyrics_tier_line; LyricsTier.Unsynced -> R.string.lyrics_tier_unsynced })
         val source = stringResource(when (doc.source) { LyricsSource.Server -> R.string.lyrics_source_server; LyricsSource.External -> R.string.lyrics_source_external; LyricsSource.Embedded -> R.string.lyrics_source_embedded })
         Text("$tier${stringResource(R.string.dot_separator)}$source", style = MaterialTheme.typography.labelSmall, color = LyricsContrast.secondary, modifier = Modifier.weight(1f))
@@ -191,7 +193,7 @@ internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
 }
 
 @Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, modifier: Modifier) {
+private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     val listState = rememberLazyListState()
@@ -204,7 +206,7 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, on
         }
     }
     val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = padding) {
         itemsIndexed(doc.lines) { i, line ->
             // Lit: every line being sung right now (main, duet, background), and the focused main
             // line held after it ends until the gap state. Each lit line sweeps its own syllables

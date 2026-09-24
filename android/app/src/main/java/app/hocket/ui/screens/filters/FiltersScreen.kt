@@ -53,10 +53,10 @@ fun FiltersScreen(nav: NavHostController) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.filters_title)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
-        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = 72.dp)) { Icon(Icons.Filled.Add, stringResource(R.string.filters_new)) } },
+        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset - 16.dp)) { Icon(Icons.Filled.Add, stringResource(R.string.filters_new)) } },
     ) { padding ->
         if (filters.isEmpty()) {
-            EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(padding), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
+            EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
             return@Scaffold
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {

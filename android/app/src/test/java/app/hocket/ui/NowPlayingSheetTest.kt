@@ -133,9 +133,19 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
-    private fun openTab(index: Int) {
-        compose.onNodeWithTag("player.tab.$index").performSemanticsAction(SemanticsActions.OnClick)
-        advanceUntil("tab $index") { compose.onNodeWithTag("player.tab.$index").fetchSemanticsNode().config.getOrElse(SemanticsProperties.Selected) { false } }
+    private val modes = listOf("lyrics", "queue", "about")
+    private fun modeSelected(mode: String): Boolean = compose.onNodeWithTag("player.mode.$mode").fetchSemanticsNode().config.getOrElse(SemanticsProperties.Selected) { false }
+
+    /** Switches the full player to [mode] (lyrics / queue / about), or back to the artwork for null. */
+    private fun openMode(mode: String?) {
+        if (mode == null) {
+            // Tapping the selected pill again goes back to the artwork.
+            modes.filter { modeSelected(it) }.forEach { compose.onNodeWithTag("player.mode.$it").performSemanticsAction(SemanticsActions.OnClick) }
+            advanceUntil("artwork mode") { modes.none { modeSelected(it) } }
+        } else {
+            if (!modeSelected(mode)) compose.onNodeWithTag("player.mode.$mode").performSemanticsAction(SemanticsActions.OnClick)
+            advanceUntil("mode $mode") { modeSelected(mode) }
+        }
     }
 
     /**
@@ -165,14 +175,14 @@ class NowPlayingSheetTest {
      * The release used to call the deprecated `AnchoredDraggableState.settle(velocity)`, which
      * throws for this state: the swipe-away crash.
      */
-    private fun swipeAwayFrom(tab: Int, tag: String) {
+    private fun swipeAwayFrom(mode: String?, tag: String) {
         compose.mainClock.autoAdvance = false
         try {
             val height = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().size.height.toFloat()
             fun open() {
                 if (!sheetOpen()) compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
                 advanceUntil("the sheet to open") { sheetOpen() }
-                openTab(tab)
+                openMode(mode)
                 advanceUntil("$tag to show") { displayed(tag) }
             }
             open()
@@ -193,9 +203,10 @@ class NowPlayingSheetTest {
     }
 
     private fun swipeAwayFromEveryPage(core: TestCore) {
-        swipeAwayFrom(1, "queue.list")
-        swipeAwayFrom(2, "lyrics.list")
-        swipeAwayFrom(0, "player.page")
+        swipeAwayFrom("queue", "queue.list")
+        swipeAwayFrom("lyrics", "lyrics.list")
+        swipeAwayFrom("about", "player.about")
+        swipeAwayFrom(null, "player.page")
         assertTrue(core.client.nowPlaying.value != null)
     }
 
@@ -256,5 +267,45 @@ class NowPlayingSheetTest {
         val before = core.client.nowPlaying.value!!.track.id
         compose.onNodeWithTag("player.next").performClick()
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id != before }
+    }
+
+    @Test
+    fun theModeStaysAcrossCollapsingAndExpandingAndTheThumbnailBringsTheArtworkBack() {
+        val core = TestCore()
+        start(core)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            openMode("queue")
+            advanceUntil("the queue") { displayed("queue.list") }
+            // Collapse and expand again: still the queue (Apple Music keeps the mode).
+            compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Dismiss)
+            advanceUntil("the sheet to collapse") { sheetCollapsed() }
+            compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
+            advanceUntil("the sheet to open") { sheetOpen() }
+            advanceUntil("the queue again") { displayed("queue.list") && modeSelected("queue") }
+            // The artwork, now a thumbnail beside the title, brings the artwork back when tapped.
+            compose.onNodeWithTag("player.artwork").performSemanticsAction(SemanticsActions.OnClick)
+            advanceUntil("artwork mode") { modes.none { modeSelected(it) } }
+            // And a selected pill tapped again does too.
+            openMode("about")
+            advanceUntil("about") { displayed("player.about") }
+            compose.onNodeWithTag("player.mode.about").performSemanticsAction(SemanticsActions.OnClick)
+            advanceUntil("artwork mode again") { modes.none { modeSelected(it) } }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun theSheetStateSavesItsModeAndPosition() {
+        val state = app.hocket.ui.player.NowPlayingSheetState(app.hocket.ui.player.SheetValue.Expanded, app.hocket.ui.player.PlayerMode.Lyrics)
+        val saver = app.hocket.ui.player.NowPlayingSheetState.Saver
+        val saved = with(saver) { androidx.compose.runtime.saveable.SaverScope { true }.save(state) }!!
+        val restored = saver.restore(saved)!!
+        assertEquals(app.hocket.ui.player.PlayerMode.Lyrics, restored.mode)
+        assertEquals(app.hocket.ui.player.SheetValue.Expanded, restored.draggable.currentValue)
+        // A value saved before modes existed restores to the artwork.
+        assertEquals(app.hocket.ui.player.PlayerMode.Artwork, saver.restore("Collapsed")!!.mode)
     }
 }
