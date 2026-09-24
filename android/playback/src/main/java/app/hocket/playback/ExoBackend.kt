@@ -47,7 +47,9 @@ import kotlin.math.pow
  *   sources are read through the core ([HocketStreamDataSource], which the core caches); anything
  *   else (`file:`, a direct server URL) through `DefaultDataSource`.
  * - `SetNext` replaces everything after the current item.
- * - `TransitionedToNext` is detected from `onMediaItemTransition(reason = AUTO)`; the played item is
+ * - `TransitionedToNext` is detected from `onMediaItemTransition(reason = AUTO)`, preceded by the
+ *   `Ended` of the played item (ExoPlayer reports no end for an item it advanced past, and the
+ *   contract is `Ended` then `TransitionedToNext`, as the native backend does); the played item is
  *   then removed so the playlist is always "current (+ next)".
  * - `PreBuffer` uses a second, silent ExoPlayer prepared at the requested position; `DiscardPreBuffer`
  *   releases its media. A subsequent `Load` of the same key still goes through the main player: the
@@ -56,7 +58,13 @@ import kotlin.math.pow
  *   no gain stage, so positive gain is an approximation (it cannot amplify) and ReplayGain-style
  *   attenuation is exact.
  * - Audio focus and becoming-noisy are handled by ExoPlayer; focus loss is reported as
- *   `AudioFocusLost` (transient when Media3 reports a suppression reason instead of a pause).
+ *   `AudioFocusLost` (transient when Media3 reports a suppression reason instead of a pause: ExoPlayer
+ *   then resumes by itself when focus returns and reports `Playing`).
+ * - The player holds a wake lock and a Wi-Fi lock while playing ([C.WAKE_MODE_NETWORK]): without
+ *   them a stream stalls once the screen is off and the CPU or Wi-Fi radio sleeps.
+ * - Network failures leave ExoPlayer idle with an error, so they are retried here with backoff
+ *   ([recoveryDelayMs]; `prepare()` resumes at the same position) and reported as non-fatal; only when
+ *   the retries run out is the error fatal and the core's own retry/skip takes over.
  */
 class ExoBackend(
     private val context: Context,
@@ -65,14 +73,24 @@ class ExoBackend(
     /** The running core's stream reader, read on each open (a restarted service has a new core). */
     private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
 ) {
-    private companion object {
-        const val TAG = "ExoBackend"
-        const val POSITION_INTERVAL_MS = 750L
+    internal companion object {
+        private const val TAG = "ExoBackend"
+        private const val POSITION_INTERVAL_MS = 750L
+        private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
+
+        /** Backoff before recovery attempt [attempt] (0-based) of a network error, or null when out of attempts. */
+        internal fun recoveryDelayMs(attempt: Int): Long? = RECOVERY_DELAYS_MS.getOrNull(attempt)
+
+        /** Errors a later `prepare()` can fix: the connection, not the media. */
+        internal fun isRecoverable(errorCode: Int): Boolean =
+            errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
     }
 
     val player: ExoPlayer = ExoPlayer.Builder(context)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
+        .setWakeMode(C.WAKE_MODE_NETWORK)
         .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build())
         .setMediaSourceFactory(mediaSourceFactory())
         .build()
@@ -82,6 +100,9 @@ class ExoBackend(
     private var masterVolume = 1.0
     private var currentGainDb = 0.0
     private var positionJob: Job? = null
+    private var recoveryJob: Job? = null
+    /** Recovery attempts for the current error streak; reset once the player is ready again. */
+    private var recoveryAttempts = 0
     /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
     private var lastLoadedKey: String? = null
     /** Keys by media id, so reports name the queue key the core gave us. */
@@ -96,6 +117,7 @@ class ExoBackend(
                 val key = currentKey() ?: return
                 when (playbackState) {
                     Player.STATE_READY -> {
+                        recoveryAttempts = 0
                         val duration = player.duration.takeIf { it != C.TIME_UNSET }?.toUInt()
                         report(BackendReport.Ready(BackendReportReadyInner(key, duration)))
                         report(BackendReport.Buffering(BackendReportBufferingInner(key, false)))
@@ -140,13 +162,7 @@ class ExoBackend(
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) {
-                    // The preloaded follow-up is now current: drop the played one so the playlist stays current(+next).
-                    if (player.currentMediaItemIndex > 0) player.removeMediaItem(0)
-                    applyGain(gainFor(mediaItem))
-                    report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(mediaItem.mediaId)))
-                    report(BackendReport.Position(BackendReportPositionInner(mediaItem.mediaId, 0u)))
-                }
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
@@ -158,9 +174,25 @@ class ExoBackend(
             override fun onPlayerError(error: PlaybackException) {
                 // No key at all (error after Stop): the core could not correlate the report, skip it.
                 val key = errorKey() ?: return
-                val fatal = error.errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED &&
-                    error.errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
-                report(BackendReport.Error(BackendReportErrorInner(key, error.errorCodeName + ": " + (error.message ?: ""), fatal)))
+                val message = error.errorCodeName + ": " + (error.message ?: "")
+                // Any player error leaves ExoPlayer idle: "non-fatal" only holds if we bring it back.
+                val delayMs = if (isRecoverable(error.errorCode)) recoveryDelayMs(recoveryAttempts) else null
+                if (delayMs == null) {
+                    recoveryAttempts = 0
+                    report(BackendReport.Error(BackendReportErrorInner(key, message, true)))
+                    return
+                }
+                recoveryAttempts++
+                report(BackendReport.Error(BackendReportErrorInner(key, message, false)))
+                report(BackendReport.Buffering(BackendReportBufferingInner(key, true)))
+                recoveryJob?.cancel()
+                recoveryJob = scope.launch {
+                    delay(delayMs)
+                    if (player.playerError != null && currentKey() == key) {
+                        Log.i(TAG, "retrying $key after ${error.errorCodeName} (attempt $recoveryAttempts)")
+                        player.prepare()
+                    }
+                }
             }
         })
     }
@@ -171,6 +203,7 @@ class ExoBackend(
                 val d = command.data
                 val sources = listOfNotNull(mediaSource(d.source), d.next?.let(::mediaSource))
                 lastLoadedKey = d.source.key
+                cancelRecovery()
                 player.setMediaSources(sources, 0, d.position_ms.toLong())
                 applyGain(d.source.gainDb)
                 player.playWhenReady = d.play
@@ -191,6 +224,7 @@ class ExoBackend(
             BackendCommand.Pause -> player.pause()
             BackendCommand.Stop -> {
                 stopPositionLoop()
+                cancelRecovery()
                 lastLoadedKey = null
                 player.stop()
                 player.clearMediaItems()
@@ -231,8 +265,28 @@ class ExoBackend(
     /** Current position, or the pre-buffered one when the main player has nothing. */
     fun position(): UInt = player.currentPosition.coerceAtLeast(0).toUInt()
 
+    /**
+     * ExoPlayer moved on to the preloaded follow-up by itself. Reports the played item's `Ended`
+     * first, then the transition, and drops the played item so the playlist stays current(+next).
+     */
+    internal fun onAutoTransition(mediaItem: MediaItem) {
+        val played = if (player.currentMediaItemIndex > 0) player.getMediaItemAt(0).mediaId else null
+        if (player.currentMediaItemIndex > 0) player.removeMediaItem(0)
+        applyGain(gainFor(mediaItem))
+        if (played != null && played != mediaItem.mediaId) report(BackendReport.Ended(BackendReportEndedInner(played)))
+        report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(mediaItem.mediaId)))
+        report(BackendReport.Position(BackendReportPositionInner(mediaItem.mediaId, 0u)))
+    }
+
+    private fun cancelRecovery() {
+        recoveryJob?.cancel()
+        recoveryJob = null
+        recoveryAttempts = 0
+    }
+
     fun release() {
         stopPositionLoop()
+        cancelRecovery()
         preBufferPlayer?.release()
         preBufferPlayer = null
         player.release()

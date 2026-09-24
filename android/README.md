@@ -59,7 +59,10 @@ the one core for the process through `CoreHost`:
 - `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item media
   source through `DefaultMediaSourceFactory` over `CoreStreamDataSourceFactory` (each item carries its
   own headers) plus the gapless follow-up as a second playlist item; `SetNext` replaces everything after the current item; the transition is
-  detected from `onMediaItemTransition(AUTO)` and the played item removed. `PreBuffer` prepares a
+  detected from `onMediaItemTransition(AUTO)`, reported as `Ended` (played item) then
+  `TransitionedToNext`, and the played item removed. The player holds `C.WAKE_MODE_NETWORK` (wake +
+  Wi-Fi lock) so streams keep going with the screen off. Network errors (connection failed/timeout)
+  are retried with `prepare()` on a ~1 min backoff and reported non-fatal; only then fatal. `PreBuffer` prepares a
   second silent ExoPlayer at the requested position (`PreBufferReady` when READY); `DiscardPreBuffer`
   releases it. `gain_db` is applied as `10^(gain/20) * masterVolume` clamped to 1.0 — Media3 has no
   gain stage, so positive gain is an approximation (documented in `ExoBackend`).
@@ -76,13 +79,24 @@ the one core for the process through `CoreHost`:
   is no `CacheDataSource` (the core caches). `NativeCore` implements the `CoreStreams` seam.
 - Reports back: `Ready`, `Playing`, `Paused`, `Buffering`, `Position` every 750 ms while playing and
   on every seek/transition, `Ended`, `TransitionedToNext`, `Error`, `PreBufferReady`,
-  `AudioFocusLost` (transient when Media3 suppresses rather than pauses).
+  `AudioFocusLost` (transient when Media3 suppresses rather than pauses; the core then leaves the
+  player alone so it resumes when focus returns).
 - `Event.MediaSession(state)` -> `MediaSessionBridge` -> `CoreSessionPlayer`, a `SimpleBasePlayer`
   whose state *is* the core's session state (metadata, extrapolated position from the stamp,
   shuffle/repeat, available commands from the customised action list). Custom buttons (love,
   shuffle, repeat, rate) are media button preferences. Controls map to
   `Command.MediaSessionCommand`. Notification, lockscreen, Bluetooth and headset controls come from
-  Media3. Playback resumption from the system is refused (resuming is always explicit).
+  Media3; the service `addSession`s the session in `onCreate` (the UI is not a Media3 controller, so
+  `onGetSession` alone would never register it and no notification or foreground promotion would
+  happen).
+- Remote output: while another Connect device plays, `CoreSessionPlayer` reports
+  `DeviceInfo(PLAYBACK_TYPE_REMOTE, routingControllerId = "hocket-connect")` (fixed volume: Connect
+  volume is per device) and `ConnectRouteProvider` (a `MediaRoute2ProviderService`, API 30+) keeps a
+  routing session with that id, named after the playing device. SystemUI pairs the two and shows the
+  device on the media controls' output chip; the other devices are routes in the system output
+  switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds
+  `ConnectRoutes` from `DevicesChanged`/`TransportChanged`/`MediaSession` and registers the app's
+  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound. Playback resumption from the system is refused (resuming is always explicit).
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
   `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
 - The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported

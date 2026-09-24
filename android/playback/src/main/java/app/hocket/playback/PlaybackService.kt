@@ -2,6 +2,7 @@ package app.hocket.playback
 
 import android.content.Intent
 import android.os.Binder
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -28,8 +29,16 @@ import kotlinx.coroutines.launch
  * - Creates the core (or the fake) through [CoreHost] and forwards its events:
  *   `Event.Backend` -> [ExoBackend], `Event.MediaSession` -> [MediaSessionBridge].
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
+ * - Feeds [ConnectRoutes] (devices, lease owner, session state) so that while another device plays
+ *   the session reports remote playback and [ConnectRouteProvider] names that device as the output;
+ *   holds the app's MediaRouter2 discovery preference ([ConnectRouteDiscovery], API 30+).
  * - Stays a foreground service (type `mediaPlayback`) while the media session says something is
- *   playing; Media3 handles the notification and foreground promotion. When nothing has played for
+ *   playing; Media3 handles the notification and foreground promotion. That only happens for a
+ *   session the service knows about: Media3 adds one when a controller connects through
+ *   [onGetSession], but the UI binds for the core, not as a controller, so the session is added
+ *   explicitly in [onCreate]. Without that there was no notification, no lock-screen or quick-settings
+ *   controls, and no foreground promotion, so a backgrounded process could be killed mid-song.
+ *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself.
  * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
  *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
@@ -69,6 +78,7 @@ class PlaybackService : MediaSessionService() {
     private var idleJob: Job? = null
     private var boundClients = 0
     private var clockOffsetMs = 0.0
+    private var routeDiscovery: Any? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -76,12 +86,17 @@ class PlaybackService : MediaSessionService() {
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         bridge = MediaSessionBridge(this, CoreSessionPlayer(Looper.getMainLooper(), ::dispatch), ::dispatch, launch)
+        addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch)
         battery = BatterySaverMonitor(this, ::dispatch)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
         network.start()
         battery.start()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            routeDiscovery = runCatching { ConnectRouteDiscovery(this).also { it.start() } }
+                .onFailure { Log.w(TAG, "route discovery unavailable: ${it.message}") }.getOrNull()
+        }
         core.dispatch(Command.RequestSnapshot)
         scheduleIdleStop()
     }
@@ -92,8 +107,17 @@ class PlaybackService : MediaSessionService() {
         when (event) {
             is Event.Backend -> if (core.kind == app.hocket.core.CoreKind.Native) backend.handle(event.data.command) else Unit
             is Event.MediaSession -> {
-                bridge.apply(event.data.state, clockOffsetMs)
+                applySession(event.data.state)
                 if (event.data.state.isPlaying) idleJob?.cancel() else scheduleIdleStop()
+            }
+            is Event.DevicesChanged -> {
+                ConnectRoutes.onDevices(event.data.devices)
+                applySession(bridge.player.state)
+            }
+            is Event.TransportChanged -> {
+                val wasRemote = ConnectRoutes.state.value.remote
+                ConnectRoutes.onOwner(event.data.transport.lease.owner)
+                if (ConnectRoutes.state.value.remote != wasRemote) applySession(bridge.player.state)
             }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
@@ -106,8 +130,16 @@ class PlaybackService : MediaSessionService() {
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
     private fun applySnapshot(snapshot: app.hocket.core.api.Snapshot) {
         clockOffsetMs = snapshot.connection.clockOffsetMs
-        bridge.apply(snapshot.mediaSession, clockOffsetMs)
+        ConnectRoutes.onDevices(snapshot.devices)
+        ConnectRoutes.onOwner(snapshot.transport.lease.owner)
+        applySession(snapshot.mediaSession)
         battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
+    }
+
+    /** Session state to the bridge, remote when another Connect device plays it. */
+    private fun applySession(state: app.hocket.core.api.MediaSessionState) {
+        ConnectRoutes.onMediaSession(state)
+        bridge.apply(state, clockOffsetMs, remote = ConnectRoutes.state.value.remote != null)
     }
 
     private fun scheduleIdleStop() {
@@ -154,6 +186,8 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         network.stop()
         battery.stop()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) (routeDiscovery as? ConnectRouteDiscovery)?.stop()
+        ConnectRoutes.clear()
         backend.release()
         bridge.release()
         scope.cancel()

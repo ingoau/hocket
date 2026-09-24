@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -20,6 +21,17 @@
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+        <!-- Publishes the other Connect devices to MediaRouter2 (system output switcher, the media
+             controls' output chip). Only the system can call into it (MediaRoute2ProviderService
+             checks the caller); the class needs API 30 and older systems never bind it. -->
+        <service
+            android:name="app.hocket.playback.ConnectRouteProvider"
+            android:exported="true"
+            tools:targetApi="30">
+            <intent-filter>
+                <action android:name="android.media.MediaRoute2ProviderService" />
             </intent-filter>
         </service>
         <!-- Media buttons: Media3 declares its own androidx.media3.session.MediaButtonReceiver (it

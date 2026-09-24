@@ -70,4 +70,20 @@ class ServiceLifecycleTest {
         assertFalse(own.filterEquals(guessed))
         assertTrue(own.filterEquals(PlaybackServiceConnection.bindIntent(app)))
     }
+
+    @Test
+    fun theMediaSessionIsAddedToTheServiceOnCreate() {
+        // The UI binds for the core, never as a Media3 controller, so without an explicit addSession
+        // Media3 never posts the media notification or promotes the service to the foreground.
+        CoreHost.forceFake = true
+        val controller = org.robolectric.Robolectric.buildService(PlaybackService::class.java).create()
+        try {
+            val service = controller.get()
+            assertEquals(1, service.sessions.size)
+            assertTrue(service.isSessionAdded(service.sessions.single()))
+        } finally {
+            controller.destroy()
+            CoreHost.forceFake = false
+        }
+    }
 }

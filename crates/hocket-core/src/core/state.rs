@@ -80,6 +80,9 @@ pub(crate) struct Playback {
     pub fade_gain: Option<f64>,
     /// Waiting for a gapless `TransitionedToNext` for this doc key.
     pub awaiting_transition: bool,
+    /// Silenced by a transient audio-focus loss: the backend still means to
+    /// play and resumes on its own (reporting `Playing`) when focus returns.
+    pub focus_suspended: bool,
 }
 
 impl Playback {

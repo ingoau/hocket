@@ -1,6 +1,7 @@
 package app.hocket.playback
 
 import android.net.Uri
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -23,6 +24,11 @@ import android.os.Looper
  * It is deliberately not the ExoPlayer instance. The core owns transport (which may be on another
  * device), so the OS notification, lockscreen, Bluetooth and headset controls must reflect the
  * session, not the local decoder. Position is extrapolated from the stamp the same way the UI does.
+ *
+ * While another device plays ([remote]), the player reports remote playback
+ * ([DeviceInfo.PLAYBACK_TYPE_REMOTE], fixed volume) with [ConnectRoutes.SESSION_ID] as its routing
+ * controller id, so the system pairs the session with [ConnectRouteProvider]'s routing session and
+ * shows that device as the output. The controls keep working: the core forwards them.
  */
 class CoreSessionPlayer(
     looper: Looper,
@@ -31,13 +37,18 @@ class CoreSessionPlayer(
 ) : SimpleBasePlayer(looper) {
     private var current: MediaSessionState = MediaSessionState(null, false, app.hocket.core.api.PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, emptyList(), true)
     private var clockOffsetMs = 0.0
+    private var remote = false
 
     /** Apply a new state from the core and notify controllers. Main thread. */
-    fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs) {
+    fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs, remote: Boolean = this.remote) {
         current = state
         this.clockOffsetMs = clockOffsetMs
+        this.remote = remote
         invalidateState()
     }
+
+    /** Playing on another device (see the class docs). */
+    val isRemote: Boolean get() = remote
 
     val state: MediaSessionState get() = current
 
@@ -62,6 +73,7 @@ class CoreSessionPlayer(
             .setVolume(s.volume.toFloat())
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(30_000)
+            .setDeviceInfo(if (remote) REMOTE_DEVICE else DeviceInfo.UNKNOWN)
         if (meta != null) {
             val mm = MediaMetadata.Builder()
                 .setTitle(meta.title)
@@ -90,6 +102,12 @@ class CoreSessionPlayer(
             builder.setContentBufferedPositionMs { duration }
         }
         return builder.build()
+    }
+
+    private companion object {
+        val REMOTE_DEVICE: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
+            .setRoutingControllerId(ConnectRoutes.SESSION_ID)
+            .build()
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
