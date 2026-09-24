@@ -78,8 +78,10 @@ import androidx.compose.ui.semantics.setProgress
 import app.hocket.ui.nav.NavItem
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.ReorderableColumn
+import androidx.compose.runtime.key
+import androidx.compose.ui.platform.testTag
+import app.hocket.ui.nav.label
 
 /** ReplayGain, preamp, normalisation, gapless, EQ with draggable bands, output device. */
 @Composable
@@ -171,7 +173,7 @@ fun EqEditor(bands: List<EqBand>, enabled: Boolean, onChange: (List<EqBand>) -> 
 fun TranscodingSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val network by client.network.collectAsStateWithLifecycle()
-    SubScreen(nav, stringResource(R.string.settings_section_transcoding)) {
+    SubScreen(nav, stringResource(R.string.settings_category_streaming)) {
         Text(stringResource(R.string.settings_transcoding_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         ProfileEditor(stringResource(R.string.settings_transcoding_wifi), "default")
         ProfileEditor(stringResource(R.string.settings_transcoding_cellular), "cellular")
@@ -209,7 +211,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
     val devices by client.devices.collectAsStateWithLifecycle()
     val lan = setting(SettingKeys.CONNECT_LAN_DISCOVERY)
     var url by remember(connection.coordinatorUrl) { mutableStateOf(connection.coordinatorUrl ?: "") }
-    SubScreen(nav, stringResource(R.string.settings_section_connect)) {
+    SubScreen(nav, stringResource(R.string.settings_category_connect)) {
         OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.settings_coordinator_url)) }, placeholder = { Text(stringResource(R.string.settings_coordinator_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(shapes = ButtonDefaults.shapes(), onClick = { client.dispatch(Commands.setCoordinatorUrl(url.trim().ifEmpty { null })); client.dispatch(Command.ConnectCoordinator) }) { Text(stringResource(R.string.settings_coordinator_connect)) }
@@ -240,7 +242,7 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         // Navigation items are an app-local preference; the core's `sidebar` surface is kept in step.
         val allNav = NavItem.entries.map { it.id }
         val navIds by (app?.prefs?.navItems ?: flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
-        ChooseAndOrder(allNav, navIds.ifEmpty { NavItem.DEFAULT.map { it.id } }, minEnabled = 2) { ids ->
+        ChooseAndOrder(allNav, navIds.ifEmpty { NavItem.DEFAULT.map { it.id } }, minEnabled = 2, label = { id -> NavItem.entries.first { it.id == id }.label() }, tag = "customise.nav") { ids ->
             scope.launch { app?.prefs?.setNavItems(ids) }
             client.dispatch(Commands.setActionOrder("sidebar", ids.map { NavItem.fromIds(listOf(it)).first().canonicalActionId }))
         }
@@ -248,30 +250,37 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         // Canonical registry ids for the contextMenu surface; an empty stored list means the registry default.
         val allMenu = ActionIds.CONTEXT_MENU
         val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu
-        ChooseAndOrder(allMenu, menuIds, minEnabled = 1) { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
+        ChooseAndOrder(allMenu, menuIds, minEnabled = 1, label = { actionLabel(it) }, tag = "customise.contextMenu") { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
         SettingsSection(stringResource(R.string.settings_media_buttons))
         val allMedia = ActionIds.MEDIA_SESSION
         val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMedia
-        ChooseAndOrder(allMedia, mediaIds, minEnabled = 0) { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
+        ChooseAndOrder(allMedia, mediaIds, minEnabled = 0, label = { actionLabel(it) }, tag = "customise.mediaSession") { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
     }
 }
 
-/** Enabled items first (draggable, in order), then disabled ones; toggling moves between the sets. */
+/**
+ * Enabled items first (draggable, in order), then disabled ones; toggling moves between the sets.
+ * A plain column (not a fixed-height lazy list), so the section is exactly as tall as its rows.
+ * [label] is each id's human label.
+ */
 @Composable
-private fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled: Int, onChange: (List<String>) -> Unit) {
+internal fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled: Int, label: @Composable (String) -> String, tag: String? = null, onChange: (List<String>) -> Unit) {
     val haptics = LocalHapticFeedback.current
     var order by remember(enabled) { mutableStateOf(enabled.filter { it in all } + all.filter { it !in enabled }) }
     val enabledSet = remember(enabled) { enabled.toSet() }
-    val listState = rememberLazyListState()
-    val reorderable = rememberReorderableLazyListState(listState) { from, to ->
-        order = order.toMutableList().apply { add(to.index, removeAt(from.index)) }
-        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-    }
     val moveUp = stringResource(R.string.a11y_move_up)
     val moveDown = stringResource(R.string.a11y_move_down)
-    LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height((all.size * 56).dp), userScrollEnabled = false) {
-        itemsIndexed(order, key = { _, id -> id }) { index, id ->
-            ReorderableItem(reorderable, key = id) { _ ->
+    ReorderableColumn(
+        list = order,
+        onSettle = { from, to ->
+            order = order.toMutableList().apply { add(to, removeAt(from)) }
+            onChange(order.filter { it in enabledSet })
+        },
+        onMove = { haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick) },
+        modifier = Modifier.fillMaxWidth().let { if (tag != null) it.testTag(tag) else it },
+    ) { index, id, _ ->
+        key(id) {
+            ReorderableItem {
                 val checked = id in enabledSet
                 fun toggle(on: Boolean) {
                     val next = if (on) order.filter { it in enabledSet || it == id } else order.filter { it in enabledSet && it != id }
@@ -293,13 +302,14 @@ private fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled:
                                 if (checked && index + 1 < order.size && order[index + 1] in enabledSet) add(CustomAccessibilityAction(moveDown) { move(index + 1); true })
                             }
                         }
+                        .let { if (tag != null) it.testTag("$tag.$id") else it }
                         .heightIn(min = 48.dp)
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(checked = checked, onCheckedChange = null)
                     Spacer(Modifier.width(12.dp))
-                    Text(id, modifier = Modifier.weight(1f))
+                    Text(label(id), modifier = Modifier.weight(1f))
                     Icon(Icons.Filled.DragHandle, null, modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
                 }
             }

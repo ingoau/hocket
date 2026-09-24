@@ -14,13 +14,15 @@ import { NARROW, useMediaQuery } from "../lib/media";
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { OFFLINE_NOTICES } from "@shared/constants";
 import { Heart, Stars } from "./Stars";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
   const transport = useApp((s) => s.transport);
   const queue = useApp((s) => s.queue);
-  const notice = useApp((s) => s.playerNotice);
+  // The offline notices get the app-wide banner (App.tsx) instead.
+  const notice = useApp((s) => (s.playerNotice && !OFFLINE_NOTICES.includes(s.playerNotice) ? s.playerNotice : undefined));
   const resume = useApp((s) => s.resumeOffer);
   const devices = useApp((s) => s.devices);
   const panels = useApp((s) => s.panels);

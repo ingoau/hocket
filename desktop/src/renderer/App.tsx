@@ -25,6 +25,8 @@ import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { accentTokens, type ThemeName } from "./lib/contrast";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
+import { Icon } from "./components/Icon";
+import { OFFLINE_NOTICES } from "@shared/constants";
 
 export function App() {
   const ready = useApp((s) => s.ready);
@@ -53,7 +55,7 @@ export function App() {
       <header className="app-header" inert={modal}>
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
-        {network?.kind === "offline" ? <div className="offline-banner" role="status">{t("misc.offline")}</div> : null}
+        <OfflineBanner offline={network?.kind === "offline"} />
         <TopBar />
       </header>
       <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
@@ -71,6 +73,28 @@ export function App() {
       <CommandPalette />
       <Dialogs />
       <Toasts />
+    </div>
+  );
+}
+
+/**
+ * Offline: the core skips what isn't downloaded or fully cached and says so
+ * with a PlayerNotice; show it (or plain "Offline") with the way to the list
+ * of what plays. The live region stays mounted so a new notice is announced.
+ */
+function OfflineBanner({ offline }: { offline: boolean }) {
+  const notice = useApp((s) => (s.playerNotice && OFFLINE_NOTICES.includes(s.playerNotice) ? s.playerNotice : undefined));
+  const navigate = useApp((s) => s.navigate);
+  const show = offline || !!notice;
+  return (
+    <div role="status" className="offline-live" data-testid="offline-live">
+      {show ? (
+        <div className="offline-banner" data-testid="offline-banner">
+          <Icon name="offline" size={12} />
+          <span data-testid="offline-banner-text">{notice ?? t("misc.offline")}</span>
+          <button type="button" className="link-button" onClick={() => navigate({ view: "downloads", param: "offline" })} data-testid="offline-banner-show">{t("misc.offlineShow")}</button>
+        </div>
+      ) : null}
     </div>
   );
 }

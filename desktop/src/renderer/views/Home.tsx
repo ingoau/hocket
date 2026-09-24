@@ -6,6 +6,7 @@ import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
 import { openContextMenu } from "../components/ContextMenu";
 import { Tile, TileList } from "../components/Tile";
+import { usePlayIntent } from "../lib/use-prime";
 
 export function Home() {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -16,9 +17,10 @@ export function Home() {
   const most = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: undefined, genre: undefined, sort: "playCount", descending: true, page: { offset: 0, limit: 12 } } }), "albums", [serverId]);
   const random = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: undefined, genre: undefined, sort: "random", descending: false, page: { offset: 0, limit: 12 } } }), "albums", [serverId], { static: true });
   const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
+  const albumIntent = usePlayIntent("home", "album");
   const empty = !recent.loading && !(recent.data?.items.length);
   const albumTile = (a: Album) => (
-    <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playAlbum(a)} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="home-album" />
+    <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playAlbum(a)} playIntent={albumIntent.bind(a.id)} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="home-album" />
   );
   const trackTile = (tr: TrackSummary, i: number) => (
     <Tile key={`${tr.id}-${i}`} title={tr.title} subtitle={tr.artist} coverArt={tr.coverArt} onActivate={() => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } })} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } })} testId="home-track" />

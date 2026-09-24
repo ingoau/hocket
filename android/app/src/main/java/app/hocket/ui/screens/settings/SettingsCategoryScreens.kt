@@ -7,6 +7,27 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import app.hocket.core.api.SettingScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
@@ -184,21 +205,55 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Downloads & storage: the downloads screen, stream cache, storage warning, Wi-Fi only. */
+/** Custom stream-cache budgets offered next to "Automatic" (decimal, as sizes are shown). */
+internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 4e9, 8e9, 16e9)
+
+/**
+ * Downloads & storage: the downloads screen, the stream cache (usage, budget, prefetch on mobile
+ * data, data saved), Wi-Fi only and the storage warning.
+ */
 @Composable
 fun DownloadsSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val storage by client.storage.collectAsStateWithLifecycle()
     val wifiOnly = setting(SettingKeys.DOWNLOADS_WIFI_ONLY)
+    val cacheMax = setting(SettingKeys.STORAGE_CACHE_MAX_BYTES)
+    val prefetchMobile = setting(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA)
+    val dot = stringResource(R.string.dot_separator)
     SubScreen(nav, stringResource(R.string.settings_category_downloads)) {
-        SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }, tag = "open.downloads") { Chevron() }
+        SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + dot + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }, tag = "open.downloads") { Chevron() }
         SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, stringResource(R.string.settings_downloads_wifi_only_body), wifiOnly.scope, tag = "downloads.wifiOnly")
-        SettingRow(stringResource(R.string.downloads_clear_cache), formatBytes(storage.cacheBytes), onClick = { client.dispatch(Command.ClearStreamCache) }, tag = "storage.clearCache")
         val warn = storage.warnThresholdBytes
         SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none), tag = "storage.warnThreshold")
         val noLimit = stringResource(R.string.downloads_threshold_none)
         ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { "${it.toInt()} GB" } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
             onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }, modifier = Modifier.padding(horizontal = 16.dp))
+
+        SettingsSection(stringResource(R.string.settings_cache_usage))
+        // Usage: complete entries play offline; partial ones (seeks, skips, primed starts) do not.
+        val partial = storage.partialCacheBytes ?: 0.0
+        val complete = (storage.cacheBytes - partial).coerceAtLeast(0.0)
+        val budget = storage.cacheBudgetBytes ?: 0.0
+        SettingRow(stringResource(R.string.settings_cache_usage), stringResource(R.string.settings_cache_usage_body, formatBytes(complete), formatBytes(partial), formatBytes(budget)), tag = "storage.cacheUsage")
+        if (budget > 0) {
+            LinearProgressIndicator(progress = { (storage.cacheBytes / budget).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp).clearAndSetSemantics { })
+        }
+        // Budget: "Automatic" while storage.cacheMaxBytes is unset (reset); a custom size sets it.
+        val auto = storage.cacheBudgetAuto ?: (cacheMax.raw == null)
+        val autoLabel = stringResource(R.string.settings_cache_budget_auto, formatBytes(budget))
+        SettingRow(stringResource(R.string.settings_cache_budget), if (auto) autoLabel else stringResource(R.string.settings_cache_budget_custom, formatBytes(budget)), cacheMax.scope, tag = "storage.cacheMaxBytes")
+        ChoiceRow(
+            listOf<Pair<Double?, String>>(null to autoLabel) + CACHE_BUDGET_CHOICES.map { it to formatBytes(it) },
+            isSelected = { b -> if (b == null) auto else !auto && kotlin.math.abs(budget - b) < 1e6 },
+            onSelect = { b -> if (b == null) client.dispatch(Commands.resetSetting(SettingKeys.STORAGE_CACHE_MAX_BYTES)) else cacheMax.setDouble(b) },
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("storage.cacheMaxBytes.choices"),
+        )
+        Text(stringResource(R.string.settings_cache_budget_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, stringResource(R.string.settings_prefetch_mobile_body), prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
+        SettingRow(stringResource(R.string.settings_data_saved), stringResource(R.string.settings_data_saved_body, formatBytes(storage.servedFromDiskBytes ?: 0.0), formatBytes(storage.fetchedBytes ?: 0.0)), tag = "storage.dataSaved") {
+            Text(formatBytes(storage.dataSavedBytes ?: 0.0), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        }
+        SettingRow(stringResource(R.string.downloads_clear_cache), formatBytes(storage.cacheBytes), onClick = { client.dispatch(Command.ClearStreamCache) }, tag = "storage.clearCache")
     }
 }
 

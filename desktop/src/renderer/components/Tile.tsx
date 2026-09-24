@@ -7,6 +7,7 @@ import { t } from "@shared/strings";
 import { useRoving } from "../lib/roving";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import type { IntentHandlers } from "../lib/use-prime";
 
 export function TileList({ label, className = "", children, testId }: { label: string; className?: string; children: ReactNode; testId?: string }) {
   const ref = useRef<HTMLUListElement>(null);
@@ -18,7 +19,7 @@ export function TileList({ label, className = "", children, testId }: { label: s
   );
 }
 
-export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onPlay, onContextMenu, testId }: {
+export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onPlay, playIntent, onContextMenu, testId }: {
   title: string;
   subtitle?: string;
   coverArt?: string;
@@ -28,6 +29,8 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
   /** Double click, and Enter when there is no onOpen. */
   onActivate?: () => void;
   onPlay?: () => void;
+  /** Handlers that prime what the play button plays when the pointer rests on it. */
+  playIntent?: IntentHandlers;
   onContextMenu?: (e: React.MouseEvent) => void;
   testId?: string;
 }) {
@@ -46,7 +49,7 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
         <span className="t1" title={title}>{title}</span>
         {subtitle ? <span className="t2" title={subtitle}>{subtitle}</span> : null}
       </button>
-      {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title })} onClick={(e) => { e.stopPropagation(); onPlay(); }}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button> : null}
+      {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title })} onClick={(e) => { e.stopPropagation(); onPlay(); }} {...playIntent}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button> : null}
     </li>
   );
 }

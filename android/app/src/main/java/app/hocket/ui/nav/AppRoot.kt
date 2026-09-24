@@ -265,7 +265,7 @@ private fun NavItem.icon(selected: Boolean): ImageVector = when (this) {
 }
 
 @Composable
-private fun NavItem.label(): String = when (this) {
+fun NavItem.label(): String = when (this) {
     NavItem.Home -> stringResource(R.string.nav_home)
     NavItem.Library -> stringResource(R.string.nav_library)
     NavItem.Search -> stringResource(R.string.nav_search)

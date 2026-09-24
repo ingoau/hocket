@@ -184,7 +184,8 @@ private fun SettingsCategory.summary(): String {
             val theme = setting(SettingKeys.DISPLAY_THEME).string ?: "system"
             val accent = setting(SettingKeys.DISPLAY_ACCENT).string
             val themeLabel = stringResource(when (theme) { "light" -> R.string.settings_theme_light; "dark" -> R.string.settings_theme_dark; else -> R.string.settings_theme_system })
-            stringResource(R.string.settings_theme) + ": " + themeLabel + dot + stringResource(R.string.settings_accent) + ": " + (accent ?: stringResource(R.string.settings_accent_dynamic))
+            val accentName = accent?.let { hex -> ACCENTS.firstOrNull { it.first.equals(hex, true) }?.let { stringResource(it.second) } ?: hex }
+            stringResource(R.string.settings_theme) + ": " + themeLabel + dot + stringResource(R.string.settings_accent) + ": " + (accentName ?: stringResource(R.string.settings_accent_dynamic))
         }
         SettingsCategory.Playback -> {
             val queue by client.queue.collectAsStateWithLifecycle()
@@ -199,7 +200,7 @@ private fun SettingsCategory.summary(): String {
         SettingsCategory.Streaming -> stringResource(R.string.settings_summary_streaming)
         SettingsCategory.Downloads -> {
             val storage by client.storage.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))
+            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), formatBytes(storage.dataSavedBytes ?: 0.0))
         }
         SettingsCategory.Lyrics -> stringResource(R.string.settings_summary_external_lyrics) + ": " + on(setting(SettingKeys.LYRICS_EXTERNAL_ENABLED).bool ?: false) +
             dot + stringResource(R.string.lyrics_offset_value, setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS).int ?: 0)
