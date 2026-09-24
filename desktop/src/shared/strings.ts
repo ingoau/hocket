@@ -534,7 +534,7 @@ const STRINGS = {
   "a11y.queueHint": "Arrow keys move, Enter plays, Delete removes, Alt+Up and Alt+Down reorder, Shift+F10 opens the menu.",
   "a11y.listHint": "Arrow keys move, Enter opens, Shift+F10 opens the menu.",
   "a11y.lyricsList": "Lyrics lines",
-  "a11y.backgroundVocal": "Background: {text}",
+  "a11y.backgroundVocal": "Background: ",
   "a11y.resizeSidebar": "Resize sidebar",
   "a11y.resizeSidePanel": "Resize side panel",
   "a11y.resizeSplit": "Resize queue and lyrics",

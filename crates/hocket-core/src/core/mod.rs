@@ -312,13 +312,35 @@ pub struct Core {
 struct Inner {
     config: CoreConfig,
     runtime: tokio::runtime::Handle,
-    _owned_runtime: Option<tokio::runtime::Runtime>,
+    /// The runtime [`Core::new`] built; torn down in `Drop for Inner`.
+    owned_runtime: Option<tokio::runtime::Runtime>,
     tx: mpsc::UnboundedSender<ActorMsg>,
     sinks: Arc<Mutex<Vec<Arc<dyn EventSink>>>>,
     /// Messages the actor has handled (test barrier bookkeeping).
     processed: Arc<AtomicU64>,
     /// The in-process stream reader (`None` on the coordinator).
     stream_reader: Option<stream_reader::StreamReader>,
+}
+
+impl Drop for Inner {
+    /// The last [`Core`] handle can go away anywhere: a plain thread, a task
+    /// on the platform's runtime (napi, a JNI coroutine bridge) or a task or
+    /// blocking thread of the core's own runtime. A blocking `Runtime` drop
+    /// panics inside any runtime context ("Cannot drop a runtime in a
+    /// context where blocking is not allowed") and on one of its own
+    /// blocking threads would wait for itself, so inside a runtime the owned
+    /// one is shut down in the background instead: its tasks are cancelled
+    /// and its threads exit on their own. On a plain thread the drop still
+    /// waits for them.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.owned_runtime.take() {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                runtime.shutdown_background();
+            } else {
+                drop(runtime);
+            }
+        }
+    }
 }
 
 impl Core {
@@ -372,7 +394,7 @@ impl Core {
         let inner = Arc::new(Inner {
             config,
             runtime: runtime.clone(),
-            _owned_runtime: owned,
+            owned_runtime: owned,
             tx: tx.clone(),
             sinks,
             processed,
@@ -429,27 +451,36 @@ impl Core {
     /// (or a call after `Command::Shutdown`) resolves as soon as the actor
     /// is gone. Platforms await this before dropping the core or exiting.
     pub async fn shutdown(&self) {
-        let (tx, rx) = oneshot::channel();
-        if self.inner.tx.send(ActorMsg::Shutdown(tx)).is_err() {
-            // The actor already stopped (its flush ran before the receiver
-            // was dropped).
-            return;
+        if let Some(ack) = self.request_shutdown() {
+            // `Err` means the actor dropped the sender: it stopped, and
+            // every sender is dropped only after the flush.
+            let _ = ack.await;
         }
-        // `Err` means the actor dropped the sender: it stopped, and every
-        // sender is dropped only after the flush.
-        let _ = rx.await;
     }
 
-    /// [`Core::shutdown`] for FFI callers on a plain thread: runs the
-    /// shutdown on the core's own runtime and blocks the calling thread for
-    /// at most `timeout`. Returns `true` when the flush completed in time.
-    /// Never call this from inside an async context; use [`Core::shutdown`]
-    /// there.
+    /// Ask the actor to flush and stop. `None` when it already stopped (its
+    /// flush ran before the receiver was dropped); otherwise the receiver
+    /// resolves once the flush is done.
+    fn request_shutdown(&self) -> Option<oneshot::Receiver<()>> {
+        let (tx, rx) = oneshot::channel();
+        self.inner.tx.send(ActorMsg::Shutdown(tx)).ok()?;
+        Some(rx)
+    }
+
+    /// [`Core::shutdown`] for FFI callers on a plain thread: blocks the
+    /// calling thread for at most `timeout`. Returns `true` when the flush
+    /// completed in time. Never call this from inside an async context; use
+    /// [`Core::shutdown`] there.
     pub fn shutdown_blocking(&self, timeout: std::time::Duration) -> bool {
+        let Some(ack) = self.request_shutdown() else {
+            return true;
+        };
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-        let core = self.clone();
+        // The waiter holds only the acknowledgement, never a `Core`: were it
+        // left with the last handle, the owned runtime would be dropped on
+        // one of its own workers.
         self.inner.runtime.spawn(async move {
-            core.shutdown().await;
+            let _ = ack.await;
             let _ = done_tx.send(());
         });
         done_rx.recv_timeout(timeout).is_ok()

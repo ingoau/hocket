@@ -42,7 +42,8 @@ test.describe("motion, contrast and zoom", () => {
     expect(await current.evaluate((el) => getComputedStyle(el).fontWeight)).toBe("700");
     expect(await list.evaluate((el) => Array.from(el.querySelectorAll("*")).some((x) => (x as HTMLElement).style.maskImage))).toBe(false);
     // Background vocals are sub-lines, named as such.
-    await expect(list.locator("li.bg").first()).toHaveText(/^Background: /);
+    await expect(list.locator("li.bg").first()).toHaveText(/^Background: \(Yeah, yeah\)/);
+    await expect(list.locator("li.bg").first().locator(".sr-only")).toHaveText(/^Background:\s*$/);
     // The highlight moves on with playback, still one line.
     await expect.poll(async () => current.textContent(), { timeout: 15_000 }).not.toBe("I lost my rank and title");
     await expect(current).toHaveCount(1);
@@ -200,6 +201,8 @@ test.describe("motion, contrast and zoom", () => {
     await expect(row).toHaveClass(/selected/);
     expect(await row.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
     expect(await row.evaluate((el) => getComputedStyle(el).color)).toBe(system.highlightText);
+    // Every cell's text too (not CanvasText on Highlight).
+    for (const color of await row.locator(".td, .td a").evaluateAll((els) => els.map((el) => getComputedStyle(el).color))) expect(color).toBe(system.highlightText);
     // The keyboard focus ring.
     await page.keyboard.press("ArrowDown");
     const next = page.getByTestId("track-row").nth(2);

@@ -153,7 +153,7 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
         const current = synced && (i === active || (l.isBG && owners[i] === active));
         return (
           <li key={i} data-line={i} className={`${l.isBG ? "bg" : ""} ${l.isDuet ? "duet" : ""} ${current ? "active" : ""}`} aria-current={current && !l.isBG ? "true" : undefined}>
-            {l.isBG ? t("a11y.backgroundVocal", { text: bgText(i) }) : l.words.map((w) => w.word).join("")}
+            {l.isBG ? <><span className="sr-only">{t("a11y.backgroundVocal")}</span>{bgText(i)}</> : l.words.map((w) => w.word).join("")}
           </li>
         );
       })}
