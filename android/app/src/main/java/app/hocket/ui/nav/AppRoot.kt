@@ -73,11 +73,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
 import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -328,7 +323,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val selected = selectedPlace(backStack, items, rootEntryId)
             val scope = rememberCoroutineScope()
             val density = LocalDensity.current
-            val haptics = LocalHapticFeedback.current
             var accountOpen by rememberSaveable { mutableStateOf(false) }
             var editorOpen by rememberSaveable { mutableStateOf(false) }
             var devicesOpen by rememberSaveable { mutableStateOf(false) }
@@ -371,8 +365,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
             }
             val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
-            val editLabel = stringResource(R.string.bottom_bar_edit)
-            val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
             Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
@@ -433,8 +425,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
                 // sheet expands and the full player takes the screen (read in the placement phase, so
-                // dragging the sheet does not recompose the bar). A long press opens its editor (also
-                // a TalkBack action on every item).
+                // dragging the sheet does not recompose the bar). Holding it does nothing special: the
+                // editor lives in Settings > Customise and the account sheet.
                 ShortNavigationBar(
                     // Transparent over the scrim (Navic's detached style).
                     containerColor = Color.Transparent,
@@ -445,7 +437,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
                         // Its icons fade quickly as the player grows over them.
                         .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
-                        .longPressToEdit(openEditor)
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
                 ) {
@@ -453,7 +444,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         val isSelected = item == selected
                         ShortNavigationBarItem(
                             selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
-                            modifier = Modifier.testTag("navBar." + item.id).semantics { customActions = listOf(CustomAccessibilityAction(editLabel) { editorOpen = true; true }) },
+                            modifier = Modifier.testTag("navBar." + item.id),
                         )
                     }
                 }
