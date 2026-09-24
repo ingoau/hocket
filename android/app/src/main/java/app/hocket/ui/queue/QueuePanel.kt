@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Repeat
@@ -39,12 +38,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButtonColors
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalDensity
@@ -59,7 +55,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -85,6 +80,7 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueKey
 import app.hocket.core.api.QueueView
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.SelectionKind
@@ -94,6 +90,11 @@ import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.ListArtCorner
 import app.hocket.ui.components.OfflineBadge
+import app.hocket.ui.components.PlaylistPicker
+import app.hocket.ui.components.SwipeActionBox
+import app.hocket.ui.components.SwipeSurface
+import app.hocket.ui.components.swipeActionIds
+import app.hocket.ui.components.trackSwipeAction
 import app.hocket.ui.components.RatingDialog
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.offlineStateText
@@ -238,8 +239,8 @@ private fun timelineRows(queue: QueueView, drag: QueueDrag?, labels: TimelineLab
  * The one scrollable list: history above (oldest first), the current item, then "Playing next"
  * (insertions) and "Continue playing · From <context>" (the permuted context), then autoplay with
  * its "why". It opens at "Now playing" so history is only revealed by scrolling up. Drag handles
- * reorder (haptics; one move per drag), swipe removes (undo toast from the core), tap jumps
- * (history: play again).
+ * reorder (haptics; one move per drag), swipes run the queue's swipe actions (remove by default,
+ * undo toast from the core), tap jumps (history: play again).
  */
 @Composable
 private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
@@ -252,6 +253,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val density = LocalDensity.current
     var sheetFor by remember { mutableStateOf<QueueEntry?>(null) }
     var ratingFor by remember { mutableStateOf<QueueEntry?>(null) }
+    var pickerFor by remember { mutableStateOf<QueueEntry?>(null) }
     val labels = TimelineLabels(
         history = stringResource(R.string.queue_section_history),
         now = stringResource(R.string.queue_now),
@@ -263,6 +265,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val removeLabel = stringResource(R.string.action_remove_from_queue)
     val moveUpLabel = stringResource(R.string.a11y_move_up)
     val moveDownLabel = stringResource(R.string.a11y_move_down)
+    val (swipeStart, swipeEnd) = swipeActionIds(SwipeSurface.Queue)
     var drag by remember { mutableStateOf<QueueDrag?>(null) }
     // A dropped drag gives way to the core's queue as soon as that changes, or after a while if
     // nothing changes (the core refused the move).
@@ -364,22 +367,17 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                         val entry = row.entry
                         val draggable = row.section == Line.Section.Next || row.section == Line.Section.Upcoming || row.section == Line.Section.Autoplay
                         val removable = row.section != Line.Section.Current
-                        val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.45f }, confirmValueChange = { v ->
-                            if (v != SwipeToDismissBoxValue.Settled) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); haptics.performHapticFeedback(HapticFeedbackType.Confirm); true } else false
-                        })
+                        val target = Commands.queueItems(listOf(entry.item.key))
+                        // The current item is never swiped away (it is removed by skipping it).
+                        fun swipeAction(id: String) = if (!removable && id == ActionIds.REMOVE_FROM_QUEUE) SwipeOptions.NONE else id
                         ReorderableItem(reorderable, key = entry.item.key, enabled = draggable) { _ ->
-                            SwipeToDismissBox(
-                                state = dismiss,
-                                enableDismissFromStartToEnd = removable && drag == null,
-                                enableDismissFromEndToStart = removable && drag == null,
-                                backgroundContent = {
-                                    // Only while a swipe is under way: the rows are transparent at rest,
-                                    // so a resting background would show straight through them.
-                                    if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp), contentAlignment = if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
-                                        // Decorative: the row's "Remove from queue" action is the accessible path.
-                                        Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
-                                    }
-                                },
+                            SwipeActionBox(
+                                startToEnd = trackSwipeAction(swipeAction(swipeStart), entry.track, target, onAddToPlaylist = { pickerFor = entry }),
+                                endToStart = trackSwipeAction(swipeAction(swipeEnd), entry.track, target, onAddToPlaylist = { pickerFor = entry }),
+                                enabled = !selecting && drag == null,
+                                // Transparent at rest (the player's backdrop shows through); an opaque
+                                // surface only while swiped, to cover the action's background.
+                                swipeSurface = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ) {
                                 // Accessible alternatives to the swipe (remove) and the drag handle (move).
                                 val index = movable.indexOf(entry.item.key)
@@ -388,9 +386,6 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                     if (draggable && index > 0) add(CustomAccessibilityAction(moveUpLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index - 1)); true })
                                     if (draggable && index >= 0 && index < movable.lastIndex) add(CustomAccessibilityAction(moveDownLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index + 1)); true })
                                 }
-                                // Transparent at rest (the player's backdrop shows through); an opaque
-                                // surface only while swiped, to cover the remove background.
-                                val swipeSurface = MaterialTheme.colorScheme.surfaceContainerHighest
                                 QueueRow(
                                     entry = entry,
                                     section = row.section,
@@ -401,7 +396,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                     onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
                                     onMore = { sheetFor = entry },
                                     onRate = { ratingFor = entry },
-                                    modifier = Modifier.testTag("queue.row." + entry.item.key).drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) },
+                                    modifier = Modifier.testTag("queue.row." + entry.item.key),
                                     handle = if (draggable) ({
                                         Box(
                                             Modifier.size(48.dp).testTag("queue.handle." + entry.item.key).draggableHandle(
@@ -422,6 +417,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
         SelectionToolbar(Modifier.align(Alignment.BottomCenter))
     }
     sheetFor?.let { e -> ActionSheet(Commands.queueItems(listOf(e.item.key)), e.track.title, e.track.artist, onDismiss = { sheetFor = null }) }
+    pickerFor?.let { e -> PlaylistPicker(target = Commands.queueItems(listOf(e.item.key)), onDismiss = { pickerFor = null }) }
     ratingFor?.let { e ->
         RatingDialog(current = e.track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), Commands.queueItems(listOf(e.item.key)))); ratingFor = null }, onDismiss = { ratingFor = null })
     }

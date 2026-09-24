@@ -746,3 +746,40 @@ fn cache_budget_automatic_is_null_and_v1_documents_migrate() {
     assert_eq!(out.applied, vec![keys::STORAGE_CACHE_MAX_BYTES]);
     assert_eq!(s.get(keys::STORAGE_CACHE_MAX_BYTES), Value::Null);
 }
+
+#[test]
+fn swipe_actions_are_registry_actions_for_their_rows() {
+    use crate::actions::{ActionRegistry, TargetKind};
+    let actions = ActionRegistry::new(crate::api::Platform::Android);
+    for (options, kind) in [
+        (registry::SWIPE_QUEUE_ACTIONS, TargetKind::QueueItems),
+        (registry::SWIPE_LIST_ACTIONS, TargetKind::Tracks),
+    ] {
+        assert_eq!(options.first(), Some(&"none"));
+        for id in options.iter().filter(|id| **id != "none") {
+            let def = actions
+                .get(id)
+                .unwrap_or_else(|| panic!("swipe option {id} is not an action"));
+            assert!(def.targets.contains(&kind), "{id} does not take {kind:?}");
+            // A swipe has no confirmation step.
+            assert!(!def.destructive, "{id} is destructive");
+        }
+    }
+    let mut s = Settings::new();
+    assert_eq!(
+        s.get_string(keys::SWIPE_QUEUE_END_TO_START).as_deref(),
+        Some("removeFromQueue")
+    );
+    assert_eq!(
+        s.get_string(keys::SWIPE_LIST_START_TO_END).as_deref(),
+        Some("playNext")
+    );
+    // Removing from the queue is the queue's own; lists never offer it.
+    assert!(matches!(
+        s.set_json(keys::SWIPE_LIST_END_TO_START, "\"removeFromQueue\"", 1.0),
+        Err(SettingsError::Invalid { .. })
+    ));
+    assert!(s
+        .set_json(keys::SWIPE_QUEUE_START_TO_END, "\"none\"", 1.0)
+        .is_ok());
+}

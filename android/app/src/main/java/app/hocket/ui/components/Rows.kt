@@ -58,6 +58,7 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ActionTarget
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
@@ -196,57 +197,70 @@ fun TrackRow(
     actionTarget: ActionTarget? = null,
     /** Row-specific accessibility actions (the queue's move and remove), added to the row menu's. */
     extraActions: List<CustomAccessibilityAction> = emptyList(),
+    /** Whose swipe settings the row follows; rows with a menu swipe like song lists, read-only rows not at all. */
+    swipe: SwipeSurface? = if (onMore != null) SwipeSurface.List else null,
 ) {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
     val label = trackLabel(track)
     var rating by remember { mutableStateOf(false) }
+    var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.id))
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
-    SelectableRow(
-        selected, selectionActive, onClick, onToggleSelect, label, modifier,
-        // "playing, downloaded": the row's state, merged with its label into one item.
-        state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
-            .joinToString(", ").ifEmpty { null },
-        actions = actions,
-        clickLabel = stringResource(R.string.action_play),
+    val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
+    SwipeActionBox(
+        startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
+        endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
+        // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
+        modifier = modifier,
+        enabled = swipe != null && !selectionActive,
     ) {
-        Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            leading?.invoke()
-            if (showArtwork) {
-                Box(Modifier.size(48.dp)) {
-                    Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
-                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
-                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+        SelectableRow(
+            selected, selectionActive, onClick, onToggleSelect, label,
+            // "playing, downloaded": the row's state, merged with its label into one item.
+            state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
+                .joinToString(", ").ifEmpty { null },
+            actions = actions,
+            clickLabel = stringResource(R.string.action_play),
+        ) {
+            Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke()
+                if (showArtwork) {
+                    Box(Modifier.size(48.dp)) {
+                        Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                        if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
+                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (nowPlaying) {
+                            Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OfflineBadge(track.offline, describe = false)
+                        Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Spacer(Modifier.width(14.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (nowPlaying) {
-                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                if (track.loved) {
+                    Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OfflineBadge(track.offline, describe = false)
-                    Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                trailing?.invoke()
+                if (onMore != null) {
+                    IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
                 }
-            }
-            if (track.loved) {
-                Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            trailing?.invoke()
-            if (onMore != null) {
-                IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
             }
         }
     }
+    if (playlistPicker) PlaylistPicker(target = target, onDismiss = { playlistPicker = false })
     if (rating) {
         val client = LocalCoreClient.current
         RatingDialog(current = track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false }, onDismiss = { rating = false })

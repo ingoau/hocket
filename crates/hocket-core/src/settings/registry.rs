@@ -75,6 +75,10 @@ pub mod keys {
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
+    pub const SWIPE_QUEUE_START_TO_END: &str = "swipe.queue.startToEnd";
+    pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
+    pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
+    pub const SWIPE_LIST_END_TO_START: &str = "swipe.list.endToStart";
     pub const SHORTCUTS: &str = "shortcuts";
     pub const SYNC_ENABLED: &str = "sync.enabled";
     pub const CONNECT_COORDINATOR_URL: &str = "connect.coordinatorUrl";
@@ -235,6 +239,29 @@ fn url_valid(v: &Value) -> Result<(), String> {
     }
 }
 
+/// What a swipe on a queue row can do: an action registry id, or `none`.
+/// Kept to actions that make sense for one queue item without a dialog
+/// (`addToPlaylist` opens the platform's picker).
+pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
+    "none",
+    "removeFromQueue",
+    "playNext",
+    "love",
+    "addToPlaylist",
+    "download",
+];
+
+/// What a swipe on a song row in any other list can do (album, playlist,
+/// search results, library songs): an action registry id, or `none`.
+pub const SWIPE_LIST_ACTIONS: &[&str] = &[
+    "none",
+    "playNext",
+    "playLater",
+    "love",
+    "addToPlaylist",
+    "download",
+];
+
 /// Every setting. Order is the settings screen's order.
 pub static REGISTRY: &[SettingDef] = &[
     def(
@@ -369,6 +396,32 @@ pub static REGISTRY: &[SettingDef] = &[
         Synced,
         || json!([]),
         string_list_valid,
+    ),
+    // Swipe actions on song rows. `love` toggles (love / unlove by the row's
+    // state); the platform runs the chosen id through `RunAction`.
+    def(
+        SWIPE_QUEUE_START_TO_END,
+        Synced,
+        SettingKind::Enum(SWIPE_QUEUE_ACTIONS),
+        || json!("removeFromQueue"),
+    ),
+    def(
+        SWIPE_QUEUE_END_TO_START,
+        Synced,
+        SettingKind::Enum(SWIPE_QUEUE_ACTIONS),
+        || json!("removeFromQueue"),
+    ),
+    def(
+        SWIPE_LIST_START_TO_END,
+        Synced,
+        SettingKind::Enum(SWIPE_LIST_ACTIONS),
+        || json!("playNext"),
+    ),
+    def(
+        SWIPE_LIST_END_TO_START,
+        Synced,
+        SettingKind::Enum(SWIPE_LIST_ACTIONS),
+        || json!("playLater"),
     ),
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
