@@ -221,6 +221,10 @@ fun NavItem.label(): String = stringResource(
     },
 )
 
+/** The label under the bar icon: [label], shortened where the full one does not fit five across. */
+@Composable
+fun NavItem.barLabel(): String = if (this == NavItem.RecentQueues) stringResource(R.string.nav_recent_queues_short) else label()
+
 /**
  * A long press anywhere on the bar calls [onLongPress] (the editor shortcut). It watches the
  * gesture before the items do, and once it fires it swallows the rest of the gesture so the item

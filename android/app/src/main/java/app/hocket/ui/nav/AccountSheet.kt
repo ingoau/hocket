@@ -92,31 +92,50 @@ fun AccountSheet(
     onEditBar: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("account.sheet")) {
+        AccountSheetContent(barItems, onSettings, onStats, onDevices, onPlace, onEditBar)
+    }
+}
+
+/** The account sheet's content (also drawn on its own by the screenshot test). */
+@Composable
+fun AccountSheetContent(
+    barItems: List<NavItem>,
+    onSettings: () -> Unit,
+    onStats: () -> Unit,
+    onDevices: () -> Unit,
+    onPlace: (NavItem) -> Unit,
+    onEditBar: () -> Unit,
+) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("account.sheet")) {
-        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 8.dp)) {
-            ListItem(
-                leadingContent = { Avatar(server, 48.dp) },
-                headlineContent = { Text(server?.username ?: stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() }) },
-                supportingContent = { server?.let { Text(stringResource(R.string.account_signed_in, it.name, it.url), maxLines = 2, overflow = TextOverflow.Ellipsis) } },
-                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            )
+    Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 8.dp)) {
+        ListItem(
+            leadingContent = { Avatar(server, 48.dp) },
+            headlineContent = { Text(server?.username ?: stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() }) },
+            supportingContent = {
+                server?.let {
+                    // The server's own name only when it says more than its address.
+                    val text = if (it.url.contains(it.name)) it.url else stringResource(R.string.account_signed_in, it.name, it.url)
+                    Text(text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        )
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        SheetRow(Icons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
+        SheetRow(Icons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
+        SheetRow(Icons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
+        val others = NavItem.entries.filter { it !in barItems && it != NavItem.Stats }
+        if (others.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            SheetRow(Icons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
-            SheetRow(Icons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
-            SheetRow(Icons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
-            val others = NavItem.entries.filter { it !in barItems && it != NavItem.Stats }
-            if (others.isNotEmpty()) {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                Text(stringResource(R.string.account_more_places), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp).semantics { heading() })
-                others.forEach { item -> SheetRow(item.icon(false), item.label(), "account.place.${item.id}") { onPlace(item) } }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            SheetRow(Icons.Filled.Tune, stringResource(R.string.bottom_bar_edit), "account.editBar", onEditBar)
-            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.account_more_places), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp).semantics { heading() })
+            others.forEach { item -> SheetRow(item.icon(false), item.label(), "account.place.${item.id}") { onPlace(item) } }
         }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        SheetRow(Icons.Filled.Tune, stringResource(R.string.bottom_bar_edit), "account.editBar", onEditBar)
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -135,9 +154,15 @@ private fun SheetRow(icon: ImageVector, label: String, tag: String, onClick: () 
 @Composable
 fun BottomBarEditorSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("bottomBar.sheet")) {
-        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 16.dp)) {
-            Text(stringResource(R.string.settings_bottom_bar), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp).semantics { heading() })
-            BottomBarEditor()
-        }
+        BottomBarEditorSheetContent()
+    }
+}
+
+/** The editor sheet's content: a title, then [BottomBarEditor]. */
+@Composable
+fun BottomBarEditorSheetContent() {
+    Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 16.dp)) {
+        Text(stringResource(R.string.settings_bottom_bar), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp).semantics { heading() })
+        BottomBarEditor()
     }
 }

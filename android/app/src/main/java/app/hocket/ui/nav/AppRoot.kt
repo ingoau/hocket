@@ -353,7 +353,7 @@ private fun MainShell() {
                     items.forEach { item ->
                         val isSelected = item == selected
                         ShortNavigationBarItem(
-                            selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.label(), maxLines = 1) },
+                            selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
                             modifier = Modifier.testTag("navBar." + item.id).semantics { customActions = listOf(CustomAccessibilityAction(editLabel) { editorOpen = true; true }) },
                         )
                     }

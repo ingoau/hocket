@@ -16,11 +16,27 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onFirst
-import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.click
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import app.hocket.ui.nav.AccountSheetContent
+import app.hocket.ui.nav.BottomBarEditorSheetContent
+import app.hocket.ui.nav.NavItem
 import app.hocket.InMemoryNavBarPrefs
 import app.hocket.ui.nav.LocalNavBarPrefs
 import kotlinx.coroutines.runBlocking
@@ -78,8 +94,9 @@ class SettingsScreenshotTest {
     fun barDark() = captureBar("dark")
 
     /**
-     * The bottom bar: the default bar (on Home), the account sheet, the bar editor opened by a long
-     * press, and a five-item bar.
+     * The bottom bar: the default bar (on Home), the account sheet, the bar editor, and a five-item
+     * bar. Robolectric draws a ModalBottomSheet's own window blank, so the two sheets' content is
+     * drawn in the app window in a sheet frame (scrim, rounded top, drag handle) as a device shows it.
      */
     private fun captureBar(theme: String) {
         val dir = outDir
@@ -87,26 +104,29 @@ class SettingsScreenshotTest {
         dir!!.mkdirs()
         val prefix = "android-bar-$theme"
         val prefs = InMemoryNavBarPrefs()
+        var sheet by mutableStateOf<(@Composable () -> Unit)?>(null)
         val core = TestCore(startPlaying = true)
-        compose.setThemedContent(core) { CompositionLocalProvider(LocalNavBarPrefs provides prefs) { AppRoot(core.client) } }
+        compose.setThemedContent(core) {
+            CompositionLocalProvider(LocalNavBarPrefs provides prefs) {
+                Box(Modifier.fillMaxSize()) {
+                    AppRoot(core.client)
+                    sheet?.let { SheetFrame(it) }
+                }
+            }
+        }
         core.start()
         awaitTag("navBar.library")
         compose.mainClock.advanceTimeBy(1_000)
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-default.png"))
 
-        compose.onAllNodesWithTag("account.button").onFirst().performClick()
+        sheet = { AccountSheetContent(NavItem.DEFAULT, {}, {}, {}, {}, {}) }
         awaitTag("account.settings")
-        compose.mainClock.advanceTimeBy(1_000)
-        captureWindows(File(dir, "$prefix-account-sheet.png"))
-        tapScrim()
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("account.sheet").fetchSemanticsNodes().isEmpty() }
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-account-sheet.png"))
 
-        compose.onNodeWithTag("navBar").performTouchInput { longClick(center) }
+        sheet = { BottomBarEditorSheetContent() }
         awaitTag("bottomBar.editor")
-        compose.mainClock.advanceTimeBy(1_000)
-        captureWindows(File(dir, "$prefix-editor.png"))
-        tapScrim()
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("bottomBar.sheet").fetchSemanticsNodes().isEmpty() }
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-editor.png"))
+        sheet = null
 
         runBlocking { prefs.setNavItems(listOf("home", "search", "library", "albums", "recentQueues")) }
         awaitTag("navBar.recentQueues")
@@ -116,37 +136,19 @@ class SettingsScreenshotTest {
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-five.png"))
     }
 
-    /** Dismisses the open sheet with a tap on its scrim, at the top of its (full-screen) window. */
-    private fun tapScrim() {
-        val roots = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })
-        val nodes = roots.fetchSemanticsNodes()
-        val main = nodes.indices.maxBy { i -> (nodes[i].root as ViewRootForTest).view.let { it.width.toLong() * it.height } }
-        val sheet = nodes.indices.first { it != main }
-        roots[sheet].performTouchInput { click(Offset(centerX, 24f)) }
-        compose.waitForIdle()
-    }
-
-    /** Every window (the app, then any sheet or dialog above it) drawn in order at its position on screen. */
-    private fun captureWindows(file: File) {
-        val roots = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null }).fetchSemanticsNodes()
-        val views = roots.map { (it.root as ViewRootForTest).view }
-        val main = views.indices.maxBy { views[it].width.toLong() * views[it].height }
-        val order = listOf(main) + views.indices.filter { it != main }
-        val base = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })[main].captureToImage().asAndroidBitmap()
-        val out = base.copy(Bitmap.Config.ARGB_8888, true)
-        val mainLoc = IntArray(2).also { views[main].getLocationOnScreen(it) }
-        Canvas(out).apply {
-            order.drop(1).forEach { i ->
-                val image = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })[i].captureToImage().asAndroidBitmap()
-                val loc = IntArray(2).also { views[i].getLocationOnScreen(it) }
-                // A full-screen sheet window sits at 0,0; a smaller one (a dialog) is centred like a device does.
-                val full = image.width >= out.width && image.height >= out.height * 0.9f
-                val x = if (full) (loc[0] - mainLoc[0]).toFloat() else (out.width - image.width) / 2f
-                val y = if (full) (loc[1] - mainLoc[1]).toFloat() else (out.height - image.height) / 2f
-                drawBitmap(image, x, y, Paint(Paint.FILTER_BITMAP_FLAG))
+    /** A modal bottom sheet's look: the scrim over the app, then the sheet at the bottom with its drag handle. */
+    @Composable
+    private fun SheetFrame(content: @Composable () -> Unit) {
+        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0x52000000)), contentAlignment = Alignment.BottomCenter) {
+            Surface(shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 22.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(32.dp, 4.dp).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(2.dp)))
+                    }
+                    content()
+                }
             }
         }
-        save(out, file)
     }
 
     private fun captureAll(theme: String) {
