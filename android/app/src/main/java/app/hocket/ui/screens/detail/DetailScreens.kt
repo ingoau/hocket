@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -224,7 +225,7 @@ fun PrimeAlbumOnDwell(albumId: String) {
 fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     PrimeAlbumOnDwell(id)
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var album by remember { mutableStateOf<Album?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(id, libraryGen) {
@@ -243,7 +244,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
-    var sheetFor by remember { mutableStateOf<Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     var albumSheet by remember { mutableStateOf(false) }
     val context = Commands.albumContext(a.serverId, a.id, a.name)
     DetailScaffold(nav, embedded, a.name, a.artist, a.coverArt, actions = { IconButton(onClick = { albumSheet = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) } }, header = {
@@ -262,12 +263,11 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         val list = tracks
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
         else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
-            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = t }, showArtwork = false,
+            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary()) }, showArtwork = false,
                 leading = { Text((t.trackNumber?.toInt() ?: (i + 1)).toString(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(32.dp)) },
                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) }, nowPlaying = nowPlaying?.track?.id == t.id)
         }
     }
-    sheetFor?.let { t -> ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToArtist = t.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } }) }
     if (albumSheet) ActionSheet(Commands.albums(listOf(a.id)), a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } })
 }
 
@@ -282,7 +282,7 @@ fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
 @Composable
 fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     var artist by remember { mutableStateOf<Artist?>(null) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
@@ -302,7 +302,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         return
     }
     val context = Commands.artistContext(ar.serverId, ar.id, ar.name)
-    var sheetFor by remember { mutableStateOf<Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, header = {
         IconToggleButton(checked = ar.loved, onCheckedChange = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) {
             Icon(if (ar.loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, stringResource(if (ar.loved) R.string.action_unlove else R.string.action_love), tint = if (ar.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -313,7 +313,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         if (top.isNotEmpty()) {
             item(key = "h.top") { SectionHeader(stringResource(R.string.artist_top_songs)) }
             itemsIndexed(top, key = { _, t -> "top" + t.id }, contentType = { _, _ -> "track" }) { i, t ->
-                TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, top.map { it.id }, i, ar.name)) }, onMore = { sheetFor = t })
+                TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, top.map { it.id }, i, ar.name)) }, onMore = { songMenu.open(t.toSummary()) })
             }
         }
         if (albums.isNotEmpty()) {
@@ -321,7 +321,6 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
             item(key = "albums") { AlbumStrip(albums) { nav.navigate(Route.Album(it.id)) } }
         }
     }
-    sheetFor?.let { t -> ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } }) }
 }
 
 /** One playlist row: its track and a key that stays with it while the list is reordered. */
@@ -345,7 +344,7 @@ internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
 @Composable
 fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var playlist by remember { mutableStateOf<Playlist?>(null) }
     var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
     var dragKey by remember { mutableStateOf<String?>(null) }
@@ -364,7 +363,8 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
-    var sheetFor by remember { mutableStateOf<Pair<Int, Track>?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
+    val removeFromPlaylist = stringResource(R.string.action_remove_from_playlist)
     var playlistSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
@@ -429,7 +429,12 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                         val t = e.track
                         val editable = !p.isSmart && p.isMine
                         ReorderableItem(reorderable, key = e.key, enabled = editable) { dragging ->
-                            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = i to t },
+                            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = {
+                                // The playlist's own extra: remove this entry (by its position).
+                                val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(removeFromPlaylist, Icons.Filled.PlaylistRemove,
+                                    onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))) }, destructive = true, testTag = "songMenu.removeFromPlaylist")) else emptyList()
+                                songMenu.open(t.toSummary(), extras = extras)
+                            },
                                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
                                 nowPlaying = nowPlaying?.track?.id == t.id,
                                 trailing = if (editable) ({
@@ -451,12 +456,6 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         }
     }
     if (p != null) {
-        sheetFor?.let { (i, t) ->
-            ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } },
-                extraTop = if (!p.isSmart && p.isMine) ({
-                    androidx.compose.material3.TextButton(onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))); sheetFor = null }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(stringResource(R.string.action_remove_from_playlist)) }
-                }) else null)
-        }
         if (playlistSheet) ActionSheet(Commands.playlists(listOf(p.id)), p.name, p.owner, onDismiss = { playlistSheet = false })
     }
 }
@@ -466,7 +465,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var albums by remember { mutableStateOf<List<Album>?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(name, libraryGen) {
@@ -476,7 +475,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
         tracks = t ?: tracks ?: emptyList()
     }
     val context = Commands.genreContext(serverId, name)
-    var sheetFor by remember { mutableStateOf<Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     val al = albums
     val tr = tracks
     // The genre's name is known up front: the bar shows it at once, the rest loads under it.
@@ -494,8 +493,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
         }
         item(key = "h.songs") { SectionHeader(stringResource(R.string.genre_songs)) }
         itemsIndexed(tr, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
-            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { sheetFor = t })
+            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary()) })
         }
     }
-    sheetFor?.let { t -> ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null }, onGoToAlbum = t.albumId?.let { aid -> { nav.navigate(Route.Album(aid)) } }) }
 }

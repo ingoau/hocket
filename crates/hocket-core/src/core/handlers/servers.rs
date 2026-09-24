@@ -593,7 +593,7 @@ impl Actor {
         self.emit(Event::SyncProgress { progress: p });
     }
 
-    fn reconcile_playlist_pins(&mut self) {
+    pub(crate) fn reconcile_playlist_pins(&mut self) {
         let Some(sid) = self.server_id() else { return };
         let pins = self.downloads.pins(&sid).unwrap_or_default();
         let mut changed = false;
@@ -677,6 +677,11 @@ impl Actor {
                 tables,
                 ids: vec![],
             });
+        }
+        if !report.playlists.is_empty() {
+            // The server's answer (its order after a rebase, a created
+            // playlist's id) is the truth: show it and share it.
+            self.announce_playlists(&report.playlists, true);
         }
         if report.deferred == 0 && self.outbox.pending_count().unwrap_or(0) > 0 {
             // More was queued while flushing.

@@ -162,6 +162,58 @@ fn handoff_moves_transport_with_position_and_played_ms() {
     w.assert_ok();
 }
 
+/// Picking this device on a device that does not play pulls playback here,
+/// long after the owner claimed (other devices never see its lease renew):
+/// through the coordinator, on the LAN, and through a coordinator too old
+/// to relay the handoff request (the puller then takes the lease over).
+#[test]
+fn non_owner_pulls_playback_to_itself() {
+    let cases = [
+        (Topology::Coordinator, vec![]),
+        (Topology::Lan, vec![]),
+        (Topology::Coordinator, vec!["handoffRequest"]),
+    ];
+    for (topology, unknown) in cases {
+        let case = format!("{topology:?} unknown={unknown:?}");
+        let mut cfg = WorldConfig::new(40);
+        cfg.devices = 2;
+        cfg.topology = topology;
+        cfg.coordinator_unknown = unknown;
+        cfg.keep_logs = true;
+        let mut w = World::new(cfg);
+        w.run_for(6_000.0);
+        // t4 is ~172 s: still inside it after a minute
+        w.perform(Action::PlayTracks {
+            device: 0,
+            tracks: vec!["t4".to_string(), "t3".to_string()],
+        });
+        w.perform(Action::ClaimTransport {
+            device: 0,
+            takeover: false,
+        });
+        w.run_for(60_000.0);
+        assert_eq!(owner(&w).as_deref(), Some("dev-a"), "{case}");
+        w.perform(Action::HandoffTo {
+            device: 1,
+            target: 1,
+        });
+        w.run_for(5_000.0);
+        assert_eq!(
+            owner(&w).as_deref(),
+            Some("dev-b"),
+            "{case}\n{}\n{}",
+            w.devices[0].log.join("\n"),
+            w.devices[1].log.join("\n")
+        );
+        assert!(!w.devices[0].playback.playing, "{case}");
+        assert!(w.devices[1].playback.playing, "{case}");
+        let pos = w.devices[1].position_ms();
+        assert!((60_000..68_000).contains(&pos), "{case}: {pos}");
+        w.finish();
+        w.assert_ok();
+    }
+}
+
 #[test]
 fn scrobble_survives_a_mid_track_handoff_exactly_once() {
     let mut w = coordinator_world(4, 2);

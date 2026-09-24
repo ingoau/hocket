@@ -1,8 +1,5 @@
 package app.hocket.ui.nav
 
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,8 +62,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -97,9 +92,9 @@ import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableColumn
 
 /*
- * The phone's bottom bar: which places it holds (a device-local preference), what is selected, the
- * long-press shortcut to its editor, and the editor itself (Settings > Customise > Bottom bar, or
- * the sheet the long-press opens).
+ * The phone's bottom bar: which places it holds (a device-local preference), what is selected, and
+ * the editor itself (Settings > Customise > Bottom bar, or the sheet the account sheet's "Customise
+ * bottom bar" opens). Holding the bar does nothing special: a long press is not an editor shortcut.
  */
 
 /** The bar's storage for this composition; AppRoot provides one so every reader shares it. */
@@ -276,25 +271,6 @@ fun NavItem.label(): String = stringResource(
 /** The label under the bar icon: [label], shortened where the full one does not fit five across. */
 @Composable
 fun NavItem.barLabel(): String = if (this == NavItem.RecentQueues) stringResource(R.string.nav_recent_queues_short) else label()
-
-/**
- * A long press anywhere on the bar calls [onLongPress] (the editor shortcut). It watches the
- * gesture before the items do, and once it fires it swallows the rest of the gesture so the item
- * under the finger does not also navigate. A tap passes through untouched.
- */
-fun Modifier.longPressToEdit(onLongPress: () -> Unit): Modifier = pointerInput(onLongPress) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { waitForUpOrCancellation(PointerEventPass.Initial) }
-        if (up == null) {
-            onLongPress()
-            do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                event.changes.forEach { it.consume() }
-            } while (event.changes.any { it.pressed })
-        }
-    }
-}
 
 /** Saves the bar and keeps the core's `sidebar` surface in step (as the navigation items always have). */
 @Composable

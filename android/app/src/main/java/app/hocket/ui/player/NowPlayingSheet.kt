@@ -204,7 +204,7 @@ fun miniPlayerHeight(): Dp {
 /**
  * Where the artwork is, for the one artwork of the full player and the one that flies between the
  * players while the sheet moves. Measured relative to the sheet ([root]): the mini player's
- * thumbnail ([thumb]), the full player's mode area ([area], the big artwork is centred in it) and
+ * thumbnail ([thumb]), the full player's mode area ([area], the big artwork sits at its top) and
  * the thumbnail slot beside the title ([small]). [playerArt] is where the full player's artwork is
  * for a mode fraction (0 = big, 1 = thumbnail); the sheet interpolates from [thumb] to it.
  */
@@ -218,6 +218,8 @@ internal class HeroGeometry {
     var artInset = 0f
     var artMax = Float.MAX_VALUE
     var artPad = 0f
+    /** The big artwork's side (px) as the full player's layout sized it for artwork mode; 0 until then. */
+    var artSide by mutableStateOf(0f)
     /** The corners at both ends (px), set from the density. */
     var bigCorner = 0f
     var smallCorner = 0f
@@ -230,13 +232,17 @@ internal class HeroGeometry {
         return r.localBoundingBoxOf(coordinates, clipBounds = false)
     }
 
-    /** The big artwork's square: as large as its area allows (up to [artMax]), centred in it. */
+    /**
+     * The big artwork's square, centred across the top of its area: [artSide] (the same in every
+     * mode, so the artwork does not resize while the area grows for lyrics or the queue), or before
+     * that is known as large as the area allows (up to [artMax]).
+     */
     fun bigSlot(): Rect {
         val a = area
         if (a.width <= 0f || a.height <= 0f) return Rect.Zero
-        val side = minOf(a.width - 2 * artInset, a.height - 2 * artPad, artMax)
+        val side = if (artSide > 0f) minOf(artSide, a.width - 2 * artInset) else minOf(a.width - 2 * artInset, a.height - 2 * artPad, artMax)
         if (side <= 0f) return Rect.Zero
-        return Rect(Offset(a.center.x - side / 2, a.center.y - side / 2), Size(side, side))
+        return Rect(Offset(a.center.x - side / 2, a.top + artPad), Size(side, side))
     }
 
     /** Where the full player's artwork is at mode fraction [f], shrunk to [pausedScale] while big. */
@@ -334,7 +340,12 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val scrimShown by remember(state) { derivedStateOf { state.progress > 0f } }
         val scrimTappable by remember(state) { derivedStateOf { state.progress > 0.5f } }
         val settledOpen by remember(state) { derivedStateOf { state.progress > 0.9f } }
-        val flying by remember(state) { derivedStateOf { state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
+        // Only the big artwork flies to and from the mini player. In lyrics / queue / about the
+        // artwork is a thumbnail beside the title near the bottom of the page: flown opaque from
+        // there to the mini player's thumbnail it would float over the fading, shrinking sheet and
+        // over the screen behind it, so instead it stays on the page (sliding and fading with it)
+        // while the mini player's own thumbnail fades in with the bar.
+        val flying by remember(state) { derivedStateOf { state.mode == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
 
         // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
         // collapse/dismiss actions are the accessible way out).
@@ -474,9 +485,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying })
                     }
                 }
-                // The one artwork that flies from the mini player's thumbnail to wherever the full
-                // player's artwork is (big, or small beside the title) while the sheet moves (both
-                // of those hide meanwhile). Decorative.
+                // The one artwork that flies from the mini player's thumbnail to the full player's
+                // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
+                // see `flying`). Decorative.
                 FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value })
             }
         }
@@ -505,8 +516,8 @@ private class SheetShape(private val inset: Float, private val corner: Float, pr
 
 /**
  * The artwork in flight: laid out at the big artwork's size and moved/scaled in a graphics layer
- * from the mini player's thumbnail to wherever the full player's artwork is (the big slot, or the
- * thumbnail beside the title in a non-artwork mode; both measured, so it lands exactly however the
+ * from the mini player's thumbnail to wherever the full player's artwork is (the big slot, or on
+ * its way to the thumbnail beside the title if the mode is changing; measured, so it lands exactly however the
  * page is scrolled or the status bar is sized). Its corners go from the thumbnail's to the target's,
  * and it gains the target's shadow. With nothing measured yet it just fades out from the thumbnail.
  */

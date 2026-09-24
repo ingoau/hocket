@@ -62,9 +62,12 @@ import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.formatAgo
 
-/** Saved queues: pinned first, then recent; restore / pin / delete / save as playlist. */
+/**
+ * Saved queues: pinned first, then recent; restore / pin / delete / save as playlist. [onRestore]
+ * runs after a queue is restored (the player's queue switcher closes itself).
+ */
 @Composable
-fun RecentQueuesList(modifier: Modifier = Modifier) {
+fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset), onRestore: () -> Unit = {}) {
     val client = LocalCoreClient.current
     val saved by client.savedQueues.collectAsStateWithLifecycle()
     val connection by client.connection.collectAsStateWithLifecycle()
@@ -76,9 +79,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier) {
     }
     val pinned = saved.filter { it.pinned }
     val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
-    LazyColumn(modifier, contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
-        if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
-        if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
+    LazyColumn(modifier, contentPadding = contentPadding) {
+        if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
+        if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
     }
     deleting?.let { sq -> ConfirmDialog(stringResource(R.string.playlist_delete_confirm, sq.label), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.deleteSavedQueue(sq.id)) }, onDismiss = { deleting = null }) }
     naming?.let { sq ->
@@ -91,9 +94,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> Unit) {
+private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> Unit, onRestore: () -> Unit) {
     val client = LocalCoreClient.current
-    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)); onRestore() }.testTag("savedQueue.${sq.id}").padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Artwork(sq.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {

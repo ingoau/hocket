@@ -77,7 +77,7 @@ fun HomeScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     // History changes when a new track starts, not on every now-playing update (rating, position,
     // state): key the re-query on the track id only. null until the first answer, so loading
     // shows skeletons instead of a false "nothing here yet".

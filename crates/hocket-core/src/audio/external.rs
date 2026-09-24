@@ -332,6 +332,20 @@ mod tests {
     }
 
     #[test]
+    fn transition_without_ended_still_promotes_next() {
+        // Media3's auto-advance: only the transition is reported.
+        let (b, _, reps) = harness();
+        b.load(source("a"), Some(source("b")), 0, true).unwrap();
+        b.report(BackendReport::TransitionedToNext { key: "b".into() });
+        b.report(BackendReport::Ended { key: "b".into() });
+        b.report(BackendReport::Ended { key: "a".into() });
+        assert_eq!(b.current_key().as_deref(), Some("b"));
+        let reps = reps.lock();
+        assert_eq!(reps.len(), 2, "a late Ended for the played item is stale");
+        assert!(matches!(&reps[1], BackendReport::Ended { key } if key == "b"));
+    }
+
+    #[test]
     fn prebuffer_ready_only_for_the_live_prebuffer() {
         let (b, _, reps) = harness();
         b.pre_buffer(source("p"), 100).unwrap();

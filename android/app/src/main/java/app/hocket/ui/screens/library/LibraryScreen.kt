@@ -306,7 +306,7 @@ internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit, topPaddi
 @Composable
 internal fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var playlists by remember { mutableStateOf<List<Playlist>?>(null) }
     LaunchedEffect(serverId, libraryGen) { playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data ?: playlists ?: emptyList() }
     val selection by client.selection.collectAsStateWithLifecycle()
@@ -347,7 +347,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
-    var sheetFor by remember { mutableStateOf<app.hocket.core.api.Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     val listLabel = stringResource(if (offlineOnly) R.string.available_offline else R.string.library_songs)
     LaunchedEffect(key, state.generation) { client.trackPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Tracks) client.setSelectionTotal(state.total) }
@@ -383,21 +383,17 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
                     // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
                     val ctx = Commands.adHocContext(serverId, listLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
                     client.dispatch(Commands.playContext(ctx, startIndex = state.pages.toSortedMap().values.flatten().indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
-                }, onMore = { sheetFor = track }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
+                }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
             } else TrackRowSkeleton()
         }
-    }
-    sheetFor?.let { t ->
-        ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null },
-            onGoToAlbum = t.albumId?.let { id -> { nav.navigate(Route.Album(id)) } }, onGoToArtist = t.artistId?.let { id -> { nav.navigate(Route.Artist(id)) } })
     }
 }
 
 @Composable
 internal fun GenresTab(serverId: String, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var genres by remember { mutableStateOf<List<Genre>?>(null) }
     LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList() }
     val list = genres

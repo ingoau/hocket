@@ -145,6 +145,7 @@ Not instant, deliberately. When the picker opens, targets pre-buffer while the c
 
 > Figure: Cap the pre-buffer fan-out; targets discard buffers on a timeout if nobody picks them.
 
+- **Any device can pull playback to itself.** Picking "this device" asks the owner, through the room, to hand off as if it had picked it. If no handoff lands within 3 s (an older coordinator that drops the request, an owner that is gone), the device takes the lease over from the owner's last stamp.
 - **Sleeping devices are hidden.** Presence means currently connected, which removes the push-notification problem entirely.
 - **Scrobbling follows transport.** Same token, unambiguous, works offline through the outbox the playing device already has.
 - **Accumulated `playedMs` travels with the track**, so taking over 90 seconds in doesn't silently eat the scrobble.
@@ -351,7 +352,7 @@ A mode, not a toggle, with "engage automatically on battery" on by default: anim
 | Listening stats | Built from local play history, so it works without server support. |
 | Settings | Every key carries a scope flag — device-local or account-synced. Synced keys ride through the coordinator, merged LWW. A master sync toggle, on by default. |
 | Config backup | A versioned document with migrations. Secrets handled separately. |
-| Customisation | Choose-and-order over a curated action set: context menu items, sidebar items, media session buttons, keyboard rebinding. Accent colour and dynamic colour from artwork. Not arbitrary layout, not a theming engine. |
+| Customisation | Choose-and-order over a curated action set: context menu items, sidebar items, media session buttons, keyboard rebinding, and the swipe actions of song rows (left and right, the queue apart from other lists). Accent colour and dynamic colour from artwork. Not arbitrary layout, not a theming engine. |
 
 
 ### The action registry

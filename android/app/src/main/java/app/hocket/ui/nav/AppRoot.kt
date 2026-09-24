@@ -73,15 +73,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
 import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -315,12 +312,14 @@ private val CollapsedRailWidth = 96.dp
 private fun MainShell(snackbar: SnackbarHostState) {
     val nav = rememberNavController()
     val sheet = rememberNowPlayingSheetState()
+    // The one song menu, hosted here (not inside the player sheet or a list) and opened from anywhere.
+    val songMenu = remember { app.hocket.ui.components.SongMenuController() }
     val client = LocalCoreClient.current
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible) {
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -328,7 +327,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val selected = selectedPlace(backStack, items, rootEntryId)
             val scope = rememberCoroutineScope()
             val density = LocalDensity.current
-            val haptics = LocalHapticFeedback.current
             var accountOpen by rememberSaveable { mutableStateOf(false) }
             var editorOpen by rememberSaveable { mutableStateOf(false) }
             var devicesOpen by rememberSaveable { mutableStateOf(false) }
@@ -371,8 +369,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
             }
             val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
-            val editLabel = stringResource(R.string.bottom_bar_edit)
-            val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
             Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
@@ -420,6 +416,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 onOpenArtist = navigator.openArtist,
             )
             }
+            app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on (Navic): the surface colour eased in
             // from transparent, so content scrolling under them fades out instead of clashing.
             if (!wide || playerVisible) {
@@ -433,8 +430,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
                 // sheet expands and the full player takes the screen (read in the placement phase, so
-                // dragging the sheet does not recompose the bar). A long press opens its editor (also
-                // a TalkBack action on every item).
+                // dragging the sheet does not recompose the bar). Holding it does nothing special: the
+                // editor lives in Settings > Customise and the account sheet.
                 ShortNavigationBar(
                     // Transparent over the scrim (Navic's detached style).
                     containerColor = Color.Transparent,
@@ -445,7 +442,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
                         // Its icons fade quickly as the player grows over them.
                         .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
-                        .longPressToEdit(openEditor)
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
                 ) {
@@ -453,7 +449,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         val isSelected = item == selected
                         ShortNavigationBarItem(
                             selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
-                            modifier = Modifier.testTag("navBar." + item.id).semantics { customActions = listOf(CustomAccessibilityAction(editLabel) { editorOpen = true; true }) },
+                            modifier = Modifier.testTag("navBar." + item.id),
                         )
                     }
                 }
@@ -505,6 +501,14 @@ private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGra
     },
 )
 
+/**
+ * A NavHost destination drawn inside [PredictiveBackCard], so every screen (places, details,
+ * settings pages) takes part in the predictive back animation the same way.
+ */
+private inline fun <reified T : Any> NavGraphBuilder.screen(transitions: ShellTransitionInfo, noinline content: @Composable (NavBackStackEntry) -> Unit) {
+    composable<T> { entry -> PredictiveBackCard(transitions, entry.id) { content(entry) } }
+}
+
 @Composable
 private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo, modifier: Modifier) {
     NavHost(
@@ -515,39 +519,41 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         exitTransition = { transitions.exit(this) },
         popEnterTransition = { transitions.popEnter(this) },
         popExitTransition = { transitions.popExit(this) },
+        predictivePopEnterTransition = { edge -> transitions.predictivePopEnter(edge) },
+        predictivePopExitTransition = { edge -> transitions.predictivePopExit(this, edge) },
         sizeTransform = null,
     ) {
-        composable<Route.Home> { HomeScreen(nav) }
-        composable<Route.Library> { entry -> LibraryScreen(nav, initialTab = entry.toRoute<Route.Library>().tab) }
-        composable<Route.Search> { SearchScreen(nav) }
-        composable<Route.Settings> { SettingsScreen(nav) }
-        composable<Route.Downloads> { DownloadsScreen(nav) }
-        composable<Route.Albums> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Albums) }
-        composable<Route.Artists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
-        composable<Route.Playlists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
-        composable<Route.Songs> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
-        composable<Route.Genres> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
-        composable<Route.AvailableOffline> { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
-        composable<Route.Filters> { FiltersScreen(nav) }
-        composable<Route.FilterBuilder> { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }
-        composable<Route.Stats> { StatsScreen(nav) }
-        composable<Route.Album> { entry -> AlbumDetailScreen(nav, entry.toRoute<Route.Album>().id) }
-        composable<Route.Artist> { entry -> ArtistDetailScreen(nav, entry.toRoute<Route.Artist>().id) }
-        composable<Route.Playlist> { entry -> PlaylistDetailScreen(nav, entry.toRoute<Route.Playlist>().id) }
-        composable<Route.Genre> { entry -> GenreDetailScreen(nav, entry.toRoute<Route.Genre>().name) }
-        composable<Route.SavedQueues> { SavedQueuesScreen(nav) }
-        composable<Route.AudioSettings> { AudioSettingsScreen(nav) }
-        composable<Route.TranscodingSettings> { TranscodingSettingsScreen(nav) }
-        composable<Route.ConnectSettings> { ConnectSettingsScreen(nav) }
-        composable<Route.CustomiseSettings> { CustomiseSettingsScreen(nav) }
-        composable<Route.About> { AboutScreen(nav) }
-        composable<Route.SettingsAccount> { AccountSettingsScreen(nav) }
-        composable<Route.SettingsAppearance> { AppearanceSettingsScreen(nav) }
-        composable<Route.SettingsPlayback> { PlaybackSettingsScreen(nav) }
-        composable<Route.SettingsDownloads> { DownloadsSettingsScreen(nav) }
-        composable<Route.SettingsLyrics> { LyricsSettingsScreen(nav) }
-        composable<Route.SettingsLibrary> { LibrarySettingsScreen(nav) }
-        composable<Route.SettingsBattery> { BatterySettingsScreen(nav) }
-        composable<Route.SettingsBackup> { BackupSettingsScreen(nav) }
+        screen<Route.Home>(transitions) { HomeScreen(nav) }
+        screen<Route.Library>(transitions) { entry -> LibraryScreen(nav, initialTab = entry.toRoute<Route.Library>().tab) }
+        screen<Route.Search>(transitions) { SearchScreen(nav) }
+        screen<Route.Settings>(transitions) { SettingsScreen(nav) }
+        screen<Route.Downloads>(transitions) { DownloadsScreen(nav) }
+        screen<Route.Albums>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Albums) }
+        screen<Route.Artists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
+        screen<Route.Playlists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
+        screen<Route.Songs>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
+        screen<Route.Genres>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
+        screen<Route.AvailableOffline>(transitions) { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
+        screen<Route.Filters>(transitions) { FiltersScreen(nav) }
+        screen<Route.FilterBuilder>(transitions) { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }
+        screen<Route.Stats>(transitions) { StatsScreen(nav) }
+        screen<Route.Album>(transitions) { entry -> AlbumDetailScreen(nav, entry.toRoute<Route.Album>().id) }
+        screen<Route.Artist>(transitions) { entry -> ArtistDetailScreen(nav, entry.toRoute<Route.Artist>().id) }
+        screen<Route.Playlist>(transitions) { entry -> PlaylistDetailScreen(nav, entry.toRoute<Route.Playlist>().id) }
+        screen<Route.Genre>(transitions) { entry -> GenreDetailScreen(nav, entry.toRoute<Route.Genre>().name) }
+        screen<Route.SavedQueues>(transitions) { SavedQueuesScreen(nav) }
+        screen<Route.AudioSettings>(transitions) { AudioSettingsScreen(nav) }
+        screen<Route.TranscodingSettings>(transitions) { TranscodingSettingsScreen(nav) }
+        screen<Route.ConnectSettings>(transitions) { ConnectSettingsScreen(nav) }
+        screen<Route.CustomiseSettings>(transitions) { CustomiseSettingsScreen(nav) }
+        screen<Route.About>(transitions) { AboutScreen(nav) }
+        screen<Route.SettingsAccount>(transitions) { AccountSettingsScreen(nav) }
+        screen<Route.SettingsAppearance>(transitions) { AppearanceSettingsScreen(nav) }
+        screen<Route.SettingsPlayback>(transitions) { PlaybackSettingsScreen(nav) }
+        screen<Route.SettingsDownloads>(transitions) { DownloadsSettingsScreen(nav) }
+        screen<Route.SettingsLyrics>(transitions) { LyricsSettingsScreen(nav) }
+        screen<Route.SettingsLibrary>(transitions) { LibrarySettingsScreen(nav) }
+        screen<Route.SettingsBattery>(transitions) { BatterySettingsScreen(nav) }
+        screen<Route.SettingsBackup>(transitions) { BackupSettingsScreen(nav) }
     }
 }

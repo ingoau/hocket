@@ -4,6 +4,7 @@
     <string name="player_playing_from">Playing from</string>
     <string name="player_playing_from_autoplay">Autoplay</string>
     <string name="player_playing_from_a11y">Playing from %1$s</string>
+    <string name="player_switch_queue">Switch queue</string>
     <string name="player_mode_lyrics">Lyrics</string>
     <string name="player_mode_queue">Queue</string>
     <string name="player_mode_about">About</string>

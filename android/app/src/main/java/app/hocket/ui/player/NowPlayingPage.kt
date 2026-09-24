@@ -41,6 +41,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
@@ -66,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
@@ -111,7 +113,6 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.QueueSource
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
-import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.PlaylistPicker
 import app.hocket.ui.components.formatClock
@@ -123,26 +124,24 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.LineHeightStyle
-import app.hocket.ui.components.RatingStars
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.combinedClickable
 
 /**
  * The full player (the owner's mockup, made Material 3 Expressive). Top to bottom:
  *
- * - "Playing from" and the queue's source (album, playlist, search...), with Connect and the collapse chevron;
- * - the mode area: the big artwork in [PlayerMode.Artwork], or Lyrics / Queue / About in its place;
- * - notices (resume offer, a problem, autoplay's reason, remote playback, the sleep timer);
- * - the title row: a small thumbnail slot (non-artwork modes), title, "artist • album" links, and
- *   add to playlist and the More sheet (which holds the rating and the sleep timer);
- * - the wavy seek bar with elapsed / total, the transport, and the Lyrics / Queue / About pills.
+ * - "Playing from" and the queue's name (a tap switches queues), with Connect and the collapse chevron;
+ * - the mode area: the big artwork (at its top) in [PlayerMode.Artwork], or Lyrics / Queue / About;
+ * - the title row, right under the artwork: a small thumbnail slot (non-artwork modes), title,
+ *   "artist • album" links, and add to playlist and the More sheet (the rating and the sleep timer);
+ * - spread over what is left: notices (resume offer, a problem, autoplay's reason, remote playback,
+ *   the sleep timer), the wavy seek bar with elapsed / total, the transport, and the Lyrics / Queue /
+ *   About pills ([PlayerLayout]).
  *
  * There is ONE artwork ([PlayerArtwork]), drawn over the page and moved in a graphics layer between
  * the big slot and the thumbnail slot as [modeFraction] goes 0 (artwork) to 1 (another mode); both
  * slots are measured into [hero], which the sheet's flying artwork also lands on.
  *
- * At least a screen tall: the area takes what the header and the controls leave (never less than
- * [MIN_AREA]); on short screens or at large font sizes the whole page scrolls. [position] is read
+ * At least a screen tall; on short screens or at large font sizes the whole page scrolls. [position] is read
  * in the draw phase (the seek bar) and once a second (its labels), never here.
  */
 @Composable
@@ -165,8 +164,11 @@ internal fun FullPlayer(
     val track = entry?.track
     val density = LocalDensity.current
     var handoff by remember { mutableStateOf(false) }
+    var queues by remember { mutableStateOf(false) }
     var sleepSheet by remember { mutableStateOf(false) }
-    var more by remember { mutableStateOf(false) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
+    val sleepLabel = stringResource(R.string.player_sleep_timer)
+    val resources = androidx.compose.ui.platform.LocalResources.current
     var addTo by remember { mutableStateOf(false) }
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
@@ -177,21 +179,35 @@ internal fun FullPlayer(
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player.page")) {
             PlayerLayout(
                 minHeight = viewport,
-                header = { PlayerHeader(onCollapse, onConnect = { handoff = true }) },
+                hero = hero,
+                header = { PlayerHeader(onCollapse, onConnect = { handoff = true }, onSwitchQueue = { queues = true }) },
                 area = { ModeArea(mode, hero, lyricsVisible) },
-                controls = {
-                    PlayerControls(
-                        mode = mode,
-                        onMode = onMode,
-                        onOpenAlbum = onOpenAlbum,
-                        onOpenArtist = onOpenArtist,
-                        position = position,
-                        hero = hero,
-                        pageWidth = pageWidth,
-                        onMore = { more = true },
-                        onAddTo = { addTo = true },
-                    )
-                },
+                title = { PlayerTitle(mode, onOpenAlbum, onOpenArtist, hero, onMore = {
+                        // The song menu is hosted at the app level, not in this (moving) sheet;
+                        // the player adds the sleep timer as its extra.
+                        val sleep = client.sleepTimer.value
+                        val sleepState = sleep?.let { t -> t.endsAt?.let { resources.getString(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: resources.getString(R.string.sleep_active_end_of_track) }
+                        track?.let { songMenu.open(it, extras = listOf(app.hocket.ui.components.SongMenuExtra(sleepLabel, Icons.Filled.Bedtime,
+                            onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep"))) }
+                    }, onAddTo = { addTo = true }) },
+                items = listOf(
+                    { PlayerNoticeLines(onConnect = { handoff = true }) },
+                    { PlayerSeek(position) },
+                    {
+                        val client = LocalCoreClient.current
+                        val playing by client.isPlaying.collectAsStateWithLifecycle()
+                        // Narrow screens (display size "largest" leaves ~320 dp): a smaller transport.
+                        TransportRow(
+                            playing = playing,
+                            onPrevious = { client.dispatch(Command.Previous) },
+                            onToggle = { client.dispatch(Command.TogglePlay) },
+                            onNext = { client.dispatch(Command.Next) },
+                            height = if (pageWidth < 360.dp) 68.dp else 80.dp,
+                            modifier = Modifier.padding(horizontal = PAGE_PADDING),
+                        )
+                    },
+                    { Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp)) { ModeBar(mode, onMode, pageWidth = pageWidth) } },
+                ),
             )
         }
         PlayerArtwork(
@@ -207,15 +223,8 @@ internal fun FullPlayer(
         )
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
+    if (queues) QueueSwitcherSheet(onDismiss = { queues = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
-    if (more && track != null) ActionSheet(Commands.tracks(listOf(track.id)), track.title, track.artist, onDismiss = { more = false },
-        onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } },
-        extraTop = {
-            // As in Navic: the rating across the top of the song menu, then the sleep timer.
-            RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 32.dp, tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).padding(vertical = 4.dp))
-            SleepTimerMenuRow(onClick = { more = false; sleepSheet = true })
-        })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
@@ -224,45 +233,99 @@ private val PAGE_PADDING = 24.dp
 private val MAX_ART = 520.dp
 private val MIN_AREA = 220.dp
 
+/** The least gap above each of the [PlayerLayout] items (notices, seek bar, transport, mode pills). */
+private val ITEM_GAPS = listOf(0.dp, 4.dp, 8.dp, 12.dp)
+
 /**
- * Header, mode area and controls stacked: the header and the controls take what they need, the
- * area what is left of [minHeight] (at least [MIN_AREA]). Laid out inside the page's vertical
- * scroll, so it can be taller than the screen.
+ * The page's layout. In artwork mode: the header, the artwork at the top of the mode area (as large
+ * as the width allows, up to [MAX_ART], shrinking on short screens but never below what [MIN_AREA]
+ * leaves), the title right below it, and the [items] spread evenly over what is left of
+ * [minHeight] (the same share above each and below the last, on top of [ITEM_GAPS]). In the other
+ * modes the area takes all that room (at least [MIN_AREA]) and the title and items stack at the
+ * bottom with just [ITEM_GAPS]. Between the two it follows [HeroGeometry.modeFraction], read here in
+ * the layout phase (the mode's animation relays out, never recomposes). The area's content is
+ * always laid out at its full (other-mode) height and clipped to the visible part, so lyrics and the
+ * queue do not relayout as it opens. Inside the page's vertical scroll, so it can be taller than
+ * the screen. The artwork's side goes to [HeroGeometry.artSide].
  */
 @Composable
-private fun PlayerLayout(minHeight: Dp, header: @Composable () -> Unit, area: @Composable () -> Unit, controls: @Composable () -> Unit) {
-    Layout(contents = listOf(header, area, controls)) { (h, a, c), constraints ->
-        val loose = Constraints(maxWidth = constraints.maxWidth)
-        val hp = h.map { it.measure(loose) }
-        val cp = c.map { it.measure(loose) }
+private fun PlayerLayout(
+    minHeight: Dp,
+    hero: HeroGeometry,
+    header: @Composable () -> Unit,
+    area: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    items: List<@Composable () -> Unit>,
+) {
+    Layout(contents = listOf(header, area, title) + items) { slots, constraints ->
+        val w = constraints.maxWidth
+        val loose = Constraints(maxWidth = w)
+        val hp = slots[0].map { it.measure(loose) }
+        val tp = slots[2].map { it.measure(loose) }
+        val ip = slots.drop(3).map { s -> s.map { it.measure(loose) } }
         val hh = hp.maxOfOrNull { it.height } ?: 0
-        val ch = cp.maxOfOrNull { it.height } ?: 0
-        val areaH = maxOf(MIN_AREA.roundToPx(), minHeight.roundToPx() - hh - ch)
-        val ap = a.map { it.measure(Constraints.fixed(constraints.maxWidth, areaH)) }
-        layout(constraints.maxWidth, hh + areaH + ch) {
+        val th = tp.maxOfOrNull { it.height } ?: 0
+        val ih = ip.map { p -> p.maxOfOrNull { it.height } ?: 0 }
+        // An empty item (no notices) takes no gap either.
+        val gaps = ih.mapIndexed { i, h -> if (h > 0) ITEM_GAPS.getOrElse(i) { 0.dp }.roundToPx() else 0 }
+        val rest = ih.sum() + gaps.sum()
+        val view = minHeight.roundToPx()
+        val pad = 8.dp.roundToPx()
+        val minArea = MIN_AREA.roundToPx()
+        // Artwork mode: the largest artwork that leaves room for the rest.
+        val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
+        val side = (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
+        hero.artSide = side.toFloat()
+        val artArea = side + 2 * pad
+        val spare = (view - hh - artArea - th - rest).coerceAtLeast(0)
+        val shares = ih.count { it > 0 } + 1
+        // Other modes: the area takes it all.
+        val fullArea = maxOf(minArea, view - hh - th - rest)
+        val f = hero.modeFraction().coerceIn(0f, 1f)
+        val areaH = lerpF(artArea.toFloat(), fullArea.toFloat(), f).roundToInt()
+        val share = spare * (1f - f) / shares
+        val ap = slots[1].map { it.measure(Constraints(minWidth = w, maxWidth = w, minHeight = areaH, maxHeight = maxOf(areaH, fullArea))) }
+        var y = hh + areaH + th
+        val tops = ih.mapIndexed { i, h -> if (h > 0) { y += gaps[i] + share.roundToInt(); val top = y; y += h; top } else y }
+        layout(w, maxOf(y + share.roundToInt(), view)) {
             hp.forEach { it.place(0, 0) }
             ap.forEach { it.place(0, hh) }
-            cp.forEach { it.place(0, hh + areaH) }
+            tp.forEach { it.place(0, hh + areaH) }
+            ip.forEachIndexed { i, p -> p.forEach { it.place(0, tops[i]) } }
         }
     }
 }
 
-/** "Playing from" and the queue's source, and the collapse chevron. */
+/**
+ * "Playing from" and the queue's name (its context: the album, playlist, search...; "Autoplay" once
+ * autoplay has taken over a queue without one), Connect and the collapse chevron. Tapping the name
+ * opens the queue switcher (the recent and pinned queues).
+ */
 @Composable
-private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit) {
+private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit, onSwitchQueue: () -> Unit) {
     val client = LocalCoreClient.current
     val owns by client.ownsTransport.collectAsStateWithLifecycle()
     val queue by client.queue.collectAsStateWithLifecycle()
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val source = when {
-        entry?.item?.source is QueueSource.Autoplay -> stringResource(R.string.player_playing_from_autoplay)
-        else -> queue.contextLabel?.takeIf { it.isNotBlank() }
-    } ?: stringResource(R.string.player_sheet_title)
+    val source = queue.contextLabel?.takeIf { it.isNotBlank() }
+        ?: (if (entry?.item?.source is QueueSource.Autoplay) stringResource(R.string.player_playing_from_autoplay) else null)
+        ?: stringResource(R.string.player_sheet_title)
     val sourceDesc = stringResource(R.string.player_playing_from_a11y, source)
-    Row(Modifier.fillMaxWidth().statusBarsPadding().padding(start = PAGE_PADDING, end = 12.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = sourceDesc }.testTag("player.source")) {
-            Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Text(source, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val switchLabel = stringResource(R.string.player_switch_queue)
+    Row(Modifier.fillMaxWidth().statusBarsPadding().padding(start = PAGE_PADDING - 8.dp, end = 12.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                .clickable(onClickLabel = switchLabel, role = Role.Button, onClick = onSwitchQueue)
+                .semantics(mergeDescendants = true) { contentDescription = sourceDesc }
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .testTag("player.source"),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Text(source, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(Icons.Filled.ArrowDropDown, null, Modifier.padding(bottom = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         // Connect, highlighted while another device plays. Tap opens the picker; long-press pulls
         // playback straight to this device.
@@ -297,12 +360,23 @@ private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit) {
 /**
  * The mode area: empty in artwork mode (the one artwork is drawn over it), else Lyrics, Queue or
  * About, crossfading with a slight grow as the artwork shrinks away. Its bounds go to [hero] (the
- * big artwork is centred in them). Lists fade out at the area's top and bottom edges.
+ * big artwork sits at their top). Lists fade out at the area's top and bottom edges.
+ *
+ * [PlayerLayout] gives it its visible height as the least height and its full (other-mode) height
+ * as the most: the content is laid out at the full height and clipped to the visible part.
  */
 @Composable
 private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean) {
     val reduced = LocalReducedMotion.current
-    Box(Modifier.fillMaxSize().onGloballyPositioned { hero.area = hero.measure(it) }) {
+    Box(
+        Modifier
+            .onGloballyPositioned { hero.area = hero.measure(it) }
+            .clipToBounds()
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, constraints.maxHeight))
+                layout(constraints.maxWidth, constraints.minHeight) { placeable.place(0, 0) }
+            },
+    ) {
         AnimatedContent(
             targetState = mode,
             transitionSpec = {
@@ -334,70 +408,88 @@ private fun Modifier.fadingEdges(): Modifier = this
         drawRect(Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = size.height - bottom, endY = size.height), blendMode = BlendMode.DstIn, topLeft = Offset(0f, size.height - bottom), size = size.copy(height = bottom))
     }
 
+/** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerControls(
-    mode: PlayerMode,
-    onMode: (PlayerMode) -> Unit,
-    onOpenAlbum: (String) -> Unit,
-    onOpenArtist: (String) -> Unit,
-    position: () -> Long,
-    hero: HeroGeometry,
-    pageWidth: Dp,
-    onMore: () -> Unit,
-    onAddTo: () -> Unit,
-) {
+private fun PlayerTitle(mode: PlayerMode, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, hero: HeroGeometry, onMore: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val playing by client.isPlaying.collectAsStateWithLifecycle()
-    val transport by client.transport.collectAsStateWithLifecycle()
+    val track = entry?.track
+    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
+        if (track == null) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.empty_queue_title), style = MaterialTheme.typography.headlineSmall)
+                Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            }
+        } else {
+            TitleRow(track, compact = mode != PlayerMode.Artwork, onOpenAlbum, onOpenArtist, hero, onMore, onAddTo)
+        }
+    }
+}
+
+/**
+ * Notices: skipped-unavailable, resume offer, autoplay "why", remote playback (a tap opens the
+ * device picker), sleep timer. Nothing at all when there are none (the layout then gives it no gap).
+ */
+@Composable
+private fun PlayerNoticeLines(onConnect: () -> Unit) {
+    val client = LocalCoreClient.current
+    val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val resume by client.resumeOffer.collectAsStateWithLifecycle()
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
     val owns by client.ownsTransport.collectAsStateWithLifecycle()
-    val reducedMotion = LocalReducedMotion.current
-    val track = entry?.track
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
-            // Notices: skipped-unavailable, resume offer, autoplay "why", remote playback, sleep timer.
-            notice?.let { NoticeLine(it, MaterialTheme.colorScheme.error) }
-            resume?.let { offer ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.player_resume_offer, offer.deviceName, offer.track.title), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = { client.dispatch(Command.ResumeHere) }, modifier = Modifier.testTag("player.resumeHere")) { Text(stringResource(R.string.player_resume_here)) }
-                    IconButton(onClick = { client.dispatch(Command.DismissResumeOffer) }) { Icon(Icons.Filled.Close, stringResource(R.string.action_dismiss)) }
-                }
+    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
+        notice?.let { NoticeLine(it, MaterialTheme.colorScheme.error) }
+        resume?.let { offer ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.player_resume_offer, offer.deviceName, offer.track.title), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TextButton(onClick = { client.dispatch(Command.ResumeHere) }, modifier = Modifier.testTag("player.resumeHere")) { Text(stringResource(R.string.player_resume_here)) }
+                IconButton(onClick = { client.dispatch(Command.DismissResumeOffer) }) { Icon(Icons.Filled.Close, stringResource(R.string.action_dismiss)) }
             }
-            (entry?.item?.source as? QueueSource.Autoplay)?.let { NoticeLine(stringResource(R.string.player_autoplay_reason, it.data.reason), MaterialTheme.colorScheme.tertiary) }
-            if (!owns) devices.firstOrNull { it.playing }?.let { NoticeLine(stringResource(R.string.player_playing_on, it.name), MaterialTheme.colorScheme.primary) }
-            sleep?.let { t ->
-                val label = t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)
-                NoticeLine(label, MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (track == null) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.empty_queue_title), style = MaterialTheme.typography.headlineSmall)
-                    Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                }
-            } else {
-                TitleRow(track, compact = mode != PlayerMode.Artwork, onOpenAlbum, onOpenArtist, hero, onMore, onAddTo)
-                Spacer(Modifier.height(4.dp))
-                WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) })
-                if (transport.buffering) Text(stringResource(R.string.player_buffering), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(8.dp))
-            // Narrow screens (display size "largest" leaves ~320 dp): a smaller transport.
-            TransportRow(
-                playing = playing,
-                onPrevious = { client.dispatch(Command.Previous) },
-                onToggle = { client.dispatch(Command.TogglePlay) },
-                onNext = { client.dispatch(Command.Next) },
-                height = if (pageWidth < 360.dp) 68.dp else 80.dp,
-            )
-            Spacer(Modifier.height(12.dp))
         }
-        ModeBar(mode, onMode, pageWidth = pageWidth)
+        (entry?.item?.source as? QueueSource.Autoplay)?.let { NoticeLine(stringResource(R.string.player_autoplay_reason, it.data.reason), MaterialTheme.colorScheme.tertiary) }
+        if (!owns) devices.firstOrNull { it.playing }?.let { PlayingOnLine(it.name, onConnect) }
+        sleep?.let { t ->
+            val label = t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)
+            NoticeLine(label, MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * "Playing on <device>" while another device plays: a tap (a 48 dp tall target) opens the device
+ * picker, as Connect in the header does.
+ */
+@Composable
+private fun PlayingOnLine(device: String, onConnect: () -> Unit) {
+    val color = MaterialTheme.colorScheme.primary
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+            .clickable(onClickLabel = stringResource(R.string.player_connect), role = Role.Button, onClick = onConnect)
+            .testTag("player.playingOn"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Cast, null, Modifier.size(18.dp), tint = color)
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(R.string.player_playing_on, device), style = MaterialTheme.typography.labelLarge, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Icon(Icons.Filled.ArrowDropDown, null, tint = color)
+    }
+}
+
+/** The wavy seek bar with elapsed / total (and "buffering" under it while it is). */
+@Composable
+private fun PlayerSeek(position: () -> Long) {
+    val client = LocalCoreClient.current
+    val entry by client.nowPlaying.collectAsStateWithLifecycle()
+    val playing by client.isPlaying.collectAsStateWithLifecycle()
+    val transport by client.transport.collectAsStateWithLifecycle()
+    val reducedMotion = LocalReducedMotion.current
+    val track = entry?.track ?: return
+    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
+        WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) })
+        if (transport.buffering) Text(stringResource(R.string.player_buffering), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -448,8 +540,8 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
                 val subColor = MaterialTheme.colorScheme.onSurfaceVariant
                 Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).then(track.artistId?.let { id -> Modifier.textLink(goArtist) { onOpenArtist(id) } } ?: Modifier).testTag("player.artist"))
-                // Beside the thumbnail there is room for the artist only (the album is in About).
-                track.album?.takeIf { !compact }?.let { album ->
+                // Beside the thumbnail too: both shrink to share the row, each ellipsised.
+                track.album?.let { album ->
                     Text(stringResource(R.string.dot_separator), style = sub, color = subColor, modifier = Modifier.clearAndSetSemantics { })
                     Text(album, style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false).then(track.albumId?.let { id -> Modifier.textLink(goAlbum) { onOpenAlbum(id) } } ?: Modifier).testTag("player.album"))
@@ -486,20 +578,6 @@ private fun ModeBar(mode: PlayerMode, onMode: (PlayerMode) -> Unit, pageWidth: D
             }
         }
     }
-}
-
-/** The More sheet's sleep-timer entry: the remaining time when one is set. */
-@Composable
-private fun SleepTimerMenuRow(onClick: () -> Unit) {
-    val client = LocalCoreClient.current
-    val sleep by client.sleepTimer.collectAsStateWithLifecycle()
-    androidx.compose.material3.ListItem(
-        headlineContent = { Text(stringResource(R.string.player_sleep_timer)) },
-        supportingContent = sleep?.let { t -> { Text(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)) } },
-        leadingContent = { Icon(Icons.Filled.Bedtime, null, tint = if (sleep != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) },
-        colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.clickable(onClick = onClick).testTag("player.sleep"),
-    )
 }
 
 private val PILL_PADDING = 12.dp

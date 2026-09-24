@@ -7,12 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::{
-    DeviceId, DeviceInfo, EpochMs, Ms, Platform, PositionStamp, QueueKey, SavedQueue, TrackId,
+    DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms, Platform, PlaylistId, PositionStamp,
+    QueueKey, SavedQueue, TrackId,
 };
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{Credential, TransportCommand, WireMessage};
+use crate::connect::wire::{Credential, PlaylistEdit, TransportCommand, WireMessage};
 use crate::connect::{PeerId, SessionOp, SyncPoint};
 use crate::sim::clock::{quantize, DeviceClock};
 use crate::util::Clock;
@@ -121,6 +122,13 @@ pub struct SimDevice {
     pub scrobbles_reached: Vec<(TrackId, EpochMs)>,
     pub listener_port: Option<u16>,
     pub asleep: bool,
+    /// The mirror's ratings and loves (keyed by item id), as far as the
+    /// library edits this device made or received go.
+    pub library_items: HashMap<String, LibraryItemState>,
+    /// The mirror's playlist orders; absent = unknown or deleted.
+    pub playlists: HashMap<PlaylistId, Vec<TrackId>>,
+    /// `LibraryEditReceived` outputs, by sending device.
+    pub library_edits_from: Vec<DeviceId>,
     prebuffer_ready_at: Option<(EpochMs, QueueKey)>,
     next_tick_at: EpochMs,
     queued: Vec<Input>,
@@ -219,6 +227,9 @@ impl SimDevice {
             scrobbles_reached: vec![],
             listener_port: None,
             asleep: false,
+            library_items: HashMap::new(),
+            playlists: HashMap::new(),
+            library_edits_from: vec![],
             prebuffer_ready_at: None,
             next_tick_at: world_start,
             queued: vec![],
@@ -275,6 +286,32 @@ impl SimDevice {
         if self.keep_log {
             self.log
                 .push(format!("[{:>9.0}] {}: {}", self.now(), self.id, s));
+        }
+    }
+
+    /// What the actor does for a rating, love or playlist edit: apply it to
+    /// the mirror, then tell the room.
+    pub fn edit_library(&mut self, items: Vec<LibraryItemState>, playlists: Vec<PlaylistEdit>) {
+        self.apply_library(&items, &playlists);
+        self.handle(Input::LibraryEdited { items, playlists });
+    }
+
+    fn apply_library(&mut self, items: &[LibraryItemState], playlists: &[PlaylistEdit]) {
+        for it in items {
+            self.library_items.insert(it.id.clone(), it.clone());
+        }
+        for p in playlists {
+            match (&p.playlist, &p.track_ids) {
+                (None, _) => {
+                    self.playlists.remove(&p.playlist_id);
+                }
+                (Some(_), Some(ids)) => {
+                    self.playlists.insert(p.playlist_id.clone(), ids.clone());
+                }
+                (Some(_), None) => {
+                    self.playlists.entry(p.playlist_id.clone()).or_default();
+                }
+            }
         }
     }
 
@@ -438,6 +475,19 @@ impl SimDevice {
                 }
             }
             Output::SavedQueuesMerged(list) => self.saved_queues = list,
+            Output::LibraryEditReceived {
+                from,
+                items,
+                playlists,
+            } => {
+                self.note(format!(
+                    "library edit from {from}: {} items, {} playlists",
+                    items.len(),
+                    playlists.len()
+                ));
+                self.apply_library(&items, &playlists);
+                self.library_edits_from.push(from);
+            }
             Output::ResumeOffer(o) => self.resume_offer = o,
             Output::PickerChanged { open, targets } => {
                 self.picker_open = open;

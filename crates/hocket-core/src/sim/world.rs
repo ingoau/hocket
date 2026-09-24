@@ -77,6 +77,9 @@ pub struct WorldConfig {
     pub hostile: bool,
     /// `LanThenCoordinator`: when the coordinator becomes reachable.
     pub coordinator_returns_ms: f64,
+    /// Message types the hosted coordinator does not know (an older build
+    /// than the devices): it decodes them as unknown and drops them.
+    pub coordinator_unknown: Vec<&'static str>,
 }
 
 impl WorldConfig {
@@ -91,6 +94,7 @@ impl WorldConfig {
             keep_logs: false,
             hostile: false,
             coordinator_returns_ms: 90_000.0,
+            coordinator_unknown: vec![],
         }
     }
 
@@ -476,7 +480,12 @@ impl World {
         if node == COORDINATOR_NODE {
             let input = match ev {
                 NetEvent::Accepted { peer } => RoomInput::Connected(peer),
-                NetEvent::Message { peer, msg } => RoomInput::Message(peer, msg),
+                NetEvent::Message { peer, mut msg } => {
+                    if self.cfg.coordinator_unknown.contains(&msg.msg.name()) {
+                        msg.msg = Msg::Unknown;
+                    }
+                    RoomInput::Message(peer, msg)
+                }
                 NetEvent::Closed { peer } => RoomInput::Disconnected(peer),
                 NetEvent::Connected { .. } | NetEvent::ConnectFailed { .. } => return,
             };

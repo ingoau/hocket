@@ -120,8 +120,11 @@ maps to:
   (`love`, `rate`) exposed as `CommandButton`s in the notification, in the
   given order.
 - `owns_transport == false` keeps the session and notification alive as a
-  remote control; the notification shows the playing device's name in the
-  subtitle.
+  remote control. The session reports remote playback (Media3 `DeviceInfo`
+  `PLAYBACK_TYPE_REMOTE` with a routing controller id) and a
+  `MediaRoute2ProviderService` publishes the Connect devices as routes plus a
+  routing session with that id named after the playing device, so the system
+  media controls' output chip shows it (see `android/README.md`).
 
 Incoming `Player` calls (`play`, `pause`, `seekTo`, `seekToNext`,
 `setShuffleModeEnabled`, `setRepeatMode`, custom commands) become

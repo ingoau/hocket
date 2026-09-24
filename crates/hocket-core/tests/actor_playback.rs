@@ -386,3 +386,123 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A gapless auto-advance must move the session to the item the backend is
+/// now playing, whether or not the backend reports `Ended` for the finished
+/// one first (Media3 reports only the transition), and playback must carry on
+/// through the queue rather than stop after the second item.
+async fn auto_advance_follows_the_backend(name: &str, transition_only: bool) {
+    let t = synced_core(name).await;
+    t.backend.set_transition_only(transition_only);
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    t.backend.clear_log();
+
+    t.run_for(201_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    // Gapless: the backend was not reloaded, the session followed it.
+    assert!(!t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { .. })));
+    let snap = t.snapshot().await;
+    assert_eq!(
+        snap.media_session.metadata.as_ref().unwrap().title,
+        "Track 1"
+    );
+    assert!(snap.transport.position.is_playing);
+    assert!(
+        snap.transport.position.position_ms < 5_000,
+        "position restarted with the new item: {}",
+        snap.transport.position.position_ms
+    );
+
+    t.run_for(200_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert!(
+        t.backend.is_playing(),
+        "playback carries on past the second item"
+    );
+    assert!(!t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { .. })));
+
+    // Next moves on to what follows; it does not restart the playing item.
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t3"));
+    assert_eq!(
+        t.snapshot().await.media_session.metadata.unwrap().title,
+        "Track 3"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gapless_auto_advance_with_ended_moves_the_session() {
+    auto_advance_follows_the_backend("g", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gapless_auto_advance_without_ended_moves_the_session() {
+    auto_advance_follows_the_backend("h", true).await;
+}
+
+/// A transient focus loss (a call, a navigation prompt) must not pause the
+/// platform player: it resumes by itself when focus returns and reports
+/// `Playing`. A pause the user asks for meanwhile does reach it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transient_focus_loss_resumes_when_focus_returns() {
+    let t = synced_core("i").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(1_500.0).await;
+    t.backend.clear_log();
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    t.run_for(100.0).await;
+    assert!(!t.transport().await.position.is_playing, "shown as paused");
+    assert!(
+        !t.backend.log().contains(&ScriptedCall::Pause),
+        "the platform player is not paused"
+    );
+    let (key, position_ms) = t.backend.current().unwrap();
+    t.run(Command::BackendReport {
+        report: BackendReport::Playing { key, position_ms },
+    })
+    .await;
+    t.run_for(100.0).await;
+    assert!(t.transport().await.position.is_playing, "focus came back");
+
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    t.run(Command::Pause).await;
+    t.run_for(100.0).await;
+    assert!(
+        t.backend.log().contains(&ScriptedCall::Pause),
+        "a user pause during the loss reaches the player"
+    );
+    assert!(!t.backend.is_playing());
+}
