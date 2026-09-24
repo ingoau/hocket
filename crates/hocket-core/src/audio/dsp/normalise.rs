@@ -111,13 +111,9 @@ impl Normaliser {
 
     pub fn reset(&mut self) {
         self.filter.reset();
-        for c in &mut self.current {
-            *c = 0.0;
-        }
+        self.current.fill(0.0);
         self.current_frames = 0;
-        for r in &mut self.ring {
-            *r = 0.0;
-        }
+        self.ring.fill(0.0);
         self.ring_pos = 0;
         self.ring_filled = 0;
         self.gain_db = 0.0;
@@ -135,9 +131,7 @@ impl Normaliser {
         self.ring[self.ring_pos] = power;
         self.ring_pos = (self.ring_pos + 1) % self.ring.len();
         self.ring_filled = (self.ring_filled + 1).min(self.ring.len());
-        for c in &mut self.current {
-            *c = 0.0;
-        }
+        self.current.fill(0.0);
         self.current_frames = 0;
         if let Some(l) = self.short_term_lufs() {
             if l > GATE_LUFS {
