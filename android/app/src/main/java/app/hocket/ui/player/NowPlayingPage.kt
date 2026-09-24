@@ -49,6 +49,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -156,6 +159,7 @@ fun HeroArtwork(coverArt: String?, title: String?, size: Dp, interactive: Boolea
 }
 
 /** Track info, transport, seek, toggles, sleep timer, Connect, resume offer and notices. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, artworkSlot: Boolean) {
     val client = LocalCoreClient.current
@@ -248,7 +252,26 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
                 IconToggleButton(checked = sleepActive, onCheckedChange = { sleepSheet = true }, modifier = Modifier.testTag("player.sleep")) {
                     Icon(Icons.Filled.Bedtime, stringResource(R.string.player_sleep_timer), tint = if (sleepActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                IconToggleButton(checked = !owns, onCheckedChange = { handoff = true }, modifier = Modifier.testTag("player.connect")) {
+                // Tap opens the picker; long-press pulls playback straight to this device.
+                val haptics = LocalHapticFeedback.current
+                val takeOverLabel = stringResource(R.string.player_take_over)
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape)
+                        .combinedClickable(
+                            role = Role.Button,
+                            onClick = { handoff = true },
+                            onLongClickLabel = takeOverLabel,
+                            onLongClick = {
+                                val self = devices.firstOrNull { it.isSelf }
+                                if (!owns && self != null) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    client.dispatch(Commands.handoffTo(self.id))
+                                } else handoff = true
+                            },
+                        )
+                        .testTag("player.connect"),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(Icons.Filled.Cast, stringResource(R.string.player_connect), tint = if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

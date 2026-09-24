@@ -91,6 +91,7 @@ const STRINGS = {
   "player.unlove": "Unlove",
   "player.rate": "Rate",
   "player.connect": "Play on…",
+  "player.connectHint": "Play on… (right-click to play here)",
   "player.queue": "Queue",
   "player.lyrics": "Lyrics",
   "player.fullscreen": "Fullscreen player",
