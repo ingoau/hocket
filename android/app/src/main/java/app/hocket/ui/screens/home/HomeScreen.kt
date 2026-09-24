@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.home
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -106,8 +108,10 @@ fun HomeScreen(nav: NavHostController) {
             return@Scaffold
         }
         val continueLabel = stringResource(R.string.home_continue)
+        val listState = rememberLazyListState()
+        ScrollToTopOnReselect(listState)
         ShimmerHost {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
                 if (loading) {
                     item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
                     items(5, key = { "sk.r$it" }, contentType = { "rowSkeleton" }) { TrackRowSkeleton() }

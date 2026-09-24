@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -117,7 +119,9 @@ fun SearchScreen(nav: NavHostController) {
         val empty = results.tracks.isEmpty() && results.albums.isEmpty() && results.artists.isEmpty() && results.playlists.isEmpty()
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = BottomContentInset)) {
+            val listState = rememberLazyListState()
+            ScrollToTopOnReselect(listState)
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = BottomContentInset)) {
                 if (empty && remote == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), "") }
                 if (results.tracks.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_songs)) }

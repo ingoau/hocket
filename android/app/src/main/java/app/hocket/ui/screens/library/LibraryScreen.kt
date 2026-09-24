@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -260,6 +261,7 @@ internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, o
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Albums) client.setSelectionTotal(state.total) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
     val grid = rememberLazyGridState()
+    ScrollToTopOnReselect(grid)
     LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize()) {
         // Until the total is known, a screenful of skeletons; items are keyed by position so a
         // skeleton turns into its card in place (no remove and insert as pages arrive).
@@ -288,7 +290,9 @@ internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit, topPaddi
     val selecting = selection.active && kind == SelectionKind.Artists
     LaunchedEffect(key, state.generation) { client.artistPages.ensure(key, 0) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         val count = if (state.known) state.total else SKELETON_COUNT
         items(count, contentType = { i -> if (state.item(i, client.artistPages.pageSize) == null) "skeleton" else "artist" }) { i ->
             val artist = state.item(i, client.artistPages.pageSize)
@@ -310,7 +314,9 @@ internal fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit, topPad
     val selecting = selection.active && kind == SelectionKind.Playlists
     val list = playlists
     if (list != null && list.isEmpty()) { EmptyState(stringResource(R.string.empty_playlists_title), stringResource(R.string.empty_playlists_body), Modifier.padding(top = topPadding)); return }
-    LazyColumn(contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         if (list == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton() }
         else items(list, key = { it.id }, contentType = { "playlist" }) { p ->
             PlaylistRow(p, onClick = { open(DetailTarget.Playlist(p.id)) }, modifier = Modifier.animateItem(), selected = selecting && selection.contains(p.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Playlists, p.id) })
@@ -351,7 +357,9 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
         else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding))
         return
     }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
         if (onOfflineOnlyChange != null) item(key = "chips") {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 FilterChip(
@@ -394,7 +402,9 @@ internal fun GenresTab(serverId: String, open: (DetailTarget) -> Unit, topPaddin
     LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList() }
     val list = genres
     if (list != null && list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
-    LazyColumn(contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         if (list == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton(showArtwork = false) }
         else items(list, key = { it.name }, contentType = { "genre" }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }, modifier = Modifier.animateItem()) }
     }
