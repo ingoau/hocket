@@ -88,7 +88,15 @@ the one core for the process through `CoreHost`:
   `Command.MediaSessionCommand`. Notification, lockscreen, Bluetooth and headset controls come from
   Media3; the service `addSession`s the session in `onCreate` (the UI is not a Media3 controller, so
   `onGetSession` alone would never register it and no notification or foreground promotion would
-  happen). Playback resumption from the system is refused (resuming is always explicit).
+  happen).
+- Remote output: while another Connect device plays, `CoreSessionPlayer` reports
+  `DeviceInfo(PLAYBACK_TYPE_REMOTE, routingControllerId = "hocket-connect")` (fixed volume: Connect
+  volume is per device) and `ConnectRouteProvider` (a `MediaRoute2ProviderService`, API 30+) keeps a
+  routing session with that id, named after the playing device. SystemUI pairs the two and shows the
+  device on the media controls' output chip; the other devices are routes in the system output
+  switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds
+  `ConnectRoutes` from `DevicesChanged`/`TransportChanged`/`MediaSession` and registers the app's
+  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound. Playback resumption from the system is refused (resuming is always explicit).
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
   `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
 - The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported
