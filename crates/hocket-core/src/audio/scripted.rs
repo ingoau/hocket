@@ -105,6 +105,9 @@ struct State {
     load_started_ms: f64,
     log: Vec<ScriptedCall>,
     devices: Vec<OutputDevice>,
+    /// Report a gapless boundary the way Media3 does: `TransitionedToNext`
+    /// alone, with no `Ended` for the item that finished.
+    transition_only: bool,
 }
 
 /// See the module docs.
@@ -151,6 +154,13 @@ impl ScriptedBackend {
     /// Virtual time a load takes before reporting `Ready` (default 0).
     pub fn set_load_latency_ms(&self, ms: f64) {
         self.state.lock().load_latency_ms = ms.max(0.0);
+    }
+
+    /// Report gapless boundaries as `TransitionedToNext` without the
+    /// preceding `Ended` (what an ExoPlayer auto-advance looks like when the
+    /// platform does not synthesise the `Ended`).
+    pub fn set_transition_only(&self, on: bool) {
+        self.state.lock().transition_only = on;
     }
 
     /// The device list [`PlaybackBackend::output_devices`] returns.
@@ -254,7 +264,12 @@ impl ScriptedBackend {
                 break;
             }
             let ended_key = cur.source.key.clone();
-            out.push(BackendReport::Ended { key: ended_key });
+            let has_next = st.next.as_ref().is_some_and(|n| {
+                !st.failing.contains(&n.key) && !st.failing_tracks.contains(&n.track.id)
+            });
+            if !(st.transition_only && has_next) {
+                out.push(BackendReport::Ended { key: ended_key });
+            }
             match st.next.take() {
                 Some(next)
                     if !st.failing.contains(&next.key)

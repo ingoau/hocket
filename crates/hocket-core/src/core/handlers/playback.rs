@@ -253,6 +253,7 @@ impl Actor {
             }
         }
         self.playback.playing = play;
+        self.playback.focus_suspended = false;
         self.playback.buffering = !transitioned;
         self.playback.started_at = started_at;
         self.playback.started_local = now - f64::from(played_ms);
@@ -544,9 +545,17 @@ impl Actor {
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
+        if !playing && self.playback.loaded && self.playback.focus_suspended {
+            // Paused while focus is away: the backend must not resume later.
+            self.playback.focus_suspended = false;
+            if let Err(e) = self.backend.pause() {
+                self.log("debug", format!("pause: {e}"));
+            }
+        }
         if !self.playback.loaded || self.playback.playing == playing {
             return;
         }
+        self.playback.focus_suspended = false;
         let now = self.now();
         self.playback.position_ms = self.playback.position_now(now);
         self.playback.position_at = now;
@@ -632,6 +641,21 @@ impl Actor {
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
         let current = |k: &QueueKey, me: &Actor| me.playback.backend_key.as_ref() == Some(k);
+        if let BackendReport::TransitionedToNext { key } = &report {
+            // A backend that moved on to the preloaded item without reporting
+            // `Ended` for the one that finished (Media3's auto-advance): the
+            // end is implied. Without it the document never advances, the
+            // new item's reports are dropped as foreign, and playback stops
+            // for good when it ends.
+            let implied_end = !self.playback.awaiting_transition
+                && !current(key, self)
+                && self.playback.next.as_ref().is_some_and(|n| &n.key == key);
+            if implied_end {
+                if let Some(ended) = self.playback.backend_key.clone() {
+                    self.on_backend_report(BackendReport::Ended { key: ended });
+                }
+            }
+        }
         match report {
             BackendReport::Ready { key, duration_ms } => {
                 if !current(&key, self) {
@@ -656,6 +680,7 @@ impl Actor {
                 self.playback.position_ms = position_ms;
                 self.playback.position_at = now;
                 self.playback.buffering = false;
+                self.playback.focus_suspended = false;
                 if !self.playback.playing {
                     self.playback.playing = true;
                     let actions = self.scrobbler.set_playing(true);
@@ -850,12 +875,28 @@ impl Actor {
                 self.engine_input(Input::PreBufferReady { key });
             }
             BackendReport::AudioFocusLost { transient } => {
-                if self.playback.playing {
-                    if !transient {
-                        self.playback.want_playing = false;
-                    }
-                    self.set_playing(false);
+                if !self.playback.playing {
+                    return;
                 }
+                if !transient {
+                    self.playback.want_playing = false;
+                    self.set_playing(false);
+                    return;
+                }
+                // A call, a navigation prompt: the platform player keeps its
+                // intent to play and resumes by itself when focus returns.
+                // Pausing it here would leave it paused for good, so only
+                // record that nothing is audible.
+                let now = self.now();
+                self.playback.position_ms = self.playback.position_now(now);
+                self.playback.position_at = now;
+                self.playback.playing = false;
+                self.playback.focus_suspended = true;
+                let actions = self.scrobbler.set_playing(false);
+                self.apply_scrobble_actions(actions);
+                self.save_position();
+                self.stamp();
+                self.emit_transport();
             }
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
