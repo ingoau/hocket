@@ -655,12 +655,12 @@ fn lan_leader_restart_keeps_the_scrobble_dedupe_log() {
 
 /// The interleaving behind LAN hostile seed 43: the LAN leader plays a
 /// track and is cut off from its members a moment before the play reaches
-/// its scrobble point. It still heard from them within
-/// `MEMBER_QUIET_MS`, so it used to trust its own room and scrobble; the
-/// members never learned of it, took the play over on their side of the
-/// partition and scrobbled it again. Now the leader's claim waits for a
-/// member to echo it, is withdrawn once the leader notices it is alone,
-/// and after the heal it finds the other side's scrobble instead.
+/// its scrobble point. It still heard from them within `MEMBER_QUIET_MS`,
+/// so it used to trust its own room and scrobble; the members never
+/// learned of it, regrouped without it, took the play over and scrobbled
+/// it again. Now the leader's claim waits for a member to echo it, is
+/// withdrawn once the leader notices it is alone, and after the heal the
+/// leader finds the other side's scrobble instead.
 #[test]
 fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
     let mut cfg = WorldConfig::new(21);
@@ -689,7 +689,7 @@ fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
     // cut off 1.2 s before the scrobble point, silently (no disconnects)
     w.perform(Action::Partition {
         device: leader,
-        duration_ms: 90_000.0,
+        duration_ms: 120_000.0,
     });
     w.run_for(2_000.0);
     assert_eq!(
@@ -697,23 +697,34 @@ fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
         1,
         "the leader reached t0's scrobble point after the cut"
     );
+    let started_at = w.devices[leader].scrobbles_reached[0].1;
     assert!(
         w.server.scrobbles.is_empty(),
         "the leader waits for a member to acknowledge its claim: {:?}",
         w.server.scrobbles
     );
-    // the other side regroups and takes the play over, past its scrobble point
-    w.run_for(35_000.0);
+    // the leader drops off the LAN for a while (its advert with it), so
+    // the other side regroups without it and takes the play over, past
+    // its scrobble point
+    w.perform(Action::Sleep {
+        device: leader,
+        duration_ms: 60_000.0,
+    });
+    w.run_for(10_000.0);
+    assert!(
+        w.devices[member].engine.is_serving() || w.devices[member].engine.is_connected(),
+        "the other side regrouped"
+    );
     w.perform(Action::ResumeHere { device: member });
     w.run_for(20_000.0);
-    if std::env::var("HOCKET_SIM_TRACE").is_ok() { for d in &w.devices { for l in &d.log { eprintln!("{l}"); } } }
-    let started_at = w.devices[leader].scrobbles_reached[0].1;
     assert_eq!(
         w.server.count("t0", started_at),
         1,
         "the other side scrobbled the play it took over: {:?}",
         w.server.scrobbles
     );
+    // the leader wakes, still cut off, then the partition heals
+    w.run_for(120_000.0);
     w.finish();
     assert_eq!(
         w.server.count("t0", started_at),

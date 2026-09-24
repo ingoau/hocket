@@ -1978,7 +1978,6 @@ impl Engine {
     }
 
     fn on_wire_in(&mut self, peer: PeerId, msg: WireMessage) {
-        if matches!(msg.msg, Msg::ScrobbleSubmitted { .. }) { eprintln!("DBG {} wire in from {peer}: {:?} inbound={:?} remote={:?}", self.cfg.device.id, msg.msg, self.inbound, self.remote.as_ref().map(|r| &r.state)); }
         if self.inbound.contains(&peer) {
             let was_serving = self.is_serving();
             let outs = self.room.handle(RoomInput::Message(peer, msg));
@@ -2397,7 +2396,6 @@ impl Engine {
         started_at: EpochMs,
         device_id: DeviceId,
     ) {
-        eprintln!("DBG {} got leader claim {track_id} {device_id}", self.cfg.device.id);
         let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
         self.learn_scrobbled(&track_id, started_at, &device_id);
         let mut ours: Vec<(TrackId, EpochMs)> = vec![];
@@ -5367,6 +5365,151 @@ mod tests {
                 m,
                 Msg::ScrobbleSubmitted { track_id, device_id, .. } if track_id == "t" && device_id == "q"
             )));
+    }
+
+    fn claim_announcements(outs: &[Output], peer: &str) -> usize {
+        wire_outs(outs)
+            .iter()
+            .filter(|(p, m)| {
+                p == peer
+                    && matches!(m, Msg::ScrobbleSubmitted { device_id, .. } if device_id == "m")
+            })
+            .count()
+    }
+
+    fn member_says(e: &mut Engine, peer: &str, msg: Msg) -> Vec<Output> {
+        e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(msg),
+        })
+    }
+
+    #[test]
+    fn a_lan_leaders_own_scrobble_waits_for_a_member_echo() {
+        let (mut e, _) = engine("m");
+        admit_inbound(&mut e, "in1", "q");
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        assert!(
+            scrobble_verdicts(&outs).is_empty(),
+            "no verdict before an echo"
+        );
+        assert_eq!(claim_announcements(&outs, "in1"), 1);
+        assert!(
+            e.known_scrobbled().is_empty(),
+            "an unconfirmed claim is not persisted as known"
+        );
+        let outs = member_says(
+            &mut e,
+            "in1",
+            Msg::ScrobbleSubmitted {
+                track_id: "t".into(),
+                started_at: 5_000.0,
+                device_id: "m".into(),
+            },
+        );
+        assert_eq!(scrobble_verdicts(&outs), vec![true]);
+        assert_eq!(e.known_scrobbled().len(), 1);
+    }
+
+    #[test]
+    fn an_unacknowledged_leader_claim_is_withdrawn_when_members_go_quiet() {
+        let (mut e, clock) = engine("m");
+        admit_inbound(&mut e, "in1", "q");
+        e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        // the member falls silent (we are the one cut off, say)
+        clock
+            .0
+            .store(10_000 + MEMBER_QUIET_MS as u64 + 1_000, Ordering::SeqCst);
+        let outs = e.handle(Input::Tick);
+        assert!(scrobble_verdicts(&outs).is_empty());
+        assert!(e.room().replica().scrobbles.is_empty(), "claim withdrawn");
+        // meanwhile the member's side scrobbled the play; it comes back and
+        // says so; our deferred query then finds its scrobble
+        let t = 10_000 + MEMBER_QUIET_MS as u64 + 2_000;
+        clock.0.store(t, Ordering::SeqCst);
+        member_says(
+            &mut e,
+            "in1",
+            Msg::ScrobbleSubmitted {
+                track_id: "t".into(),
+                started_at: 5_000.0,
+                device_id: "q".into(),
+            },
+        );
+        let mut verdicts = vec![];
+        for i in 1..=5 {
+            clock.0.store(t + i * 1_000, Ordering::SeqCst);
+            member_says(&mut e, "in1", Msg::ClockPing { t0: 0.0 });
+            verdicts.extend(scrobble_verdicts(&e.handle(Input::Tick)));
+        }
+        assert_eq!(verdicts, vec![false], "the other side's scrobble wins");
+    }
+
+    #[test]
+    fn a_claim_no_member_ever_echoes_is_judged_alone_after_the_grace() {
+        let (mut e, clock) = engine("m");
+        admit_inbound(&mut e, "in1", "q");
+        e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        // a member that talks but never echoes (an older build): the claim
+        // is re-announced on every retry and finally stands on its own
+        let mut verdicts = vec![];
+        let mut announced = 0;
+        let mut t = 10_000;
+        while t <= 10_000 + DEFAULT_SCROBBLE_GRACE_MS as u64 + 5_000 {
+            t += 5_000;
+            clock.0.store(t, Ordering::SeqCst);
+            member_says(&mut e, "in1", Msg::ClockPing { t0: 0.0 });
+            let outs = e.handle(Input::Tick);
+            announced += claim_announcements(&outs, "in1");
+            verdicts.extend(scrobble_verdicts(&outs));
+        }
+        assert!(
+            announced >= 10,
+            "retries re-announce the claim: {announced}"
+        );
+        assert_eq!(verdicts, vec![true]);
+        assert_eq!(e.room().replica().scrobbles[0].device_id, "m");
+    }
+
+    #[test]
+    fn a_member_echoes_its_leaders_claim_and_drops_its_own_pending_reach() {
+        let (mut e, _) = engine("a");
+        attach(&mut e, None, vec![]);
+        // we reached the same play ourselves; our query is out
+        e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::ScrobbleSubmitted {
+                track_id: "t".into(),
+                started_at: 5_000.3,
+                device_id: "m".into(),
+            }),
+        });
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "up"
+            && matches!(m, Msg::ScrobbleSubmitted { device_id, started_at, .. } if device_id == "m" && *started_at == 5_000.3)));
+        assert_eq!(
+            scrobble_verdicts(&outs),
+            vec![false],
+            "the leader's claim came first"
+        );
+        // and a later reach of it (a takeover) is a duplicate at once
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        assert_eq!(scrobble_verdicts(&outs), vec![false]);
     }
 
     #[test]
