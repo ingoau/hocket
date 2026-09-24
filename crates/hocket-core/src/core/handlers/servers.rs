@@ -689,8 +689,14 @@ impl Actor {
             .network
             .as_ref()
             .is_some_and(|n| n.kind == NetworkKind::Offline);
+        let changed = self.network.as_ref() != Some(&state);
         self.downloads.set_network(Some(state.clone()));
         self.network = Some(state.clone());
+        if changed {
+            self.emit(Event::NetworkChanged {
+                network: self.network.clone(),
+            });
+        }
         self.mark_prefetch_check();
         if state.kind != NetworkKind::Offline && (was_offline || self.network.is_some()) {
             self.last_outbox_retry = self.now();

@@ -466,7 +466,41 @@ mod tests {
         );
         push(
             "event.playerNotice.none",
-            json!(Event::PlayerNotice { message: None }),
+            json!(Event::PlayerNotice {
+                message: None,
+                code: None,
+                detail: None
+            }),
+        );
+        push(
+            "event.playerNotice.offline",
+            json!(Event::PlayerNotice {
+                message: Some("Offline: skipping tracks that aren't downloaded or cached".into()),
+                code: Some(PlayerNoticeCode::OfflineSkipping),
+                detail: None
+            }),
+        );
+        push(
+            "event.playerNotice.skipped",
+            json!(Event::PlayerNotice {
+                message: Some("Couldn't play Title, skipped".into()),
+                code: Some(PlayerNoticeCode::CouldNotPlaySkipped),
+                detail: Some("Title".into())
+            }),
+        );
+        push(
+            "event.networkChanged",
+            json!(Event::NetworkChanged {
+                network: Some(NetworkState {
+                    kind: NetworkKind::Cellular,
+                    metered: true,
+                    network_id: None
+                })
+            }),
+        );
+        push(
+            "event.networkChanged.none",
+            json!(Event::NetworkChanged { network: None }),
         );
         push(
             "event.libraryChanged",

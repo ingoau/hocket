@@ -508,9 +508,11 @@ impl Actor {
         }
         for key in skipped {
             let name = self.track_title_for_key(&document, &key);
-            self.emit(Event::PlayerNotice {
-                message: Some(format!("Couldn't play {name}, skipped")),
-            });
+            self.player_notice(
+                PlayerNoticeCode::CouldNotPlaySkipped,
+                format!("Couldn't play {name}, skipped"),
+                Some(name),
+            );
         }
 
         if new_key != old_key {
@@ -702,9 +704,11 @@ impl Actor {
             return;
         }
         if picks.is_empty() {
-            self.emit(Event::PlayerNotice {
-                message: Some("Autoplay found nothing to add".into()),
-            });
+            self.player_notice(
+                PlayerNoticeCode::AutoplayFoundNothing,
+                "Autoplay found nothing to add",
+                None,
+            );
             return;
         }
         let items = picks

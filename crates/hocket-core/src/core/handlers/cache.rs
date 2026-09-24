@@ -106,16 +106,20 @@ impl Actor {
         if self.cache.offline_skips > MAX_OFFLINE_SKIPS {
             self.cache.offline_skips = 0;
             self.playback.want_playing = false;
-            self.emit(Event::PlayerNotice {
-                message: Some("Nothing in the queue is available offline".into()),
-            });
+            self.player_notice(
+                PlayerNoticeCode::NothingAvailableOffline,
+                "Nothing in the queue is available offline",
+                None,
+            );
             return true;
         }
         if !self.cache.offline_notice {
             self.cache.offline_notice = true;
-            self.emit(Event::PlayerNotice {
-                message: Some("Offline: skipping tracks that aren't downloaded or cached".into()),
-            });
+            self.player_notice(
+                PlayerNoticeCode::OfflineSkipping,
+                "Offline: skipping tracks that aren't downloaded or cached",
+                None,
+            );
         }
         // Skipped on the next turn of the loop (never from inside the
         // reaction that is loading it).

@@ -786,6 +786,9 @@ impl Actor {
         self.emit(Event::ConnectionChanged {
             state: snapshot.connection.clone(),
         });
+        self.emit(Event::NetworkChanged {
+            network: snapshot.network.clone(),
+        });
         self.emit(Event::DevicesChanged {
             devices: snapshot.devices.clone(),
         });
@@ -1049,6 +1052,30 @@ impl Actor {
 
     /// A toast: only for an immediate failure of something the user just did,
     /// and for undo.
+    /// A player-bar notice: the core's English `message` with its stable
+    /// `code` (and variable `detail`) for platforms that localise.
+    pub(crate) fn player_notice(
+        &mut self,
+        code: PlayerNoticeCode,
+        message: impl Into<String>,
+        detail: Option<String>,
+    ) {
+        self.emit(Event::PlayerNotice {
+            message: Some(message.into()),
+            code: Some(code),
+            detail,
+        });
+    }
+
+    /// Clears the player-bar notice.
+    pub(crate) fn clear_player_notice(&mut self) {
+        self.emit(Event::PlayerNotice {
+            message: None,
+            code: None,
+            detail: None,
+        });
+    }
+
     pub(crate) fn toast(&mut self, message: impl Into<String>, action: Option<(String, Command)>) {
         let (action_label, action_command) = match action {
             Some((l, c)) => (Some(l), serde_json::to_string(&c).ok()),

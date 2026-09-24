@@ -647,7 +647,41 @@
   "event.playerNotice.none": {
     "type": "playerNotice",
     "data": {
-      "message": null
+      "message": null,
+      "code": null,
+      "detail": null
+    }
+  },
+  "event.playerNotice.offline": {
+    "type": "playerNotice",
+    "data": {
+      "message": "Offline: skipping tracks that aren't downloaded or cached",
+      "code": "offlineSkipping",
+      "detail": null
+    }
+  },
+  "event.playerNotice.skipped": {
+    "type": "playerNotice",
+    "data": {
+      "message": "Couldn't play Title, skipped",
+      "code": "couldNotPlaySkipped",
+      "detail": "Title"
+    }
+  },
+  "event.networkChanged": {
+    "type": "networkChanged",
+    "data": {
+      "network": {
+        "kind": "cellular",
+        "metered": true,
+        "networkId": null
+      }
+    }
+  },
+  "event.networkChanged.none": {
+    "type": "networkChanged",
+    "data": {
+      "network": null
     }
   },
   "event.libraryChanged": {

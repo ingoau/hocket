@@ -160,7 +160,7 @@ async fn offline_plays_downloads_and_complete_cache_entries_and_skips_the_rest()
         .events
         .all()
         .iter()
-        .filter(|e| matches!(e, Event::PlayerNotice { message: Some(m) } if m.contains("Offline")))
+        .filter(|e| matches!(e, Event::PlayerNotice { message: Some(m), code: Some(PlayerNoticeCode::OfflineSkipping), detail: None } if m.contains("Offline")))
         .count();
     assert!(notices >= 1);
     assert_eq!(

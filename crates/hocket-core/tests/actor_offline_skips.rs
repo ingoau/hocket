@@ -110,8 +110,24 @@ async fn offline_skips_are_cleared_when_the_network_returns() {
     assert_eq!(marked(&m), ["t1", "t3"], "{m:?}");
     // An offline skip is not reported as a failure.
     assert!(!t.events.all().iter().any(
-        |e| matches!(e, Event::PlayerNotice { message: Some(m) } if m.starts_with("Couldn't play"))
+        |e| matches!(e, Event::PlayerNotice { message: Some(m), .. } if m.starts_with("Couldn't play"))
     ));
+    // Announced by its stable code, once.
+    let offline_notices = t
+        .events
+        .all()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::PlayerNotice {
+                    code: Some(PlayerNoticeCode::OfflineSkipping),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(offline_notices >= 1);
 
     // Back online: the marks go, without an undo entry of their own.
     let before = undo_len(&t.snapshot().await);
@@ -217,4 +233,41 @@ async fn the_clear_reaches_a_peer() {
     assert!(!doc.extra.contains_key("offlineSkipped"));
     a.core.shutdown().await;
     b.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repeating_queue_with_nothing_offline_stops_with_a_coded_notice() {
+    let t = started("offline-nothing").await;
+    t.run(network(NetworkKind::Offline)).await;
+    t.run(Command::SetRepeat {
+        mode: RepeatMode::All,
+    })
+    .await;
+    t.run(Command::PlayTracks {
+        server_id: t.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Loop".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(2000.0).await;
+    assert!(
+        t.events.all().iter().any(|e| matches!(
+            e,
+            Event::PlayerNotice {
+                code: Some(PlayerNoticeCode::NothingAvailableOffline),
+                message: Some(_),
+                detail: None
+            }
+        )),
+        "{:?}",
+        t.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, Event::PlayerNotice { .. }))
+            .collect::<Vec<_>>()
+    );
+    assert!(!t.backend.is_playing());
+    t.core.shutdown().await;
 }

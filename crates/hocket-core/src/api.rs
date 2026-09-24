@@ -2166,6 +2166,28 @@ pub enum ErrorKind {
     Internal,
 }
 
+/// What an `Event::PlayerNotice` is about, stable across releases and
+/// languages (the `message` text is neither).
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PlayerNoticeCode {
+    /// Offline: tracks neither downloaded nor fully cached are skipped.
+    OfflineSkipping,
+    /// Offline, and nothing left in the queue plays here: playback stopped.
+    NothingAvailableOffline,
+    /// No server connection to stream from.
+    NoServer,
+    /// A non-fatal playback problem (`detail`: the backend's message).
+    PlaybackProblem,
+    /// A track failed to play and was skipped (`detail`: its title).
+    CouldNotPlaySkipped,
+    /// Stopped after several unplayable tracks in a row (`detail`: the last title).
+    CouldNotPlayStopped,
+    /// Autoplay was asked for more and found nothing to add.
+    AutoplayFoundNothing,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
@@ -2220,8 +2242,18 @@ pub enum Event {
         toast: Toast,
     },
     /// Inline player-bar line for a non-fatal playback issue ("Couldn't play X, skipped").
+    /// `message` is the core's English text; platforms that show their own
+    /// (localised) text match on `code` and fill in `detail`. All `None`
+    /// clears the line.
     PlayerNotice {
         message: Option<String>,
+        #[serde(default)]
+        code: Option<PlayerNoticeCode>,
+        /// The variable part of the notice: the track's title for
+        /// `couldNotPlaySkipped` / `couldNotPlayStopped`, the backend's
+        /// message for `playbackProblem`; `None` for the others.
+        #[serde(default)]
+        detail: Option<String>,
     },
 
     JobsChanged {
@@ -2233,6 +2265,12 @@ pub enum Event {
 
     ConnectionChanged {
         state: ConnectionState,
+    },
+    /// The network the platform last reported with `SetNetworkState`
+    /// (`Snapshot.network`): emitted whenever it changes and in every
+    /// replay. `None` until the platform first reports one.
+    NetworkChanged {
+        network: Option<NetworkState>,
     },
     DevicesChanged {
         devices: Vec<DeviceInfo>,

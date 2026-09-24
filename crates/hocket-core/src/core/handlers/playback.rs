@@ -222,9 +222,11 @@ impl Actor {
             self.playback.loaded = true;
         } else {
             let Some(source) = self.media_source_for(&item.key, &track) else {
-                self.emit(Event::PlayerNotice {
-                    message: Some("No server connection: add or reconnect your server".into()),
-                });
+                self.player_notice(
+                    PlayerNoticeCode::NoServer,
+                    "No server connection: add or reconnect your server",
+                    None,
+                );
                 self.playback.doc_key = Some(item.key.clone());
                 self.playback.track = Some(track);
                 self.playback.loaded = false;
@@ -408,7 +410,7 @@ impl Actor {
             play,
             Some((played_ms, started_at, scrobbled)),
         );
-        self.emit(Event::PlayerNotice { message: None });
+        self.clear_player_notice();
     }
 
     pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms) {
@@ -643,7 +645,7 @@ impl Actor {
                 self.playback.buffering = false;
                 self.playback.load_failures = 0;
                 self.playback.consecutive_skips = 0;
-                self.emit(Event::PlayerNotice { message: None });
+                self.clear_player_notice();
                 self.emit_transport();
             }
             BackendReport::Playing { key, position_ms } => {
@@ -769,9 +771,11 @@ impl Actor {
                 }
                 self.log("warn", format!("playback error on {key}: {message}"));
                 if !fatal {
-                    self.emit(Event::PlayerNotice {
-                        message: Some(format!("Playback problem: {message}")),
-                    });
+                    self.player_notice(
+                        PlayerNoticeCode::PlaybackProblem,
+                        format!("Playback problem: {message}"),
+                        Some(message),
+                    );
                     return;
                 }
                 if is_next && !current(&key, self) {
@@ -817,20 +821,24 @@ impl Actor {
                     None,
                 );
                 if self.playback.consecutive_skips >= MAX_CONSECUTIVE_SKIPS {
-                    self.emit(Event::PlayerNotice {
-                        message: Some(format!(
+                    self.player_notice(
+                        PlayerNoticeCode::CouldNotPlayStopped,
+                        format!(
                             "Couldn't play {title}; stopped after {MAX_CONSECUTIVE_SKIPS} unplayable tracks"
-                        )),
-                    });
+                        ),
+                        Some(title),
+                    );
                     self.playback.want_playing = false;
                     self.playback.consecutive_skips = 0;
                     self.stamp();
                     self.emit_transport();
                     return;
                 }
-                self.emit(Event::PlayerNotice {
-                    message: Some(format!("Couldn't play {title}, skipped")),
-                });
+                self.player_notice(
+                    PlayerNoticeCode::CouldNotPlaySkipped,
+                    format!("Couldn't play {title}, skipped"),
+                    Some(title),
+                );
                 if let Some(doc_key) = self.playback.doc_key.clone() {
                     if self.owns_transport() {
                         self.playback.want_playing = true;

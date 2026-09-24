@@ -257,3 +257,59 @@ async fn add_server_rejects_urls_that_are_not_plain_http() {
         other => panic!("{other:?}"),
     }
 }
+
+fn network_events(t: &TestCore) -> Vec<Option<NetworkState>> {
+    t.events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::NetworkChanged { network } => Some(network),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Snapshot.network` does not go stale: every change is announced, and the
+/// attach replay carries the current state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_changes_are_announced_and_replayed() {
+    let t = TestCore::start(
+        "network-event",
+        hocket_core::core::test_support::seeded_server(2, 100.0),
+    )
+    .await;
+    let wifi = NetworkState {
+        kind: NetworkKind::Wifi,
+        metered: false,
+        network_id: None,
+    };
+    let offline = NetworkState {
+        kind: NetworkKind::Offline,
+        metered: false,
+        network_id: None,
+    };
+    t.events.clear();
+    t.run(Command::SetNetworkState {
+        state: offline.clone(),
+    })
+    .await;
+    assert_eq!(network_events(&t), [Some(offline.clone())]);
+    // The same state again is not a change.
+    t.run(Command::SetNetworkState {
+        state: offline.clone(),
+    })
+    .await;
+    assert_eq!(network_events(&t).len(), 1);
+    t.run(Command::SetNetworkState {
+        state: wifi.clone(),
+    })
+    .await;
+    assert_eq!(network_events(&t), [Some(offline), Some(wifi.clone())]);
+    assert_eq!(t.snapshot().await.network, Some(wifi.clone()));
+
+    // A late attach (RequestSnapshot) replays it.
+    t.events.clear();
+    t.run(Command::RequestSnapshot).await;
+    assert_eq!(network_events(&t), [Some(wifi)]);
+    t.core.shutdown().await;
+}

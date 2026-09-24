@@ -301,7 +301,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         .events
         .all()
         .iter()
-        .any(|e| matches!(e, Event::PlayerNotice { message: Some(m) } if m.contains("skipped"))));
+        .any(|e| matches!(e, Event::PlayerNotice { message: Some(m), code: Some(PlayerNoticeCode::CouldNotPlaySkipped), detail: Some(title) } if m.contains("skipped") && m.contains(title.as_str()) && !title.is_empty())));
     assert!(t.backend.is_playing());
     let loads = t
         .backend
