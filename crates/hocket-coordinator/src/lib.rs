@@ -293,19 +293,19 @@ impl App {
                     return false;
                 }
             },
-            None => match verify_target(&credential.server_url, self.args.allow_private_servers)
-                .await
-            {
-                Ok(t) => {
-                    let host = t.host.clone();
-                    let addrs = t.addrs.clone();
-                    (t.url, Some((host, addrs)))
+            None => {
+                match verify_target(&credential.server_url, self.args.allow_private_servers).await {
+                    Ok(t) => {
+                        let host = t.host.clone();
+                        let addrs = t.addrs.clone();
+                        (t.url, Some((host, addrs)))
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "client named an unusable server");
+                        return false;
+                    }
                 }
-                Err(e) => {
-                    debug!(error = %e, "client named an unusable server");
-                    return false;
-                }
-            },
+            }
         };
         // The request goes to the addresses that were checked, whatever the
         // name resolves to a moment later.
@@ -631,7 +631,10 @@ async fn ws_upgrade(
     State(app): State<Arc<App>>,
 ) -> axum::response::Response {
     let ip = addr.ip();
-    let admitted = app.admission.lock().try_admit(ip, &app.args, Instant::now());
+    let admitted = app
+        .admission
+        .lock()
+        .try_admit(ip, &app.args, Instant::now());
     if let Err(why) = admitted {
         debug!(%ip, ?why, "connection refused");
         let status = match why {
@@ -781,9 +784,10 @@ pub async fn serve(
         loop {
             interval.tick().await;
             let store = purge_app.store.clone();
-            let purged =
-                tokio::task::spawn_blocking(move || store.purge_expired(hocket_core::util::now_ms()))
-                    .await;
+            let purged = tokio::task::spawn_blocking(move || {
+                store.purge_expired(hocket_core::util::now_ms())
+            })
+            .await;
             match purged {
                 Ok(Ok(n)) if n > 0 => info!(dropped = n, "expired replicas purged"),
                 Ok(Ok(_)) => {}
@@ -851,7 +855,10 @@ mod tests {
         let t0 = Instant::now();
         assert!(adm.try_admit(a, &args, t0).is_ok());
         assert!(adm.try_admit(a, &args, t0).is_ok());
-        assert_eq!(adm.try_admit(a, &args, t0), Err(Refused::TooManyFromAddress));
+        assert_eq!(
+            adm.try_admit(a, &args, t0),
+            Err(Refused::TooManyFromAddress)
+        );
         adm.release(a);
         // the bucket held two: the third within the minute is rate limited
         assert_eq!(adm.try_admit(a, &args, t0), Err(Refused::RateLimited));
@@ -860,6 +867,9 @@ mod tests {
             .try_admit(a, &args, t0 + Duration::from_secs(31))
             .is_ok());
         assert!(adm.try_admit(b, &args, t0).is_ok());
-        assert_eq!(adm.try_admit(b, &args, t0), Err(Refused::TooManyConnections));
+        assert_eq!(
+            adm.try_admit(b, &args, t0),
+            Err(Refused::TooManyConnections)
+        );
     }
 }

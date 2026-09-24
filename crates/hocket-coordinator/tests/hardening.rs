@@ -163,14 +163,23 @@ async fn refused_sockets_persist_nothing_and_open_no_lasting_room() {
     let (app, url, _stop) = start(args).await;
 
     // a frame before Hello
-    let got = exchange(&url, vec![Message::text("{\"protocolVersion\":2,\"msg\":{\"type\":\"syncRequest\",\"data\":null}}")]).await;
-    assert!(matches!(
-        got.first(),
-        Some(Msg::Refuse {
-            reason: RefuseReason::Unauthorised,
-            ..
-        })
-    ), "{got:?}");
+    let got = exchange(
+        &url,
+        vec![Message::text(
+            "{\"protocolVersion\":2,\"msg\":{\"type\":\"syncRequest\",\"data\":null}}",
+        )],
+    )
+    .await;
+    assert!(
+        matches!(
+            got.first(),
+            Some(Msg::Refuse {
+                reason: RefuseReason::Unauthorised,
+                ..
+            })
+        ),
+        "{got:?}"
+    );
 
     // a Hello without a credential, for a hundred different scopes
     for i in 0..100 {
@@ -190,7 +199,11 @@ async fn refused_sockets_persist_nothing_and_open_no_lasting_room() {
     // and the closing Disconnected did not resurrect it from disk
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(app.room_count(), 0);
-    assert_eq!(replica_files(dir.path()), 0, "nothing on disk for refused scopes");
+    assert_eq!(
+        replica_files(dir.path()),
+        0,
+        "nothing on disk for refused scopes"
+    );
     app.flush_all();
     assert_eq!(replica_files(dir.path()), 0);
     assert_eq!(app.connection_count(), 0);
@@ -210,9 +223,16 @@ async fn the_verify_proxy_never_fetches_private_addresses_by_default() {
         format!("http://user:pw@{}", subsonic.addr),
         "ftp://music.example/".into(),
     ] {
-        let got = exchange(&url, vec![hello(&scope, Some(credential(&named, "good-token")))]).await;
+        let got = exchange(
+            &url,
+            vec![hello(&scope, Some(credential(&named, "good-token")))],
+        )
+        .await;
         // Refused either way: a scope mismatch before the check, or the check.
-        assert!(matches!(got.first(), Some(Msg::Refuse { .. })), "{named}: {got:?}");
+        assert!(
+            matches!(got.first(), Some(Msg::Refuse { .. })),
+            "{named}: {got:?}"
+        );
     }
     assert_eq!(app.verification_count(), 0, "no ping was ever sent");
     assert_eq!(subsonic.pings.load(Ordering::SeqCst), 0);
@@ -224,7 +244,11 @@ async fn the_verify_proxy_does_not_follow_redirects() {
     let (app, url, _stop) = start(Args::for_tests()).await;
     let base = format!("http://{}", subsonic.addr);
     let scope = scope_key(&base, "alice");
-    let got = exchange(&url, vec![hello(&scope, Some(credential(&base, "good-token")))]).await;
+    let got = exchange(
+        &url,
+        vec![hello(&scope, Some(credential(&base, "good-token")))],
+    )
+    .await;
     assert!(
         matches!(
             got.first(),

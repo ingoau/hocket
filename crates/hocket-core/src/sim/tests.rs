@@ -541,7 +541,10 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     let start = w.now();
     w.run_for(10_000.0);
     let serving = w.devices.iter().filter(|d| d.engine.is_serving()).count();
-    assert_eq!(serving, 1, "the LAN elected a room while the coordinator is down");
+    assert_eq!(
+        serving, 1,
+        "the LAN elected a room while the coordinator is down"
+    );
     let t = tracks(&w, 5);
     w.perform(Action::PlayTracks {
         device: 0,
@@ -570,7 +573,11 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     w.run_for(45_000.0);
     for d in &w.devices {
         assert!(d.engine.is_connected(), "{} back on the coordinator", d.id);
-        assert!(d.engine.lan_leader().is_none(), "{} left the LAN room", d.id);
+        assert!(
+            d.engine.lan_leader().is_none(),
+            "{} left the LAN room",
+            d.id
+        );
         assert_eq!(
             d.engine.document().current.as_ref().unwrap().track_id,
             t[2],

@@ -1701,10 +1701,7 @@ impl Engine {
         // mid-election) is honest about it: plain backoff, no strike, or
         // honest devices that all chased the same bad advert would end up
         // ignoring each other.
-        let claims_serving = self
-            .lan_peers
-            .iter()
-            .any(|p| p.device_id == l && p.serving);
+        let claims_serving = self.lan_peers.iter().any(|p| p.device_id == l && p.serving);
         if !claims_serving {
             return false;
         }
@@ -1719,7 +1716,10 @@ impl Engine {
         let block = (LAN_STRIKE_BLOCK_MS * 2f64.powi(level.min(16) as i32)).min(LAN_BLOCK_MS);
         self.log(
             "warn",
-            format!("LAN peer {l} {reason}; ignoring it for {:.0} s", block / 1000.0),
+            format!(
+                "LAN peer {l} {reason}; ignoring it for {:.0} s",
+                block / 1000.0
+            ),
         );
         let until = self.now_local_ms() + block;
         self.lan_blocklist.insert(l, until);

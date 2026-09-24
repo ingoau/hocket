@@ -1106,10 +1106,7 @@ impl World {
         // 5. convergence: every attached device holds its room's document,
         //    and (LAN) the healed network has settled on one room.
         if self.cfg.topology == Topology::Lan {
-            let rooms: BTreeSet<String> = self
-                .honest()
-                .filter_map(|i| self.room_key(i))
-                .collect();
+            let rooms: BTreeSet<String> = self.honest().filter_map(|i| self.room_key(i)).collect();
             if rooms.len() > 1 {
                 self.violations.push(format!(
                     "[{now:.0}] LAN did not settle on one room after heal: {rooms:?}"
@@ -1131,9 +1128,7 @@ impl World {
             if d.asleep {
                 continue;
             }
-            if self.cfg.has_coordinator()
-                && self.room_key(i).as_deref() != Some(COORDINATOR_NODE)
-            {
+            if self.cfg.has_coordinator() && self.room_key(i).as_deref() != Some(COORDINATOR_NODE) {
                 self.violations.push(format!(
                     "[{now:.0}] {} not on the coordinator after heal (room {:?})",
                     d.id,
