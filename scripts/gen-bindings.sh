@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerates every platform type/binding from crates/hocket-core/src/api.rs.
 #
-#   typeshare      -> desktop/src/core/api.ts                                   (TypeScript)
+#   typeshare      -> desktop/src/core/api.ts                                   (TypeScript, then
+#                     desktop/scripts/postprocess-api.mjs: unit enums -> string-literal unions)
 #   typeshare      -> android/core/src/main/java/app/hocket/core/api/Generated.kt (Kotlin, kotlinx.serialization)
 #   uniffi-bindgen -> android/core/src/main/java/app/hocket/core/ffi/hocket_android.kt (Kotlin FFI glue)
 #
@@ -16,6 +17,10 @@ command -v typeshare >/dev/null || { echo "error: typeshare is not installed; ru
 
 mkdir -p "$ROOT/desktop/src/core" "$ROOT/android/core/src/main/java/app/hocket/core/api"
 typeshare "$API" --lang=typescript --output-file="$ROOT/desktop/src/core/api.ts"
+# The desktop turns typeshare's unit enums into string-literal unions (what the JSON carries); apply
+# the same normalisation so this script leaves the desktop typecheck green.
+command -v node >/dev/null || { echo "error: node is not installed (needed to post-process desktop/src/core/api.ts)" >&2; exit 1; }
+node "$ROOT/desktop/scripts/postprocess-api.mjs" "$ROOT/desktop/src/core/api.ts"
 typeshare "$API" --lang=kotlin --java-package=app.hocket.core.api --module-name=core \
   --output-file="$ROOT/android/core/src/main/java/app/hocket/core/api/Generated.kt"
 # typeshare names the `FilterValue::List` variant `List`, which shadows kotlin.collections.List inside
