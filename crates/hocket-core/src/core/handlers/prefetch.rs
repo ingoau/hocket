@@ -1,8 +1,9 @@
 //! Background audio prefetch: the device that owns playback reads the next
 //! two upcoming queue items through the in-process stream reader, from
-//! byte 0 to the end, so the reader's normal tee → `cache_put` path puts
-//! them in the stream cache before they come up (no separate download
-//! code, and they play from disk with zero server requests).
+//! byte 0 to the end, so the reader's normal write-through path completes
+//! their stream-cache entries before they come up (no separate download
+//! code, and they play from disk with zero server requests; bytes an
+//! earlier read or the album primer left are not fetched again).
 //!
 //! - Which: the first two playable items after the current one in derived
 //!   play order (playing-next insertions, then upcoming; shuffle and repeat
@@ -260,10 +261,12 @@ impl Actor {
     }
 
     /// Read one track through the stream reader in the background, from
-    /// byte 0: the whole track (`byte_limit` `None`, which caches it) or
-    /// only its first bytes (warms nothing today: partial reads are never
-    /// cached). Replaces any running prefetch. `false` when there is
-    /// nothing to fetch (downloaded, no server, no reader).
+    /// byte 0: the whole track (`byte_limit` `None`, which completes its
+    /// cache entry) or only its first bytes (kept as a partial span).
+    /// Whatever an earlier read or the primer left is served from disk and
+    /// only the gaps are fetched. Replaces any running prefetch and makes a
+    /// running prime step aside. `false` when there is nothing to fetch
+    /// (downloaded, no server, no reader).
     pub(crate) fn start_prefetch(&mut self, track: &Track, byte_limit: Option<u64>) -> bool {
         let (Some(reader), Some(api)) = (self.stream_reader.clone(), self.api()) else {
             return false;
@@ -286,6 +289,8 @@ impl Actor {
         if let Some(r) = self.prefetch.running.take() {
             r.cancel.cancel();
         }
+        // The primer never holds up the queue.
+        self.yield_prime();
         self.prefetch.generation += 1;
         let generation = self.prefetch.generation;
         let cancel = CancellationToken::new();
@@ -328,6 +333,7 @@ impl Actor {
             self.prefetch.failed.insert(track_id);
         }
         self.apply_prefetch();
+        self.prime_next();
     }
 
     /// Stop any prefetch (shutdown).

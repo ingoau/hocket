@@ -185,10 +185,7 @@ impl Actor {
         let warn = self.settings.get_f64(keys::STORAGE_WARN_THRESHOLD_BYTES);
         self.downloads
             .set_warn_threshold(if warn > 0.0 { Some(warn) } else { None });
-        let budget = self.settings.get_f64(keys::STORAGE_CACHE_MAX_BYTES);
-        if budget > 0.0 {
-            self.downloads.set_cache_budget(budget);
-        }
+        self.apply_cache_budget();
     }
 
     pub(crate) fn apply_transcoding_settings(&mut self) {

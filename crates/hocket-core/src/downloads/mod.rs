@@ -117,8 +117,12 @@ impl From<DownloadError> for JobError {
 
 /// Minimum free space kept after a download (out-of-space threshold).
 pub const MIN_FREE_BYTES: f64 = 200.0 * 1024.0 * 1024.0;
-/// Default LRU budget for the stream cache.
+/// Default (and largest automatic) budget for the stream cache.
 pub const DEFAULT_CACHE_BUDGET: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
+/// Smallest automatic budget.
+pub const MIN_AUTO_CACHE_BUDGET: f64 = 64.0 * 1024.0 * 1024.0;
+/// Share of the cache volume an automatic budget takes.
+pub const AUTO_CACHE_BUDGET_SHARE: f64 = 0.10;
 
 /// Per-network transcoding choice. `None` profile = original.
 #[derive(Debug, Clone, Default)]
@@ -206,6 +210,7 @@ struct Inner {
     cache_dir: PathBuf,
     platform: Platform,
     cache_budget: RwLock<f64>,
+    cache_budget_auto: RwLock<bool>,
     warn_threshold: RwLock<Option<f64>>,
     policy: RwLock<TranscodingPolicy>,
     network: RwLock<Option<api::NetworkState>>,
@@ -282,6 +287,7 @@ impl Downloads {
                 cache_dir: cache_dir.to_path_buf(),
                 platform,
                 cache_budget: RwLock::new(DEFAULT_CACHE_BUDGET),
+                cache_budget_auto: RwLock::new(true),
                 warn_threshold: RwLock::new(None),
                 policy: RwLock::new(TranscodingPolicy::default()),
                 network: RwLock::new(None),
@@ -783,7 +789,23 @@ impl Downloads {
         // creates `dest` through a completed rename, so on failure there is
         // nothing of ours to remove (a file already there belongs to an
         // earlier complete download and is left alone).
-        let result = api.download_to_file(url, &dest).await;
+        //
+        // A complete stream-cache copy (the profile this pin would fetch,
+        // or the original) is kept instead of downloaded again.
+        let adopted = match self.adopt_cached_for_pin(server_id, &track, profile.as_ref()) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(error = %e, "keeping the cached copy for a pin");
+                None
+            }
+        };
+        let (dest, suffix, result) = match adopted {
+            Some((path, suffix, out)) => (path, suffix, Ok(out)),
+            None => {
+                let result = api.download_to_file(url, &dest).await;
+                (dest, suffix, result)
+            }
+        };
         match result {
             Ok(out) => {
                 let rg = track.replay_gain.as_ref();
@@ -820,6 +842,98 @@ impl Downloads {
                 Err(e.into())
             }
         }
+    }
+
+    /// Keep a complete stream-cache copy as the pin's file: moved into the
+    /// downloads directory (copied while a reader has it open, or across
+    /// volumes), its cache row dropped. Only the profile the pin would
+    /// fetch, or the original, qualifies. Returns where it went, its suffix
+    /// and what the download would have reported.
+    fn adopt_cached_for_pin(
+        &self,
+        server_id: &str,
+        track: &api::Track,
+        profile: Option<&TranscodingProfile>,
+    ) -> Result<
+        Option<(
+            PathBuf,
+            Option<String>,
+            crate::subsonic::transport::DownloadOutcome,
+        )>,
+        DownloadError,
+    > {
+        let want = profile_key(profile);
+        let mut rows: Vec<CacheRow> = self
+            .cache_rows(server_id, &track.id)?
+            .into_iter()
+            .filter(|r| r.complete && (r.profile == want || r.profile.is_empty()))
+            .collect();
+        rows.sort_by_key(|r| r.profile != want);
+        let mut changed = vec![];
+        for row in rows {
+            let len = std::fs::metadata(&row.path).ok().map(|m| m.len());
+            let bytes = row.total.unwrap_or(row.bytes);
+            if self.is_doomed(&row.path) || len != Some(bytes) {
+                continue;
+            }
+            if let (Some(tag), Some(now)) =
+                (&row.source_tag, self.source_tag(server_id, &track.id)?)
+            {
+                if *tag != now {
+                    self.drop_row(&row, &mut changed)?;
+                    continue;
+                }
+            }
+            let suffix = if row.profile.is_empty() {
+                track.suffix.clone()
+            } else {
+                profile
+                    .and_then(|p| p.format.clone())
+                    .or(track.suffix.clone())
+            };
+            let dest = self.download_path(server_id, &track.id, suffix.as_deref());
+            let open = self
+                .inner
+                .cache_use
+                .lock()
+                .readers
+                .get(&row.path)
+                .is_some_and(|n| *n > 0);
+            let moved = !open && std::fs::rename(&row.path, &dest).is_ok();
+            if !moved {
+                let tmp = crate::subsonic::transport::part_path(&dest);
+                if let Err(e) =
+                    std::fs::copy(&row.path, &tmp).and_then(|_| std::fs::rename(&tmp, &dest))
+                {
+                    let _ = std::fs::remove_file(&tmp);
+                    tracing::warn!(error = %e, "copying a cached file for a pin");
+                    continue;
+                }
+            }
+            if moved {
+                self.inner.db.with_conn(|c| {
+                    c.execute(
+                        "DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4",
+                        params![row.server_id, row.track_id, row.profile, row.path.to_string_lossy().as_ref()],
+                    )?;
+                    Ok(())
+                })?;
+            } else {
+                // The pinned copy wins every lookup: the cache one is dead weight.
+                self.drop_row(&row, &mut changed)?;
+            }
+            tracing::info!(track = %track.id, moved, "pinned from the stream cache, no download");
+            return Ok(Some((
+                dest,
+                suffix,
+                crate::subsonic::transport::DownloadOutcome {
+                    status: 200,
+                    content_type: row.content_type.clone(),
+                    bytes,
+                },
+            )));
+        }
+        Ok(None)
     }
 
     /// Compare-and-set claim of every `wanted`/`failed` row for the track.
@@ -1249,9 +1363,10 @@ impl Downloads {
             track.content_type.clone()
         };
         if let Some(proxy) = proxy {
-            let cached_type = self
-                .cache_lookup(sid, &track.id, profile.as_ref(), false)?
-                .and_then(|e| e.content_type);
+            let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), false)?;
+            // A complete original serves a transcoded request as it is.
+            let transcoded = transcoded && !cached.as_ref().is_some_and(|e| e.profile.is_empty());
+            let cached_type = cached.and_then(|e| e.content_type);
             let suffix = if transcoded {
                 profile.as_ref().and_then(|p| p.format.clone())
             } else {
@@ -1313,13 +1428,44 @@ impl Downloads {
 
     /// Storage summary (images_bytes is filled in by the image cache).
     pub fn storage_summary(&self, images_bytes: f64) -> DbResult<StorageSummary> {
+        let traffic = self.inner.traffic.totals();
         Ok(StorageSummary {
             downloads_bytes: self.downloads_bytes()?,
             cache_bytes: self.cache_bytes()?,
             images_bytes,
             warn_threshold_bytes: *self.inner.warn_threshold.read(),
             free_bytes: self.inner.storage.free_bytes(&self.inner.data_dir),
+            partial_cache_bytes: self.partial_cache_bytes()?,
+            cache_budget_bytes: self.cache_budget(),
+            cache_budget_auto: *self.inner.cache_budget_auto.read(),
+            served_from_disk_bytes: traffic.from_disk as f64,
+            fetched_bytes: (traffic.fetched + traffic.fetched_background) as f64,
+            data_saved_bytes: traffic.saved() as f64,
         })
+    }
+
+    /// The budget when the user never set one: 10% of the cache volume's
+    /// space (free plus what the cache already holds, so filling the cache
+    /// does not shrink its own budget), between [`MIN_AUTO_CACHE_BUDGET`]
+    /// and [`DEFAULT_CACHE_BUDGET`]. Unknown free space: the default.
+    pub fn auto_cache_budget(&self) -> f64 {
+        let probe = if self.inner.cache_dir.join("stream").exists() {
+            self.inner.cache_dir.join("stream")
+        } else {
+            self.inner.cache_dir.clone()
+        };
+        match self.inner.storage.free_bytes(&probe) {
+            Some(free) => {
+                let held = self.cache_bytes().unwrap_or(0.0);
+                ((free + held) * AUTO_CACHE_BUDGET_SHARE)
+                    .clamp(MIN_AUTO_CACHE_BUDGET, DEFAULT_CACHE_BUDGET)
+            }
+            None => DEFAULT_CACHE_BUDGET,
+        }
+    }
+
+    pub fn set_cache_budget_auto(&self, auto: bool) {
+        *self.inner.cache_budget_auto.write() = auto;
     }
 
     /// True when downloads exceed the configured warn threshold.
@@ -2698,5 +2844,31 @@ mod tests {
             })
             .unwrap();
         assert_eq!(primed, 0);
+    }
+
+    /// With free space known, the automatic budget is 10% of the cache
+    /// volume (free plus what the cache holds), between 64 MiB and 2 GiB.
+    #[test]
+    fn the_automatic_budget_follows_the_cache_volume() {
+        let f = fixture();
+        let mib = 1024.0 * 1024.0;
+        assert_eq!(
+            f.dl.auto_cache_budget(),
+            DEFAULT_CACHE_BUDGET,
+            "unknown: default"
+        );
+        *f.storage.0.lock() = Some(5000.0 * mib);
+        assert!((f.dl.auto_cache_budget() - 500.0 * mib).abs() < 1.0);
+        // What the cache already holds does not shrink its own budget.
+        let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, vec![0u8; 1_000_000]).unwrap();
+        f.dl.cache_put("srv", "t0", None, &p, 1_000_000.0, None)
+            .unwrap();
+        assert!((f.dl.auto_cache_budget() - 500.0 * mib).abs() < 1.0);
+        *f.storage.0.lock() = Some(100.0 * mib);
+        assert_eq!(f.dl.auto_cache_budget(), MIN_AUTO_CACHE_BUDGET);
+        *f.storage.0.lock() = Some(1.0e12);
+        assert_eq!(f.dl.auto_cache_budget(), DEFAULT_CACHE_BUDGET);
     }
 }

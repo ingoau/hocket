@@ -263,6 +263,11 @@ pub enum Input {
     ReleaseTransport,
     /// Play/pause/seek from this device's UI when it may not own transport.
     TransportRequest(TransportCommand),
+    /// Prime a track's first seconds on whichever device owns playback
+    /// (this one when nobody else holds a live lease).
+    PrimeRequest {
+        track_id: TrackId,
+    },
 
     // -- handoff -----------------------------------------------------------
     OpenPicker,
@@ -394,6 +399,10 @@ pub enum Output {
     ReleaseTransport,
     /// Remote control for the transport owner (this device).
     TransportCommand(TransportCommand),
+    /// Prime this track's first seconds into the stream cache here.
+    Prime {
+        track_id: TrackId,
+    },
     /// Verdict on a `ScrobbleReached`.
     Scrobble {
         track_id: TrackId,
@@ -1172,6 +1181,20 @@ impl Engine {
                 } else {
                     let from = self.cfg.device.id.clone();
                     self.upstream_send(Msg::TransportRequest { command: cmd, from });
+                }
+            }
+            Input::PrimeRequest { track_id } => {
+                let me = self.cfg.device.id.clone();
+                let now = self.now_session_ms();
+                let remote_owner = self
+                    .lease
+                    .owner
+                    .as_ref()
+                    .is_some_and(|o| *o != me && self.lease.expires_at > now);
+                if self.held.is_none() && remote_owner {
+                    self.upstream_send(Msg::PrimeRequest { track_id, from: me });
+                } else {
+                    self.out.push(Output::Prime { track_id });
                 }
             }
             Input::OpenPicker => self.open_picker(),
@@ -2332,6 +2355,11 @@ impl Engine {
             Msg::TransportRequest { command, .. } => {
                 if self.held.is_some() {
                     self.out.push(Output::TransportCommand(command));
+                }
+            }
+            Msg::PrimeRequest { track_id, .. } => {
+                if self.held.is_some() {
+                    self.out.push(Output::Prime { track_id });
                 }
             }
             Msg::LeaseGranted { lease, ack_of } => {
@@ -4008,6 +4036,62 @@ mod tests {
             .iter()
             .any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());
+    }
+
+    #[test]
+    fn prime_requests_go_to_whoever_owns_transport() {
+        let (mut e, _) = engine("a");
+        // Nobody owns: prime here.
+        let outs = e.handle(Input::PrimeRequest {
+            track_id: "t1".into(),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Prime { track_id } if track_id == "t1")));
+        // b holds a live lease in the room: the request goes to it.
+        attach(&mut e, None, vec![]);
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 3,
+                    expires_at: 1_000_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        let outs = e.handle(Input::PrimeRequest {
+            track_id: "t2".into(),
+        });
+        assert!(!outs.iter().any(|o| matches!(o, Output::Prime { .. })));
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "up"
+            && matches!(m, Msg::PrimeRequest { track_id, from } if track_id == "t2" && from == "a")));
+        // Not the owner: a relayed request is ignored.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::PrimeRequest {
+                track_id: "t3".into(),
+                from: "c".into(),
+            }),
+        });
+        assert!(!outs.iter().any(|o| matches!(o, Output::Prime { .. })));
+        // The lease lapsed: prime here again.
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 3,
+                    expires_at: 1.0,
+                },
+                ack_of: None,
+            }),
+        });
+        let outs = e.handle(Input::PrimeRequest {
+            track_id: "t4".into(),
+        });
+        assert!(outs.iter().any(|o| matches!(o, Output::Prime { .. })));
     }
 
     #[test]

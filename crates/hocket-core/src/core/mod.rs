@@ -175,6 +175,15 @@ pub enum Internal {
     StreamCacheChanged {
         tracks: Vec<crate::downloads::TrackKey>,
     },
+    /// Offline: the current item cannot play here; skip it (posted so the
+    /// skip never runs inside the reaction that tried to load it).
+    SkipOffline {
+        key: QueueKey,
+    },
+    /// An album-primer fetch ended.
+    PrimeDone {
+        generation: u64,
+    },
     /// A background prefetch ended.
     PrefetchDone {
         track_id: TrackId,

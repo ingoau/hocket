@@ -625,6 +625,14 @@ pub enum Msg {
         command: TransportCommand,
         from: DeviceId,
     },
+    /// → room, relayed to the transport owner: prime the first seconds of
+    /// this track into your stream cache (the album primer; the owner
+    /// decides with its own network and battery state). Peers that do not
+    /// know it ignore it.
+    PrimeRequest {
+        track_id: TrackId,
+        from: DeviceId,
+    },
     /// → room. Every 5 s while owning transport. `sentAt` (sender's clock) is
     /// echoed back as `ackOf` so the owner knows exactly which heartbeat was
     /// answered.
@@ -778,6 +786,7 @@ impl Msg {
         "syncRequest",
         "transportStamp",
         "transportRequest",
+        "primeRequest",
         "leaseHeartbeat",
         "leaseClaim",
         "leaseRelease",
@@ -822,6 +831,7 @@ impl Msg {
             Msg::SyncRequest => "syncRequest",
             Msg::TransportStamp { .. } => "transportStamp",
             Msg::TransportRequest { .. } => "transportRequest",
+            Msg::PrimeRequest { .. } => "primeRequest",
             Msg::LeaseHeartbeat { .. } => "leaseHeartbeat",
             Msg::LeaseClaim { .. } => "leaseClaim",
             Msg::LeaseRelease { .. } => "leaseRelease",
@@ -957,6 +967,28 @@ mod tests {
         assert_eq!(WireMessage::decode(&text).unwrap().msg, Msg::SyncRequest);
     }
 
+    /// A build that predates `primeRequest` sees an unknown message and
+    /// ignores it (never an error on the connection).
+    #[test]
+    fn prime_request_is_unknown_to_a_build_without_it() {
+        let text = WireMessage::new(Msg::PrimeRequest {
+            track_id: "t1".into(),
+            from: "a".into(),
+        })
+        .encode()
+        .unwrap();
+        assert!(text.contains(r#""type":"primeRequest""#), "{text}");
+        let old = text.replace("primeRequest", "somethingNewer");
+        assert_eq!(WireMessage::decode(&old).unwrap().msg, Msg::Unknown);
+        assert_eq!(
+            WireMessage::decode(&text).unwrap().msg,
+            Msg::PrimeRequest {
+                track_id: "t1".into(),
+                from: "a".into(),
+            }
+        );
+    }
+
     #[test]
     fn unknown_message_type_decodes_to_unknown() {
         let text = r#"{"protocolVersion":7,"msg":{"type":"teleport","data":{"where":"there"}}}"#;
@@ -976,6 +1008,10 @@ mod tests {
                 sent_at: 0.0,
             },
             Msg::HandoffPickerOpen { from: "a".into() },
+            Msg::PrimeRequest {
+                track_id: "t".into(),
+                from: "a".into(),
+            },
             Msg::ScrobbleDedupeAnswer {
                 query_id: "q".into(),
                 duplicate: false,

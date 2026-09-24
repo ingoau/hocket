@@ -145,6 +145,8 @@ impl Actor {
             Command::Pin { target, transcode } => self.pin(target, transcode),
             Command::Unpin { target } => self.unpin(target),
             Command::ClearStreamCache => self.clear_stream_cache(),
+            Command::PrimeAlbum { album_id } => self.prime_album(album_id),
+            Command::PrimeTrack { track_id } => self.request_prime(track_id),
             Command::SetBackendCapabilities { core_stream } => {
                 let native = self.cfg.audio == AudioMode::Native;
                 self.core_stream = (core_stream || native) && self.stream_reader.is_some();

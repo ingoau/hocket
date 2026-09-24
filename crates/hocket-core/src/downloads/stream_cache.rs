@@ -357,8 +357,10 @@ impl Downloads {
 
     /// The complete entry to serve for (track, profile): the exact profile,
     /// else the original when it can be decoded (a full original serves any
-    /// quality setting without a fetch), else another complete variant.
-    /// Stale rows found on the way are dropped. `touch` stamps it as used.
+    /// quality setting without a fetch), else — when a transcode was asked
+    /// for anyway, or offline — another complete transcode. An original
+    /// request online never settles for a transcode. Stale rows found on
+    /// the way are dropped. `touch` stamps it as used.
     pub fn cache_complete(
         &self,
         server_id: &str,
@@ -373,7 +375,17 @@ impl Downloads {
             .filter(|r| r.complete)
             .collect();
         let original_ok = self.original_decodable(server_id, track_id, profile)?;
-        rows.retain(|r| !r.profile.is_empty() || want.is_empty() || original_ok);
+        let offline = self
+            .inner
+            .network
+            .read()
+            .as_ref()
+            .is_some_and(|n| n.kind == crate::api::NetworkKind::Offline);
+        rows.retain(|r| {
+            r.profile == want
+                || (r.profile.is_empty() && original_ok)
+                || (!r.profile.is_empty() && (offline || !want.is_empty()))
+        });
         rows.sort_by_key(|r| (r.profile != want, !r.profile.is_empty()));
         let mut changed = vec![];
         for row in rows {

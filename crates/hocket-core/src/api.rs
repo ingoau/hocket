@@ -1358,10 +1358,32 @@ pub struct Pin {
 #[serde(rename_all = "camelCase")]
 pub struct StorageSummary {
     pub downloads_bytes: f64,
+    /// Stream cache, complete and partial entries.
     pub cache_bytes: f64,
     pub images_bytes: f64,
     pub warn_threshold_bytes: Option<f64>,
     pub free_bytes: Option<f64>,
+    /// Part of `cache_bytes` held by partial entries (byte ranges of tracks
+    /// read only in part: seeks, skips, primed starts).
+    #[serde(default)]
+    pub partial_cache_bytes: f64,
+    /// The stream cache's effective budget.
+    #[serde(default)]
+    pub cache_budget_bytes: f64,
+    /// `true` while `storage.cacheMaxBytes` was never set: the budget is
+    /// min(2 GiB, 10% of the cache volume's space), re-evaluated as it moves.
+    #[serde(default)]
+    pub cache_budget_auto: bool,
+    /// Bytes players read from downloads or the stream cache (since install).
+    #[serde(default)]
+    pub served_from_disk_bytes: f64,
+    /// Bytes fetched from the server for audio, playback and background.
+    #[serde(default)]
+    pub fetched_bytes: f64,
+    /// Data saved: bytes served from disk that did not need a download, less
+    /// what background prefetch and priming spent filling the cache.
+    #[serde(default)]
+    pub data_saved_bytes: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,6 +1661,20 @@ pub enum Command {
         target: PinTarget,
     },
     ClearStreamCache,
+    /// The album primer: the album page has been open a moment, or the
+    /// pointer rests on its play button. The core resolves the album's
+    /// first track and asks the device that owns playback (this one when
+    /// nobody else does) to fetch its first seconds into the stream cache,
+    /// so pressing play starts from disk. The owner decides with its own
+    /// state: only on an unmetered network, not in battery saver, never on
+    /// the coordinator; deduplicated and rate-limited. Fire and forget.
+    PrimeAlbum {
+        album_id: AlbumId,
+    },
+    /// [`Command::PrimeAlbum`] for one track (a hovered track row).
+    PrimeTrack {
+        track_id: TrackId,
+    },
     /// What the platform's playback backend can do. `core_stream`: it reads
     /// `hocket-stream://<token>` media sources through the core's stream
     /// reader (`stream_open`/`stream_read`/`stream_close` on the core

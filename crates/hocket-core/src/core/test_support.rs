@@ -570,6 +570,8 @@ struct FakeUpstreamState {
     media: std::collections::HashMap<String, (bytes::Bytes, String)>,
     behaviour: std::collections::HashMap<String, UpstreamBehaviour>,
     calls: Vec<UpstreamCall>,
+    /// Bodies of these tracks wait until released.
+    holds: std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>,
 }
 
 /// In-memory server side of the stream reader: serves registered media by
@@ -595,6 +597,20 @@ impl FakeUpstream {
 
     pub fn set_behaviour(&self, track_id: &str, b: UpstreamBehaviour) {
         self.state.lock().behaviour.insert(track_id.into(), b);
+    }
+
+    /// Answer this track's requests but hold their bodies back until
+    /// [`release`](Self::release).
+    pub fn hold(&self, track_id: &str) {
+        let (tx, _) = tokio::sync::watch::channel(false);
+        self.state.lock().holds.insert(track_id.into(), tx);
+    }
+
+    /// Let held bodies of this track flow (and stop holding new ones).
+    pub fn release(&self, track_id: &str) {
+        if let Some(tx) = self.state.lock().holds.remove(track_id) {
+            let _ = tx.send(true);
+        }
     }
 
     /// The bytes served for a track.
@@ -643,6 +659,12 @@ impl StreamUpstream for FakeUpstream {
             .map(|(_, v)| v.into_owned())
             .unwrap_or_default();
         let (media, content_type) = self.entry(&track_id);
+        let gate = self
+            .state
+            .lock()
+            .holds
+            .get(&track_id)
+            .map(|tx| tx.subscribe());
         let behaviour = {
             let mut st = self.state.lock();
             st.calls.push(UpstreamCall {
@@ -715,6 +737,15 @@ impl StreamUpstream for FakeUpstream {
                         .boxed()
                 }
                 _ => futures::stream::iter(chunks).boxed(),
+            };
+            let body = match gate {
+                Some(mut rx) => futures::stream::once(async move {
+                    let _ = rx.wait_for(|open| *open).await;
+                    body
+                })
+                .flatten()
+                .boxed(),
+                None => body,
             };
             Ok(UpstreamResponse {
                 status,

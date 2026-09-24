@@ -1057,6 +1057,19 @@ impl Room {
                 };
                 self.broadcast(relay, Some(peer));
             }
+            Msg::PrimeRequest { track_id, .. } => {
+                if let Some(owner) = self.lease.live_owner(now).cloned() {
+                    if let Some(p) = self.peer_of_device(&owner) {
+                        self.send(
+                            &p,
+                            Msg::PrimeRequest {
+                                track_id,
+                                from: device_id,
+                            },
+                        );
+                    }
+                }
+            }
             Msg::TransportRequest { command, .. } => {
                 if let Some(owner) = self.lease.live_owner(now).cloned() {
                     if let Some(p) = self.peer_of_device(&owner) {
@@ -2393,6 +2406,19 @@ mod tests {
             }),
         ));
         assert!(matches!(sent(&outs, "p1")[0], Msg::TransportRequest { from, .. } if from == "b"));
+        // so do prime requests, routed to the owner only
+        let outs = r.handle(RoomInput::Message(
+            "p2".into(),
+            WireMessage::new(Msg::PrimeRequest {
+                track_id: "t9".into(),
+                from: "a".into(),
+            }),
+        ));
+        assert!(matches!(
+            &sent(&outs, "p1")[..],
+            [Msg::PrimeRequest { track_id, from }] if track_id == "t9" && from == "b"
+        ));
+        assert!(sent(&outs, "p2").is_empty());
     }
 
     #[test]

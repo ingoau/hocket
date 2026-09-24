@@ -391,6 +391,7 @@ impl SimDevice {
                 self.set_playing(false);
             }
             Output::TransportCommand(cmd) => self.transport_command(cmd),
+            Output::Prime { .. } => {}
             Output::PreBuffer { key, .. } => {
                 self.prebuffer_ready_at = Some((quantize(self.world_now() + 500.0), key));
             }

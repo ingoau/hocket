@@ -130,6 +130,10 @@ pub(crate) struct Actor {
     pub core_stream: bool,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
+    /// The album primer (first seconds of a track the user is about to play).
+    pub prime: super::handlers::prime::PrimeState,
+    /// Stream-cache bookkeeping (offline skips, budget checks).
+    pub cache: super::handlers::cache::CacheState,
     pub caches: Caches,
     pub scrobbler: Scrobbler,
     pub sleep: SleepTimerMachine,
@@ -364,6 +368,8 @@ impl Actor {
             stream_reader,
             core_stream,
             prefetch: Default::default(),
+            prime: Default::default(),
+            cache: Default::default(),
             caches,
             scrobbler: Scrobbler::new(clock.clone()),
             sleep: SleepTimerMachine::new(clock),
@@ -581,6 +587,8 @@ impl Actor {
                 generation,
                 outcome,
             } => self.on_prefetch_done(track_id, generation, outcome),
+            Internal::SkipOffline { key } => self.on_skip_offline(key),
+            Internal::PrimeDone { generation } => self.on_prime_done(generation),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
@@ -701,9 +709,11 @@ impl Actor {
         }
         let _ = self.backend.stop();
         self.cancel_prefetch();
+        self.cancel_prime();
         if let Some(r) = &self.stream_reader {
             r.stop();
         }
+        self.downloads.save_traffic();
         tracing::info!("core stopped");
     }
 
@@ -822,6 +832,8 @@ impl Actor {
             self.engine_input(Input::Tick);
         }
         self.prefetch_tick(now);
+        self.prime_next();
+        self.cache_tick(now);
         // Sleep timer.
         let action = self.sleep.tick();
         self.apply_sleep_action(action);
@@ -861,6 +873,13 @@ impl Actor {
         if let Err(e) = self.jobs.prune() {
             self.log("warn", format!("job prune: {e}"));
         }
+        // The OS may have cleared cache files behind our back.
+        match self.downloads.reconcile_stream_cache() {
+            Ok(changed) if !changed.is_empty() => self.on_stream_cache_changed(changed),
+            Ok(_) => {}
+            Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
+        }
+        self.downloads.save_traffic();
     }
 
     // -- persistence ----------------------------------------------------------

@@ -65,17 +65,25 @@ impl Actor {
         Some(source)
     }
 
-    /// The item that follows the current one, for gapless preload.
+    /// The item that follows the current one, for gapless preload
+    /// (offline: the next one that can play offline).
     fn next_item(&self) -> Option<QueueItem> {
         let doc = self.doc()?;
         if doc.repeat == RepeatMode::One {
             return None;
         }
         let d = derive(doc);
+        let offline = self.is_offline();
         d.playing_next
             .into_iter()
             .chain(d.upcoming)
-            .find(|i| !i.unavailable)
+            .filter(|i| !i.unavailable)
+            .find(|i| {
+                !offline
+                    || self
+                        .track_or_bare(&i.track_id)
+                        .is_some_and(|t| self.available_offline(&t))
+            })
     }
 
     pub(crate) fn refresh_next(&mut self) {
@@ -172,6 +180,12 @@ impl Actor {
         let Some(track) = self.track_or_bare(&item.track_id) else {
             return;
         };
+        if self.skip_if_unavailable_offline(item, &track) {
+            self.playback.doc_key = Some(item.key.clone());
+            self.playback.track = Some(track);
+            self.playback.loaded = false;
+            return;
+        }
         // Never hand the backend a position past the end (a merged saved
         // queue or an early seek may carry one): it would seek to EOF and
         // skip the track.
@@ -190,6 +204,7 @@ impl Actor {
                 .as_ref()
                 .is_some_and(|n| n.track.id == item.track_id)
             && self.playback.awaiting_transition;
+        self.note_cache_signals(item, &track, transitioned, play);
         let (played_ms, started_at, scrobbled) = match carried {
             Some((p, s, sc)) => (p, s, sc),
             None => (0, self.session_now(), false),

@@ -376,6 +376,7 @@ impl Actor {
             ),
             Output::ReleaseTransport => self.release_transport(),
             Output::TransportCommand(cmd) => self.apply_transport_command(cmd),
+            Output::Prime { track_id } => self.prime_here(track_id),
             Output::Scrobble {
                 track_id,
                 started_at,
@@ -595,6 +596,22 @@ impl Actor {
                 .map(|c| crate::autoplay::ContextClass::of(&c.kind)),
             exclude,
         };
+        if self.is_offline() {
+            // Offline: pick from what plays without a network.
+            let picks = self.offline_autoplay_picks(
+                &seeds,
+                &engine.exclusion_ids(),
+                AUTOPLAY_BATCH as usize,
+            );
+            let _ = self.tx.send(crate::core::ActorMsg::Internal(
+                crate::core::Internal::Autoplay {
+                    engine,
+                    picks,
+                    generation,
+                },
+            ));
+            return;
+        }
         let source = crate::core::handlers::library::DbAutoplaySource {
             api,
             db: self.db.clone(),
