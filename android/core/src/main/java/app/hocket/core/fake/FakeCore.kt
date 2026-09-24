@@ -5,6 +5,7 @@ import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
 import app.hocket.core.HocketJson
 import app.hocket.core.SettingKeys
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.*
 import app.hocket.core.toSummary
 import kotlinx.coroutines.CoroutineDispatcher
@@ -164,6 +165,7 @@ class FakeCore(
         def(SettingKeys.LIBRARY_SYNC_INTERVAL_MINUTES, "60", SettingScope.DeviceLocal)
         def(SettingKeys.LIBRARY_FULL_RECONCILE_DAYS, "7", SettingScope.DeviceLocal)
         def(SettingKeys.SEARCH_INCLUDE_SERVER, "true", SettingScope.AccountSynced)
+        SwipeOptions.DEFAULTS.forEach { (key, id) -> def(key, "\"$id\"", SettingScope.AccountSynced) }
         settings.forEach { (k, v) -> defaults[k] = v.value }
         filters += Filter("f-loved", "Loved, not played lately", FilterNode.All(listOf(
             FilterNode.Rule(FilterRule(FilterField.Loved, FilterOp.IsTrue, FilterValue.Bool(true))),

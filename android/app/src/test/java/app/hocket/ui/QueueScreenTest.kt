@@ -8,7 +8,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.geometry.Offset
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.RepeatMode
 import app.hocket.ui.queue.QueuePanel
@@ -142,6 +147,64 @@ class QueueScreenTest {
         compose.onNodeWithText("Recent").assertIsDisplayed()
         compose.onNodeWithContentDescription("Undo history").performClick()
         compose.onNodeWithText("Nothing to undo").assertIsDisplayed()
+    }
+
+    /**
+     * The core re-keys a context item that moves (`ctx-<index>` follows the context list), so a
+     * drag that sent a move per slot lost its item after the first one. The drag now reorders a
+     * local copy and sends ONE move when the finger lifts.
+     */
+    @Test
+    fun draggingTheHandleReordersTheQueueWithOneMove() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val q0 = core.client.queue.value
+        fun tracks() = core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.track.id } }
+        val before = tracks()
+        val entry = q0.upcoming.first()
+        val from = before.indexOf(entry.track.id)
+        assertTrue(q0.upcoming.size >= 4)
+        val undoBefore = core.client.undo.value.history.size
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${entry.item.key}"))
+        compose.waitForIdle()
+        val rowHeight = compose.onNodeWithTag("queue.row.${entry.item.key}").fetchSemanticsNode().size.height
+        compose.onNodeWithTag("queue.handle.${entry.item.key}", useUnmergedTree = true).performTouchInput {
+            down(center)
+            // Past the touch slop, then about two and a half rows down in small steps, as a finger would.
+            repeat(25) { moveBy(Offset(0f, rowHeight / 10f), delayMillis = 16) }
+            up()
+        }
+        compose.waitForIdle()
+        compose.waitUntil(5_000) { tracks().indexOf(entry.track.id) >= from + 2 }
+        assertEquals("only the dragged item moved", before - entry.track.id, tracks() - entry.track.id)
+        assertEquals("one drag is one move (one undo entry)", undoBefore + 1, core.client.undo.value.history.size)
+        // The moved row is on screen under its new key, and the rows still follow the queue.
+        compose.waitUntil(5_000) { core.client.queue.value.upcoming.any { it.track.id == entry.track.id } }
+        val key = core.client.queue.value.upcoming.first { it.track.id == entry.track.id }.item.key
+        compose.onNodeWithTag("queue.row.$key").assertIsDisplayed()
+    }
+
+    @Test
+    fun scrollingTheListStillWorksWithHandles() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        // A queue longer than the screen.
+        val ids = core.fake.library.tracks.take(30).map { it.id }
+        core.client.dispatch(Commands.playLater(core.fake.library.serverId, ids))
+        compose.waitUntil(5_000) { core.client.queue.value.playingNext.size >= 30 }
+        compose.waitForIdle()
+        val before = core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.item.key } }
+        compose.onNodeWithText("Now playing").assertIsDisplayed()
+        // A vertical swipe over the rows (not on a handle) scrolls and never reorders or swipes a row.
+        compose.onNodeWithTag("queue.list").performTouchInput { swipeUp(startY = bottom - 10f, endY = top + 10f) }
+        compose.waitForIdle()
+        compose.onNodeWithText("Now playing").assertIsNotDisplayed()
+        assertEquals(before, core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.item.key } })
     }
 
     private fun hasTestTagPrefix(prefix: String) = SemanticsMatcher("tag starts with $prefix") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith(prefix) == true }

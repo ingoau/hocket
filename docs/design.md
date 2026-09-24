@@ -352,7 +352,7 @@ A mode, not a toggle, with "engage automatically on battery" on by default: anim
 | Listening stats | Built from local play history, so it works without server support. |
 | Settings | Every key carries a scope flag — device-local or account-synced. Synced keys ride through the coordinator, merged LWW. A master sync toggle, on by default. |
 | Config backup | A versioned document with migrations. Secrets handled separately. |
-| Customisation | Choose-and-order over a curated action set: context menu items, sidebar items, media session buttons, keyboard rebinding. Accent colour and dynamic colour from artwork. Not arbitrary layout, not a theming engine. |
+| Customisation | Choose-and-order over a curated action set: context menu items, sidebar items, media session buttons, keyboard rebinding, and the swipe actions of song rows (left and right, the queue apart from other lists). Accent colour and dynamic colour from artwork. Not arbitrary layout, not a theming engine. |
 
 
 ### The action registry

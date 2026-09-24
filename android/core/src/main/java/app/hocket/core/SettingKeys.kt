@@ -46,6 +46,11 @@ object SettingKeys {
     const val LIBRARY_SYNC_INTERVAL_MINUTES = "library.syncIntervalMinutes"
     const val LIBRARY_FULL_RECONCILE_DAYS = "library.fullReconcileDays"
     const val SEARCH_INCLUDE_SERVER = "search.includeServer"
+    /** Swipe actions on song rows: an [ActionIds] id or [SwipeOptions.NONE] (see [SwipeOptions]). */
+    const val SWIPE_QUEUE_START_TO_END = "swipe.queue.startToEnd"
+    const val SWIPE_QUEUE_END_TO_START = "swipe.queue.endToStart"
+    const val SWIPE_LIST_START_TO_END = "swipe.list.startToEnd"
+    const val SWIPE_LIST_END_TO_START = "swipe.list.endToStart"
 
     fun actionOrder(surface: String) = "actions.order.$surface"
 }
@@ -99,4 +104,20 @@ object ActionIds {
         DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
+}
+
+/**
+ * The choices of the swipe settings (`SWIPE_QUEUE_ACTIONS` / `SWIPE_LIST_ACTIONS` in the core's
+ * settings registry) and their defaults. "love" toggles: the row runs love or unlove by its state.
+ */
+object SwipeOptions {
+    const val NONE = "none"
+    val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
+    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
+    val DEFAULTS = mapOf(
+        SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
+        SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,
+        SettingKeys.SWIPE_LIST_START_TO_END to ActionIds.PLAY_NEXT,
+        SettingKeys.SWIPE_LIST_END_TO_START to ActionIds.PLAY_LATER,
+    )
 }
