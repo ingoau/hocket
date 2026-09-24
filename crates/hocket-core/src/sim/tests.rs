@@ -593,6 +593,64 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     w.assert_ok();
 }
 
+/// A LAN leader killed mid-track and restarted (review #16): it comes back
+/// with what it persisted (document, sync base, known scrobbles), is
+/// re-elected, and the play it scrobbled before the crash is not scrobbled
+/// again when a follower takes it over. (The engine test
+/// `restored_leader_room_answers_dedupe_for_its_members_plays` pins the
+/// room-log half, which the play's own `scrobbled` flag masks here.)
+#[test]
+fn lan_leader_restart_keeps_the_scrobble_dedupe_log() {
+    let mut cfg = WorldConfig::new(14);
+    cfg.devices = 2;
+    cfg.topology = Topology::Lan;
+    cfg.keep_logs = true;
+    let mut w = World::new(cfg);
+    w.run_for(5_000.0);
+    let leader = w
+        .devices
+        .iter()
+        .position(|d| d.engine.is_serving())
+        .expect("the LAN elected a room");
+    let follower = 1 - leader;
+    // t0 is 20 s: its scrobble point is at 10 s
+    let t = vec!["t0".to_string(), "t1".to_string()];
+    w.perform(Action::PlayTracks {
+        device: leader,
+        tracks: t.clone(),
+    });
+    w.perform(Action::ClaimTransport {
+        device: leader,
+        takeover: false,
+    });
+    w.run_for(11_000.0);
+    assert_eq!(w.server.scrobbles.len(), 1, "the leader scrobbled t0");
+    // the leader is killed mid-track and comes back a moment later
+    w.perform(Action::Crash {
+        device: leader,
+        duration_ms: 1_500.0,
+    });
+    w.run_for(6_000.0);
+    assert!(
+        w.devices[leader].engine.is_serving(),
+        "re-elected after the restart"
+    );
+    // the follower takes the same play over, already past its scrobble point
+    w.perform(Action::ClaimTransport {
+        device: follower,
+        takeover: true,
+    });
+    w.run_for(3_000.0);
+    assert_eq!(
+        w.server.count("t0", w.server.scrobbles[0].1),
+        1,
+        "t0 scrobbled once: {:?}",
+        w.server.scrobbles
+    );
+    w.finish();
+    w.assert_ok();
+}
+
 /// Seeds with an open bug, excluded from the batches so the harness stays a
 /// gate for everything else. Reproduce one with `random_single_seed_from_env`.
 /// Empty at the moment; keep it that way.

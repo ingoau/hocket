@@ -712,17 +712,35 @@ impl Engine {
         self.sync_base.as_ref()
     }
 
-    /// Every scrobble this device knows about; persist it with the sync
-    /// base so a restarted LAN leader still answers dedupe queries.
+    /// Every scrobble this device knows about, its own room's dedupe log
+    /// included (what it judged for LAN members while it led); persist it
+    /// with the sync base so a restarted LAN leader still answers dedupe
+    /// queries. At most 500 entries, newest last.
     pub fn known_scrobbled(&self) -> Vec<KnownScrobble> {
-        self.known_scrobbled
+        let mut out: Vec<KnownScrobble> = vec![];
+        let own_room = self
+            .room
+            .replica()
+            .scrobbles
             .iter()
-            .map(|(track_id, started_at, device_id)| KnownScrobble {
+            .map(|r| (&r.track_id, r.started_at, &r.device_id));
+        let known = self.known_scrobbled.iter().map(|(t, s, d)| (t, *s, d));
+        for (track_id, started_at, device_id) in own_room.chain(known) {
+            if out
+                .iter()
+                .any(|k| &k.track_id == track_id && (k.started_at - started_at).abs() < 1000.0)
+            {
+                continue;
+            }
+            out.push(KnownScrobble {
                 track_id: track_id.clone(),
-                started_at: *started_at,
+                started_at,
                 device_id: device_id.clone(),
-            })
-            .collect()
+            });
+        }
+        let excess = out.len().saturating_sub(500);
+        out.drain(..excess);
+        out
     }
 
     /// Restore what [`Engine::known_scrobbled`] returned before a restart
@@ -4473,8 +4491,100 @@ mod tests {
             .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
         assert!(e.lan_blocklist.contains_key("rogue2"));
         assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
-        // a proof for the right key but the wrong identity is no better
         let _ = nonce;
+        // a proof for the right key but another identity (a relayed honest
+        // device's) is no better: it must name the leader we elected
+        e.handle(Input::PeerLost {
+            device_id: "rogue2".into(),
+        });
+        e.handle(Input::PeerDiscovered(advert("rogue3", u32::MAX)));
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("rogue3"));
+        let outs = e.handle(Input::Connected {
+            peer: "up3".into(),
+            url: "ws://10.0.0.2:5/".into(),
+        });
+        let nonce3 = match &wire_outs(&outs)[0].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        let outs = e.handle(Input::WireIn {
+            peer: "up3".into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: "honest".into(),
+                mac: auth::prove(&key(), Role::Leader, &nonce3, "honest"),
+            }),
+        });
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
+        assert!(e.lan_blocklist.contains_key("rogue3"));
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
+    }
+
+    /// Knock on the elected LAN leader `n` times and get a `Bye` each time
+    /// before any proof; returns the last outputs.
+    fn turned_away(e: &mut Engine, clock: &TestClock, n: usize) -> Vec<Output> {
+        let mut outs = vec![];
+        for i in 0..n {
+            let peer = format!("knock-{i}-{}", clock.0.load(Ordering::SeqCst));
+            let o = e.handle(Input::Connected {
+                peer: peer.clone(),
+                url: "ws://10.0.0.2:5/".into(),
+            });
+            assert!(matches!(&wire_outs(&o)[0].1, Msg::Challenge { .. }));
+            outs = e.handle(Input::WireIn {
+                peer,
+                msg: WireMessage::new(Msg::Bye {
+                    reason: "not serving".into(),
+                }),
+            });
+            if i + 1 < n {
+                // wait out the backoff: the engine knocks again
+                clock.0.fetch_add(40_000, Ordering::SeqCst);
+                let o = e.handle(Input::Tick);
+                assert!(o.iter().any(|o| matches!(o, Output::Connect { .. })));
+            }
+        }
+        outs
+    }
+
+    #[test]
+    fn lan_turn_aways_block_only_a_peer_that_claims_to_serve() {
+        // an honest peer that says it is not serving (it follows someone
+        // else) and turns us away is retried with backoff, never blocked
+        let (mut e, clock) = engine("m");
+        e.handle(Input::SetLanDiscovery(true));
+        e.handle(Input::PeerDiscovered(advert("z", 9)));
+        turned_away(&mut e, &clock, LAN_STRIKES as usize + 2);
+        assert!(e.lan_blocklist.is_empty());
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("z"));
+
+        // one that claims to serve and still turns us away is blocked after
+        // a few tries, and tried again (once) when the block runs out
+        let (mut e, clock) = engine("m");
+        e.handle(Input::SetLanDiscovery(true));
+        let mut liar = advert("s", 9);
+        liar.serving = true;
+        e.handle(Input::PeerDiscovered(liar));
+        let outs = turned_away(&mut e, &clock, LAN_STRIKES as usize);
+        assert!(e.lan_blocklist.contains_key("s"));
+        assert!(e.remote.is_none(), "alone again: we are our own room");
+        assert!(!outs.iter().any(|o| matches!(o, Output::Connect { .. })));
+        clock
+            .0
+            .fetch_add(LAN_STRIKE_BLOCK_MS as u64 - 1_000, Ordering::SeqCst);
+        let outs = e.handle(Input::Tick);
+        assert!(!outs.iter().any(|o| matches!(o, Output::Connect { .. })));
+        clock.0.fetch_add(2_000, Ordering::SeqCst);
+        let outs = e.handle(Input::Tick);
+        assert!(e.lan_blocklist.is_empty());
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")
+        ));
+        // the next block is longer
+        turned_away(&mut e, &clock, LAN_STRIKES as usize);
+        let until = e.lan_blocklist["s"];
+        assert!(until - e.now_local_ms() > LAN_STRIKE_BLOCK_MS * 1.5);
     }
 
     #[test]
@@ -4732,6 +4842,106 @@ mod tests {
                 ..
             } if document.current.is_some()
         )));
+    }
+
+    /// Admit `id` on inbound socket `peer` into `e`'s own room (the full
+    /// LAN handshake).
+    fn admit_inbound(e: &mut Engine, peer: &str, id: &str) {
+        e.handle(Input::ListenerStarted { port: 7 });
+        e.handle(Input::PeerConnected { peer: peer.into() });
+        let outs = e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(Msg::Challenge {
+                nonce: auth::new_nonce(),
+            }),
+        });
+        let theirs = match &wire_outs(&outs)[1].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: id.into(),
+                mac: auth::prove(&key(), Role::Joiner, &theirs, id),
+            }),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(Msg::Hello {
+                device: dev(id),
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL,
+                scope: "scope".into(),
+                credential: None,
+                session_id: None,
+                session_revision: 0,
+                held_epoch: None,
+                extra: Default::default(),
+            }),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(p, m)| p == peer && matches!(m, Msg::Welcome { .. })));
+    }
+
+    #[test]
+    fn restored_leader_room_answers_dedupe_for_its_members_plays() {
+        // a LAN leader's room judges a member's scrobble
+        let (mut e, _) = engine("m");
+        admit_inbound(&mut e, "in1", "q");
+        let outs = e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                query_id: "q-1".into(),
+                track_id: "t".into(),
+                started_at: 5_000.0,
+                device_id: "q".into(),
+            }),
+        });
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in1"
+            && matches!(
+                m,
+                Msg::ScrobbleDedupeAnswer {
+                    duplicate: false,
+                    ..
+                }
+            )));
+        // what the leader persists includes its room's log
+        let known = e.known_scrobbled();
+        assert!(known
+            .iter()
+            .any(|k| k.track_id == "t" && k.device_id == "q"));
+        // killed and restarted: the new room still knows, so another member
+        // asking about the same play is told it is taken
+        let (mut fresh, _) = engine("m");
+        fresh.restore_known_scrobbled(known);
+        admit_inbound(&mut fresh, "in2", "r");
+        let outs = fresh.handle(Input::WireIn {
+            peer: "in2".into(),
+            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                query_id: "r-1".into(),
+                track_id: "t".into(),
+                started_at: 5_000.0,
+                device_id: "r".into(),
+            }),
+        });
+        let duplicate = wire_outs(&outs)
+            .into_iter()
+            .find_map(|(p, m)| match m {
+                Msg::ScrobbleDedupeAnswer { duplicate, .. } if p == "in2" => Some(duplicate),
+                _ => None,
+            })
+            .expect("an answer");
+        assert!(duplicate, "the restored room remembers q's claim");
+        // and the leader itself would not scrobble it either
+        let outs = fresh.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
     }
 
     #[test]

@@ -102,6 +102,8 @@ pub struct Persisted {
     pub saved_queues: Vec<SavedQueue>,
     /// Scrobbles reached but without a verdict yet (the outbox).
     pub outbox: Vec<(TrackId, EpochMs)>,
+    /// What the engine knows was scrobbled (persisted with the sync base).
+    pub known_scrobbled: Vec<crate::connect::engine::KnownScrobble>,
 }
 
 pub struct SimDevice {
@@ -182,17 +184,26 @@ impl SimDevice {
             api_version: "1.16.1".into(),
         });
         let now = clock.now_ms();
-        let (doc, sync_base, saved, outbox) = match persisted {
-            Some(p) => (p.document, p.sync_base, p.saved_queues, p.outbox),
+        let (doc, sync_base, saved, outbox, known) = match persisted {
+            Some(p) => (
+                p.document,
+                p.sync_base,
+                p.saved_queues,
+                p.outbox,
+                p.known_scrobbled,
+            ),
             None => (
                 crate::session::new_document(scope, format!("session-{id}"), now),
                 None,
                 vec![],
                 vec![],
+                vec![],
             ),
         };
         let world_start = clock.world_now_ms();
-        let engine = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, sync_base);
+        let mut engine = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, sync_base);
+        // What the app does after a restart (connect/mod.rs rule 8).
+        engine.restore_known_scrobbled(known);
         let mut d = SimDevice {
             id: id.into(),
             engine,
@@ -238,6 +249,7 @@ impl SimDevice {
             sync_base: self.engine.sync_base().cloned(),
             saved_queues: self.saved_queues.clone(),
             outbox: self.outbox.clone(),
+            known_scrobbled: self.engine.known_scrobbled(),
         }
     }
 
