@@ -8,6 +8,7 @@ import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.ffi.EventListener
 import app.hocket.core.ffi.HocketCore
+import app.hocket.core.ffi.StreamException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +32,7 @@ import kotlinx.coroutines.launch
  * subscriber (the main thread mid-composition) applies back-pressure to the pump, not to the core,
  * and `Started` / `ServersChanged` / `Backend` can never be dropped.
  */
-class NativeCore private constructor(private val core: HocketCore) : CoreHandle {
+class NativeCore private constructor(private val core: HocketCore) : CoreHandle, CoreStreams {
     override val kind: CoreKind = CoreKind.Native
 
     private val pumpScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -72,6 +73,38 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
     override suspend fun query(query: Query): QueryResult =
         HocketJson.decodeQueryResult(core.query(HocketJson.encodeQuery(query)))
 
+    // -- CoreStreams: blocking, for ExoPlayer's loader threads ------------------------------------
+
+    override fun streamOpen(url: String, offset: Long, length: Long?): CoreStreamInfo = streamCall {
+        val info = core.streamOpen(url, offset.coerceAtLeast(0).toULong(), length?.coerceAtLeast(0)?.toULong())
+        CoreStreamInfo(info.handle.toLong(), info.offset.toLong(), info.totalLength?.toLong(), info.length?.toLong(), info.contentType)
+    }
+
+    override fun streamRead(handle: Long, maxBytes: Int): ByteArray = streamCall {
+        core.streamRead(handle.toULong(), maxBytes.coerceIn(1, CoreStreams.MAX_READ).toUInt())
+    }
+
+    override fun streamClose(handle: Long) {
+        try {
+            core.streamClose(handle.toULong())
+        } catch (e: Exception) {
+            // Freed core: its handles are gone with it.
+        }
+    }
+
+    /**
+     * Maps UniFFI's [StreamException] to [CoreStreamException]. A call on a core that has been freed
+     * (UniFFI throws `IllegalStateException`) is [CoreStreamException.Kind.ShutDown], so a loader
+     * racing a service restart fails like an I/O error instead of crashing the player thread.
+     */
+    private inline fun <T> streamCall(block: () -> T): T = try {
+        block()
+    } catch (e: StreamException) {
+        throw mapStreamException(e)
+    } catch (e: IllegalStateException) {
+        throw CoreStreamException(CoreStreamException.Kind.ShutDown)
+    }
+
     /**
      * Flushes and stops the core (blocking up to [SHUTDOWN_TIMEOUT_MS]), then frees it. Blocks the
      * calling thread: never call it on the main thread.
@@ -100,6 +133,20 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
          */
         internal fun undecodable(json: String, t: Throwable): String =
             "Dropping undecodable event ${eventType(json)}: ${t.javaClass.simpleName}: ${t.message?.substringBefore("JSON input")?.trim()}"
+
+        internal fun mapStreamException(e: StreamException): CoreStreamException = when (e) {
+            is StreamException.UnknownToken -> CoreStreamException(CoreStreamException.Kind.UnknownToken)
+            is StreamException.UnknownHandle -> CoreStreamException(CoreStreamException.Kind.UnknownHandle)
+            is StreamException.TooManyHandles -> CoreStreamException(CoreStreamException.Kind.TooManyHandles)
+            is StreamException.NoServer -> CoreStreamException(CoreStreamException.Kind.NoServer)
+            is StreamException.RangeNotSatisfiable -> CoreStreamException(CoreStreamException.Kind.RangeNotSatisfiable)
+            is StreamException.Status -> CoreStreamException(CoreStreamException.Kind.Status, httpStatus = e.code.toInt())
+            is StreamException.ErrorEnvelope -> CoreStreamException(CoreStreamException.Kind.ErrorEnvelope)
+            is StreamException.Network -> CoreStreamException(CoreStreamException.Kind.Network, detail = e.reason)
+            is StreamException.Io -> CoreStreamException(CoreStreamException.Kind.Io, detail = e.reason)
+            is StreamException.Closed -> CoreStreamException(CoreStreamException.Kind.Closed)
+            is StreamException.ShutDown -> CoreStreamException(CoreStreamException.Kind.ShutDown)
+        }
 
         /** The `"type"` tag of an event JSON without decoding it (for log lines only). */
         internal fun eventType(json: String): String =

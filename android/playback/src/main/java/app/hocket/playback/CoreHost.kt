@@ -7,6 +7,7 @@ import android.util.Log
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
+import app.hocket.core.CoreStreams
 import app.hocket.core.NativeCore
 import app.hocket.core.api.AudioMode
 import app.hocket.core.api.Command
@@ -119,9 +120,20 @@ object CoreHost {
         // UNDISPATCHED: the collector is subscribed before Start is dispatched, so the first
         // `Started` cannot slip past it.
         replayJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { replayCredentials(core, store) }
-        core.dispatch(Command.Start)
+        start(core)
         _handle.value = core
         return core
+    }
+
+    /**
+     * Starts a fresh core. The backend capabilities are not persisted by the core, so they go with
+     * every start, ahead of `Start` so that no `Backend.Load` (a resumed session) can precede them:
+     * a core that serves streams ([CoreStreams]) hands ExoPlayer `hocket-stream://` sources, read
+     * through [HocketStreamDataSource] and cached by the core; any other core keeps server URLs.
+     */
+    internal fun start(core: CoreHandle) {
+        core.dispatch(Commands.setBackendCapabilities(coreStream = core is CoreStreams))
+        core.dispatch(Command.Start)
     }
 
     private fun createCore(app: Context): CoreHandle {

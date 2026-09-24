@@ -8,14 +8,12 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import app.hocket.core.Commands
+import app.hocket.core.CoreStreams
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
 import app.hocket.core.api.BackendReportAudioFocusLostInner
@@ -43,8 +41,11 @@ import kotlin.math.pow
  * application thread).
  *
  * Mapping, as documented in `android/README.md`:
- * - `Load` builds a per-item `ProgressiveMediaSource` (so each item carries its own headers) and,
- *   when `next` is given, a second one behind it; ExoPlayer's playlist transition is the gapless join.
+ * - `Load` builds a per-item media source through `DefaultMediaSourceFactory` over
+ *   [CoreStreamDataSourceFactory] (so each item carries its own headers) and, when `next` is given, a
+ *   second one behind it; ExoPlayer's playlist transition is the gapless join. `hocket-stream://`
+ *   sources are read through the core ([HocketStreamDataSource], which the core caches); anything
+ *   else (`file:`, a direct server URL) through `DefaultDataSource`.
  * - `SetNext` replaces everything after the current item.
  * - `TransitionedToNext` is detected from `onMediaItemTransition(reason = AUTO)`; the played item is
  *   then removed so the playlist is always "current (+ next)".
@@ -61,6 +62,8 @@ class ExoBackend(
     private val context: Context,
     private val scope: CoroutineScope,
     private val dispatch: (Command) -> Unit,
+    /** The running core's stream reader, read on each open (a restarted service has a new core). */
+    private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
 ) {
     private companion object {
         const val TAG = "ExoBackend"
@@ -71,6 +74,7 @@ class ExoBackend(
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build())
+        .setMediaSourceFactory(DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams)))
         .build()
 
     private var preBufferPlayer: ExoPlayer? = null
@@ -267,19 +271,6 @@ class ExoBackend(
             .setMimeType(source.mimeType)
             .setRequestMetadata(MediaItem.RequestMetadata.Builder().setExtras(extras).build())
             .build()
-        val factory: DataSource.Factory = if (source.url.startsWith("file:")) {
-            DefaultDataSource.Factory(context)
-        } else {
-            // Stream URLs carry the Subsonic token and salt in the query (`MediaSource.url`), so an
-            // https server must never be followed onto http (cross-protocol redirects stay off, the
-            // Media3 default): a proxy or captive portal would otherwise see a replayable token.
-            val http = DefaultHttpDataSource.Factory()
-                .setUserAgent("Hocket/Android")
-                .setConnectTimeoutMs(15_000)
-                .setReadTimeoutMs(30_000)
-            if (source.headers.isNotEmpty()) http.setDefaultRequestProperties(source.headers)
-            DefaultDataSource.Factory(context, http)
-        }
-        return ProgressiveMediaSource.Factory(factory).createMediaSource(item)
+        return DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams, source.headers)).createMediaSource(item)
     }
 }

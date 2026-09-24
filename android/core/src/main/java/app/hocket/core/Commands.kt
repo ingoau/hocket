@@ -100,6 +100,8 @@ object Commands {
     fun setSleepTimer(timer: SleepTimer?) = Command.SetSleepTimer(CommandSetSleepTimerInner(timer))
 
     fun backendReport(report: BackendReport) = Command.BackendReport(CommandBackendReportInner(report))
+    /** `core_stream`: the backend reads `hocket-stream://` sources through the core. Not persisted: send on every core start. */
+    fun setBackendCapabilities(coreStream: Boolean) = Command.SetBackendCapabilities(CommandSetBackendCapabilitiesInner(coreStream))
     fun mediaSessionCommand(action: MediaSessionAction, value: Double? = null) =
         Command.MediaSessionCommand(CommandMediaSessionCommandInner(action, value))
     fun runAction(actionId: String, target: ActionTarget) = Command.RunAction(CommandRunActionInner(actionId, target))
