@@ -2,7 +2,12 @@ package app.hocket.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performSemanticsAction
 import app.hocket.core.client.CoreClient
 import app.hocket.core.fake.FakeCore
 import app.hocket.ui.theme.HocketTheme
@@ -26,4 +31,17 @@ fun ComposeContentTestRule.setThemedContent(core: TestCore, content: @Composable
             CompositionLocalProvider(LocalCoreClient provides core.client) { content() }
         }
     }
+}
+
+/**
+ * Opens Settings the way a user does since Settings left the bottom bar: the account button in the
+ * current page's top app bar, then Settings in the account sheet.
+ */
+fun ComposeContentTestRule.openSettingsFromAccount() {
+    waitUntil(5_000) { onAllNodesWithTag("account.button").fetchSemanticsNodes().isNotEmpty() }
+    onAllNodesWithTag("account.button").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+    waitUntil(5_000) { onAllNodesWithTag("account.settings").fetchSemanticsNodes().isNotEmpty() }
+    onNodeWithTag("account.settings").performSemanticsAction(SemanticsActions.OnClick)
+    waitUntil(5_000) { onAllNodesWithTag("settings.categories").fetchSemanticsNodes().isNotEmpty() }
+    waitForIdle()
 }

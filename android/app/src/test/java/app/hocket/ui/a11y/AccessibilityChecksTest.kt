@@ -30,6 +30,7 @@ import app.hocket.ui.screens.settings.SettingsCategory
 import app.hocket.ui.setThemedContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import app.hocket.ui.openSettingsFromAccount
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -129,8 +130,7 @@ class AccessibilityChecksTest {
     @Test
     fun everySettingsScreenPassesTheChecks() {
         start()
-        compose.onNodeWithTag("navBar.settings").performClick()
-        compose.waitForIdle()
+        compose.openSettingsFromAccount()
         check("settings categories")
         var visited = 0
         for (category in SettingsCategory.entries) {
@@ -146,7 +146,7 @@ class AccessibilityChecksTest {
     }
 
     private fun open(settingsCategory: String, row: String) {
-        click("navBar.settings")
+        compose.openSettingsFromAccount()
         compose.onNodeWithTag("settings.category.$settingsCategory").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { displayed("setting.$row") || runCatching { compose.onNodeWithTag("setting.$row").performScrollTo() }.isSuccess }
         compose.onNodeWithTag("setting.$row").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)

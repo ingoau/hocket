@@ -81,7 +81,7 @@ import kotlinx.serialization.builtins.serializer
 import sh.calvin.reorderable.ReorderableColumn
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.testTag
-import app.hocket.ui.nav.label
+import app.hocket.ui.nav.BottomBarEditor
 
 /** ReplayGain, preamp, normalisation, gapless, EQ with draggable bands, output device. */
 @Composable
@@ -228,25 +228,18 @@ fun ConnectSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Choose-and-order lists for context menu actions, media buttons and navigation items. */
+/** The bottom bar editor, and choose-and-order lists for context menu actions and media buttons. */
 @Composable
 fun CustomiseSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as? HocketApp
-    val scope = rememberCoroutineScope()
     val menuSetting = setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU)
     val mediaSetting = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION)
     SubScreen(nav, stringResource(R.string.settings_section_customise)) {
-        Text(stringResource(R.string.settings_reorder_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-        SettingsSection(stringResource(R.string.settings_sidebar))
-        // Navigation items are an app-local preference; the core's `sidebar` surface is kept in step.
-        val allNav = NavItem.entries.map { it.id }
-        val navIds by (app?.prefs?.navItems ?: flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
-        ChooseAndOrder(allNav, navIds.ifEmpty { NavItem.DEFAULT.map { it.id } }, minEnabled = 2, label = { id -> NavItem.entries.first { it.id == id }.label() }, tag = "customise.nav") { ids ->
-            scope.launch { app?.prefs?.setNavItems(ids) }
-            client.dispatch(Commands.setActionOrder("sidebar", ids.map { NavItem.fromIds(listOf(it)).first().canonicalActionId }))
-        }
+        // The phone's bottom bar: a device-local choice of two to five places (Settings is never one).
+        SettingsSection(stringResource(R.string.settings_bottom_bar))
+        BottomBarEditor(Modifier.testTag("customise.bottomBar"))
         SettingsSection(stringResource(R.string.settings_context_menu))
+        Text(stringResource(R.string.settings_reorder_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         // Canonical registry ids for the contextMenu surface; an empty stored list means the registry default.
         val allMenu = ActionIds.CONTEXT_MENU
         val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu

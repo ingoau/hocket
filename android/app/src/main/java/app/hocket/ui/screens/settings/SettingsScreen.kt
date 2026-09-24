@@ -221,7 +221,7 @@ private fun SettingsCategory.summary(): String {
                 ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
             }
         }
-        SettingsCategory.Customise -> stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_sidebar)
+        SettingsCategory.Customise -> stringResource(R.string.settings_bottom_bar) + dot + stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons)
         SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
         SettingsCategory.About -> stringResource(R.string.settings_licence)
     }

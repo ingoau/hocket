@@ -230,8 +230,7 @@ class CacheUiTest {
         val core = TestCore(startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
-        awaitTag("navBar.settings")
-        compose.onNodeWithTag("navBar.settings").performClick()
+        compose.openSettingsFromAccount()
         compose.onNodeWithTag("settings.category.downloads").performScrollTo().performClick()
         compose.onNodeWithTag("setting.open.downloads").performClick()
         awaitTag("downloads.availableOffline")

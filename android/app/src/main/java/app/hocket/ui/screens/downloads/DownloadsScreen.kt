@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.AccountButton
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.OfflineBolt
@@ -73,6 +74,7 @@ fun DownloadsScreen(nav: NavHostController) {
                 title = { Text(stringResource(R.string.downloads_title)) },
                 subtitle = { Text(stringResource(R.string.downloads_storage, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), storage.freeBytes?.let { formatBytes(it) } ?: "?")) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                actions = { AccountButton() },
                 scrollBehavior = scroll,
             )
         },

@@ -68,6 +68,12 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -139,7 +145,7 @@ fun AppRoot(
     val fatal by fatalError.collectAsStateWithLifecycle()
     fatal?.let { FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
-    CompositionLocalProvider(LocalCoreClient provides client) {
+    CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberNavBarPrefs()) {
         val started by client.started.collectAsStateWithLifecycle()
         val servers by client.servers.collectAsStateWithLifecycle()
         // The fake core has nothing to replay; the native core waits for the keystore replay first.
@@ -254,52 +260,6 @@ private fun ToastCollector(host: SnackbarHostState) {
     }
 }
 
-private fun NavItem.icon(selected: Boolean): ImageVector = when (this) {
-    NavItem.Home -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
-    NavItem.Library -> if (selected) Icons.Filled.LibraryMusic else Icons.Outlined.LibraryMusic
-    NavItem.Search -> if (selected) Icons.Filled.Search else Icons.Outlined.Search
-    NavItem.Downloads -> if (selected) Icons.Filled.Download else Icons.Outlined.Download
-    NavItem.Filters -> if (selected) Icons.Filled.FilterAlt else Icons.Outlined.FilterAlt
-    NavItem.Stats -> if (selected) Icons.Filled.BarChart else Icons.Outlined.BarChart
-    NavItem.Settings -> if (selected) Icons.Filled.Settings else Icons.Outlined.Settings
-}
-
-@Composable
-fun NavItem.label(): String = when (this) {
-    NavItem.Home -> stringResource(R.string.nav_home)
-    NavItem.Library -> stringResource(R.string.nav_library)
-    NavItem.Search -> stringResource(R.string.nav_search)
-    NavItem.Downloads -> stringResource(R.string.nav_downloads)
-    NavItem.Filters -> stringResource(R.string.nav_filters)
-    NavItem.Stats -> stringResource(R.string.nav_stats)
-    NavItem.Settings -> stringResource(R.string.nav_settings)
-}
-
-private fun NavItem.route(): Route = when (this) {
-    NavItem.Home -> Route.Home
-    NavItem.Library -> Route.Library()
-    NavItem.Search -> Route.Search
-    NavItem.Downloads -> Route.Downloads
-    NavItem.Filters -> Route.Filters
-    NavItem.Stats -> Route.Stats
-    NavItem.Settings -> Route.Settings
-}
-
-private fun NavItem.matches(routeName: String?): Boolean = routeName != null && routeName.contains(
-    when (this) {
-        NavItem.Home -> "Route.Home"; NavItem.Library -> "Route.Library"; NavItem.Search -> "Route.Search"; NavItem.Downloads -> "Route.Downloads"
-        NavItem.Filters -> "Route.Filters"; NavItem.Stats -> "Route.Stats"; NavItem.Settings -> "Route.Settings"
-    },
-)
-
-/** The user's ordered navigation items: an app-local preference (not a core setting). */
-@Composable
-fun navItems(): List<NavItem> {
-    val app = LocalContext.current.applicationContext as? HocketApp
-    val ids by (app?.prefs?.navItems ?: kotlinx.coroutines.flow.flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
-    return remember(ids) { if (ids.isEmpty()) NavItem.DEFAULT else NavItem.fromIds(ids) }
-}
-
 /** Bottom content inset for scrolling screens: the mini player (taller at large font sizes) floats over the last rows. */
 val BottomContentInset: Dp
     @Composable get() = app.hocket.ui.player.miniPlayerHeight() + 32.dp
@@ -312,10 +272,16 @@ private fun MainShell() {
         val wide = maxWidth >= 600.dp
         CompositionLocalProvider(LocalWideLayout provides wide) {
             val items = navItems()
-            val backStack by nav.currentBackStackEntryAsState()
-            val routeName = backStack?.destination?.route
+            val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
+            // The root entry of the stack last switched to (see selectedPlace).
+            var rootEntryId by rememberSaveable { mutableStateOf<String?>(null) }
+            val selected = selectedPlace(backStack, items, rootEntryId)
             val scope = rememberCoroutineScope()
             val density = LocalDensity.current
+            val haptics = LocalHapticFeedback.current
+            var accountOpen by rememberSaveable { mutableStateOf(false) }
+            var editorOpen by rememberSaveable { mutableStateOf(false) }
+            var devicesOpen by remember { mutableStateOf(false) }
             // The phone navigation bar is measured (its height includes the edge-to-edge navigation-bar
             // inset) so the content column ends above it and the sheet's collapsed anchor sits on it.
             var navBarHeightPx by remember { mutableIntStateOf(0) }
@@ -326,21 +292,24 @@ private fun MainShell() {
             // into content nobody can see.
             val covered by remember(sheet) { derivedStateOf { sheet.progress >= 0.6f } }
             val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
-            fun go(item: NavItem) {
-                nav.navigate(item.route()) { popUpTo(nav.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true }
-            }
+            fun go(item: NavItem) { rootEntryId = nav.goToPlace(item) }
+            val shell = remember(items, nav) { ShellNavigator(items, goTo = { rootEntryId = nav.goToPlace(it) }, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }) }
+            val editLabel = stringResource(R.string.bottom_bar_edit)
+            val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
+            CompositionLocalProvider(LocalShellNavigator provides shell) {
             Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
                 if (wide) {
                     val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
                     ModalWideNavigationRail(state = railState, hideOnCollapse = false) {
                         items.forEach { item ->
-                            val selected = item.matches(routeName)
+                            val isSelected = item == selected
                             WideNavigationRailItem(
-                                selected = selected,
+                                selected = isSelected,
                                 onClick = { go(item); scope.launch { railState.collapse() } },
-                                icon = { Icon(item.icon(selected), null) },
+                                icon = { Icon(item.icon(isSelected), null) },
                                 label = { Text(item.label()) },
                                 railExpanded = railState.targetValue == WideNavigationRailValue.Expanded,
+                                modifier = Modifier.testTag("navRail." + item.id),
                             )
                         }
                     }
@@ -369,21 +338,40 @@ private fun MainShell() {
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
-                // sheet expands and the full player takes the screen.
+                // sheet expands and the full player takes the screen. A long press opens its editor
+                // (also a TalkBack action on every item).
                 ShortNavigationBar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .zIndex(20f)
                         .onSizeChanged { navBarHeightPx = it.height }
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                        .longPressToEdit(openEditor)
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
                 ) {
                     items.forEach { item ->
-                        val selected = item.matches(routeName)
-                        ShortNavigationBarItem(selected = selected, onClick = { go(item) }, icon = { Icon(item.icon(selected), null) }, label = { Text(item.label()) }, modifier = Modifier.testTag("navBar." + item.id))
+                        val isSelected = item == selected
+                        ShortNavigationBarItem(
+                            selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.label(), maxLines = 1) },
+                            modifier = Modifier.testTag("navBar." + item.id).semantics { customActions = listOf(CustomAccessibilityAction(editLabel) { editorOpen = true; true }) },
+                        )
                     }
                 }
+            }
+            if (accountOpen) {
+                AccountSheet(
+                    barItems = items,
+                    onSettings = { accountOpen = false; nav.navigate(Route.Settings) { launchSingleTop = true } },
+                    onStats = { accountOpen = false; go(NavItem.Stats) },
+                    onDevices = { accountOpen = false; devicesOpen = true },
+                    onPlace = { accountOpen = false; go(it) },
+                    onEditBar = { accountOpen = false; editorOpen = true },
+                    onDismiss = { accountOpen = false },
+                )
+            }
+            if (editorOpen) BottomBarEditorSheet(onDismiss = { editorOpen = false })
+            if (devicesOpen) app.hocket.ui.player.HandoffSheet(onDismiss = { devicesOpen = false })
             }
         }
     }
@@ -397,6 +385,11 @@ private fun AppNavHost(nav: NavHostController, modifier: Modifier) {
         composable<Route.Search> { SearchScreen(nav) }
         composable<Route.Settings> { SettingsScreen(nav) }
         composable<Route.Downloads> { DownloadsScreen(nav) }
+        composable<Route.Albums> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Albums) }
+        composable<Route.Artists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
+        composable<Route.Playlists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
+        composable<Route.Songs> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
+        composable<Route.Genres> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
         composable<Route.AvailableOffline> { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
         composable<Route.Filters> { FiltersScreen(nav) }
         composable<Route.FilterBuilder> { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
@@ -76,7 +77,7 @@ fun HomeScreen(nav: NavHostController) {
     var jobs by remember { mutableStateOf(false) }
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.home_greeting)) }, subtitle = { Text(server?.name ?: "") }, actions = { JobsIndicator(onClick = { jobs = true }) }, scrollBehavior = scroll) },
+        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.home_greeting)) }, subtitle = { Text(server?.name ?: "") }, actions = { JobsIndicator(onClick = { jobs = true }); AccountButton() }, scrollBehavior = scroll) },
     ) { padding ->
         if (recent.isEmpty() && added.isEmpty()) {
             EmptyState(stringResource(R.string.empty_home_title), stringResource(R.string.empty_home_body), Modifier.padding(padding), stringResource(R.string.nav_library)) { nav.navigate(Route.Library()) }

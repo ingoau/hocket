@@ -56,6 +56,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import androidx.annotation.StringRes
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import app.hocket.ui.nav.AccountButton
+import app.hocket.ui.nav.NavItem
+import app.hocket.ui.nav.icon
+import app.hocket.ui.nav.label
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -159,9 +169,12 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                             }
                         }
                         JobsIndicator(onClick = { jobs = true })
+                        AccountButton()
                     },
                     scrollBehavior = scroll,
                 )
+                // The places beyond the tabs, so each stays reachable when it is not in the bottom bar.
+                LibraryLinks(nav)
                 PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = 8.dp) {
                     tabs.forEachIndexed { i, res ->
                         Tab(selected = pager.currentPage == i, onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
@@ -207,7 +220,7 @@ private val detailSaver = androidx.compose.runtime.saveable.Saver<DetailTarget?,
 )
 
 @Composable
-private fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, open: (DetailTarget) -> Unit) {
+internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, open: (DetailTarget) -> Unit) {
     val client = LocalCoreClient.current
     val key = remember(serverId, sort, descending) { AlbumListKey(serverId, sort, descending) }
     val state by client.albumPages.state(key).collectAsStateWithLifecycle()
@@ -236,7 +249,7 @@ private fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, op
 }
 
 @Composable
-private fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     val client = LocalCoreClient.current
     val key = remember(serverId) { ArtistListKey(serverId) }
     val state by client.artistPages.state(key).collectAsStateWithLifecycle()
@@ -257,7 +270,7 @@ private fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
 }
 
 @Composable
-private fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     val client = LocalCoreClient.current
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
     var playlists by remember { mutableStateOf<List<Playlist>?>(null) }
@@ -343,7 +356,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
 }
 
 @Composable
-private fun GenresTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun GenresTab(serverId: String, open: (DetailTarget) -> Unit) {
     val client = LocalCoreClient.current
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
     var genres by remember { mutableStateOf<List<Genre>?>(null) }
@@ -352,5 +365,68 @@ private fun GenresTab(serverId: String, open: (DetailTarget) -> Unit) {
     if (list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
     LazyColumn(contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
         items(list, key = { it.name }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }) }
+    }
+}
+
+/** The library's lists as bottom-bar places of their own. */
+enum class LibraryList(@StringRes val title: Int) {
+    Albums(R.string.library_albums), Artists(R.string.library_artists), Playlists(R.string.library_playlists), Songs(R.string.library_songs), Genres(R.string.library_genres)
+}
+
+/** One library list on its own screen (a bottom-bar place): its top app bar with the account button, then the list. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
+    val client = LocalCoreClient.current
+    val server by client.server.collectAsStateWithLifecycle()
+    val serverId = server?.id ?: return
+    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    fun open(target: DetailTarget) = when (target) {
+        is DetailTarget.Album -> nav.navigate(Route.Album(target.id))
+        is DetailTarget.Artist -> nav.navigate(Route.Artist(target.id))
+        is DetailTarget.Playlist -> nav.navigate(Route.Playlist(target.id))
+        is DetailTarget.Genre -> nav.navigate(Route.Genre(target.name))
+    }
+    Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("libraryList.${list.name.lowercase()}"),
+        topBar = {
+            MediumFlexibleTopAppBar(
+                title = { Text(stringResource(list.title), modifier = Modifier.semantics { heading() }) },
+                actions = { AccountButton() },
+                scrollBehavior = scroll,
+            )
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
+            when (list) {
+                LibraryList.Albums -> AlbumsTab(serverId, SortOrder.Default, false, ::open)
+                LibraryList.Artists -> ArtistsTab(serverId, ::open)
+                LibraryList.Playlists -> PlaylistsTab(serverId, ::open)
+                LibraryList.Songs -> {
+                    var offlineOnly by rememberSaveable { mutableStateOf(false) }
+                    SongsTab(serverId, SortOrder.Default, false, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it })
+                }
+                LibraryList.Genres -> GenresTab(serverId, ::open)
+            }
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+        }
+    }
+}
+
+/** Links from the library to the places its tabs do not cover: recent queues, downloads, filters. */
+@Composable
+private fun LibraryLinks(nav: NavHostController) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp).testTag("library.links"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        listOf(NavItem.RecentQueues to Route.SavedQueues, NavItem.Downloads to Route.Downloads, NavItem.Filters to Route.Filters).forEach { (item, route) ->
+            AssistChip(
+                onClick = { nav.navigate(route) { launchSingleTop = true } },
+                label = { Text(item.label()) },
+                leadingIcon = { Icon(item.icon(false), null, Modifier.size(AssistChipDefaults.IconSize)) },
+                modifier = Modifier.testTag("library.link.${item.id}"),
+            )
+        }
     }
 }

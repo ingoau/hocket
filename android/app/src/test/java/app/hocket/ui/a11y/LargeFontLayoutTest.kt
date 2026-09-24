@@ -17,6 +17,7 @@ import app.hocket.ui.TestCore
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.screens.settings.SettingsCategory
 import app.hocket.ui.theme.HocketTheme
+import app.hocket.ui.openSettingsFromAccount
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -70,7 +71,7 @@ class LargeFontLayoutTest {
     @Test
     fun settingsCategoriesAndTheirScreensAtFontScaleTwo() {
         start()
-        click("navBar.settings")
+        compose.openSettingsFromAccount()
         holds("settings categories")
         for (category in SettingsCategory.entries) {
             compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)

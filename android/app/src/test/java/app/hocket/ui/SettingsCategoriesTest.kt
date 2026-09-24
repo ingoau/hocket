@@ -86,9 +86,7 @@ class SettingsCategoriesTest {
         val core = TestCore(startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("navBar.settings").assertExists() }.isSuccess }
-        compose.onNodeWithTag("navBar.settings").performClick()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("settings.categories").assertExists() }.isSuccess }
+        compose.openSettingsFromAccount()
 
         val seen = ArrayList<String>()
         for (category in SettingsCategory.entries) {
@@ -117,9 +115,7 @@ class SettingsCategoriesTest {
         val core = TestCore(startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("navBar.settings").assertExists() }.isSuccess }
-        compose.onNodeWithTag("navBar.settings").performClick()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("settings.category.account").assertExists() }.isSuccess }
+        compose.openSettingsFromAccount()
         compose.onNodeWithTag("settings.category.account").performClick()
         compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("setting.server.remove").assertExists() }.isSuccess }
         compose.onNodeWithTag("setting.server.remove").performScrollTo().performClick()
@@ -132,9 +128,7 @@ class SettingsCategoriesTest {
     private fun openSettings(core: TestCore) {
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("navBar.settings").assertExists() }.isSuccess }
-        compose.onNodeWithTag("navBar.settings").performClick()
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("settings.categories").assertExists() }.isSuccess }
+        compose.openSettingsFromAccount()
     }
 
     private fun open(category: SettingsCategory) {

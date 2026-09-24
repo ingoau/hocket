@@ -16,6 +16,14 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.click
+import androidx.compose.runtime.CompositionLocalProvider
+import app.hocket.InMemoryNavBarPrefs
+import app.hocket.ui.nav.LocalNavBarPrefs
+import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
@@ -31,7 +39,8 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
- * Renders the settings UI (category list, every category screen, the sign-out confirmation) to PNGs
+ * Renders the settings UI (category list, every category screen, the sign-out confirmation) and the
+ * bottom bar (default, five items, its editor, the account sheet) to PNGs
  * with Robolectric native graphics, in the light and the dark theme, for visual review. Not an
  * assertion test: it only runs when an output directory is given, so ordinary test runs write
  * nothing, e.g.
@@ -60,6 +69,86 @@ class SettingsScreenshotTest {
     @Config(qualifiers = "+night")
     fun dark() = captureAll("dark")
 
+    @Test
+    @Config(qualifiers = "+notnight")
+    fun barLight() = captureBar("light")
+
+    @Test
+    @Config(qualifiers = "+night")
+    fun barDark() = captureBar("dark")
+
+    /**
+     * The bottom bar: the default bar (on Home), the account sheet, the bar editor opened by a long
+     * press, and a five-item bar.
+     */
+    private fun captureBar(theme: String) {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
+        dir!!.mkdirs()
+        val prefix = "android-bar-$theme"
+        val prefs = InMemoryNavBarPrefs()
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalNavBarPrefs provides prefs) { AppRoot(core.client) } }
+        core.start()
+        awaitTag("navBar.library")
+        compose.mainClock.advanceTimeBy(1_000)
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-default.png"))
+
+        compose.onAllNodesWithTag("account.button").onFirst().performClick()
+        awaitTag("account.settings")
+        compose.mainClock.advanceTimeBy(1_000)
+        captureWindows(File(dir, "$prefix-account-sheet.png"))
+        tapScrim()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("account.sheet").fetchSemanticsNodes().isEmpty() }
+
+        compose.onNodeWithTag("navBar").performTouchInput { longClick(center) }
+        awaitTag("bottomBar.editor")
+        compose.mainClock.advanceTimeBy(1_000)
+        captureWindows(File(dir, "$prefix-editor.png"))
+        tapScrim()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("bottomBar.sheet").fetchSemanticsNodes().isEmpty() }
+
+        runBlocking { prefs.setNavItems(listOf("home", "search", "library", "albums", "recentQueues")) }
+        awaitTag("navBar.recentQueues")
+        compose.onNodeWithTag("navBar.albums").performClick()
+        awaitTag("libraryList.albums")
+        compose.mainClock.advanceTimeBy(1_000)
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-five.png"))
+    }
+
+    /** Dismisses the open sheet with a tap on its scrim, at the top of its (full-screen) window. */
+    private fun tapScrim() {
+        val roots = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })
+        val nodes = roots.fetchSemanticsNodes()
+        val main = nodes.indices.maxBy { i -> (nodes[i].root as ViewRootForTest).view.let { it.width.toLong() * it.height } }
+        val sheet = nodes.indices.first { it != main }
+        roots[sheet].performTouchInput { click(Offset(centerX, 24f)) }
+        compose.waitForIdle()
+    }
+
+    /** Every window (the app, then any sheet or dialog above it) drawn in order at its position on screen. */
+    private fun captureWindows(file: File) {
+        val roots = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null }).fetchSemanticsNodes()
+        val views = roots.map { (it.root as ViewRootForTest).view }
+        val main = views.indices.maxBy { views[it].width.toLong() * views[it].height }
+        val order = listOf(main) + views.indices.filter { it != main }
+        val base = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })[main].captureToImage().asAndroidBitmap()
+        val out = base.copy(Bitmap.Config.ARGB_8888, true)
+        val mainLoc = IntArray(2).also { views[main].getLocationOnScreen(it) }
+        Canvas(out).apply {
+            order.drop(1).forEach { i ->
+                val image = compose.onAllNodes(SemanticsMatcher("a root") { it.parent == null })[i].captureToImage().asAndroidBitmap()
+                val loc = IntArray(2).also { views[i].getLocationOnScreen(it) }
+                // A full-screen sheet window sits at 0,0; a smaller one (a dialog) is centred like a device does.
+                val full = image.width >= out.width && image.height >= out.height * 0.9f
+                val x = if (full) (loc[0] - mainLoc[0]).toFloat() else (out.width - image.width) / 2f
+                val y = if (full) (loc[1] - mainLoc[1]).toFloat() else (out.height - image.height) / 2f
+                drawBitmap(image, x, y, Paint(Paint.FILTER_BITMAP_FLAG))
+            }
+        }
+        save(out, file)
+    }
+
     private fun captureAll(theme: String) {
         val dir = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write settings screenshots", dir != null)
@@ -69,9 +158,7 @@ class SettingsScreenshotTest {
         val core = TestCore(startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
-        awaitTag("navBar.settings")
-        compose.onNodeWithTag("navBar.settings").performClick()
-        awaitTag("settings.categories")
+        compose.openSettingsFromAccount()
         capturePages(File(dir, "$prefix-categories"))
         scrollToTop()
 
