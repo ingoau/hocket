@@ -9,9 +9,11 @@ use crate::connect::wire::{SessionOp, TransportCommand};
 use crate::core::actor::{
     Actor, LOAD_RETRIES, MAX_CONSECUTIVE_SKIPS, MEDIA_SESSION_ART, MEDIA_SESSION_ART_SMALL,
 };
+use crate::core::state::{pending_scrobbles_key, PendingScrobble};
 use crate::core::Internal;
+use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
-use crate::outbox::ScrobbleAction;
+use crate::outbox::{ScrobbleAction, Verdict};
 use crate::session::reducer::derive;
 
 impl Actor {
@@ -864,24 +866,97 @@ impl Actor {
                     // across a handoff) before submitting.
                     self.playback.scrobbled = true;
                     let started_at = self.playback.started_at;
+                    let Some(server_id) = self.server_id() else {
+                        continue;
+                    };
+                    // The play's ORIGINAL start (its identity, on the session
+                    // clock), not when this device resumed it: every device
+                    // that ever submits this play sends the same Subsonic
+                    // `time`, so a duplicate that slips past the session's
+                    // dedupe (a device judging alone after the grace)
+                    // collapses into one downstream.
+                    let played_at = if started_at > 0.0 {
+                        started_at
+                    } else {
+                        self.playback.started_local
+                    };
+                    let pending = PendingScrobble {
+                        server_id,
+                        track_id: track_id.clone(),
+                        started_at,
+                        played_at,
+                        played_ms,
+                    };
+                    self.pending_submits
+                        .insert((track_id.clone(), started_at.to_bits()), pending.clone());
                     if self.engine.is_none() {
                         // No session to ask (between servers): nobody else
                         // could have scrobbled this play.
-                        self.pending_submits
-                            .insert((track_id.clone(), started_at.to_bits()), played_ms);
                         self.on_scrobble_verdict(track_id, started_at, true);
                         continue;
                     }
-                    self.pending_submits
-                        .insert((track_id.clone(), started_at.to_bits()), played_ms);
+                    // Durable before the engine is asked (its verdict may come
+                    // back at once): a restart before the verdict asks again.
+                    self.store_pending_scrobble(&pending);
                     self.stamp();
                     self.engine_input(Input::ScrobbleReached {
                         track_id,
                         started_at,
                     });
+                    // An unanswered ask is a wait the engine persists with its
+                    // connect state (awaitingSince): save it now, not only
+                    // when the session document next changes.
+                    self.mark_doc_dirty();
                 }
             }
         }
+    }
+
+    /// Add a play to the open scope's durable "awaiting a verdict" list.
+    fn store_pending_scrobble(&mut self, pending: &PendingScrobble) {
+        let Some(scope) = self.scope.clone() else {
+            return;
+        };
+        let key = pending_scrobbles_key(&scope);
+        let now = self.now();
+        let r = self.db.with_tx(|tx| {
+            let mut list = load_pending_scrobbles(tx, &key)?;
+            list.retain(|p| !p.is(&pending.track_id, pending.started_at));
+            list.push(pending.clone());
+            save_pending_scrobbles(tx, &key, &list, now)
+        });
+        if let Err(e) = r {
+            self.error(
+                ErrorKind::Storage,
+                "save pending scrobble",
+                Some(e.to_string()),
+            );
+        }
+    }
+
+    /// After the engine is (re)built for `scope`: ask again about every play
+    /// that was still waiting for its verdict when the app last stopped, with
+    /// its original identity, so the engine resumes the wait (its restored
+    /// `awaitingSince` keeps the grace honest) instead of the play being lost.
+    pub(crate) fn resume_pending_scrobbles(&mut self, scope: &str) {
+        let key = pending_scrobbles_key(scope);
+        let list = match self.db.with_tx(|tx| load_pending_scrobbles(tx, &key)) {
+            Ok(list) => list,
+            Err(e) => {
+                self.log("warn", format!("pending scrobbles unreadable: {e}"));
+                return;
+            }
+        };
+        for p in list {
+            let (track_id, started_at) = (p.track_id.clone(), p.started_at);
+            self.pending_submits
+                .insert((track_id.clone(), started_at.to_bits()), p);
+            self.engine_input(Input::ScrobbleReached {
+                track_id,
+                started_at,
+            });
+        }
+        self.mark_doc_dirty();
     }
 
     pub(crate) fn recorder(&self) -> crate::outbox::ScrobbleRecorder {
@@ -898,53 +973,69 @@ impl Actor {
         started_at: EpochMs,
         allowed: bool,
     ) {
-        let played_ms = self
+        // The engine's awaiting list changed: persist it with the document.
+        self.mark_doc_dirty();
+        let pending = self
             .pending_submits
-            .remove(&(track_id.clone(), started_at.to_bits()))
-            .unwrap_or_else(|| self.scrobbler.played_ms());
-        let Some(server_id) = self.server_id() else {
-            return;
+            .remove(&(track_id.clone(), started_at.to_bits()));
+        let (server_id, played_at, played_ms) = match pending {
+            Some(p) => (p.server_id, p.played_at, p.played_ms),
+            None => {
+                let Some(server_id) = self.server_id() else {
+                    return;
+                };
+                let played_ms = self.scrobbler.played_ms();
+                let played_at = if started_at > 0.0 {
+                    started_at
+                } else if self.playback.started_at == started_at {
+                    self.playback.started_local
+                } else {
+                    self.now() - f64::from(played_ms)
+                };
+                (server_id, played_at, played_ms)
+            }
         };
-        // The play's ORIGINAL start (its identity, on the session clock), not
-        // when this device resumed it: every device that ever submits this
-        // play sends the same Subsonic `time`, so a duplicate that slips
-        // past the session's dedupe (a device judging alone after the
-        // grace) collapses into one downstream.
-        let played_at = if started_at > 0.0 {
-            started_at
-        } else if self.playback.started_at == started_at {
-            self.playback.started_local
-        } else {
-            self.now() - f64::from(played_ms)
-        };
-        if allowed
+        let submit = allowed
             && self
                 .settings
-                .get_bool(crate::settings::keys::SCROBBLE_ENABLED)
-        {
-            let action = ScrobbleAction::Submit {
-                track_id: track_id.clone(),
-                started_at: played_at,
-                played_ms,
-            };
-            if let Err(e) = self.recorder().apply(&server_id, &action) {
-                self.log("warn", format!("scrobble: {e}"));
-            }
-            self.schedule_flush();
+                .get_bool(crate::settings::keys::SCROBBLE_ENABLED);
+        // Already scrobbled by the device that handed over (`!allowed`), or
+        // scrobbling is off here: it still counts as a local play, and is
+        // only marked scrobbled when a device actually submitted it.
+        let verdict = if submit {
+            Verdict::Submit
+        } else if !allowed {
+            Verdict::ScrobbledElsewhere
         } else {
-            // Already scrobbled by the device that handed over (`!allowed`),
-            // or scrobbling is off here: it still counts as a local play, and
-            // is only marked scrobbled when a device actually submitted it.
-            if let Err(e) = self.db.record_play(
-                &server_id,
-                &track_id,
-                played_at,
-                played_ms,
-                !allowed,
-                &self.cfg.device_id,
-            ) {
-                self.log("warn", format!("record play: {e}"));
-            }
+            Verdict::LocalOnly
+        };
+        // The play is recorded and its pending record cleared together.
+        let pending_key = self.scope.as_deref().map(pending_scrobbles_key);
+        let now = self.now();
+        let r = self.recorder().record_verdict(
+            &server_id,
+            &track_id,
+            played_at,
+            played_ms,
+            verdict,
+            |tx| {
+                let Some(key) = &pending_key else {
+                    return Ok(());
+                };
+                let mut list = load_pending_scrobbles(tx, key)?;
+                let before = list.len();
+                list.retain(|p| !p.is(&track_id, started_at));
+                if list.len() != before {
+                    save_pending_scrobbles(tx, key, &list, now)?;
+                }
+                Ok(())
+            },
+        );
+        if let Err(e) = r {
+            self.log("warn", format!("record play: {e}"));
+        }
+        if submit {
+            self.schedule_flush();
         }
         self.emit(Event::LibraryChanged {
             server_id,
@@ -1148,4 +1239,36 @@ impl Actor {
             self.emit_media_session();
         }
     }
+}
+
+fn load_pending_scrobbles(tx: &rusqlite::Transaction, key: &str) -> DbResult<Vec<PendingScrobble>> {
+    use rusqlite::OptionalExtension;
+    let json: Option<String> = tx
+        .query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(match json {
+        Some(j) => serde_json::from_str(&j)?,
+        None => vec![],
+    })
+}
+
+fn save_pending_scrobbles(
+    tx: &rusqlite::Transaction,
+    key: &str,
+    list: &[PendingScrobble],
+    now: EpochMs,
+) -> DbResult<()> {
+    if list.is_empty() {
+        tx.execute("DELETE FROM saved_state WHERE key = ?1", [key])?;
+        return Ok(());
+    }
+    let json = serde_json::to_string(list)?;
+    tx.execute(
+        "INSERT INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at",
+        rusqlite::params![key, json, now],
+    )?;
+    Ok(())
 }

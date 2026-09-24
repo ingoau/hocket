@@ -164,7 +164,9 @@ pub(crate) struct Actor {
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
     pub last_transport: TransportState,
-    pub pending_submits: HashMap<(TrackId, u64), Ms>,
+    /// Plays waiting for the session's scrobble verdict (mirrors the durable
+    /// [`super::state::PendingScrobble`] records of the open scope).
+    pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
     pub pending_cas: HashMap<String, PendingCas>,
     pub outbox_entries: HashMap<String, String>,
 

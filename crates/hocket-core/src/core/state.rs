@@ -116,6 +116,37 @@ pub(crate) struct SavedPosition {
     pub position_ms: Ms,
 }
 
+/// A play that reached its scrobble threshold and waits for the session's
+/// verdict (`Output::Scrobble`). Kept in `saved_state` under
+/// [`pending_scrobbles_key`] from the moment it is asked about until the
+/// verdict is recorded (in the same transaction), and asked about again
+/// after a restart (connect/mod.rs rule 8), so no play is lost to a restart
+/// and none is recorded twice.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingScrobble {
+    pub server_id: ServerId,
+    pub track_id: TrackId,
+    /// The play's identity: its start on the session clock (what the engine
+    /// is asked about).
+    pub started_at: EpochMs,
+    /// What the play is recorded and submitted with.
+    pub played_at: EpochMs,
+    pub played_ms: Ms,
+}
+
+impl PendingScrobble {
+    /// The same play (the engine's own tolerance for a `startedAt`).
+    pub fn is(&self, track_id: &str, started_at: EpochMs) -> bool {
+        self.track_id == track_id && (self.started_at - started_at).abs() < 1.0
+    }
+}
+
+/// `saved_state` key of a scope's [`PendingScrobble`]s.
+pub(crate) fn pending_scrobbles_key(scope: &str) -> String {
+    format!("pendingScrobbles:{scope}")
+}
+
 /// Bookkeeping for an undo whose inverse runs as compare-and-swap steps.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingCas {

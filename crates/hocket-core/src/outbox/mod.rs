@@ -44,7 +44,7 @@ use crate::jobs::{JobContext, JobError, JobResult, JobRunner, RetryAction};
 use crate::subsonic::{PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError};
 use crate::util::{new_id, Clock};
 
-pub use scrobbler::{ScrobbleAction, ScrobbleRecorder, Scrobbler};
+pub use scrobbler::{ScrobbleAction, ScrobbleRecorder, Scrobbler, Verdict};
 
 /// What `star`/`unstar` can target.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -380,6 +380,19 @@ impl Outbox {
         mutation: Mutation,
         prior: Option<Prior>,
     ) -> DbResult<String> {
+        self.db
+            .with_tx(|tx| self.enqueue_in(tx, server_id, mutation, prior))
+    }
+
+    /// [`Outbox::enqueue`] inside the caller's transaction, so the entry
+    /// commits (or not) together with the caller's other writes.
+    pub fn enqueue_in(
+        &self,
+        tx: &rusqlite::Transaction,
+        server_id: &str,
+        mutation: Mutation,
+        prior: Option<Prior>,
+    ) -> DbResult<String> {
         let id = new_id();
         let now = self.clock.now_ms();
         let target = mutation.target_key();
@@ -388,30 +401,27 @@ impl Outbox {
             Some(p) => Some(serde_json::to_string(p)?),
             None => None,
         };
-        self.db.with_tx(|tx| {
-            // Coalesce: an unsent entry for the same target is superseded; keep its original prior.
-            let mut inherited_prior: Option<String> = None;
-            if mutation.coalesces() {
-                let existing: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "SELECT id, expected_prior FROM outbox WHERE server_id = ?1 AND target = ?2 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
-                        [server_id, &target],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                if let Some((old_id, old_prior)) = existing {
-                    tx.execute("DELETE FROM outbox WHERE id = ?1", [&old_id])?;
-                    inherited_prior = old_prior;
-                }
+        // Coalesce: an unsent entry for the same target is superseded; keep its original prior.
+        let mut inherited_prior: Option<String> = None;
+        if mutation.coalesces() {
+            let existing: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT id, expected_prior FROM outbox WHERE server_id = ?1 AND target = ?2 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                    [server_id, &target],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            if let Some((old_id, old_prior)) = existing {
+                tx.execute("DELETE FROM outbox WHERE id = ?1", [&old_id])?;
+                inherited_prior = old_prior;
             }
-            let prior_json = inherited_prior.or(prior_json);
-            tx.execute(
-                "INSERT INTO outbox(id, server_id, mutation, status, created_at, attempts, next_attempt_at, target, expected_prior) VALUES (?1, ?2, ?3, 'pending', ?4, 0, ?4, ?5, ?6)",
-                params![id, server_id, json, now, target, prior_json],
-            )?;
-            apply_local(tx, &mutation)?;
-            Ok(())
-        })?;
+        }
+        let prior_json = inherited_prior.or(prior_json);
+        tx.execute(
+            "INSERT INTO outbox(id, server_id, mutation, status, created_at, attempts, next_attempt_at, target, expected_prior) VALUES (?1, ?2, ?3, 'pending', ?4, 0, ?4, ?5, ?6)",
+            params![id, server_id, json, now, target, prior_json],
+        )?;
+        apply_local(tx, &mutation)?;
         Ok(id)
     }
 

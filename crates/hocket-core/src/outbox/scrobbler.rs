@@ -41,6 +41,18 @@ pub fn threshold_ms(duration_ms: Ms) -> Ms {
     (duration_ms / 2).min(MAX_THRESHOLD_MS)
 }
 
+/// How a play that reached its threshold is recorded
+/// ([`ScrobbleRecorder::record_verdict`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Recorded and submitted from here.
+    Submit,
+    /// Another device already scrobbled it: a local play, marked scrobbled.
+    ScrobbledElsewhere,
+    /// A local play nobody scrobbled (scrobbling is off here).
+    LocalOnly,
+}
+
 /// What the state machine wants done.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScrobbleAction {
@@ -295,27 +307,67 @@ impl ScrobbleRecorder {
                 started_at,
                 played_ms,
             } => {
-                let history_id = self.db.record_play(
+                self.record_verdict(
                     server_id,
                     track_id,
                     *started_at,
                     *played_ms,
-                    false,
-                    &self.device_id,
+                    Verdict::Submit,
+                    |_| Ok(()),
                 )?;
-                self.outbox.enqueue(
+            }
+        }
+        Ok(())
+    }
+
+    /// Record a play that reached its threshold, as the session judged it:
+    /// a play history row (bumping the local play count) and, for
+    /// [`Verdict::Submit`], the outbox submission, in ONE transaction with
+    /// `also` (the caller clears its durable "awaiting a verdict" record
+    /// there), so a crash leaves either the pending record or the play,
+    /// never both and never neither.
+    pub fn record_verdict(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        played_at: f64,
+        played_ms: Ms,
+        verdict: Verdict,
+        also: impl FnOnce(&rusqlite::Transaction) -> DbResult<()>,
+    ) -> DbResult<()> {
+        self.db.with_tx(|tx| {
+            // Same rows as `Db::record_play`, inside this transaction.
+            tx.execute(
+                "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    server_id,
+                    track_id,
+                    played_at,
+                    played_ms,
+                    (verdict == Verdict::ScrobbledElsewhere) as i64,
+                    self.device_id
+                ],
+            )?;
+            let history_id = tx.last_insert_rowid();
+            tx.execute(
+                "UPDATE tracks SET local_play_count = local_play_count + 1, local_last_played = ?3 WHERE server_id = ?1 AND id = ?2",
+                rusqlite::params![server_id, track_id, played_at],
+            )?;
+            if verdict == Verdict::Submit {
+                self.outbox.enqueue_in(
+                    tx,
                     server_id,
                     Mutation::Scrobble {
-                        track_id: track_id.clone(),
-                        played_at: *started_at,
+                        track_id: track_id.to_string(),
+                        played_at,
                         submission: true,
                         history_id: Some(history_id),
                     },
                     None,
                 )?;
             }
-        }
-        Ok(())
+            also(tx)
+        })
     }
 
     pub fn apply_all(&self, server_id: &str, actions: &[ScrobbleAction]) -> DbResult<()> {

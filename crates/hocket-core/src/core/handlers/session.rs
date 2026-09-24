@@ -147,6 +147,8 @@ impl Actor {
             self.playback.doc_key = Some(cur.key.clone());
             self.playback.track = self.track_or_bare(&cur.track_id);
         }
+        // Plays still waiting for a scrobble verdict when the app stopped.
+        self.resume_pending_scrobbles(&scope);
     }
 
     // -- engine plumbing ----------------------------------------------------------
