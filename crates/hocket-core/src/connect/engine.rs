@@ -21,7 +21,7 @@
 //! Ops are optimistic: applied locally at submission, confirmed by `OpAck`,
 //! rolled back on `OpReject` or when someone else's op commits first.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,11 @@ pub const SCROBBLE_QUERY_RETRY_MS: f64 = 10_000.0;
 /// heartbeat/ping periods) may be the one that is cut off: its own room
 /// stops being authoritative for scrobble verdicts until they speak again.
 pub const MEMBER_QUIET_MS: f64 = 12_000.0;
+/// After the engine starts (or LAN discovery is switched on) mDNS needs a
+/// moment to report the peers already on the network: until then being
+/// alone proves nothing, and our own room is not the scrobble authority (a
+/// restarted device would otherwise judge its outbox in a room of one).
+pub const LAN_SETTLE_MS: f64 = 5_000.0;
 /// Clock ping cadence once synced.
 const PING_INTERVAL_MS: f64 = 5_000.0;
 /// Pings sent quickly after joining to converge the offset.
@@ -571,6 +576,13 @@ pub struct Engine {
     /// leader carries the LAN session to the coordinator, so on the next
     /// coordinator welcome we adopt without filing and without replaying.
     lan_deferred: bool,
+    /// Until when LAN discovery is still settling (see [`LAN_SETTLE_MS`]).
+    lan_settle_until: EpochMs,
+    /// LAN devices that proved the scope's key in a room with us (joined
+    /// ours, or we joined theirs, or we met them there). Only these are
+    /// waited for before a lone leader judges scrobbles: an advert alone
+    /// (a rogue's, say) earns no such patience.
+    lan_proven: BTreeSet<DeviceId>,
     last_known_lan: HashMap<DeviceId, String>,
     last_advert: Option<PeerAdvert>,
     last_advert_at: EpochMs,
@@ -679,6 +691,8 @@ impl Engine {
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
             lan_deferred: false,
+            lan_settle_until: now + LAN_SETTLE_MS,
+            lan_proven: BTreeSet::new(),
             last_known_lan: HashMap::new(),
             last_advert: None,
             last_advert_at: 0.0,
@@ -744,13 +758,22 @@ impl Engine {
     }
 
     /// Restore what [`Engine::known_scrobbled`] returned before a restart
-    /// (call right after [`Engine::new`]). Seeds the embedded room's log.
+    /// (call right after [`Engine::new`]). Seeds the embedded room's log
+    /// with all of it; other devices' scrobbles also become known locally.
+    /// Our own entries only go to the room: they may be claims we never got
+    /// to submit (killed between the room's answer and the submission), and
+    /// the outbox asking again must hear "yours" from the room rather than
+    /// "already done" from us.
     pub fn restore_known_scrobbled(&mut self, known: Vec<KnownScrobble>) {
+        let me = self.cfg.device.id.clone();
+        let mut seed: Vec<(TrackId, EpochMs, DeviceId)> = vec![];
         for k in known {
-            self.learn_scrobbled(&k.track_id, k.started_at, &k.device_id);
+            if k.device_id != me {
+                self.learn_scrobbled(&k.track_id, k.started_at, &k.device_id);
+            }
+            seed.push((k.track_id, k.started_at, k.device_id));
         }
-        let known = self.known_scrobbled.clone();
-        self.room.seed_scrobbles(&known);
+        self.room.seed_scrobbles(&seed);
     }
 
     pub fn owns_transport(&self) -> bool {
@@ -954,6 +977,9 @@ impl Engine {
                 self.reevaluate();
             }
             Input::SetLanDiscovery(enabled) => {
+                if enabled && !self.cfg.lan_enabled {
+                    self.lan_settle_until = self.now_local_ms() + LAN_SETTLE_MS;
+                }
                 self.cfg.lan_enabled = enabled;
                 if !enabled {
                     self.lan_peers.clear();
@@ -962,8 +988,12 @@ impl Engine {
             }
             Input::SetCredential(c) => self.cfg.credential = c,
             Input::SetLanKey(key) => {
+                if key.is_some() && self.cfg.lan_key.is_none() {
+                    self.lan_settle_until = self.now_local_ms() + LAN_SETTLE_MS;
+                }
                 self.cfg.lan_key = key;
                 self.room.set_lan_auth(self.cfg.room_lan_auth());
+                self.lan_proven.clear();
                 self.lan_blocklist.clear();
                 self.lan_strikes.clear();
                 // Inbound members were admitted under the old key.
@@ -1158,6 +1188,9 @@ impl Engine {
         // from one recently. Members all silent, or all gone a moment ago,
         // means we may be the one who is cut off.
         let now = self.now_local_ms();
+        if self.cfg.lan_enabled && self.cfg.lan_key.is_some() && now < self.lan_settle_until {
+            return false; // nobody around yet may just mean not heard yet
+        }
         if !self.inbound.is_empty() {
             match self.room.last_member_seen() {
                 Some(t) if now - t <= MEMBER_QUIET_MS => {}
@@ -1170,7 +1203,38 @@ impl Engine {
         }
         match self.elect_lan_leader() {
             None => true,
-            Some(l) => l == self.cfg.device.id,
+            Some(l) if l != self.cfg.device.id => false,
+            Some(_) => {
+                // We lead, but alone while a device we have shared a room
+                // with is in view: it is on its way to us (or cut off from
+                // us, in a room of its own), and what it knows was
+                // scrobbled only reaches our room once it joins. Its
+                // announcements, or the grace period, decide.
+                !(self.inbound.is_empty() && self.proven_peer_in_view(now))
+            }
+        }
+    }
+
+    /// A LAN peer that proved the key with us before is advertising (and is
+    /// not blocked).
+    fn proven_peer_in_view(&self, now: EpochMs) -> bool {
+        self.lan_peers.iter().any(|p| {
+            self.lan_proven.contains(&p.device_id)
+                && self
+                    .lan_blocklist
+                    .get(&p.device_id)
+                    .map(|until| now >= *until)
+                    .unwrap_or(true)
+        })
+    }
+
+    /// Remember the devices in our own room as proven LAN peers.
+    fn note_proven_members(&mut self) {
+        let me = self.cfg.device.id.clone();
+        for id in self.room.member_device_ids() {
+            if id != me {
+                self.lan_proven.insert(id);
+            }
         }
     }
 
@@ -1250,6 +1314,27 @@ impl Engine {
         if was_serving && !self.is_serving() {
             // The room timed our last member out: we may be the one cut off.
             self.lost_members_at = Some(self.now_local_ms());
+        }
+    }
+
+    /// A peer's `scrobbled` flag for a play (in a stamp or a handoff) says
+    /// the play was scrobbled, not who did it. When we reached that play
+    /// ourselves and our own verdict is still pending, the flag is most
+    /// likely our own reach coming back around: recording it under the
+    /// peer's name would have us announce "the peer did it" and then get
+    /// our own query answered "duplicate", and nobody would submit.
+    fn learn_scrobbled_from_peer(&mut self, track_id: &str, started_at: EpochMs, device_id: &str) {
+        let same = |t: &TrackId, s: EpochMs| t == track_id && (s - started_at).abs() < 1000.0;
+        let own_pending = self
+            .deferred_scrobbles
+            .iter()
+            .any(|d| same(&d.track_id, d.started_at))
+            || self
+                .scrobble_queries
+                .values()
+                .any(|(t, s, _)| same(t, *s));
+        if !own_pending {
+            self.learn_scrobbled(track_id, started_at, device_id);
         }
     }
 
@@ -1881,6 +1966,7 @@ impl Engine {
             let was_serving = self.is_serving();
             let outs = self.room.handle(RoomInput::Message(peer, msg));
             self.process_room_outputs(outs);
+            self.note_proven_members();
             let serving_now = self.is_serving();
             if serving_now && !was_serving {
                 self.members_returned();
@@ -2058,7 +2144,7 @@ impl Engine {
                         .clone()
                         .filter(|c| Some(c.key.as_str()) == key.as_deref())
                     {
-                        self.learn_scrobbled(&item.track_id, started_at, &device_id);
+                        self.learn_scrobbled_from_peer(&item.track_id, started_at, &device_id);
                     }
                 }
                 if let Some(r) = &mut self.resume {
@@ -2178,7 +2264,7 @@ impl Engine {
                 }
                 let Some(lease) = lease else { return };
                 if scrobbled {
-                    self.learn_scrobbled(&track_id, started_at, &from);
+                    self.learn_scrobbled_from_peer(&track_id, started_at, &from);
                 }
                 self.prebuffer = None;
                 self.lease = lease.clone();
@@ -2304,7 +2390,12 @@ impl Engine {
         if remote && !via_coordinator {
             if let Some(l) = self.remote.as_ref().and_then(|r| r.leader.clone()) {
                 self.lan_strikes.remove(&l);
+                // It proved the key, and so did everyone it admitted.
+                self.lan_proven.insert(l);
             }
+            let me = self.cfg.device.id.clone();
+            self.lan_proven
+                .extend(members.iter().map(|m| m.id.clone()).filter(|id| id != &me));
             if self.coordinator_target().is_some() {
                 self.lan_deferred = true;
             }
@@ -4944,6 +5035,150 @@ mod tests {
             .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
     }
 
+    fn scrobble_verdicts(outs: &[Output]) -> Vec<bool> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Output::Scrobble { allowed, .. } => Some(*allowed),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_fresh_lan_device_is_no_scrobble_authority_until_discovery_settles() {
+        let (mut e, clock) = engine("m");
+        e.handle(Input::SetLanDiscovery(true));
+        // nobody in view yet: that may only mean nobody heard yet
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert!(scrobble_verdicts(&outs).is_empty(), "deferred");
+        let mut verdicts = vec![];
+        for _ in 0..10 {
+            clock.0.fetch_add(1_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&e.handle(Input::Tick)));
+        }
+        // settled and still alone: our own room judges it
+        assert_eq!(verdicts, vec![true]);
+    }
+
+    #[test]
+    fn a_lone_leader_waits_for_a_proven_peer_in_view() {
+        let (mut e, clock) = engine("m");
+        e.handle(Input::LocalOp { op: play_op() });
+        e.handle(Input::SetLanDiscovery(true));
+        clock.0.fetch_add(LAN_SETTLE_MS as u64 + 1, Ordering::SeqCst);
+        // an advert we never shared a room with (a rogue's, say) earns no
+        // patience: we lead (higher revision) and judge at once
+        e.handle(Input::PeerDiscovered(advert("y", 0)));
+        assert!(e.remote.is_none());
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert_eq!(scrobble_verdicts(&outs), vec![true]);
+        // a device that was in a room with us is in view but not with us:
+        // what it knows reaches us only when it joins, so we wait for it
+        e.lan_proven.insert("z".into());
+        e.handle(Input::PeerDiscovered(advert("z", 0)));
+        assert!(e.remote.is_none(), "we still lead");
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "u".into(),
+            started_at: 2.0,
+        });
+        assert!(scrobble_verdicts(&outs).is_empty(), "deferred");
+        clock.0.fetch_add(5_000, Ordering::SeqCst);
+        assert!(scrobble_verdicts(&e.handle(Input::Tick)).is_empty());
+        // it went away (or joined and left): our room decides after a beat
+        e.handle(Input::PeerLost {
+            device_id: "z".into(),
+        });
+        let mut verdicts = vec![];
+        for _ in 0..4 {
+            clock.0.fetch_add(1_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&e.handle(Input::Tick)));
+        }
+        assert_eq!(verdicts, vec![true]);
+    }
+
+    #[test]
+    fn a_peers_scrobbled_flag_is_not_credited_to_it_while_our_own_verdict_is_pending() {
+        let (mut e, _) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
+        e.handle(Input::LocalOp { op: play_op() });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "a-1".into(),
+                revision: 2,
+            }),
+        });
+        let current = e.document().current.clone().expect("playing");
+        let started_at = 5_000.0;
+        // we reached the play; our query is out, the verdict not back yet
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: current.track_id.clone(),
+            started_at,
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::ScrobbleDedupeQuery { .. })));
+        // b (which took the play over from us) stamps it "scrobbled": that
+        // is our own reach coming back, not b's scrobble
+        let stamp = |device: &str| {
+            WireMessage::new(Msg::TransportStamp {
+                device_id: device.into(),
+                key: Some(current.key.clone()),
+                position: PositionStamp {
+                    position_ms: 60_000,
+                    taken_at: 10_000.0,
+                    rate: 1.0,
+                    is_playing: true,
+                },
+                played_ms: 60_000,
+                started_at,
+                scrobbled: true,
+                epoch: 1,
+            })
+        };
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: stamp("b"),
+        });
+        assert!(
+            !e.known_scrobbled()
+                .iter()
+                .any(|k| k.track_id == current.track_id && k.device_id == "b"),
+            "not credited to b"
+        );
+        // with nothing of ours pending, the flag is knowledge as before
+        let (mut other, _) = engine("c");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(&mut other, Some(replica_with(room_doc)), vec![dev("b")]);
+        other.handle(Input::LocalOp { op: play_op() });
+        other.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "c-1".into(),
+                revision: 2,
+            }),
+        });
+        let key = other.document().current.clone().unwrap().key;
+        assert_eq!(key, current.key, "same play, same key");
+        other.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: stamp("b"),
+        });
+        assert!(other
+            .known_scrobbled()
+            .iter()
+            .any(|k| k.track_id == current.track_id && k.device_id == "b"));
+    }
+
     #[test]
     fn known_scrobbles_round_trip_through_restore() {
         let (mut e, _) = engine("a");
@@ -4955,17 +5190,29 @@ mod tests {
         assert_eq!(known.len(), 1);
         let json = serde_json::to_string(&known).unwrap();
         let back: Vec<KnownScrobble> = serde_json::from_str(&json).unwrap();
-        let (mut fresh, _) = engine("a");
-        fresh.restore_known_scrobbled(back);
-        // both the engine and its room remember the pair
-        let outs = fresh.handle(Input::ScrobbleReached {
+        // another device restores it: both it and its room know the pair
+        let (mut other, _) = engine("b");
+        other.restore_known_scrobbled(back.clone());
+        let outs = other.handle(Input::ScrobbleReached {
             track_id: "t".into(),
             started_at: 1.0,
         });
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
+        assert_eq!(other.room().replica().scrobbles.len(), 1);
+        // the device itself, restarted with the pair still in its outbox (it
+        // may never have submitted): its room says "yours", so it submits
+        let (mut fresh, _) = engine("a");
+        fresh.restore_known_scrobbled(back);
         assert_eq!(fresh.room().replica().scrobbles.len(), 1);
+        let outs = fresh.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
     }
 
     #[test]

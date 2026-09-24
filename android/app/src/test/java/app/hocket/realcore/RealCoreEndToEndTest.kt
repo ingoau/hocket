@@ -311,7 +311,7 @@ class RealCoreEndToEndTest {
     }
 
     @Test
-    fun wrongPasswordIsAnAuthErrorAndTheServerStaysUnreachable() = runBlocking {
+    fun wrongPasswordIsAnAuthErrorAndTheServerIsNeverInstalled() = runBlocking {
         val core = startCore()
         core.dispatch(Command.Start)
         waitFor { it as? Event.Started }
@@ -319,9 +319,10 @@ class RealCoreEndToEndTest {
         core.dispatch(Commands.addServer(server.baseUrl, "alice", "wrong", null))
         val err = waitFor { it as? Event.Error }
         assertTrue(err.data.message.contains("probe"))
-        // The install-time ServersChanged reports reachable=true optimistically; the probe result flips it.
-        val servers = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() && !it.data.servers.first().reachable } }
-        assertFalse(servers.data.servers.first().reachable)
+        // A brand-new server is probed first: a refused login installs nothing (only a persisted
+        // server is installed ahead of its probe, see the offline-start test).
+        kotlinx.coroutines.delay(500)
+        assertTrue("a refused new server is never listed", events.none { it is Event.ServersChanged && it.data.servers.isNotEmpty() })
         // Subsonic error 40 ("Wrong username or password") maps to ErrorKind.Auth, so the setup screen can
         // tell a bad password from an outage.
         assertEquals("probe error kind (message=${err.data.message} detail=${err.data.detail})", app.hocket.core.api.ErrorKind.Auth, err.data.kind)

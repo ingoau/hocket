@@ -863,7 +863,11 @@ impl World {
                 if self.devices[i].asleep && !self.crashed.contains_key(&i) {
                     self.devices[i].asleep = false;
                     self.net.node_up(&id);
-                    self.lan_adverts.remove(&i);
+                    // The mDNS registration outlives a sleep (the responder
+                    // answers again once the device is back on the network):
+                    // keep the record the engine last published. Dropping it
+                    // here left a woken device invisible for good, since the
+                    // engine only re-publishes when its record changes.
                     self.devices[i].handle(Input::Tick);
                 }
             }
