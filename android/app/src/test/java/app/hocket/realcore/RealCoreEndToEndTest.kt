@@ -227,6 +227,8 @@ class RealCoreEndToEndTest {
         assertFalse("metadata only: not reachable until credentials are replayed", started.data.snapshot.servers[0].reachable)
         val probed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }
         assertEquals("alice", probed.data.servers[0].username)
+        // The install-time ServersChanged carries the persisted capabilities; the fresh probe follows.
+        withTimeout(20_000) { while (!server.calls.contains("ping")) kotlinx.coroutines.delay(50) }
         assertTrue("the replayed AddServer probed the server again", server.calls.contains("ping"))
         replay.cancel()
         // A pruned server list drops the stored login.
@@ -246,10 +248,9 @@ class RealCoreEndToEndTest {
         // The install-time ServersChanged reports reachable=true optimistically; the probe result flips it.
         val servers = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() && !it.data.servers.first().reachable } }
         assertFalse(servers.data.servers.first().reachable)
-        // Core bug (recorded in the wave-3 report): a Subsonic error 40 ("Wrong username or password") is
-        // classified as Network, not Auth, because on_probed matches the substring "authentication". Until
-        // it is fixed the app cannot tell a wrong password from an outage; the test documents the detail.
-        assertTrue("probe error kind=${err.data.kind} message=${err.data.message} detail=${err.data.detail} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }}", err.data.kind == app.hocket.core.api.ErrorKind.Auth || err.data.kind == app.hocket.core.api.ErrorKind.Network)
+        // Subsonic error 40 ("Wrong username or password") maps to ErrorKind.Auth, so the setup screen can
+        // tell a bad password from an outage.
+        assertEquals("probe error kind (message=${err.data.message} detail=${err.data.detail})", app.hocket.core.api.ErrorKind.Auth, err.data.kind)
         assertTrue("detail names the credentials: kind=${err.data.kind} message=${err.data.message} detail=${err.data.detail}", err.data.detail?.contains("password", ignoreCase = true) == true || err.data.detail?.contains("auth", ignoreCase = true) == true || err.data.detail?.contains("40", ignoreCase = true) == true)
         val client = CoreClient(core, scope)
         client.close()

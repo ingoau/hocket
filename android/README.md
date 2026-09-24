@@ -80,6 +80,45 @@ the one core for the process through `CoreHost`:
 caches for tracks/albums/artists/playlist tracks (invalidated on `LibraryChanged`) and holds the
 id-keyed selection with select-all as a predicate.
 
+## Settings keys, action ids and app-only preferences
+
+The app reads and writes only the core registry's keys (`app.hocket.core.SettingKeys`, mirroring
+`crates/hocket-core/src/settings/registry.rs`): `display.theme`, `display.accent` (null or
+`#RRGGBB`), `display.dynamicColour`, `display.animatedBackground`, `battery.autoEngage`,
+`lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`, `queue.savedCap`,
+`transcoding.profiles` (one map keyed `default` / `cellular` / `<networkId>`), `sync.enabled`,
+`connect.{coordinatorUrl,lanDiscovery}`, `actions.order.{contextMenu,sidebar,mediaSession}`, ….
+The core refuses unknown keys, so app-only choices (the ordered navigation items) live in DataStore
+(`app.hocket.AppPrefs`). Action descriptors from `Query.Actions` carry the registry's canonical ids
+(`app.hocket.core.ActionIds`: `play`, `playShuffled`, `playNext`, `rate0`…`rate5`, `love`,
+`unlove`, `download`, `unpin`, `goToAlbum`, …); ui-handled ids (`addToPlaylist`, `rate`,
+`goToAlbum`, `goToArtist`, `sleepTimer`, `navigate*`) produce no core command and the sheet or
+toolbar performs them. `FakeCore` serves the same keys and ids.
+
+## Credentials
+
+The core persists server metadata only. `playback/ServerCredentialStore` keeps the password
+AES/GCM-encrypted with an Android Keystore key (`KeystoreCredentialStore`); `CoreHost` replays
+`AddServer` for every stored login once `Started` arrives on each core start, prunes logins on
+`ServersChanged`, and `AppRoot` shows the shell only when a server is known *and* a login is stored
+(otherwise the setup screen). Passwords never reach logs or `toString`.
+
+## The real core on the JVM
+
+`app/src/test/java/app/hocket/realcore/RealCoreEndToEndTest` loads the host build of the core
+(`CARGO_TARGET_DIR=target-connect cargo build -p hocket-android` →
+`target-connect/debug/libhocket_android.so`, or `HOCKET_HOST_LIB`) through JNA using UniFFI's
+`uniffi.component.hocket_android.libraryOverride`, and drives `NativeCore` against
+`FakeNavidrome` — an in-process HTTP server on `ServerSocket` serving the core's own Subsonic
+fixtures (ping 0.63.1, extensions, getArtists, getAlbumList2/search3 paged, playlists, genres,
+scan status, PNG cover art, WAV streams, lyrics, setRating/star/scrobble, 404 `/auth/login`). It
+covers AddServer → probe → sync → albums/tracks in the mirror → artwork cached → PlayContext →
+`Backend.Load` → Ready/Playing/Position/Ended reports advancing the queue → SetRating reaching the
+server → Undo (compare-and-swap) reverting it; credential replay on restart; and the wrong-password
+Auth error. The test runs at Robolectric SDK 32 because the UniFFI glue's `SystemCleaner` path on
+33+ needs `jdk.internal.ref`, which the JDK does not export. It is skipped when the host `.so` is
+absent.
+
 ## Gesture and motion conventions
 
 - Anything the finger drives settles with a spring (`ui/theme/Motion.kt`): low-bouncy for the
