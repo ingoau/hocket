@@ -20,7 +20,7 @@ export function SearchView({ query }: { query: string }) {
   const list = tracks.data ?? [];
   return (
     <div className="view" data-testid="view-search">
-      <div className="view-header"><h1>{query}</h1><span className="muted">{list.length}</span></div>
+      <div className="view-header"><h1>{query}</h1><span className="muted count-chip">{list.length}</span></div>
       <div className="view-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {(local.data?.albums.length || server?.albums.length) ? (
           <section className="home-section" aria-labelledby="search-albums">
@@ -30,9 +30,10 @@ export function SearchView({ query }: { query: string }) {
             ))}</TileList>
           </section>
         ) : null}
-        <div style={{ flex: 1, minHeight: 300, display: "flex", flexDirection: "column" }}>
+        <section className="search-songs" aria-labelledby="search-tracks" style={{ flex: 1, minHeight: 300, display: "flex", flexDirection: "column" }}>
+          <h2 className="section-heading" id="search-tracks">{t("search.tracks")}</h2>
           <TrackTable tracks={list} total={list.length} columns={["art", "title", "artist", "album", "rating", "duration"]} scope={`search:${query}`} label={t("search.tracks")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: list.map((x) => x.id), start_index: i, label: query, shuffle: false } })} emptyMessage={t("search.noResults", { query })} />
-        </div>
+        </section>
       </div>
     </div>
   );

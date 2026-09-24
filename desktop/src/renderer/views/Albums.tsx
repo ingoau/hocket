@@ -27,12 +27,14 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
     <div className="view" data-testid="view-albums">
       <div className="view-header">
         <h1>{title ?? t("albums.title")}</h1>
-        <span className="muted">{total}</span>
+        <span className="muted count-chip">{total}</span>
         <div className="actions">
+          <div className="sort-group">
           <select className="select" value={sort} aria-label={t("sort.label", { sort: "" })} onChange={(e) => { setSort(e.target.value as SortOrder); saveLocal("albums.sort", e.target.value); }} data-testid="albums-sort">
             {SORTS.map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}
           </select>
-          <button type="button" className="btn icon" aria-label={t("filters.descending")} aria-pressed={desc} onClick={() => { setDesc(!desc); saveLocal("albums.desc", !desc); }}><Icon name={desc ? "arrowDown" : "arrowUp"} size={14} /></button>
+          <button type="button" className="btn icon" aria-label={t("filters.descending")} aria-pressed={desc} onClick={() => { setDesc(!desc); saveLocal("albums.desc", !desc); }}><Icon name={desc ? "arrowDown" : "arrowUp"} size={16} /></button>
+          </div>
         </div>
       </div>
       <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={play} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} testId="albums-grid" label={title ?? t("albums.title")} />

@@ -16,8 +16,8 @@ export function Playlists() {
     <div className="view" data-testid="view-playlists">
       <div className="view-header">
         <h1>{t("playlists.title")}</h1>
-        <span className="muted">{items.length}</span>
-        <div className="actions"><button type="button" className="btn" onClick={() => void executeAction("ui.newPlaylist")}><Icon name="plus" size={14} /> {t("playlists.new")}</button></div>
+        <span className="muted count-chip">{items.length}</span>
+        <div className="actions"><button type="button" className="btn tonal new-playlist" onClick={() => void executeAction("ui.newPlaylist")}><Icon name="plus" size={18} /> {t("playlists.new")}</button></div>
       </div>
       <AlbumGrid items={items} total={items.length} scope="playlists" targetKind="playlists" onOpen={(it) => navigate({ view: "playlist", id: it.id })} onPlay={play} emptyMessage={t("playlists.empty")} testId="playlists-grid" label={t("playlists.title")} />
     </div>

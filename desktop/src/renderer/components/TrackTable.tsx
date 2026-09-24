@@ -280,7 +280,7 @@ export function TrackTable(props: TrackTableProps) {
         </div>
       </div>
       <div ref={parentRef} className="table-body" role="rowgroup" onKeyDown={onKey}>
-        {total === 0 ? <div className="empty" role="row"><div role="gridcell">{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
+        {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name="song" size={32} /></span>{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
           {items.map((vi) => {
             const tr = tracks[vi.index];

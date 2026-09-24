@@ -1,1 +1,257 @@
-/* m3-library: Material 3 Expressive pass (loaded after global.css, before now-playing.css). */
+/* m3-library: Material 3 Expressive pass for the library views (loaded after
+   global.css, before now-playing.css). Page content sits on the floating
+   --bg-elev content pane: display-size titles, counts as tonal chips, tiles
+   whose art morphs and lifts on springs, a scalloped "cookie" for artists,
+   squircle heroes with a large Play FAB, rounded track rows with a tonal
+   playing row, and genre cards carrying a coloured (decorative) shape.
+   Text only ever sits on --bg-elev, --bg-sunken or the contrast-checked
+   accent tints (--accent-soft, --surface-tonal, --selection). */
+:root {
+  /* Shapes from the M3 Expressive library: a 9-scallop cookie and a softer
+     12-scallop one. Same point count, so clip-path morphs between them. */
+  --lib-cookie-9: polygon(50% 0%, 52.17% 0.35%, 54.26% 1.36%, 56.20% 2.88%, 57.99% 4.70%, 59.62% 6.58%, 61.17% 8.30%, 62.72% 9.65%, 64.36% 10.53%, 66.19% 10.92%, 68.25% 10.87%, 70.53% 10.56%, 73% 10.16%, 75.54% 9.91%, 78.01% 10%, 80.25% 10.57%, 82.14% 11.70%, 83.57% 13.36%, 84.53% 15.47%, 85.04% 17.89%, 85.24% 20.43%, 85.28% 22.93%, 85.36% 25.24%, 85.68% 27.27%, 86.37% 29%, 87.52% 30.47%, 89.13% 31.75%, 91.08% 32.98%, 93.23% 34.27%, 95.33% 35.71%, 97.16% 37.36%, 98.52% 39.24%, 99.24% 41.32%, 99.27% 43.51%, 98.64% 45.74%, 97.49% 47.93%, 96% 50%, 94.43% 51.94%, 93.01% 53.76%, 91.94% 55.52%, 91.36% 57.29%, 91.30% 59.16%, 91.70% 61.17%, 92.41% 63.37%, 93.23% 65.73%, 93.91% 68.19%, 94.25% 70.64%, 94.08% 72.95%, 93.30% 75%, 91.91% 76.70%, 90% 78.01%, 87.71% 78.93%, 85.24% 79.57%, 82.79% 80.04%, 80.53% 80.53%, 78.58% 81.19%, 77% 82.17%, 75.75% 83.56%, 74.76% 85.36%, 73.89% 87.50%, 73% 89.84%, 71.95% 92.16%, 70.64% 94.25%, 69.02% 95.91%, 67.10% 96.98%, 64.94% 97.40%, 62.64% 97.16%, 60.29% 96.40%, 57.99% 95.30%, 55.80% 94.09%, 53.76% 93.01%, 51.85% 92.26%, 50% 92%, 48.15% 92.26%, 46.24% 93.01%, 44.20% 94.09%, 42.01% 95.30%, 39.71% 96.40%, 37.36% 97.16%, 35.06% 97.40%, 32.90% 96.98%, 30.98% 95.91%, 29.36% 94.25%, 28.05% 92.16%, 27% 89.84%, 26.11% 87.50%, 25.24% 85.36%, 24.25% 83.56%, 23% 82.17%, 21.42% 81.19%, 19.47% 80.53%, 17.21% 80.04%, 14.76% 79.57%, 12.29% 78.93%, 10% 78.01%, 8.09% 76.70%, 6.70% 75%, 5.92% 72.95%, 5.75% 70.64%, 6.09% 68.19%, 6.77% 65.73%, 7.59% 63.37%, 8.30% 61.17%, 8.70% 59.16%, 8.64% 57.29%, 8.06% 55.52%, 6.99% 53.76%, 5.57% 51.94%, 4% 50%, 2.51% 47.93%, 1.36% 45.74%, 0.73% 43.51%, 0.76% 41.32%, 1.48% 39.24%, 2.84% 37.36%, 4.67% 35.71%, 6.77% 34.27%, 8.92% 32.98%, 10.87% 31.75%, 12.48% 30.47%, 13.63% 29%, 14.32% 27.27%, 14.64% 25.24%, 14.72% 22.93%, 14.76% 20.43%, 14.96% 17.89%, 15.47% 15.47%, 16.43% 13.36%, 17.86% 11.70%, 19.75% 10.57%, 21.99% 10%, 24.46% 9.91%, 27% 10.16%, 29.47% 10.56%, 31.75% 10.87%, 33.81% 10.92%, 35.64% 10.53%, 37.28% 9.65%, 38.83% 8.30%, 40.38% 6.58%, 42.01% 4.70%, 43.80% 2.88%, 45.74% 1.36%, 47.83% 0.35%);
+  --lib-cookie-12: polygon(50% 0%, 52.17% 0.32%, 54.27% 1.19%, 56.27% 2.41%, 58.16% 3.71%, 60.01% 4.83%, 61.91% 5.57%, 63.91% 5.87%, 66.07% 5.83%, 68.37% 5.65%, 70.71% 5.59%, 72.96% 5.89%, 75% 6.70%, 76.72% 8.06%, 78.11% 9.86%, 79.22% 11.92%, 80.21% 14%, 81.26% 15.89%, 82.53% 17.47%, 84.11% 18.74%, 86% 19.79%, 88.08% 20.78%, 90.14% 21.89%, 91.94% 23.28%, 93.30% 25%, 94.11% 27.04%, 94.41% 29.29%, 94.35% 31.63%, 94.17% 33.93%, 94.13% 36.09%, 94.43% 38.09%, 95.17% 39.99%, 96.29% 41.84%, 97.59% 43.73%, 98.81% 45.73%, 99.68% 47.83%, 100% 50%, 99.68% 52.17%, 98.81% 54.27%, 97.59% 56.27%, 96.29% 58.16%, 95.17% 60.01%, 94.43% 61.91%, 94.13% 63.91%, 94.17% 66.07%, 94.35% 68.37%, 94.41% 70.71%, 94.11% 72.96%, 93.30% 75%, 91.94% 76.72%, 90.14% 78.11%, 88.08% 79.22%, 86% 80.21%, 84.11% 81.26%, 82.53% 82.53%, 81.26% 84.11%, 80.21% 86%, 79.22% 88.08%, 78.11% 90.14%, 76.72% 91.94%, 75% 93.30%, 72.96% 94.11%, 70.71% 94.41%, 68.37% 94.35%, 66.07% 94.17%, 63.91% 94.13%, 61.91% 94.43%, 60.01% 95.17%, 58.16% 96.29%, 56.27% 97.59%, 54.27% 98.81%, 52.17% 99.68%, 50% 100%, 47.83% 99.68%, 45.73% 98.81%, 43.73% 97.59%, 41.84% 96.29%, 39.99% 95.17%, 38.09% 94.43%, 36.09% 94.13%, 33.93% 94.17%, 31.63% 94.35%, 29.29% 94.41%, 27.04% 94.11%, 25% 93.30%, 23.28% 91.94%, 21.89% 90.14%, 20.78% 88.08%, 19.79% 86%, 18.74% 84.11%, 17.47% 82.53%, 15.89% 81.26%, 14% 80.21%, 11.92% 79.22%, 9.86% 78.11%, 8.06% 76.72%, 6.70% 75%, 5.89% 72.96%, 5.59% 70.71%, 5.65% 68.37%, 5.83% 66.07%, 5.87% 63.91%, 5.57% 61.91%, 4.83% 60.01%, 3.71% 58.16%, 2.41% 56.27%, 1.19% 54.27%, 0.32% 52.17%, 0% 50%, 0.32% 47.83%, 1.19% 45.73%, 2.41% 43.73%, 3.71% 41.84%, 4.83% 39.99%, 5.57% 38.09%, 5.87% 36.09%, 5.83% 33.93%, 5.65% 31.63%, 5.59% 29.29%, 5.89% 27.04%, 6.70% 25%, 8.06% 23.28%, 9.86% 21.89%, 11.92% 20.78%, 14% 19.79%, 15.89% 18.74%, 17.47% 17.47%, 18.74% 15.89%, 19.79% 14%, 20.78% 11.92%, 21.89% 9.86%, 23.28% 8.06%, 25% 6.70%, 27.04% 5.89%, 29.29% 5.59%, 31.63% 5.65%, 33.93% 5.83%, 36.09% 5.87%, 38.09% 5.57%, 39.99% 4.83%, 41.84% 3.71%, 43.73% 2.41%, 45.73% 1.19%, 47.83% 0.32%);
+  --lib-title-size: clamp(36px, 2.4vw + 18px, 52px);
+  --lib-hero-title-size: clamp(32px, 2.6vw + 16px, 56px);
+}
+
+/* ---- View headers --------------------------------------------------------- */
+.view-header { align-items: baseline; flex-wrap: wrap; gap: 8px 14px; padding: 28px 28px 16px; }
+.view-header h1 {
+  font-size: var(--lib-title-size); font-weight: 800; letter-spacing: -0.02em; line-height: 1.05;
+  min-width: 0; overflow-wrap: anywhere;
+}
+/* The item count: a small tonal chip riding the title's baseline. */
+.view-header .count-chip {
+  display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: var(--shape-full);
+  background: var(--accent-soft); color: var(--accent-text); font-weight: 700; font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums; position: relative; top: -6px;
+}
+.view-header .count-chip:empty { display: none; }
+.view-header .actions { align-self: center; gap: 8px; }
+.view-header .actions .btn:not(.icon) { height: 40px; padding: 0 20px 0 16px; font-size: var(--fs-md); font-weight: 600; }
+.view-header .actions .btn.tonal { color: var(--fg); }
+
+/* Sort: a connected button group — a pill select joined to the direction
+   toggle, each end fully round, the inner corners tight (M3 Expressive). */
+.sort-group { display: inline-flex; align-items: center; gap: 2px; }
+.sort-group .select {
+  height: 40px; padding: 0 30px 0 16px; border-radius: var(--shape-full) var(--shape-xs) var(--shape-xs) var(--shape-full);
+  background: var(--accent-soft); box-shadow: none; border-color: transparent; font-weight: 600; color: var(--fg);
+}
+.sort-group .select:hover { background: var(--selection); box-shadow: none; }
+.sort-group .select:focus { border-color: transparent; }
+.sort-group .select:active { border-radius: var(--shape-sm); }
+.sort-group .btn.icon:where(:not(.player *, .fullscreen *)) {
+  width: 44px; height: 40px; border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs);
+  background: var(--accent-soft); color: var(--fg);
+}
+.sort-group .btn.icon:where(:not(.player *, .fullscreen *)):hover { background: var(--selection); }
+.sort-group .btn.icon[aria-pressed="true"]:where(:not(.player *, .fullscreen *)) { border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs); color: var(--accent-text); }
+.sort-group .btn.icon:where(:not(.player *, .fullscreen *)):active { border-radius: var(--shape-sm); }
+
+/* ---- Grids and tiles ------------------------------------------------------ */
+.view-body { padding: 4px 20px 24px; }
+.view-body.no-pad { padding: 0; }
+.tile {
+  gap: 8px; padding: 8px; border-radius: var(--shape-xl);
+  transition: background-color var(--dur-short) var(--ease-emphasized), transform var(--dur-spring) var(--spring-bouncy);
+}
+.tile-main { gap: 8px; }
+.tile:hover { background: var(--accent-soft); }
+.tile.selected { background: var(--selection); }
+.tile.selected:hover { background: var(--selection); }
+.tile .art {
+  border-radius: var(--shape-lg);
+  transition: border-radius var(--dur-spring-long) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy), box-shadow var(--dur-short) var(--ease-emphasized), clip-path var(--dur-spring-long) var(--spring-fast);
+}
+/* Hover: the art rounds into a squircle and lifts on a bouncy spring. */
+.tile:hover .art:not(.round) { border-radius: 36px; }
+.tile:hover .art { transform: translateY(-3px) scale(1.02); box-shadow: var(--shadow-2); }
+/* Selected: the art settles back toward a squarer shape, like a selected control. */
+.tile.selected .art:not(.round) { border-radius: var(--shape-md); }
+.tile .t1 { font-weight: 600; font-size: var(--fs-md); margin-top: 2px; }
+.tile .t2 { margin-top: -6px; }
+.tile-main .t2 { margin-top: -6px; }
+/* Artists: a scalloped cookie that loosens into a softer 12-scallop one under the pointer. */
+.tile .art.round, .detail-head .art.round { border-radius: 0; clip-path: var(--lib-cookie-9); box-shadow: none; }
+.tile:hover .art.round { clip-path: var(--lib-cookie-12); box-shadow: none; transform: scale(1.03) rotate(0deg); }
+
+/* The play FAB: a big squircle on the art's corner that morphs to a circle when pointed at. */
+.tile .play {
+  width: 48px; height: 48px; right: 18px; top: calc(100cqw - 50px); border-radius: 16px;
+  transform: scale(0.5) translateY(8px);
+}
+.tile:hover .play, .tile:focus-within .play { transform: none; }
+.tile .play:hover { border-radius: 50%; box-shadow: var(--shadow); }
+.tile .play:active { border-radius: var(--shape-sm); transform: scale(0.9); }
+.tile-badge { top: 14px !important; left: 14px !important; padding: 5px; }
+
+/* ---- Home: carousels under expressive section headings ------------------- */
+.home-section { margin-bottom: 28px; }
+.home-section:last-child { margin-bottom: 8px; }
+.view-body .section-heading {
+  display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 750; letter-spacing: -0.01em; line-height: 1.2; margin: 0 0 10px 8px;
+}
+.section-icon {
+  display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex: 0 0 auto;
+  clip-path: var(--lib-cookie-9); background: var(--selection); color: var(--accent-text);
+  transition: clip-path var(--dur-spring-long) var(--spring-fast), transform var(--dur-spring-long) var(--spring-bouncy);
+}
+.home-section:hover .section-icon { clip-path: var(--lib-cookie-12); transform: rotate(20deg); }
+.home-section .scroller {
+  gap: 6px; padding: 6px 4px 12px; margin: -6px -4px 0; scroll-snap-type: x proximity; scroll-padding-inline: 4px;
+}
+.home-section .scroller .tile { width: 172px; scroll-snap-align: start; }
+
+/* ---- Detail heroes -------------------------------------------------------- */
+.detail-head {
+  margin: 12px 16px 12px; padding: 28px; gap: 28px; align-items: flex-end; border-radius: var(--shape-xl);
+  background-color: var(--bg-elev);
+  background-image: linear-gradient(135deg, var(--accent-soft) 0%, var(--surface-tonal) 72%);
+}
+/* Big squircle artwork. */
+.detail-head .art { width: 216px; height: 216px; border-radius: 48px; box-shadow: var(--shadow); }
+.detail-head .art.round { width: 228px; height: 228px; }
+.detail-head .meta { gap: 8px; flex: 1 1 auto; }
+/* Eyebrow ("Albums", "Smart playlist"): a chip on the elevated surface. */
+.detail-head .meta > .muted.small:first-child {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--shape-full);
+  background: var(--bg-elev); font-weight: 600; letter-spacing: 0.01em;
+}
+.detail-head .meta h1 {
+  font-size: var(--lib-hero-title-size); font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; padding-bottom: 2px;
+  white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+}
+.detail-head .meta > div:not(.actions) { font-size: var(--fs-lg); }
+.detail-head .meta > .small { font-size: var(--fs-sm); }
+.detail-head .plain-link { font-weight: 700; }
+.detail-head .meta .actions { gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+/* Play: a large extended FAB, squircle at rest, morphing to a full pill when pointed at. */
+.detail-head .meta .actions .btn.fab {
+  height: 56px; padding: 0 28px 0 20px; gap: 8px; border-radius: 18px; font-size: 17px; font-weight: 700; box-shadow: var(--shadow-2);
+}
+.detail-head .meta .actions .btn.fab:hover { border-radius: 28px; box-shadow: var(--shadow); }
+.detail-head .meta .actions .btn.fab:active { border-radius: var(--shape-md); }
+.detail-head .meta .actions .btn.tonal { height: 44px; padding: 0 18px 0 14px; font-size: var(--fs-lg); font-weight: 600; background: var(--bg-elev); }
+.detail-head .meta .actions .btn.tonal:hover { background: var(--state-selected); }
+/* Secondary actions: tonal icon buttons. */
+.detail-head .meta .actions .btn.icon { width: 44px; height: 44px; background: var(--bg-elev); }
+.detail-head .meta .actions .btn.icon:hover { background: var(--state-selected); }
+.detail-head .meta .actions .btn.icon svg { width: 22px; height: 22px; }
+.detail-head .meta .actions .btn.icon:where(.on, [aria-pressed="true"]) { border-radius: var(--shape-md); }
+.detail-head .meta .actions .stars { padding: 0 12px; height: 44px; align-items: center; border-radius: var(--shape-full); background: var(--bg-elev); }
+.detail-head .meta .actions .stars svg { width: 18px; height: 18px; }
+/* Artist pages: the section headings sit in the body, the top songs in a sunken well. */
+[data-testid="view-artist"] .view-body .section-heading { margin: 8px 0 10px 8px; }
+[data-testid="view-artist"] .view-body .section-heading ~ .section-heading { margin-top: 28px; }
+
+/* ---- Track tables --------------------------------------------------------- */
+.table-head {
+  height: 34px; margin: 0 4px 6px; padding: 0 8px; border: 0; border-radius: var(--shape-full);
+  background: var(--bg-sunken); color: var(--fg-muted); font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0.01em;
+}
+.table-head .th.sortable:hover { background: var(--bg-hover); }
+.table-head .th.sorted { color: var(--fg); }
+.table-head .th.sorted .th-btn { background: var(--state-selected); color: var(--fg); }
+.table-head .th.sortable .th-btn { transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
+.table-head .th.sortable .th-btn:active { border-radius: var(--shape-sm); }
+.tr {
+  border-radius: 15px;
+  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
+}
+.tr:hover { background: var(--bg-hover); }
+/* Selected rows morph toward a squarer shape; the playing row is filled tonally. */
+.tr.selected { background: var(--selection); border-radius: var(--shape-sm); }
+.tr.playing { background: var(--accent-soft); }
+.tr.playing:hover, .tr.playing.selected { background: var(--selection); }
+.tr.playing .td.title { color: var(--fg); font-weight: 700; }
+.tr.playing .td.index .icon { color: var(--accent-text); }
+.tr .art { width: 24px; height: 24px; border-radius: 8px; }
+.tr .row-play { background: var(--accent); color: var(--accent-fg); width: 24px; inset: 3px 0 3px auto; border-radius: 9px; transition: border-radius var(--dur-spring) var(--spring-fast), opacity var(--dur-short) var(--ease-emphasized); }
+.tr .row-play:hover { background: var(--accent); border-radius: 50%; }
+.table .empty .empty-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+/* ---- Genres: colourful tonal cards ---------------------------------------- */
+.genre-grid { --tile-w: 200px; gap: 12px; }
+.genre-tile {
+  position: relative; min-height: 120px; justify-content: flex-start; gap: 4px;
+  padding: 18px 16px 16px 20px; border: 0; border-radius: var(--shape-xl); background: var(--bg-sunken);
+}
+.genre-tile:hover { background: var(--accent-soft); border-radius: var(--shape-lg); }
+.genre-tile:active { border-radius: var(--shape-md); }
+.genre-tile .genre-name { font-size: var(--fs-lg); font-weight: 750; letter-spacing: -0.01em; line-height: 1.2; overflow-wrap: anywhere; }
+/* Decorative only: a flex item below the text, so it never sits behind it. */
+.genre-tile::after {
+  content: ""; flex: 0 0 auto; align-self: flex-end; margin-top: auto; width: 44px; height: 44px;
+  clip-path: var(--lib-cookie-9); background: hsl(var(--genre-hue, 250) 62% 58%);
+  transition: transform var(--dur-spring-long) var(--spring-bouncy), clip-path var(--dur-spring-long) var(--spring-fast);
+}
+.genre-tile:hover::after { transform: rotate(40deg) scale(1.15); clip-path: var(--lib-cookie-12); }
+
+/* ---- Search --------------------------------------------------------------- */
+.search-songs .section-heading { margin-left: 8px; }
+
+/* ---- Empty states: one glyph in a tonal cookie ---------------------------- */
+.empty { gap: 12px; font-size: var(--fs-lg); max-width: 520px; margin: 0 auto; }
+.empty-icon {
+  display: inline-flex; align-items: center; justify-content: center; width: 80px; height: 80px; flex: 0 0 auto;
+  clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text);
+}
+.empty-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+/* ---- Stars and hearts ----------------------------------------------------- */
+.heart { transition: transform var(--dur-spring) var(--spring-bouncy), background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
+.heart.on svg { animation: lib-heart-pop var(--dur-spring-long) var(--spring-bouncy); }
+@keyframes lib-heart-pop { from { transform: scale(0.6); } to { transform: none; } }
+
+/* ---- Narrow windows and 200% zoom ----------------------------------------- */
+@media (max-width: 900px) {
+  .view-header { padding: 16px 14px 10px; }
+  .view-header .actions { margin-left: 0; }
+  .view-body { padding: 4px 8px 16px; }
+  .detail-head { margin: 8px; padding: 16px; gap: 16px; align-items: flex-start; }
+  .detail-head .art, .detail-head .art.round { width: 128px; height: 128px; border-radius: 32px; }
+  .detail-head .art.round { border-radius: 0; }
+  .detail-head .meta { flex: 1 1 220px; }
+  .detail-head .meta .actions { margin-top: 8px; }
+  .detail-head .meta .actions .btn.fab { height: 52px; padding: 0 22px 0 18px; border-radius: 18px; }
+  .home-section .scroller { margin: 0; padding: 0; }
+  .home-section .scroller .tile { width: 150px; }
+  .genre-grid { --tile-w: 160px; }
+}
+
+/* Short windows (200% zoom): a compact hero, and the page scrolls as a whole
+   so the hero's controls are never cut off; the track list keeps a bounded
+   height of its own for virtualisation. */
+@media (max-height: 640px) {
+  .detail-head { padding: 12px 14px; gap: 14px; margin: 6px 8px; }
+  .detail-head .art, .detail-head .art.round { width: 88px; height: 88px; border-radius: 24px; }
+  .detail-head .art.round { border-radius: 0; }
+  .detail-head .meta h1 { font-size: 28px; }
+  .detail-head .meta > div:not(.actions) { font-size: var(--fs-md); }
+  .detail-head .meta .actions { margin-top: 6px; gap: 8px; }
+  .detail-head .meta .actions .btn.fab { height: 44px; padding: 0 18px 0 14px; border-radius: 14px; font-size: var(--fs-lg); }
+  .detail-head .meta .actions .btn.fab:hover { border-radius: 22px; }
+  .detail-head .meta .actions .btn.tonal, .detail-head .meta .actions .btn.icon, .detail-head .meta .actions .stars { height: 40px; }
+  .detail-head .meta .actions .btn.icon { width: 40px; }
+  .view:has(> .detail-head) { overflow-y: auto; }
+  .view:has(> .detail-head) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
+}
+
+/* ---- Reduced motion: no lifts, spins or pops (colour changes stay) ------- */
+@media (prefers-reduced-motion: reduce) {
+  .tile:hover .art, .tile:hover .art.round, .tile .play, .tile:hover .play, .tile .play:active,
+  .home-section:hover .section-icon, .genre-tile:hover::after, .heart.on svg { transform: none !important; animation: none !important; }
+}
+
+/* ---- Forced colours -------------------------------------------------------- */
+@media (forced-colors: active) {
+  .tr.selected, .tr.playing.selected, .tr.playing:hover, .tile.selected, .tile.selected:hover {
+    forced-color-adjust: none; background: Highlight; color: HighlightText;
+  }
+  .tr.playing:not(.selected) { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .detail-head, .genre-tile, .table-head, .view-header .count-chip, .sort-group .select { border: 1px solid CanvasText; }
+  .genre-tile::after, .section-icon, .empty-icon { forced-color-adjust: none; background: GrayText; color: Canvas; }
+  .tr, .tile, .genre-tile, .tile .art { transition: none; }
+}
