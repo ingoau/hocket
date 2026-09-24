@@ -7,12 +7,15 @@ use crate::core::actor::Actor;
 
 impl Actor {
     pub(crate) fn handle_command(&mut self, cmd: Command) {
-        tracing::trace!(target: "hocket_core", ?cmd, "command");
+        // Only the variant name: payloads carry passwords and stream URLs.
+        if tracing::enabled!(target: "hocket_core", tracing::Level::TRACE) {
+            tracing::trace!(target: "hocket_core", kind = %cmd.kind(), "command");
+        }
         match cmd {
             // -- lifecycle --
             Command::Start => self.start(),
             Command::Shutdown => {}
-            Command::RequestSnapshot => self.emit_everything(),
+            Command::RequestSnapshot => self.emit_everything(false),
             Command::SetNetworkState { state } => self.set_network_state(state),
             Command::SetVisibility { visible, focused } => {
                 self.visible = visible;
@@ -121,6 +124,7 @@ impl Actor {
                 from_index,
                 to_index,
             } => self.playlist_move(playlist_id, from_index, to_index),
+            #[cfg(feature = "sim")]
             Command::Scrobble {
                 track_id,
                 played_at,

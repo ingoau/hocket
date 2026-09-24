@@ -1009,7 +1009,7 @@ pub struct OutputDevice {
 /// How to fetch/play one item. Given to an external backend (Android) and
 /// consumed by the native backend internally.
 #[typeshare]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaSource {
     pub key: QueueKey,
@@ -1021,6 +1021,29 @@ pub struct MediaSource {
     /// Gain to apply in dB after ReplayGain/normalisation. External backends apply this.
     pub gain_db: f64,
     pub transcoded: bool,
+}
+
+/// A URL with its query string (where Subsonic carries the auth token) and
+/// fragment removed, for logs.
+pub fn redact_url(url: &str) -> String {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    url[..end].to_string()
+}
+
+impl std::fmt::Debug for MediaSource {
+    /// The stream URL is logged without its query string: it carries the
+    /// auth token and salt.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaSource")
+            .field("key", &self.key)
+            .field("track", &self.track)
+            .field("url", &redact_url(&self.url))
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("mime_type", &self.mime_type)
+            .field("gain_db", &self.gain_db)
+            .field("transcoded", &self.transcoded)
+            .finish()
+    }
 }
 
 /// Commands the core sends to an external playback backend.
@@ -1361,16 +1384,54 @@ pub enum RatingTarget {
     Album { id: AlbumId },
 }
 
+/// A secret supplied by the platform (a server password). Serialises as a
+/// plain string; its `Debug` output is redacted so a command logged at
+/// `trace` never carries the password.
+#[typeshare]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Secret(pub String);
+
+impl Secret {
+    /// Expose the secret. Callers must not copy it into logs or long-lived
+    /// storage.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Secret(s)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Secret(s.to_string())
+    }
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Command {
     // -- lifecycle --------------------------------------------------------
     /// First command after construction. Loads persisted state, starts subsystems.
+    /// Emits [`Event::Started`] exactly once per core (a repeated `Start` behaves
+    /// like `RequestSnapshot`).
     Start,
-    /// Flush everything and stop. The process may exit afterwards.
+    /// Flush everything and stop. The process may exit afterwards. Platforms
+    /// that need to know when the flush is done use `Core::shutdown()`.
     Shutdown,
-    /// Re-emit every `*Changed` event with current state (UI (re)attach).
+    /// Re-emit every `*Changed` event with current state (UI (re)attach),
+    /// preceded by [`Event::Snapshot`]. Never emits a second `Started`, so
+    /// platforms can key one-time work (credential replay) on `Started`.
     RequestSnapshot,
     SetNetworkState {
         state: NetworkState,
@@ -1385,10 +1446,15 @@ pub enum Command {
     },
 
     // -- servers ----------------------------------------------------------
+    /// `url` must be `http(s)://` with a host and no embedded credentials.
+    /// Naming a server that is already persisted (same url + username)
+    /// installs it immediately from the stored capabilities (so downloads
+    /// play offline) and probes in the background; a new server is only
+    /// installed once the probe accepts the credentials.
     AddServer {
         url: String,
         username: String,
-        password: String,
+        password: Secret,
         name: Option<String>,
     },
     RemoveServer {
@@ -1546,7 +1612,9 @@ pub enum Command {
         to_index: u32,
     },
     /// Marks a played track on the server (`scrobble submission=true`) — used only by the
-    /// core's own scrobbler; exposed for tests.
+    /// core's own scrobbler; exposed for tests (feature `sim` only: it bypasses the
+    /// threshold, session dedupe and the scrobble setting).
+    #[cfg(feature = "sim")]
     Scrobble {
         track_id: TrackId,
         played_at: EpochMs,
@@ -1710,6 +1778,17 @@ pub enum Command {
     Touch {
         target: ActionTarget,
     },
+}
+
+impl Command {
+    /// The variant name as it appears on the wire (`"addServer"`), for logs
+    /// that must never carry the payload.
+    pub fn kind(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+            .unwrap_or_else(|| "?".into())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2027,8 +2106,15 @@ pub enum ErrorKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Event {
-    /// Emitted once `Start` completes.
+    /// Emitted exactly once per core, when `Start` completes. Platforms key
+    /// one-time work (credential replay, first-run setup) on this.
     Started {
+        snapshot: Snapshot,
+    },
+    /// Emitted by `RequestSnapshot` (and by anything else that re-emits the
+    /// whole state, such as `RemoveServer`) ahead of the `*Changed` replay.
+    /// Same payload as `Started`, never confused with it.
+    Snapshot {
         snapshot: Snapshot,
     },
     ServersChanged {
@@ -2176,4 +2262,54 @@ pub struct ConfigDocument {
     pub autoplay: AutoplaySettings,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    #[test]
+    fn command_debug_never_shows_the_password_and_kind_is_the_wire_tag() {
+        let cmd = Command::AddServer {
+            url: "https://music.example/".into(),
+            username: "alice".into(),
+            password: "hunter2".into(),
+            name: None,
+        };
+        let dbg = format!("{cmd:?}");
+        assert!(!dbg.contains("hunter2"), "{dbg}");
+        assert!(dbg.contains("<redacted>"), "{dbg}");
+        assert_eq!(cmd.kind(), "addServer");
+        assert_eq!(Command::Start.kind(), "start");
+        // The wire shape is unchanged: a plain string.
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""password":"hunter2""#), "{json}");
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn media_source_debug_strips_the_query_string() {
+        let source = MediaSource {
+            key: "k1".into(),
+            track: TrackSummary::default(),
+            url: "https://music.example/rest/stream?id=t0&u=alice&t=abc123&s=salt".into(),
+            headers: [("Authorization".to_string(), "Bearer xyz".to_string())].into(),
+            mime_type: None,
+            gain_db: 0.0,
+            transcoded: false,
+        };
+        let dbg = format!("{source:?}");
+        assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");
+        assert!(!dbg.contains("abc123") && !dbg.contains("salt") && !dbg.contains("xyz"), "{dbg}");
+        let cmd = BackendCommand::Load {
+            source,
+            next: None,
+            position_ms: 0,
+            play: true,
+        };
+        assert!(!format!("{cmd:?}").contains("abc123"));
+        assert_eq!(redact_url("file:///tmp/a.flac"), "file:///tmp/a.flac");
+        assert_eq!(redact_url("https://h/p#frag"), "https://h/p");
+    }
 }

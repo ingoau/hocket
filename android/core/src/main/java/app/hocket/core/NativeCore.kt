@@ -8,10 +8,15 @@ import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.ffi.EventListener
 import app.hocket.core.ffi.HocketCore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.serialization.SerializationException
+import kotlinx.coroutines.launch
 
 /**
  * The real core: a UniFFI [HocketCore] talked to in JSON strings of the typeshare types.
@@ -19,24 +24,41 @@ import kotlinx.serialization.SerializationException
  * Construction loads `libhocket_android.so` through JNA. [isAvailable] probes that without throwing so
  * the app can fall back to the fake core (and show its debug banner) when the native library has not
  * been built for this ABI.
+ *
+ * Events: the core calls [EventListener.onEvent] synchronously on its actor thread, so nothing there
+ * may block or throw. Decoded events go into an unbounded [Channel] (never blocks, never drops) and a
+ * pump coroutine forwards them into the shared [events] flow with a suspending `emit`, so a slow
+ * subscriber (the main thread mid-composition) applies back-pressure to the pump, not to the core,
+ * and `Started` / `ServersChanged` / `Backend` can never be dropped.
  */
 class NativeCore private constructor(private val core: HocketCore) : CoreHandle {
     override val kind: CoreKind = CoreKind.Native
 
-    // Unbounded replay-less buffer: events are decoded on the core's thread and must never block it.
-    private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 512)
+    private val inbox = Channel<Event>(Channel.UNLIMITED)
+    private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 256)
     override val events: SharedFlow<Event> = _events.asSharedFlow()
+    private val pumpScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     init {
+        pumpScope.launch { for (event in inbox) _events.emit(event) }
         core.setListener(object : EventListener {
             override fun onEvent(eventJson: String) {
+                // Anything escaping here surfaces in Rust as a callback failure (the crate contains
+                // it, but the event would still be lost and the failure logged as a panic); catch
+                // everything, including errors, and log only the event type: a decode failure's
+                // message quotes the JSON, which for `Backend.Load` holds the stream URL with its
+                // auth token.
                 val event = try {
                     HocketJson.decodeEvent(eventJson)
-                } catch (e: SerializationException) {
-                    Log.w(TAG, "Dropping undecodable event: ${e.message}")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Dropping undecodable event ${eventType(eventJson)}: ${t.javaClass.simpleName}: ${t.message?.substringBefore("JSON input")?.trim()}")
                     return
                 }
-                if (!_events.tryEmit(event)) Log.w(TAG, "Event buffer full; dropped ${event::class.simpleName}")
+                try {
+                    inbox.trySend(event)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Dropping event ${event::class.simpleName}: ${t.javaClass.simpleName}")
+                }
             }
         })
     }
@@ -52,16 +74,31 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle 
     override suspend fun query(query: Query): QueryResult =
         HocketJson.decodeQueryResult(core.query(HocketJson.encodeQuery(query)))
 
+    /**
+     * Flushes and stops the core (blocking up to [SHUTDOWN_TIMEOUT_MS]), then frees it. Blocks the
+     * calling thread: never call it on the main thread.
+     */
     override fun close() {
-        dispatch(Command.Shutdown)
+        try {
+            if (!core.shutdown(SHUTDOWN_TIMEOUT_MS.toULong())) Log.w(TAG, "core shutdown did not finish within ${SHUTDOWN_TIMEOUT_MS}ms; freeing anyway")
+        } catch (e: Exception) {
+            Log.e(TAG, "core shutdown failed", e)
+        }
+        inbox.close()
+        pumpScope.cancel()
         core.close()
     }
 
     companion object {
         private const val TAG = "NativeCore"
+        const val SHUTDOWN_TIMEOUT_MS = 8_000L
 
         @Volatile
         private var available: Boolean? = null
+
+        /** The `"type"` tag of an event JSON without decoding it (for log lines only). */
+        internal fun eventType(json: String): String =
+            Regex("\"type\"\\s*:\\s*\"([A-Za-z0-9_]+)\"").find(json)?.groupValues?.get(1) ?: "?"
 
         /** True when the native library can be loaded for this ABI. Cached after the first probe. */
         fun isAvailable(): Boolean = available ?: synchronized(this) {

@@ -78,8 +78,13 @@ class ExoBackend(
     private var masterVolume = 1.0
     private var currentGainDb = 0.0
     private var positionJob: Job? = null
+    /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
+    private var lastLoadedKey: String? = null
     /** Keys by media id, so reports name the queue key the core gave us. */
     private fun currentKey(): String? = player.currentMediaItem?.mediaId
+
+    /** The key an error report is attributed to; null when there is nothing to attribute it to (after `Stop`). */
+    internal fun errorKey(): String? = currentKey() ?: lastLoadedKey
 
     init {
         player.addListener(object : Player.Listener {
@@ -147,7 +152,8 @@ class ExoBackend(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                val key = currentKey() ?: "?"
+                // No key at all (error after Stop): the core could not correlate the report, skip it.
+                val key = errorKey() ?: return
                 val fatal = error.errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED &&
                     error.errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
                 report(BackendReport.Error(BackendReportErrorInner(key, error.errorCodeName + ": " + (error.message ?: ""), fatal)))
@@ -160,12 +166,16 @@ class ExoBackend(
             is BackendCommand.Load -> {
                 val d = command.data
                 val sources = listOfNotNull(mediaSource(d.source), d.next?.let(::mediaSource))
+                lastLoadedKey = d.source.key
                 player.setMediaSources(sources, 0, d.position_ms.toLong())
                 applyGain(d.source.gainDb)
                 player.playWhenReady = d.play
                 player.prepare()
             }
             is BackendCommand.SetNext -> {
+                // With no current item (after Stop) a follow-up would become the current item and
+                // later play under the wrong key; the next `Load` carries its own `next`.
+                if (player.mediaItemCount == 0) return
                 while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
                 command.data.next?.let { player.addMediaSource(mediaSource(it)) }
             }
@@ -177,6 +187,7 @@ class ExoBackend(
             BackendCommand.Pause -> player.pause()
             BackendCommand.Stop -> {
                 stopPositionLoop()
+                lastLoadedKey = null
                 player.stop()
                 player.clearMediaItems()
             }
@@ -259,9 +270,11 @@ class ExoBackend(
         val factory: DataSource.Factory = if (source.url.startsWith("file:")) {
             DefaultDataSource.Factory(context)
         } else {
+            // Stream URLs carry the Subsonic token and salt in the query (`MediaSource.url`), so an
+            // https server must never be followed onto http (cross-protocol redirects stay off, the
+            // Media3 default): a proxy or captive portal would otherwise see a replayable token.
             val http = DefaultHttpDataSource.Factory()
                 .setUserAgent("Hocket/Android")
-                .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(15_000)
                 .setReadTimeoutMs(30_000)
             if (source.headers.isNotEmpty()) http.setDefaultRequestProperties(source.headers)

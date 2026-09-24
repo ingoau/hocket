@@ -111,8 +111,12 @@ impl Actor {
         if !doc.saved_queues.is_empty() {
             self.engine_input(Input::SavedQueuesChanged(doc.saved_queues.clone()));
         }
-        for s in self.settings.synced_settings() {
-            self.engine_input(Input::SettingChanged(s));
+        // Defaults standing in for an unreadable settings document are never
+        // broadcast: they would win last-write-wins on every other device.
+        if self.settings_corrupt.is_none() {
+            for s in self.settings.synced_settings() {
+                self.engine_input(Input::SettingChanged(s));
+            }
         }
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
@@ -468,10 +472,14 @@ impl Actor {
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
-                        // Another device plays; we only render.
+                        // Another device plays; we only render. Whatever this
+                        // backend had loaded is stopped, and the old item's
+                        // position is not carried onto the new one.
+                        self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
                         self.playback.track = self.track_or_bare(&item.track_id);
-                        self.playback.loaded = false;
+                        self.playback.position_ms = 0;
+                        self.playback.position_at = self.now();
                     }
                 }
                 None => {
@@ -488,14 +496,13 @@ impl Actor {
             // Queue edits around the current item: keep the gapless preload right.
             self.refresh_next();
         }
-        if let Some(context) = resolve {
-            let tracks = self.resolve_context_tracks(&context.server_id, &context.kind);
-            if !tracks.is_empty() {
-                self.local_op(SessionOp::SetContextTracks { tracks });
-                return;
-            }
-        }
-        if needs_autoplay && owns {
+        // A restored context resolves its tracks with a nested op once this
+        // document's bookkeeping is done (below), so it is persisted and
+        // announced even when that op does not apply.
+        let resolve_tracks = resolve
+            .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
+            .filter(|tracks| !tracks.is_empty());
+        if needs_autoplay && owns && resolve_tracks.is_none() {
             self.request_autoplay();
         }
         // Saved queues ride the engine's LWW set too.
@@ -516,6 +523,9 @@ impl Actor {
         self.mark_doc_dirty();
         self.emit(Event::SessionChanged { document });
         self.emit_queue();
+        if let Some(tracks) = resolve_tracks {
+            self.local_op(SessionOp::SetContextTracks { tracks });
+        }
     }
 
     pub(crate) fn emit_queue(&mut self) {

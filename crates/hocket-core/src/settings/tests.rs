@@ -107,6 +107,35 @@ fn set_validate_reset_and_persist() {
     assert!(s
         .set_json(keys::CONNECT_COORDINATOR_URL, "\"ftp://x\"", 101.0)
         .is_err());
+    // ws:// is only for the local network; https is not a WebSocket
+    assert!(s
+        .set_json(
+            keys::CONNECT_COORDINATOR_URL,
+            "\"ws://hocket.example/ws\"",
+            101.0
+        )
+        .is_err());
+    assert!(s
+        .set_json(
+            keys::CONNECT_COORDINATOR_URL,
+            "\"ws://192.168.1.4:7373/ws\"",
+            101.0
+        )
+        .is_ok());
+    assert!(s
+        .set_json(
+            keys::CONNECT_COORDINATOR_URL,
+            "\"https://hocket.example/ws\"",
+            101.0
+        )
+        .is_err());
+    assert!(s
+        .set_json(
+            keys::CONNECT_COORDINATOR_URL,
+            "\"wss://u:p@hocket.example/ws\"",
+            101.0
+        )
+        .is_err());
     assert!(s.set_json(keys::AUTOPLAY_SETTINGS, r#"{"chain":["random"],"seedWindow":3,"minSimilarity":null,"exclusionWindow":10,"filterId":null}"#, 102.0).is_ok());
     assert!(s
         .set_json(keys::AUTOPLAY_SETTINGS, r#"{"chain":"random"}"#, 102.0)
@@ -479,4 +508,102 @@ fn config_errors() {
     // A minimal v1 document with everything else defaulted parses.
     let d = parse_document(r#"{"version": 1}"#).unwrap();
     assert!(d.settings.is_empty() && d.servers.is_empty());
+}
+
+/// M6: an imported document can't plant timestamps in the future, device-
+/// local keys are opt-in, and the synced keys that changed are reported.
+#[test]
+fn import_clamps_timestamps_and_scopes_device_local_keys() {
+    let mut s = Settings::new();
+    s.set_json(keys::QUEUE_SAVED_CAP, "20", 100.0).unwrap();
+    let doc = vec![
+        setting(
+            keys::QUEUE_SAVED_CAP,
+            "30",
+            SettingScope::AccountSynced,
+            9e15, // hand-edited: would win every future merge
+        ),
+        setting(
+            keys::SCROBBLE_ENABLED,
+            "true",
+            SettingScope::AccountSynced,
+            50.0,
+        ),
+        setting(keys::SYNC_ENABLED, "false", SettingScope::DeviceLocal, 50.0),
+        setting(
+            keys::DISPLAY_THEME,
+            "\"light\"",
+            SettingScope::DeviceLocal,
+            50.0,
+        ),
+        setting("bogus", "1", SettingScope::DeviceLocal, 1.0),
+    ];
+    let out = s.import_settings(&doc, 1_000.0, false);
+    assert_eq!(
+        out.applied,
+        vec![keys::QUEUE_SAVED_CAP, keys::SCROBBLE_ENABLED]
+    );
+    assert_eq!(
+        out.skipped_device_local,
+        vec![keys::SYNC_ENABLED, keys::DISPLAY_THEME]
+    );
+    assert_eq!(out.skipped, vec!["bogus"]);
+    assert_eq!(
+        out.changed_synced,
+        vec![keys::QUEUE_SAVED_CAP],
+        "scrobble.enabled was already true (default): no change to broadcast"
+    );
+    assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 30);
+    assert_eq!(
+        s.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at,
+        1_000.0,
+        "clamped to the import time"
+    );
+    assert_eq!(s.setting(keys::SCROBBLE_ENABLED).unwrap().updated_at, 50.0);
+    assert!(s.sync_enabled(), "device-local key untouched");
+    // a peer's honest later write still wins after the import
+    let changed = s.merge_remote(&[setting(
+        keys::QUEUE_SAVED_CAP,
+        "25",
+        SettingScope::AccountSynced,
+        2_000.0,
+    )]);
+    assert_eq!(changed, vec![keys::QUEUE_SAVED_CAP]);
+    assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 25);
+
+    // same-device restore includes device-local keys, still clamped
+    let out = s.import_settings(&doc, 3_000.0, true);
+    assert!(out.skipped_device_local.is_empty());
+    assert!(!s.sync_enabled());
+    assert_eq!(
+        s.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at,
+        3_000.0
+    );
+    // the compatibility wrapper clamps too
+    let mut t = Settings::new();
+    t.apply_settings(&doc, 10.0);
+    assert_eq!(t.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at, 10.0);
+}
+
+/// L4: the external-lyrics toggle is a per-device privacy choice.
+#[test]
+fn external_lyrics_toggle_is_device_local() {
+    assert_eq!(
+        lookup(keys::LYRICS_EXTERNAL_ENABLED).unwrap().scope,
+        SettingScope::DeviceLocal
+    );
+    assert_eq!(
+        lookup(keys::LYRICS_EXTERNAL_PROVIDER).unwrap().scope,
+        SettingScope::AccountSynced
+    );
+    let mut s = Settings::new();
+    assert!(s
+        .merge_remote(&[setting(
+            keys::LYRICS_EXTERNAL_ENABLED,
+            "true",
+            SettingScope::AccountSynced,
+            5.0
+        )])
+        .is_empty());
+    assert!(!s.get_bool(keys::LYRICS_EXTERNAL_ENABLED));
 }

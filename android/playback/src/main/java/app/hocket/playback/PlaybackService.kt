@@ -13,6 +13,7 @@ import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,14 +30,24 @@ import kotlinx.coroutines.launch
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
  * - Stays a foreground service (type `mediaPlayback`) while the media session says something is
  *   playing; Media3 handles the notification and foreground promotion. When nothing has played for
- *   [IDLE_TIMEOUT_MS] and no client is bound, it stops itself.
- * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding.
+ *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself.
+ * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
+ *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
+ *   carries [CoreHost.bindToken], which no other process can know.
  */
 class PlaybackService : MediaSessionService() {
     companion object {
         private const val TAG = "PlaybackService"
         const val IDLE_TIMEOUT_MS = 5 * 60_000L
         const val ACTION_BIND_CORE = "app.hocket.playback.BIND_CORE"
+        const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
+
+        /**
+         * True for this process's own core bind. `onBind` runs outside a binder transaction, so
+         * `Binder.getCallingUid()` cannot tell callers apart; the per-process token can.
+         */
+        fun isLocalBind(intent: Intent?, token: String = CoreHost.bindToken): Boolean =
+            intent?.action == ACTION_BIND_CORE && intent.getStringExtra(EXTRA_BIND_TOKEN) == token
     }
 
     inner class LocalBinder : Binder() {
@@ -64,7 +75,8 @@ class PlaybackService : MediaSessionService() {
         bridge = MediaSessionBridge(this, CoreSessionPlayer(Looper.getMainLooper(), ::dispatch), ::dispatch, launch)
         network = NetworkMonitor(this, ::dispatch)
         battery = BatterySaverMonitor(this, ::dispatch)
-        scope.launch { core.events.collect { event -> main.post { onEvent(event) } } }
+        // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
         network.start()
         battery.start()
         core.dispatch(Command.RequestSnapshot)
@@ -105,16 +117,17 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = bridge.session
 
     override fun onBind(intent: Intent?): IBinder? {
-        if (intent?.action == ACTION_BIND_CORE) {
+        if (isLocalBind(intent)) {
             boundClients++
             idleJob?.cancel()
             return LocalBinder()
         }
+        // Media3 controllers, and anything else (a foreign BIND_CORE gets nothing and is not counted).
         return super.onBind(intent)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (intent?.action == ACTION_BIND_CORE) {
+        if (isLocalBind(intent)) {
             boundClients = (boundClients - 1).coerceAtLeast(0)
             if (!bridge.player.state.isPlaying) scheduleIdleStop()
             return true
@@ -123,10 +136,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onRebind(intent: Intent?) {
-        if (intent?.action == ACTION_BIND_CORE) { boundClients++; idleJob?.cancel() } else super.onRebind(intent)
+        if (isLocalBind(intent)) { boundClients++; idleJob?.cancel() } else super.onRebind(intent)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // The UI unbinds shortly after (ForegroundBinder); with nothing playing the service then goes.
         if (!bridge.player.state.isPlaying) pauseAllPlayersAndStopSelf()
     }
 
@@ -136,6 +150,7 @@ class PlaybackService : MediaSessionService() {
         backend.release()
         bridge.release()
         scope.cancel()
+        // Detaches the core and flushes it on a worker thread (the flush blocks; never on main).
         CoreHost.shutdown()
         super.onDestroy()
     }

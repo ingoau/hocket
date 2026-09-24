@@ -341,16 +341,39 @@ impl ReplicaStore for FileReplicaStore {
     }
 
     fn save(&self, scope: &str, replica: &ReplicaState) -> Result<(), ReplicaError> {
+        use std::io::Write;
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = self.path_for(scope);
-        let tmp = path.with_extension("json.tmp");
+        // A unique temp name per writer, so two saves of one scope never
+        // share (and truncate) each other's file.
+        let tmp = path.with_extension(format!(
+            "json.{}.{}.tmp",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let stored = StoredReplica {
             schema_version: STORE_SCHEMA_VERSION,
             scope: scope.to_string(),
             replica: replica.clone(),
         };
-        let bytes = serde_json::to_vec_pretty(&stored)?;
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, &path)?;
+        let bytes = serde_json::to_vec(&stored)?;
+        let result = (|| -> std::io::Result<()> {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(&bytes)?;
+            // Content before name: a rename that survives a power cut must
+            // point at a file that survived it too.
+            f.sync_all()?;
+            std::fs::rename(&tmp, &path)?;
+            #[cfg(unix)]
+            {
+                std::fs::File::open(&self.dir)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result?;
         Ok(())
     }
 

@@ -1047,6 +1047,10 @@ impl Actor {
         let filter_id = filter.id.clone();
         match path {
             Some(p) => {
+                if let Err(e) = validate_nsp_export_path(&p) {
+                    self.toast(format!("Can't export there: {e}"), None);
+                    return;
+                }
                 let tx = self.tx.clone();
                 self.spawn(async move {
                     let error = tokio::fs::write(&p, document.as_bytes())
@@ -1434,6 +1438,31 @@ fn rate_label(rating: u32, n: usize) -> String {
     }
 }
 
+/// An `.nsp` export path from the UI: absolute, no `..` segments, `.nsp`
+/// extension, and not an existing file of another kind (a compromised
+/// renderer must not be able to overwrite dotfiles with filter JSON).
+pub(crate) fn validate_nsp_export_path(path: &str) -> Result<(), String> {
+    use std::path::{Component, Path};
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err("the path must be absolute".into());
+    }
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("the path must not contain '..'".into());
+    }
+    if !p
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("nsp"))
+    {
+        return Err("the file name must end in .nsp".into());
+    }
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if !m.is_file() => Err("the path is not a regular file".into()),
+        _ => Ok(()),
+    }
+}
+
 fn cas_target_key(m: &CasMutation) -> Option<String> {
     Some(match (&m.target, &m.expect) {
         (RemoteTarget::Track { id }, RemoteValue::Rating(_)) => format!("rating:track:{id}"),
@@ -1624,5 +1653,35 @@ impl AutoplaySource for DbAutoplaySource {
                 .summaries_by_ids(&ids)
                 .map_err(|e| AutoplayError::Other(e.to_string()))
         })
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::validate_nsp_export_path;
+
+    #[test]
+    fn nsp_export_paths_are_absolute_dotdot_free_and_nsp() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = dir.path().join("mine.nsp");
+        assert!(validate_nsp_export_path(ok.to_str().unwrap()).is_ok());
+        let upper = dir.path().join("MINE.NSP");
+        assert!(validate_nsp_export_path(upper.to_str().unwrap()).is_ok());
+        assert!(validate_nsp_export_path("relative.nsp").is_err());
+        let dots = dir.path().join("../escape.nsp");
+        assert!(validate_nsp_export_path(dots.to_str().unwrap()).is_err());
+        let bashrc = dir.path().join(".bashrc");
+        assert!(validate_nsp_export_path(bashrc.to_str().unwrap()).is_err());
+        let noext = dir.path().join("mine");
+        assert!(validate_nsp_export_path(noext.to_str().unwrap()).is_err());
+        // An existing directory or symlink named *.nsp is refused too.
+        std::fs::create_dir(dir.path().join("dir.nsp")).unwrap();
+        assert!(validate_nsp_export_path(dir.path().join("dir.nsp").to_str().unwrap()).is_err());
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link.nsp");
+            std::os::unix::fs::symlink(&bashrc, &link).unwrap();
+            assert!(validate_nsp_export_path(link.to_str().unwrap()).is_err());
+        }
     }
 }

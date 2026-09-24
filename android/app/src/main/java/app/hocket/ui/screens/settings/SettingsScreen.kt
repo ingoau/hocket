@@ -46,6 +46,7 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.Event
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SettingScope
+import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.components.formatAgo
@@ -186,7 +187,7 @@ fun SettingsScreen(nav: NavHostController) {
             SettingRow(stringResource(R.string.settings_section_about), stringResource(R.string.settings_licence), onClick = { nav.navigate(Route.About) }) { Icon(Icons.Filled.ChevronRight, null) }
         }
     }
-    if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { client.dispatch(Commands.removeServer(s.id)) }, onDismiss = { signOut = false }) }
+    if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeServer(client::dispatch, s) }, onDismiss = { signOut = false }) }
     importConfirm?.let { doc -> ConfirmDialog(stringResource(R.string.settings_import_confirm), stringResource(R.string.settings_import_config), onConfirm = { client.dispatch(Commands.importConfig(doc)) }, onDismiss = { importConfirm = null }, destructive = false) }
 }
 

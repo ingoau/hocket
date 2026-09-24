@@ -51,12 +51,27 @@
 //! 6. `Output::FilePreviousStateAsSavedQueue` means: snapshot this document
 //!    with `session::saved::snapshot`, upsert it locally and report it back
 //!    through `Input::SavedQueuesChanged`. Never merge it.
+//! 7. **Supply the LAN key.** Set [`EngineConfig::lan_key`] to
+//!    `Some(auth::derive_lan_key(&scope, &password))` (the scope from
+//!    [`wire::scope_key`], the password the user entered for that server)
+//!    before building the engine, and rebuild it when the password changes.
+//!    LAN rooms admit only devices that prove knowledge of this key and a
+//!    device only follows a LAN leader that proves it back ([`auth`]); with
+//!    `None` the engine neither serves nor follows LAN peers. The
+//!    credential is sent only to a coordinator (`ConnectionTier::Coordinator`)
+//!    and only over `wss://` (or `ws://` to loopback, or anywhere when
+//!    [`EngineConfig::allow_insecure_coordinator`] is set from the
+//!    `connect.allowInsecureCoordinator` setting) — never in a LAN `Hello`.
+//! 8. **Persist [`Engine::known_scrobbled`]** next to the sync base and hand
+//!    it back through [`Engine::restore_known_scrobbled`] on start, so a
+//!    LAN leader that restarts still answers dedupe queries correctly.
 //!
 //! Everything in [`wire`] is the protocol; [`room`] is the coordinator role;
-//! [`replica`] its store; [`lease`], [`clock`], [`election`] are the pure
-//! pieces; [`discovery`] and [`transport`] are the I/O seams with real
-//! (mDNS, tokio-tungstenite) implementations that the simulation fakes.
+//! [`replica`] its store; [`lease`], [`clock`], [`election`], [`auth`] are
+//! the pure pieces; [`discovery`] and [`transport`] are the I/O seams with
+//! real (mDNS, tokio-tungstenite) implementations that the simulation fakes.
 
+pub mod auth;
 pub mod clock;
 pub mod discovery;
 pub mod election;
@@ -75,7 +90,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{EpochMs, Ms, SessionDocument, SessionId};
 
 pub use engine::{DocChange, Engine, EngineConfig, Input, Output, ResumeOfferDraft, SyncBase};
-pub use room::{Room, RoomConfig, RoomInput, RoomOutput};
+pub use room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 pub use session_adapter::RealReducer;
 pub use wire::{Msg, SessionOp, WireMessage};
 

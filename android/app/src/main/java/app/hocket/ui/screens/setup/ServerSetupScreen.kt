@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,7 +50,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
-import app.hocket.core.Commands
 import app.hocket.core.api.ServerInfo
 import app.hocket.playback.CoreHost
 import app.hocket.playback.ServerCredential
@@ -58,14 +58,17 @@ import app.hocket.ui.LocalCoreClient
 /**
  * Server setup is the entire first screen (design: empty states). URL, username, password, connect.
  * Progress while the core probes and starts the sync; the capability summary and a clear error for
- * servers below 0.63.0. Nothing else.
+ * servers below 0.63.0. A prominent warning for `http://` addresses (the app allows cleartext, see
+ * the manifest). [needsRelogin]: a login is stored but unreadable right now; say so instead of
+ * looking like a sign-out.
  */
 @Composable
-fun ServerSetupScreen(existing: ServerInfo?) {
+fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false) {
     val client = LocalCoreClient.current
     var url by rememberSaveable { mutableStateOf(existing?.url ?: "") }
     var username by rememberSaveable { mutableStateOf(existing?.username ?: "") }
-    var password by rememberSaveable { mutableStateOf("") }
+    // Never rememberSaveable: the saved-instance Bundle goes to system_server and outlives the process.
+    var password by remember { mutableStateOf("") }
     var showPassword by rememberSaveable { mutableStateOf(false) }
     var connecting by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf(false) }
@@ -82,10 +85,11 @@ fun ServerSetupScreen(existing: ServerInfo?) {
         error = null
         connecting = true
         val cleanUrl = url.trim().trimEnd('/')
-        // The core never keeps the password: it lives in the platform keystore and is replayed on every start.
-        CoreHost.credentials?.save(ServerCredential(cleanUrl, username.trim(), password, null))
-        client.dispatch(Commands.addServer(cleanUrl, username.trim(), password))
+        // The core never keeps the password: it lives in the platform keystore and is replayed on
+        // every start. CoreHost stores it only once the core reports the server reachable with it.
+        CoreHost.login(client::dispatch, ServerCredential(cleanUrl, username.trim(), password, null))
     }
+    val cleartext = url.trim().startsWith("http://")
 
     Surface(Modifier.fillMaxSize()) {
         Column(
@@ -97,6 +101,12 @@ fun ServerSetupScreen(existing: ServerInfo?) {
                 Text(stringResource(R.string.setup_title), style = MaterialTheme.typography.displaySmall)
                 Spacer(Modifier.height(8.dp))
                 Text(stringResource(R.string.setup_subtitle), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (needsRelogin) {
+                    Spacer(Modifier.height(16.dp))
+                    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth().testTag("setup.relogin")) {
+                        Text(stringResource(R.string.setup_relogin_notice), color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
                 Spacer(Modifier.height(32.dp))
                 OutlinedTextField(
                     value = url, onValueChange = { url = it; urlError = false }, label = { Text(stringResource(R.string.setup_url)) },
@@ -105,6 +115,12 @@ fun ServerSetupScreen(existing: ServerInfo?) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth().testTag("setup.url"), enabled = !connecting,
                 )
+                if (cleartext) {
+                    Spacer(Modifier.height(8.dp))
+                    Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth().testTag("setup.cleartextWarning")) {
+                        Text(stringResource(R.string.setup_cleartext_warning), color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = username, onValueChange = { username = it }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true,
@@ -148,7 +164,7 @@ fun ServerSetupScreen(existing: ServerInfo?) {
                         else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = { CoreHost.credentials?.remove(server.url, server.username); client.dispatch(Commands.removeServer(server.id)) }) { Text(stringResource(R.string.setup_remove_server)) }
+                    TextButton(onClick = { CoreHost.removeServer(client::dispatch, server) }) { Text(stringResource(R.string.setup_remove_server)) }
                 }
             }
         }

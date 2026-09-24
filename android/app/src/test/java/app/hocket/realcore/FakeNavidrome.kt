@@ -4,6 +4,7 @@ import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -23,17 +24,19 @@ import kotlin.concurrent.thread
  * (empty), and a 404 on /auth/login (no native API). Every request is recorded in [calls]; a wrong
  * password gets the Subsonic error 40.
  */
-class FakeNavidrome(private val expectedUser: String = "alice", private val expectedPassword: String = "secret") {
+class FakeNavidrome(private val expectedUser: String = "alice", private val expectedPassword: String = "secret", port: Int = 0) {
     val calls = CopyOnWriteArrayList<String>()
     val ratings = HashMap<String, Int>()
     val starred = HashSet<String>()
     val scrobbles = CopyOnWriteArrayList<Pair<String, Boolean>>()
     // A minimal HTTP/1.1 server on ServerSocket: unit tests compile against android.jar, which has no
     // com.sun.net.httpserver.
-    private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+    // `port` lets a test bring the "same" server back after stopping it (offline start, then online).
+    private val server = ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 50) }
     private val pool = Executors.newCachedThreadPool()
     @Volatile private var running = false
-    val baseUrl: String get() = "http://127.0.0.1:${server.localPort}"
+    val port: Int get() = server.localPort
+    val baseUrl: String get() = "http://127.0.0.1:$port"
 
     /** One parsed request. */
     class HttpExchange(val method: String, val requestURI: URI, val headers: Map<String, String>, private val socket: Socket) {

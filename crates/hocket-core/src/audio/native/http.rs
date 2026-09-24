@@ -86,10 +86,11 @@ impl RangeFetcher for ReqwestFetcher {
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
             }
+            // `without_url`: stream URLs carry the auth token in the query.
             let resp = req
                 .send()
                 .await
-                .map_err(|e| FetchError::Network(e.to_string()))?;
+                .map_err(|e| FetchError::Network(e.without_url().to_string()))?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(FetchError::Status(status.as_u16()));
@@ -116,7 +117,7 @@ impl RangeFetcher for ReqwestFetcher {
             };
             let body = resp
                 .bytes_stream()
-                .map(|r| r.map_err(|e| FetchError::Network(e.to_string())));
+                .map(|r| r.map_err(|e| FetchError::Network(e.without_url().to_string())));
             Ok(FetchResponse {
                 range_start,
                 total_len,

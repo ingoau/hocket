@@ -125,7 +125,8 @@ impl ConnectIo for RealIo {
                     Err(_) => false,
                 },
                 Err(e) => {
-                    tracing::debug!(%url, error = %e, "credential ping failed");
+                    // `without_url`: the request URL carries token and salt.
+                    tracing::debug!(%url, error = %e.without_url(), "credential ping failed");
                     false
                 }
             }

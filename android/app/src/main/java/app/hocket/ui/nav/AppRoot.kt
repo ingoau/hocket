@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,6 +83,7 @@ import app.hocket.core.api.ErrorKind
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalWideLayout
+import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.player.NowPlayingSheet
 import app.hocket.ui.player.NowPlayingSheetState
 import app.hocket.ui.player.rememberNowPlayingSheetState
@@ -107,10 +110,19 @@ import kotlinx.coroutines.launch
 
 /**
  * Root: waits for the core and for the credential replay, shows setup only when there is no stored
- * server login (or the server is below the floor), then the shell.
+ * server login (or the server is below the floor), then the shell. A release build whose native
+ * core could not start shows [FatalErrorScreen] instead (never a fake library).
  */
 @Composable
-fun AppRoot(client: CoreClient?, credentialsReady: StateFlow<Boolean> = CoreHost.credentialsReplayed) {
+fun AppRoot(
+    client: CoreClient?,
+    credentialsReady: StateFlow<Boolean> = CoreHost.credentialsReplayed,
+    logins: StateFlow<Set<String>> = CoreHost.logins,
+    unreadableLogins: StateFlow<Set<String>> = CoreHost.unreadableLogins,
+    fatalError: StateFlow<String?> = CoreHost.fatalError,
+) {
+    val fatal by fatalError.collectAsStateWithLifecycle()
+    fatal?.let { FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
     CompositionLocalProvider(LocalCoreClient provides client) {
         val started by client.started.collectAsStateWithLifecycle()
@@ -118,14 +130,19 @@ fun AppRoot(client: CoreClient?, credentialsReady: StateFlow<Boolean> = CoreHost
         // The fake core has nothing to replay; the native core waits for the keystore replay first.
         val replayed by credentialsReady.collectAsStateWithLifecycle()
         val ready = replayed || client.kind == CoreKind.Fake
+        // Login state is a flow kept by CoreHost (no keystore reads during composition): it moves
+        // when a setup login is confirmed, a stored one is refused, or the server list is pruned.
+        val loginKeys by logins.collectAsStateWithLifecycle()
+        val unreadable by unreadableLogins.collectAsStateWithLifecycle()
         val snackbar = remember { SnackbarHostState() }
         ToastCollector(snackbar)
         val server = servers.firstOrNull()
-        val hasLogin = server != null && (CoreHost.credentials?.get(server.url, server.username) != null || client.kind == CoreKind.Fake)
+        val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
+        val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             when {
                 !started || !ready -> LoadingScreen()
-                server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server)
+                server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
                 else -> MainShell()
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) { data -> Snackbar(data) }
@@ -136,6 +153,22 @@ fun AppRoot(client: CoreClient?, credentialsReady: StateFlow<Boolean> = CoreHost
             }
         }
     }
+}
+
+/** The native core failed to start (release): say so, offer a data reset, never fake a library. */
+@Composable
+fun FatalErrorScreen(detail: String, onReset: (android.content.Context) -> Unit = { CoreHost.resetData(it) }) {
+    val context = LocalContext.current
+    var confirm by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().padding(24.dp).testTag("fatal"), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(stringResource(R.string.fatal_title), style = MaterialTheme.typography.headlineMedium)
+            Text(stringResource(R.string.fatal_body), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+            Text(stringResource(R.string.fatal_detail, detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
+            Button(onClick = { confirm = true }, modifier = Modifier.padding(top = 24.dp).testTag("fatal.reset")) { Text(stringResource(R.string.fatal_reset)) }
+        }
+    }
+    if (confirm) ConfirmDialog(stringResource(R.string.fatal_reset_confirm), stringResource(R.string.fatal_reset), onConfirm = { onReset(context) }, onDismiss = { confirm = false })
 }
 
 @Composable

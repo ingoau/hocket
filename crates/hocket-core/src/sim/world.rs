@@ -448,6 +448,7 @@ impl World {
                     };
                     self.coordinator_outputs(outs);
                 }
+                RoomOutput::ReplicaTouched => {}
                 RoomOutput::ReplicaChanged => {
                     if let Some(c) = &mut self.coordinator {
                         let _ = c.store.save(c.room.scope(), c.room.replica());

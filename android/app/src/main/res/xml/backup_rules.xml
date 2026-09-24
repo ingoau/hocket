@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- The mirror is a cache; downloads are large. Only settings/session survive a backup. -->
+    <!-- Backed up: app-only preferences (DataStore). Excluded: the library mirror (a cache, and
+         large enough to blow the auto-backup quota and lose everything else), its backups, the
+         downloads and stream cache, the device id (must be unique per install: Connect leases and
+         elections; a fresh one is generated when the prefs file is missing) and the keystore
+         ciphertext plus names (the key never leaves the device, so the ciphertext is useless elsewhere
+         and the plaintext keys would leak the server address and username). -->
     <exclude domain="file" path="hocket/cache" />
     <exclude domain="file" path="hocket/downloads" />
+    <exclude domain="file" path="hocket/hocket.sqlite" />
+    <exclude domain="file" path="hocket/hocket.sqlite-wal" />
+    <exclude domain="file" path="hocket/hocket.sqlite-shm" />
+    <exclude domain="file" path="hocket/hocket.sqlite-journal" />
+    <exclude domain="file" path="hocket/backups" />
+    <exclude domain="sharedpref" path="hocket-core.xml" />
+    <exclude domain="sharedpref" path="hocket-credentials.xml" />
+    <exclude domain="sharedpref" path="hocket-credential-names.xml" />
 </full-backup-content>

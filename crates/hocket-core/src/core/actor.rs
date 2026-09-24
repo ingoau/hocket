@@ -51,6 +51,9 @@ pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 3;
 /// Artwork size for the media session (small in battery saver).
 pub(crate) const MEDIA_SESSION_ART: u32 = 640;
 pub(crate) const MEDIA_SESSION_ART_SMALL: u32 = 160;
+/// Finished outbox entries are kept this long (housekeeping).
+pub(crate) const OUTBOX_RETENTION: std::time::Duration =
+    std::time::Duration::from_secs(7 * 86_400);
 /// Diagnostics ring buffer.
 const LOG_RING: usize = 200;
 
@@ -68,6 +71,15 @@ pub fn default_audio_settings() -> AudioSettings {
         gapless: true,
         output_device: None,
         exclusive: false,
+    }
+}
+
+/// Posts `TaskDone` when dropped: on completion, cancellation or a panic.
+struct TaskDoneGuard(mpsc::UnboundedSender<ActorMsg>);
+
+impl Drop for TaskDoneGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(ActorMsg::Internal(Internal::TaskDone));
     }
 }
 
@@ -101,6 +113,9 @@ pub(crate) struct Actor {
     pub db: Db,
     pub settings: Settings,
     settings_store: DbSettingsStore,
+    /// Why the stored settings document could not be used (defaults are in
+    /// effect and synced settings are not broadcast).
+    pub settings_corrupt: Option<String>,
     pub registry: ActionRegistry,
     pub undo: UndoStack,
     pub jobs: JobQueue,
@@ -195,7 +210,29 @@ impl Actor {
             db: db.clone(),
             clock: clock.clone(),
         };
-        let settings = Settings::load(&settings_store).unwrap_or_default();
+        // A settings document that does not parse is backed up verbatim
+        // before defaults take its place; the platform gets an `Error` at
+        // start and synced settings are not broadcast until a user edit.
+        let (settings, settings_corrupt) = match settings_store.load() {
+            Ok(Some(json)) => match Settings::from_json(&json) {
+                Ok(s) => (s, None),
+                Err(e) => {
+                    let key = format!("settings.corrupt-{}", clock.now_ms() as i64);
+                    let backed_up = db.saved_state_set_raw(&key, &json, clock.as_ref());
+                    tracing::error!(error = %e, backup = %key, "settings document unreadable; starting from defaults");
+                    let detail = match backed_up {
+                        Ok(()) => format!("{e}; the original was kept as {key}"),
+                        Err(b) => format!("{e}; backing up the original failed: {b}"),
+                    };
+                    (Settings::new(), Some(detail))
+                }
+            },
+            Ok(None) => (Settings::new(), None),
+            Err(e) => {
+                tracing::error!(error = %e, "settings store unreadable; starting from defaults");
+                (Settings::new(), Some(e.to_string()))
+            }
+        };
         let audio: AudioSettings = settings
             .get_typed(keys::AUDIO_SETTINGS)
             .unwrap_or_else(default_audio_settings);
@@ -280,6 +317,7 @@ impl Actor {
             db,
             settings,
             settings_store,
+            settings_corrupt,
             registry,
             undo: UndoStack::new("", crate::undo::DEFAULT_MAX_BYTES),
             jobs,
@@ -517,15 +555,17 @@ impl Actor {
     }
 
     /// Spawn a short task and count it (tests wait for it in `settle`).
+    /// `TaskDone` is sent from a drop guard, so a task that panics still
+    /// decrements `in_flight`.
     pub(crate) fn spawn<F>(&mut self, fut: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.in_flight += 1;
-        let tx = self.tx.clone();
+        let guard = TaskDoneGuard(self.tx.clone());
         self.rt.spawn(async move {
+            let _guard = guard;
             fut.await;
-            let _ = tx.send(ActorMsg::Internal(Internal::TaskDone));
         });
     }
 
@@ -533,10 +573,17 @@ impl Actor {
 
     pub(crate) fn start(&mut self) {
         if self.started {
-            self.emit_everything();
+            self.emit_everything(false);
             return;
         }
         self.started = true;
+        if let Some(detail) = self.settings_corrupt.clone() {
+            self.error(
+                ErrorKind::Storage,
+                "Settings could not be read; defaults are in effect",
+                Some(detail),
+            );
+        }
         if self.cfg.coordinator_listen.is_some() {
             // The hosted coordinator role is served by `hocket-coordinator`,
             // which drives the same `connect::Room`; a core in this mode only
@@ -578,7 +625,7 @@ impl Actor {
             self.log("debug", format!("set_volume: {e}"));
         }
         self.output_devices = self.backend.output_devices();
-        self.emit_everything();
+        self.emit_everything(true);
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
         self.last_engine_tick = self.now();
@@ -609,12 +656,19 @@ impl Actor {
         tracing::info!("core stopped");
     }
 
-    /// Re-emit every `*Changed` event with current state.
-    pub(crate) fn emit_everything(&mut self) {
+    /// Re-emit every `*Changed` event with current state, led by `Started`
+    /// (the one time `Start` completes) or `Snapshot` (every other replay).
+    pub(crate) fn emit_everything(&mut self, first: bool) {
         let snapshot = self.snapshot();
-        self.emit(Event::Started {
-            snapshot: snapshot.clone(),
-        });
+        if first {
+            self.emit(Event::Started {
+                snapshot: snapshot.clone(),
+            });
+        } else {
+            self.emit(Event::Snapshot {
+                snapshot: snapshot.clone(),
+            });
+        }
         self.emit(Event::ServersChanged {
             servers: snapshot.servers.clone(),
         });
@@ -739,7 +793,21 @@ impl Actor {
         // Housekeeping.
         if now - self.last_meta_prune >= 3_600_000.0 {
             self.last_meta_prune = now;
-            let _ = self.caches.meta_prune();
+            self.housekeeping();
+        }
+    }
+
+    /// Hourly: prune cache metadata, finished outbox entries and terminal
+    /// jobs so the database does not grow with listening history.
+    pub(crate) fn housekeeping(&mut self) {
+        if let Err(e) = self.caches.meta_prune() {
+            self.log("warn", format!("cache prune: {e}"));
+        }
+        if let Err(e) = self.outbox.prune(OUTBOX_RETENTION) {
+            self.log("warn", format!("outbox prune: {e}"));
+        }
+        if let Err(e) = self.jobs.prune() {
+            self.log("warn", format!("job prune: {e}"));
         }
     }
 
@@ -764,33 +832,47 @@ impl Actor {
             return;
         };
         let sync_base = engine.sync_base().cloned();
-        let saved = crate::session::save(engine.document());
-        match saved {
-            Ok(json) => {
-                if let Err(e) = self.db.saved_state_set_raw(
-                    &format!("session:{scope}"),
-                    &json,
-                    self.clock.as_ref(),
-                ) {
-                    self.error(ErrorKind::Storage, "save session", Some(e.to_string()));
-                }
+        let doc_json = match crate::session::save(engine.document()) {
+            Ok(json) => json,
+            Err(e) => {
+                self.error(
+                    ErrorKind::Internal,
+                    "serialise session",
+                    Some(e.to_string()),
+                );
+                return;
             }
-            Err(e) => self.error(
-                ErrorKind::Internal,
-                "serialise session",
-                Some(e.to_string()),
-            ),
-        }
+        };
         let state = PersistedConnectState { sync_base };
-        if let Err(e) =
-            self.db
-                .saved_state_set(&format!("connect:{scope}"), &state, self.clock.as_ref())
-        {
-            self.error(
-                ErrorKind::Storage,
-                "save connect state",
-                Some(e.to_string()),
-            );
+        let state_json = match serde_json::to_string(&state) {
+            Ok(j) => j,
+            Err(e) => {
+                self.error(
+                    ErrorKind::Internal,
+                    "serialise connect state",
+                    Some(e.to_string()),
+                );
+                return;
+            }
+        };
+        // One transaction: the document and the sync base it was classified
+        // against are never seen apart after a crash.
+        let now = self.now();
+        let r = self.db.with_tx(|tx| {
+            for (key, json) in [
+                (format!("session:{scope}"), &doc_json),
+                (format!("connect:{scope}"), &state_json),
+            ] {
+                tx.execute(
+                    "INSERT INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at",
+                    rusqlite::params![key, json, now],
+                )?;
+            }
+            Ok(())
+        });
+        if let Err(e) = r {
+            self.error(ErrorKind::Storage, "save session", Some(e.to_string()));
         }
     }
 

@@ -345,3 +345,38 @@ async fn sleep_timer_stops_at_end_of_track() {
     assert!(!t.backend.is_playing());
     assert!(t.snapshot().await.sleep_timer.is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
+    let t = synced_core("noscrobble").await;
+    t.run(Command::SetSetting {
+        key: "scrobble.enabled".into(),
+        value: "false".into(),
+    })
+    .await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Selection".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(110_000.0).await;
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    assert!(t.server.scrobbles().is_empty(), "nothing sent to the server");
+    match t.query(Query::RecentlyPlayed { limit: 10 }).await {
+        QueryResult::History(h) => {
+            assert_eq!(h.len(), 1);
+            assert_eq!(h[0].track.id, "t0");
+            assert!(!h[0].scrobbled, "history is honest about what was scrobbled");
+        }
+        other => panic!("{other:?}"),
+    }
+    match t.query(Query::Stats { period_days: 30 }).await {
+        QueryResult::Stats(s) => assert_eq!(s.total_plays, 1),
+        other => panic!("{other:?}"),
+    }
+}

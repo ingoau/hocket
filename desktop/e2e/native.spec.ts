@@ -13,7 +13,10 @@ const addonBuilt = existsSync(join(root, "native", "index.js"));
 async function launch(userData: string): Promise<{ app: ElectronApplication; page: Page }> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "HOCKET_FAKE_CORE") env[k] = v;
-  Object.assign(env, { HOCKET_USER_DATA: userData, HOCKET_DEVICE_NAME: "e2e-native", HOCKET_LOG: "warn", ELECTRON_ENABLE_LOGGING: "1" });
+  // A headless display server has no keyring, so safeStorage falls back to
+  // the fixed-key basic_text backend, which the app refuses to persist with;
+  // opt in explicitly so the credential replay after restart is exercised.
+  Object.assign(env, { HOCKET_USER_DATA: userData, HOCKET_DEVICE_NAME: "e2e-native", HOCKET_LOG: "warn", ELECTRON_ENABLE_LOGGING: "1", HOCKET_INSECURE_CREDENTIAL_STORE: "1" });
   const app = await electron.launch({ args: [root, "--no-sandbox", "--disable-gpu"], env });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
@@ -105,8 +108,7 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("settings-nav-appearance").click();
       await page.getByTestId("setting-theme").selectOption("dark");
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-      // Give the core a moment to persist, then restart.
-      await page.waitForTimeout(1500);
+      // No settling delay: quitting waits for the core's flush (before-quit → Core::shutdown).
     } finally {
       await app.close();
     }

@@ -20,6 +20,8 @@ use super::io::memory::MemoryNet;
 use super::io::ConnectIo;
 use super::{BackendChoice, Core, CoreError, Deps, EventSink, LateSink, PollFn, PresetServer};
 
+pub use super::handlers::servers::server_id_for;
+
 /// A backend built by the test, with its sink wired into the core later.
 pub struct TestBackend {
     backend: Arc<dyn PlaybackBackend>,
@@ -245,6 +247,34 @@ impl TestCore {
         clock: Arc<SimTime>,
         dir: tempfile::TempDir,
     ) -> TestCore {
+        Self::start_in_with(
+            name,
+            server,
+            net,
+            seed,
+            clock,
+            dir,
+            true,
+            "https://music.example/",
+        )
+        .await
+    }
+
+    /// Like [`TestCore::start_in`]; `attach_api == false` starts the core the
+    /// way a platform does, with the persisted server row but no API until
+    /// `Command::AddServer` supplies credentials. `server_url` is what the
+    /// preset server (and `AddServer`) are keyed on.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_in_with(
+        name: &str,
+        server: FakeServer,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+        dir: tempfile::TempDir,
+        attach_api: bool,
+        server_url: &str,
+    ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
             cache_dir: dir.path().join("cache").to_string_lossy().into_owned(),
@@ -262,8 +292,8 @@ impl TestCore {
             clock.clone(),
             TestOptions {
                 backend,
-                api: Some(Arc::new(server.clone())),
-                server_url: "https://music.example/".into(),
+                api: attach_api.then(|| Arc::new(server.clone()) as Arc<dyn SubsonicApi>),
+                server_url: server_url.into(),
                 password: "secret".into(),
                 net,
                 lyrics_http: None,
@@ -309,6 +339,19 @@ impl TestCore {
 
     pub async fn query(&self, q: Query) -> QueryResult {
         self.core.query(q).await.expect("query")
+    }
+
+    /// The data directory (for tests that inspect or tamper with the
+    /// database between a shutdown and a restart).
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        self.dir.path().join("data")
+    }
+
+    /// Open the core's database directly (between a shutdown and a restart,
+    /// or to inspect rows while it runs).
+    pub fn open_db(&self) -> crate::db::Db {
+        let data = self.data_dir();
+        crate::db::Db::open(&data.join("hocket.sqlite"), &data.join("backups")).expect("db")
     }
 
     /// Advance virtual time in 250 ms steps, ticking and settling each step.
@@ -376,7 +419,13 @@ impl TestCore {
 /// A fake server with `n` songs of `duration_s` seconds each, in two
 /// albums by one artist.
 pub fn seeded_server(n: usize, duration_s: f64) -> FakeServer {
-    let s = FakeServer::new("srv", "alice");
+    seeded_server_with_id("srv", n, duration_s)
+}
+
+/// [`seeded_server`] under a chosen server id (e.g. the id `AddServer`
+/// derives for a URL and username).
+pub fn seeded_server_with_id(server_id: &str, n: usize, duration_s: f64) -> FakeServer {
+    let s = FakeServer::new(server_id, "alice");
     for i in 0..n {
         let mut c = FakeServer::song(
             &format!("t{i}"),

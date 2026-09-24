@@ -18,6 +18,20 @@ use tokio::sync::mpsc;
 use crate::connect::wire::{WireError, WireMessage};
 use crate::connect::PeerId;
 
+/// Largest frame (and message) accepted on any Connect socket. A session
+/// document is a few tens of KiB; anything near this is hostile.
+pub const MAX_FRAME_BYTES: usize = 1 << 20;
+/// A socket that delivers nothing for this long is dead, whatever the
+/// engine or room think (they time out at 30 s; this is the backstop).
+pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// tungstenite configuration with the frame caps applied.
+pub fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME_BYTES))
+        .max_frame_size(Some(MAX_FRAME_BYTES))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("connect {url}: {error}")]
@@ -115,12 +129,13 @@ pub struct WsTransport;
 impl Transport for WsTransport {
     fn connect(&self, peer: PeerId, url: String) -> ConnectFuture {
         Box::pin(async move {
-            let (ws, _resp) = tokio_tungstenite::connect_async(url.as_str())
-                .await
-                .map_err(|e| TransportError::Connect {
-                    url: url.clone(),
-                    error: e.to_string(),
-                })?;
+            let (ws, _resp) =
+                tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_config()), false)
+                    .await
+                    .map_err(|e| TransportError::Connect {
+                        url: url.clone(),
+                        error: e.to_string(),
+                    })?;
             Ok(pump(peer, url, ws))
         })
     }
@@ -128,6 +143,11 @@ impl Transport for WsTransport {
 
 /// Turn any WebSocket stream into a [`Connection`] by pumping frames both
 /// ways on background tasks. Used by the client side and the LAN listener.
+///
+/// Frames over [`MAX_FRAME_BYTES`] end the connection (tungstenite refuses
+/// them), a silent peer is dropped after [`READ_TIMEOUT`], and once the
+/// sender is dropped (the engine said `Disconnect`) the reader is aborted
+/// rather than left waiting for a peer that may never answer the close.
 pub fn pump<S>(peer: PeerId, url: String, ws: tokio_tungstenite::WebSocketStream<S>) -> Connection
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -136,23 +156,17 @@ where
     let (mut sink, mut stream) = ws.split();
     let (in_tx, in_rx) = mpsc::unbounded_channel::<WireMessage>();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<WireMessage>();
-    let p1 = peer.clone();
-    tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            match msg.encode() {
-                Ok(text) => {
-                    if sink.send(Message::text(text)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(e) => tracing::warn!(peer = %p1, error = %e, "unencodable frame dropped"),
-            }
-        }
-        let _ = sink.close().await;
-    });
     let p2 = peer.clone();
-    tokio::spawn(async move {
-        while let Some(frame) = stream.next().await {
+    let reader = tokio::spawn(async move {
+        loop {
+            let frame = match tokio::time::timeout(READ_TIMEOUT, stream.next()).await {
+                Ok(Some(f)) => f,
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::debug!(peer = %p2, "read timeout");
+                    break;
+                }
+            };
             match frame {
                 Ok(Message::Text(text)) => match WireMessage::decode(&text) {
                     Ok(m) => {
@@ -177,6 +191,22 @@ where
                 Ok(_) => {}
             }
         }
+    });
+    let p1 = peer.clone();
+    tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            match msg.encode() {
+                Ok(text) => {
+                    if sink.send(Message::text(text)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => tracing::warn!(peer = %p1, error = %e, "unencodable frame dropped"),
+            }
+        }
+        let _ = sink.close().await;
+        // Don't wait for the peer to acknowledge: the socket is done.
+        reader.abort();
     });
     Connection {
         peer,
@@ -224,7 +254,12 @@ impl LanListener {
                         let tx = tx.clone();
                         let peer = ids.next("lan");
                         tokio::spawn(async move {
-                            match tokio_tungstenite::accept_async(stream).await {
+                            match tokio_tungstenite::accept_async_with_config(
+                                stream,
+                                Some(ws_config()),
+                            )
+                            .await
+                            {
                                 Ok(ws) => {
                                     let conn = pump(peer, remote.to_string(), ws);
                                     let _ = tx.send(conn);
@@ -319,6 +354,26 @@ mod tests {
         // closing the client ends the server's stream
         drop(client.tx);
         drop(client.rx);
+        assert!(server_side.rx.recv().await.is_none());
+        listener.shutdown();
+    }
+
+    #[tokio::test]
+    async fn oversized_frames_end_the_connection() {
+        let ids = Arc::new(PeerIds::default());
+        let mut listener = LanListener::bind(0, ids.clone()).await.unwrap();
+        let url = format!("ws://127.0.0.1:{}/", listener.port());
+        // a raw client that ignores our caps
+        let (mut raw, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let mut server_side = listener.accept().await.unwrap();
+        let big = format!(
+            r#"{{"protocolVersion":2,"msg":{{"type":"bye","data":{{"reason":"{}"}}}}}}"#,
+            "x".repeat(MAX_FRAME_BYTES + 1024)
+        );
+        raw.send(tokio_tungstenite::tungstenite::Message::text(big))
+            .await
+            .unwrap();
+        // the listener side never delivers it and the connection ends
         assert!(server_side.rx.recv().await.is_none());
         listener.shutdown();
     }

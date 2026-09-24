@@ -100,6 +100,14 @@ impl Actor {
         let Some(track) = self.track_or_bare(&item.track_id) else {
             return;
         };
+        // Never hand the backend a position past the end (a merged saved
+        // queue or an early seek may carry one): it would seek to EOF and
+        // skip the track.
+        let position_ms = if track.duration_ms > 0 {
+            position_ms.min(track.duration_ms)
+        } else {
+            position_ms
+        };
         let now = self.now();
         // Gapless: the backend already moved on to this track.
         let transitioned = carried.is_none()
@@ -138,7 +146,7 @@ impl Actor {
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = Some(item.key.clone());
             self.playback.track = Some(track.clone());
-            self.playback.position_ms = position_ms.min(track.duration_ms.max(position_ms));
+            self.playback.position_ms = position_ms;
             self.playback.position_at = now;
             self.playback.awaiting_transition = false;
             self.playback.loaded = true;
@@ -233,21 +241,17 @@ impl Actor {
             self.playback.consecutive_skips = 0;
             if !self.playback.loaded {
                 if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
-                    let position = self
-                        .playback
-                        .restore_position
-                        .take()
-                        .filter(|(k, _)| *k == item.key)
-                        .map(|(_, p)| p)
-                        .unwrap_or(self.playback.position_ms);
+                    let position = self.resume_position_for(&item);
                     let play = self.playback.want_playing;
                     self.load_item(&item, position, play, None);
                 }
             } else if self.playback.want_playing && !self.playback.playing {
                 self.set_playing(true);
             }
-        } else if self.playback.playing {
-            self.set_playing(false);
+        } else {
+            // Another device owns transport now: this backend must go quiet
+            // and stop accepting late reports for what it had loaded.
+            self.render_only();
         }
         if detached {
             self.log("info", "owning transport while cut off from the room");
@@ -390,15 +394,49 @@ impl Actor {
         if self.playback.loaded {
             self.set_playing(true);
         } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
-            let position = self
-                .playback
-                .restore_position
-                .take()
-                .filter(|(k, _)| *k == item.key)
-                .map(|(_, p)| p)
-                .unwrap_or(self.playback.position_ms);
+            let position = self.resume_position_for(&item);
             self.load_item(&item, position, true, None);
         }
+    }
+
+    /// Where to start `item` when loading it fresh: a pending restore for
+    /// this key, else the last known position if it was taken for this key,
+    /// else the start. A position taken for another item (the queue moved on
+    /// while another device played) is never reused.
+    fn resume_position_for(&mut self, item: &QueueItem) -> Ms {
+        if let Some((_, p)) = self
+            .playback
+            .restore_position
+            .take_if(|(k, _)| *k == item.key)
+        {
+            return p;
+        }
+        if self.playback.doc_key.as_ref() == Some(&item.key) {
+            self.playback.position_ms
+        } else {
+            0
+        }
+    }
+
+    /// Stop driving the backend but keep rendering the current item: used
+    /// when transport moves to another device. Clears the backend key so
+    /// late reports for the old item no longer pass as ours.
+    pub(crate) fn render_only(&mut self) {
+        if self.playback.playing {
+            self.set_playing(false);
+        }
+        if self.playback.loaded {
+            if let Err(e) = self.backend.stop() {
+                self.log("debug", format!("stop: {e}"));
+            }
+        }
+        self.playback.loaded = false;
+        self.playback.playing = false;
+        self.playback.buffering = false;
+        self.playback.backend_key = None;
+        self.playback.next = None;
+        self.playback.next_doc_key = None;
+        self.playback.awaiting_transition = false;
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
@@ -427,16 +465,16 @@ impl Actor {
     }
 
     pub(crate) fn seek_to(&mut self, position_ms: Ms) {
-        if !self.playback.loaded {
-            self.playback.position_ms = position_ms;
-            return;
-        }
         let cap = self.playback.duration_ms();
         let position_ms = if cap > 0 {
             position_ms.min(cap)
         } else {
             position_ms
         };
+        if !self.playback.loaded {
+            self.playback.position_ms = position_ms;
+            return;
+        }
         self.playback.position_ms = position_ms;
         self.playback.position_at = self.now();
         if let Err(e) = self.backend.seek(position_ms) {
@@ -751,6 +789,14 @@ impl Actor {
                     // across a handoff) before submitting.
                     self.playback.scrobbled = true;
                     let started_at = self.playback.started_at;
+                    if self.engine.is_none() {
+                        // No session to ask (between servers): nobody else
+                        // could have scrobbled this play.
+                        self.pending_submits
+                            .insert((track_id.clone(), started_at.to_bits()), played_ms);
+                        self.on_scrobble_verdict(track_id, started_at, true);
+                        continue;
+                    }
                     self.pending_submits
                         .insert((track_id.clone(), started_at.to_bits()), played_ms);
                     self.stamp();
@@ -804,14 +850,15 @@ impl Actor {
             }
             self.schedule_flush();
         } else {
-            // Already scrobbled by the device that handed over (or scrobbling
-            // is off): it still counts as a local play.
+            // Already scrobbled by the device that handed over (`!allowed`),
+            // or scrobbling is off here: it still counts as a local play, and
+            // is only marked scrobbled when a device actually submitted it.
             if let Err(e) = self.db.record_play(
                 &server_id,
                 &track_id,
                 started_local,
                 played_ms,
-                allowed,
+                !allowed,
                 &self.cfg.device_id,
             ) {
                 self.log("warn", format!("record play: {e}"));
@@ -824,6 +871,7 @@ impl Actor {
         });
     }
 
+    #[cfg(feature = "sim")]
     pub(crate) fn scrobble_command(
         &mut self,
         track_id: TrackId,

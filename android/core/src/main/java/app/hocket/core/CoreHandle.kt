@@ -22,9 +22,16 @@ interface CoreHandle {
     /** Async request/response. */
     suspend fun query(query: Query): QueryResult
 
-    /** Every event the core emits, on an unspecified thread. Replays nothing; call [Command.RequestSnapshot]. */
+    /**
+     * Every event the core emits, on an unspecified thread, in order and without loss (the native
+     * seam buffers without bound). Replays nothing: subscribe before dispatching `Start` or
+     * [Command.RequestSnapshot] (e.g. `launch(start = CoroutineStart.UNDISPATCHED)`).
+     */
     val events: SharedFlow<Event>
 
-    /** Stop the core. The handle is unusable afterwards. */
+    /**
+     * Flush and stop the core. The handle is unusable afterwards. May block for the duration of the
+     * flush (bounded): call it from a worker thread, never from the main thread.
+     */
     fun close()
 }

@@ -90,6 +90,7 @@ class RealCoreEndToEndTest {
     @After
     fun tearDown() {
         core?.close()
+        CoreHost.credentials = null
         scope.cancel()
         if (::server.isInitialized) server.stop()
         if (::dataDir.isInitialized) dataDir.deleteRecursively()
@@ -230,10 +231,78 @@ class RealCoreEndToEndTest {
         // The install-time ServersChanged carries the persisted capabilities; the fresh probe follows.
         withTimeout(20_000) { while (!server.calls.contains("ping")) kotlinx.coroutines.delay(50) }
         assertTrue("the replayed AddServer probed the server again", server.calls.contains("ping"))
-        replay.cancel()
-        // A pruned server list drops the stored login.
-        store.retainOnly(emptyList())
+        withTimeout(20_000) { while (!CoreHost.credentialsReplayed.value) kotlinx.coroutines.delay(25) }
+        assertTrue("the shell gate sees the login", CoreHost.hasLogin(probed.data.servers[0], CoreHost.logins.value))
+
+        // RequestSnapshot (every UI attach, every service reconnect) re-emits Started: no second replay, no second probe.
+        val pings = server.calls.count { it == "ping" }
+        val startedBefore = events.count { it is Event.Started }
+        second.dispatch(Command.RequestSnapshot)
+        withTimeout(20_000) { while (events.count { it is Event.Started } <= startedBefore) kotlinx.coroutines.delay(25) }
+        kotlinx.coroutines.delay(750)
+        assertEquals("a second Started must not replay AddServer", pings, server.calls.count { it == "ping" })
+
+        // Sign-out through the shared helper: the login is gone before RemoveServer, and the Started the
+        // core emits while clearing (before ServersChanged{[]}) must not resurrect the server.
+        CoreHost.credentials = store
+        events.clear()
+        CoreHost.removeServer(second::dispatch, probed.data.servers[0])
+        assertTrue("credential removed synchronously", store.all().isEmpty())
+        waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isEmpty() } }
+        kotlinx.coroutines.delay(750)
+        assertEquals("nothing re-added the server", pings, server.calls.count { it == "ping" })
+        assertTrue(events.none { it is Event.ServersChanged && it.data.servers.isNotEmpty() })
         assertTrue(store.all().isEmpty())
+        replay.cancel()
+        CoreHost.credentials = null
+    }
+
+    @Test
+    fun offlineStartInstallsThePersistedServerAndReprobesWhenOnline() = runBlocking {
+        // First run, online: the server is persisted with its capabilities.
+        val store = InMemoryCredentialStore()
+        store.save(ServerCredential(server.baseUrl, "alice", "secret", "Fake"))
+        val first = startCore()
+        first.dispatch(Command.Start)
+        waitFor { it as? Event.Started }
+        first.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
+        waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }
+        first.close()
+        core = null
+        events.clear()
+
+        // Second run with the server down (design: "keeps working when the network doesn't").
+        val port = server.port
+        server.stop()
+        val second = startCore()
+        val replay = scope.launch { CoreHost.replayCredentials(second, store) }
+        second.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Offline, false, null)))
+        second.dispatch(Command.Start)
+        val started = waitFor { it as? Event.Started }
+        assertEquals(1, started.data.snapshot.servers.size)
+        assertFalse(started.data.snapshot.servers[0].reachable)
+        // Contract #2: the replayed AddServer for the persisted server installs the client at once
+        // from the persisted capabilities (reachable=false), so downloads play offline; the failed
+        // probe is an Error + toast only and the server stays installed.
+        val installed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() } }
+        assertFalse(installed.data.servers[0].reachable)
+        assertTrue("persisted capabilities are kept", installed.data.servers[0].capabilities.meetsFloor)
+        withTimeout(20_000) { while (!CoreHost.credentialsReplayed.value) kotlinx.coroutines.delay(25) }
+        assertTrue("the shell gate: a server with a login", CoreHost.hasLogin(installed.data.servers[0], CoreHost.logins.value))
+        val err = waitFor { e -> (e as? Event.Error)?.takeIf { it.data.kind == app.hocket.core.api.ErrorKind.Network } }
+        assertNotNull(err)
+        assertTrue("a failed probe leaves the server installed", events.none { it is Event.ServersChanged && it.data.servers.isEmpty() })
+        assertTrue("a network error must not touch the stored login", store.all().size == 1)
+
+        // Back online on the same address: the core re-probes the unreachable server on its own; the
+        // Android side only reports connectivity (NetworkMonitor -> SetNetworkState).
+        server = FakeNavidrome(port = port).also { it.start() }
+        events.clear()
+        second.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Wifi, false, "test")))
+        val reprobed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable } } }
+        assertEquals("alice", reprobed.data.servers[0].username)
+        assertTrue("the re-probe hit the server", server.calls.contains("ping"))
+        replay.cancel()
     }
 
     @Test

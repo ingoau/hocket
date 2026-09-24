@@ -10,7 +10,7 @@
 //! | `Command::SetSetting` / `ResetSetting` | [`Settings::set_json`] / [`Settings::reset`] → the `api::Setting` to emit |
 //! | `Query::Settings` / snapshot | [`Settings::to_api`] |
 //! | Sync: what to send, what to accept | [`Settings::synced_settings`], [`Settings::merge_remote`]; pure [`merge`] |
-//! | Config backup | [`build_document`], [`to_json`], [`parse_document`] (migrates), [`Settings::apply_settings`] |
+//! | Config backup | [`build_document`], [`to_json`], [`parse_document`] (migrates), [`Settings::import_settings`] (→ [`ImportOutcome`]; timestamps clamped to now, device-local keys opt-in, changed synced keys to broadcast) |
 //! | Key constants | [`keys`] |
 //! | Labels/descriptions | [`strings`] |
 //!
@@ -339,36 +339,83 @@ impl Settings {
             .collect()
     }
 
-    /// Applies settings from a config document (import). Every valid entry
-    /// is set with its own timestamp; invalid or unknown ones are skipped and
-    /// reported. Returns `(applied keys, skipped keys)`.
+    /// Applies settings from a config document (import), device-local keys
+    /// included (a same-device restore). Returns `(applied keys, skipped
+    /// keys)`. See [`Settings::import_settings`] for the scoped variant the
+    /// actor should prefer; timestamps are clamped the same way.
     pub fn apply_settings(
         &mut self,
         settings: &[Setting],
         now_ms: f64,
     ) -> (Vec<String>, Vec<String>) {
-        let mut applied = Vec::new();
-        let mut skipped = Vec::new();
+        let out = self.import_settings(settings, now_ms, true);
+        (out.applied, out.skipped)
+    }
+
+    /// Applies settings from a config document (import).
+    ///
+    /// - Every valid entry is set with its document timestamp clamped to
+    ///   `now_ms` (a hand-edited `updatedAt` far in the future would
+    ///   otherwise win every future LWW merge on every device); entries
+    ///   without a timestamp get `now_ms`.
+    /// - Invalid or unknown entries are skipped and reported.
+    /// - Device-local keys (see [`registry::REGISTRY`], scope
+    ///   `DeviceLocal`: audio/output device, transcoding profiles, storage
+    ///   budgets, `connect.*`, display accent/theme, battery, shortcuts,
+    ///   `sync.enabled`, `lyrics.external.enabled`, …) describe *this*
+    ///   device and are only imported when `include_device_local`; otherwise
+    ///   they are listed in `skipped_device_local`.
+    /// - `changed_synced` lists the account-synced keys whose effective value
+    ///   changed, for the actor to broadcast (`Input::SettingChanged`) so
+    ///   peers learn about the import instead of reverting it on merge.
+    pub fn import_settings(
+        &mut self,
+        settings: &[Setting],
+        now_ms: f64,
+        include_device_local: bool,
+    ) -> ImportOutcome {
+        let mut out = ImportOutcome::default();
         for s in settings {
+            let scope = lookup(&s.key).map(|d| d.scope);
+            if !include_device_local && scope == Some(SettingScope::DeviceLocal) {
+                out.skipped_device_local.push(s.key.clone());
+                continue;
+            }
             let Ok(value) = serde_json::from_str::<Value>(&s.value) else {
-                skipped.push(s.key.clone());
+                out.skipped.push(s.key.clone());
                 continue;
             };
-            match self.set_value(
-                &s.key,
-                value,
-                if s.updated_at > 0.0 {
-                    s.updated_at
-                } else {
-                    now_ms
-                },
-            ) {
-                Ok(_) => applied.push(s.key.clone()),
-                Err(_) => skipped.push(s.key.clone()),
+            let before = self.get(&s.key);
+            let at = if s.updated_at > 0.0 {
+                s.updated_at.min(now_ms)
+            } else {
+                now_ms
+            };
+            match self.set_value(&s.key, value, at) {
+                Ok(_) => {
+                    if scope == Some(SettingScope::AccountSynced) && self.get(&s.key) != before {
+                        out.changed_synced.push(s.key.clone());
+                    }
+                    out.applied.push(s.key.clone());
+                }
+                Err(_) => out.skipped.push(s.key.clone()),
             }
         }
-        (applied, skipped)
+        out
     }
+}
+
+/// What [`Settings::import_settings`] did.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportOutcome {
+    /// Keys set from the document.
+    pub applied: Vec<String>,
+    /// Unknown keys and invalid values.
+    pub skipped: Vec<String>,
+    /// Device-local keys left alone (`include_device_local == false`).
+    pub skipped_device_local: Vec<String>,
+    /// Account-synced keys whose value changed: broadcast these.
+    pub changed_synced: Vec<String>,
 }
 
 /// Pure last-write-wins merge of account-synced settings. Local entries are

@@ -145,7 +145,7 @@ impl Actor {
                 self.emit_media_session();
             }
             keys::SYNC_ENABLED => {
-                if self.settings.sync_enabled() {
+                if self.settings.sync_enabled() && self.settings_corrupt.is_none() {
                     for s in self.settings.synced_settings() {
                         self.queue_input(Input::SettingChanged(s));
                     }

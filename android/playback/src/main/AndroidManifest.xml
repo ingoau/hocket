@@ -22,12 +22,9 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
-        <receiver
-            android:name="androidx.media.session.MediaButtonReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON" />
-            </intent-filter>
-        </receiver>
+        <!-- Media buttons: Media3 declares its own androidx.media3.session.MediaButtonReceiver (it
+             FGS-starts the service only for a PLAY key while nothing plays). The legacy
+             androidx.media.session.MediaButtonReceiver must not be declared as well: exported with a
+             MEDIA_BUTTON filter, it let any app start playback here with an arbitrary key event. -->
     </application>
 </manifest>

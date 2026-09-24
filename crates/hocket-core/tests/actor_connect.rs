@@ -223,3 +223,80 @@ async fn session_undo_is_shared_but_only_the_author_can_undo() {
     assert!(ub.history.iter().any(|e| e.device_id == a.device_id));
     assert!(a.snapshot().await.undo.can_undo);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+
+    // a is 90 s into t0 when b takes over.
+    TestCore::run_all_for(&[&a, &b], 90_000.0).await;
+    a.run(Command::OpenHandoffPicker).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    a.run(Command::HandoffTo {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    // Losing the lease stops a's backend outright: nothing stays loaded
+    // (no held output device), and late reports for t0 are not ours.
+    assert!(!a.backend.is_playing());
+    assert!(
+        a.backend.current().is_none(),
+        "a's backend was stopped, not just paused"
+    );
+    assert!(a
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, hocket_core::audio::scripted::ScriptedCall::Stop)));
+    let a_before = a.backend.log().len();
+    a.run(Command::BackendReport {
+        report: BackendReport::Playing {
+            key: b.queue().await.current.unwrap().item.key,
+            position_ms: 95_000,
+        },
+    })
+    .await;
+    assert!(
+        !a.transport().await.position.is_playing || a.backend.log().len() == a_before,
+        "a stale report for the released item does not make a look like the player"
+    );
+
+    // b skips to t1 and stops: nobody owns transport.
+    b.run(Command::Next).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t1"));
+    b.run(Command::Stop).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.snapshot().await.transport.lease.owner.is_none());
+
+    // a presses play: t1 starts from the top, not 90 s in (a's stale t0 position).
+    a.run(Command::Play).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+    let (key, pos) = a.backend.current().unwrap();
+    assert_eq!(key, a.queue().await.current.unwrap().item.key);
+    assert!(pos < 5_000, "t1 started at {pos} ms");
+    let last_load = a
+        .backend
+        .log()
+        .into_iter()
+        .rev()
+        .find_map(|c| match c {
+            hocket_core::audio::scripted::ScriptedCall::Load { position_ms, .. } => Some(position_ms),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_load, 0);
+}

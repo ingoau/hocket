@@ -1,8 +1,11 @@
 package app.hocket
 
 import android.app.Application
+import androidx.lifecycle.ProcessLifecycleOwner
 import app.hocket.core.CoreHandle
 import app.hocket.core.client.CoreClient
+import app.hocket.playback.CoreHost
+import app.hocket.playback.ForegroundBinder
 import app.hocket.playback.PlaybackServiceConnection
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
@@ -15,12 +18,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import okio.Path.Companion.toOkioPath
 
 /**
- * Process-wide wiring: binds to the playback service (which owns the core) and builds the one
- * [CoreClient] the UI reads. Screens never see a `CoreHandle` directly.
+ * Process-wide wiring: binds to the playback service (which owns the core) while any UI is started
+ * and builds the one [CoreClient] the UI reads. Screens never see a `CoreHandle` directly.
  */
 class HocketApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -35,9 +39,14 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         connection = PlaybackServiceConnection(this)
         scope.launch {
-            connection.core.collect { handle -> attach(handle) }
+            // The client exists for a handle the service delivered that CoreHost still runs: the
+            // connection keeps the handle across an unbind, CoreHost drops it when the service stops.
+            combine(connection.core, CoreHost.handle) { delivered, live -> delivered?.takeIf { it === live } }
+                .collect { handle -> attach(handle) }
         }
-        connection.bind()
+        // Bound only while UI is visible (never from here): an idle service can then stop, and the
+        // process can go after the task is removed. Media3 keeps it alive while playing.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(ForegroundBinder(connection))
     }
 
     /** Swap in a different core (UI tests). */

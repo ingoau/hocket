@@ -690,7 +690,21 @@ impl JobQueue {
         let q = self.clone();
         let fut = runner.run(ctx);
         tokio::spawn(async move {
-            let result = fut.await;
+            // A panicking runner must still release its slot and finish the
+            // row, or the job spins forever and its kind never runs again.
+            use futures::FutureExt;
+            let result = match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+                Ok(r) => r,
+                Err(payload) => {
+                    let msg = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    tracing::error!(job = id, panic = msg, "job runner panicked");
+                    Err(JobError::Failed(format!("panicked: {msg}")))
+                }
+            };
             drop(permit);
             q.finish(&id, result);
         });
@@ -763,7 +777,10 @@ impl JobQueue {
         self.inner.notify.notify_one();
     }
 
-    /// Delete terminal jobs older than retention (housekeeping).
+    /// Delete terminal jobs (`done`/`cancelled`/`failed`) older than the
+    /// retention (`JobQueue::retention_ms`, default 24 h), keeping any a
+    /// live problem still refers to. Call from periodic housekeeping
+    /// alongside `Outbox::prune`; returns the number removed.
     pub fn prune(&self) -> DbResult<usize> {
         let cutoff = self.inner.clock.now_ms() - self.inner.retention_ms;
         self.inner.db.with_tx(|tx| {
@@ -1032,6 +1049,45 @@ mod tests {
         q.add_problem(None, "x", None, None).unwrap();
         q.add_problem(None, "y", None, None).unwrap();
         assert_eq!(q.dismiss_all_problems().unwrap(), 2);
+    }
+
+    /// M5: a runner that panics finishes the job as failed and frees its
+    /// slot; the kind keeps working afterwards.
+    #[tokio::test]
+    async fn panicking_runner_fails_the_job_and_frees_the_slot() {
+        let q = queue();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        q.register(
+            JobKind::LibrarySync,
+            1,
+            Arc::new(
+                move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                    let n = c.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        let _ = ctx;
+                        if n == 0 {
+                            panic!("converter choked on odd server data");
+                        }
+                        Ok(())
+                    })
+                },
+            ),
+        );
+        let bad = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync"))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        let j = q.job(&bad).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Failed);
+        assert!(!q.has_active(JobKind::LibrarySync).unwrap());
+        assert!(q.inner.running.lock().is_empty());
+        let good = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync again"))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&good).unwrap().unwrap().state, JobState::Done);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

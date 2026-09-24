@@ -17,10 +17,29 @@ use crate::subsonic::auth::{self, AuthMode};
 use crate::subsonic::{Client, ClientConfig, ReqwestTransport, SubsonicApi};
 
 /// Deterministic server id from the identity the device authenticated with.
-pub(crate) fn server_id_for(url: &str, username: &str) -> String {
+pub fn server_id_for(url: &str, username: &str) -> String {
     use md5::{Digest, Md5};
     let d = Md5::digest(scope_key(url, username).as_bytes());
     hex::encode(&d[..8])
+}
+
+/// Why a server URL was rejected by [`validate_server_url`].
+pub(crate) fn validate_server_url(url: &str) -> Result<url::Url, String> {
+    let base = url::Url::parse(url).map_err(|e| e.to_string())?;
+    if base.cannot_be_a_base() {
+        return Err("not an http(s) address".into());
+    }
+    match base.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("unsupported scheme {other:?}; use http or https")),
+    }
+    if base.host_str().is_none_or(str::is_empty) {
+        return Err("no host".into());
+    }
+    if !base.username().is_empty() || base.password().is_some() {
+        return Err("credentials belong in the username and password fields, not the URL".into());
+    }
+    Ok(base)
 }
 
 impl Actor {
@@ -28,10 +47,10 @@ impl Actor {
         &mut self,
         url: String,
         username: String,
-        password: String,
+        password: Secret,
         name: Option<String>,
     ) {
-        let base = match url::Url::parse(&url) {
+        let base = match validate_server_url(&url) {
             Ok(u) => u,
             Err(e) => {
                 self.toast(format!("Invalid server URL: {e}"), None);
@@ -58,28 +77,46 @@ impl Actor {
             base,
             AuthMode::Password {
                 username: username.clone(),
-                password: crate::subsonic::Credential::new(password.clone()),
+                password: crate::subsonic::Credential::new(password.expose()),
             },
         );
         let client = Arc::new(Client::new(cfg, transport));
-        let info = match &self.server {
-            Some(s) if s.info.id == id => {
-                let mut i = s.info.clone();
-                i.name = name;
-                i
-            }
-            _ => ServerInfo {
-                id: id.clone(),
-                url: url.clone(),
-                username: username.clone(),
-                name,
-                capabilities: ServerCapabilities::default(),
-                last_sync: None,
-                reachable: false,
-            },
+        let credential = wire_credential(&url, &username, password.expose());
+        // A server this device already authenticated with (persisted row,
+        // capabilities known): install it now so downloads play offline, and
+        // verify in the background. A failed probe keeps it installed.
+        let persisted = match &self.server {
+            Some(s) if s.info.id == id => Some(s.info.clone()),
+            _ => self
+                .db
+                .servers()
+                .ok()
+                .and_then(|list| list.into_iter().find(|s| s.id == id)),
         };
-        let credential = wire_credential(&url, &username, &password);
-        // Verify first: the server is only persisted, announced and synced
+        if let Some(mut info) = persisted {
+            info.name = name;
+            info.reachable = false;
+            self.pending_servers.remove(&id);
+            self.install_server(
+                info,
+                client.clone() as Arc<dyn SubsonicApi>,
+                Some(client),
+                credential,
+                false,
+            );
+            self.probe_server(&id);
+            return;
+        }
+        let info = ServerInfo {
+            id: id.clone(),
+            url: url.clone(),
+            username: username.clone(),
+            name,
+            capabilities: ServerCapabilities::default(),
+            last_sync: None,
+            reachable: false,
+        };
+        // Verify first: a new server is only persisted, announced and synced
         // once the probe accepts the credentials.
         self.pending_servers.insert(
             id.clone(),
@@ -117,7 +154,7 @@ impl Actor {
             reachable: true,
         };
         let credential = wire_credential(&preset.url, &username, &preset.password);
-        self.install_server(info, preset.api, None, credential);
+        self.install_server(info, preset.api, None, credential, true);
     }
 
     fn install_server(
@@ -126,6 +163,7 @@ impl Actor {
         api: Arc<dyn SubsonicApi>,
         client: Option<Arc<Client>>,
         credential: WireCredential,
+        reachable: bool,
     ) {
         let replaced = self.server.as_ref().is_some_and(|s| s.info.id != info.id);
         if replaced {
@@ -143,7 +181,7 @@ impl Actor {
             _ => ServerState::new(info.clone()),
         };
         state.info = info;
-        state.info.reachable = true;
+        state.info.reachable = reachable;
         state.api = Some(api.clone());
         state.client = client;
         state.credential = Some(credential.clone());
@@ -223,7 +261,7 @@ impl Actor {
                 }
             });
         }
-        self.emit_everything();
+        self.emit_everything(false);
     }
 
     pub(crate) fn probe_server(&mut self, server_id: &str) {
@@ -264,6 +302,7 @@ impl Actor {
                         client.clone() as Arc<dyn SubsonicApi>,
                         Some(client),
                         pending.credential,
+                        true,
                     );
                 }
                 Err((kind, e)) => self.probe_failed(kind, e),
@@ -606,6 +645,16 @@ impl Actor {
             self.last_outbox_retry = self.now();
             self.schedule_flush();
             self.maybe_start_sync(false, false);
+            // A server installed offline (or whose last probe failed) is
+            // verified again now that there is a network.
+            if let Some(id) = self
+                .server
+                .as_ref()
+                .filter(|s| !s.info.reachable && !s.probing && s.client.is_some())
+                .map(|s| s.info.id.clone())
+            {
+                self.probe_server(&id);
+            }
         }
         // The stream URL may change with the network's transcoding profile.
         if self.playback.loaded && self.owns_transport() {
@@ -624,5 +673,31 @@ fn wire_credential(url: &str, username: &str, password: &str) -> WireCredential 
         api_key: None,
         client: auth::CLIENT_NAME.to_string(),
         api_version: auth::API_VERSION.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::validate_server_url;
+
+    #[test]
+    fn only_plain_http_urls_with_a_host_are_accepted() {
+        assert!(validate_server_url("https://music.example/").is_ok());
+        assert!(validate_server_url("http://192.168.1.10:4533").is_ok());
+        assert!(validate_server_url("https://music.example/navidrome/").is_ok());
+        for bad in [
+            "mailto:x@y",
+            "data:text/plain,x",
+            "javascript:alert(1)",
+            "ftp://music.example/",
+            "ws://music.example/",
+            "http://alice:pw@music.example/",
+            "http://alice@music.example/",
+            "http:///rest",
+            "music.example",
+            "",
+        ] {
+            assert!(validate_server_url(bad).is_err(), "{bad}");
+        }
     }
 }

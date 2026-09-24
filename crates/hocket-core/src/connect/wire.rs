@@ -30,13 +30,18 @@ use typeshare::typeshare;
 use crate::api::{
     AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp,
     QueueKey, QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
-    TrackId, TransportLease, UndoEntry, PROTOCOL_MIN_VERSION, PROTOCOL_VERSION,
+    TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
-pub const PROTOCOL: u32 = PROTOCOL_VERSION;
+///
+/// History: 1 = initial; 2 = LAN rooms authenticate with
+/// [`Msg::Challenge`]/[`Msg::Proof`] and a `Hello` on the LAN never carries a
+/// credential. Version 1 peers are refused (they would hand a credential to
+/// any LAN host).
+pub const PROTOCOL: u32 = 2;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = PROTOCOL_MIN_VERSION;
+pub const PROTOCOL_MIN: u32 = 2;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -128,7 +133,7 @@ pub fn negotiate(their_min: u32, their_max: u32) -> Result<u32, WireError> {
 /// token+salt (or an API key when the server supports it), never a password.
 /// The coordinator forwards it once in a `ping` and forgets it.
 #[typeshare]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Credential {
     pub server_url: String,
@@ -142,6 +147,23 @@ pub struct Credential {
     pub client: String,
     /// Subsonic `v` parameter.
     pub api_version: String,
+}
+
+/// Never prints the token, salt or API key: this type travels inside `Msg`,
+/// engine inputs/outputs and room outputs, all of which get logged.
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
+        f.debug_struct("Credential")
+            .field("server_url", &self.server_url)
+            .field("username", &self.username)
+            .field("token", &redact(&self.token))
+            .field("salt", &redact(&self.salt))
+            .field("api_key", &redact(&self.api_key))
+            .field("client", &self.client)
+            .field("api_version", &self.api_version)
+            .finish()
+    }
 }
 
 impl Credential {
@@ -486,13 +508,30 @@ impl SessionOp {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Msg {
     // -- handshake ------------------------------------------------------
-    /// → room. First message on a connection.
+    /// Either direction, LAN rooms only. "Prove you know this scope's LAN
+    /// key": answer with [`Msg::Proof`] over this nonce. The joiner sends
+    /// one first (before anything else); the room answers with its own
+    /// proof and its own challenge. See [`crate::connect::auth`].
+    Challenge {
+        /// 32 random bytes, hex.
+        nonce: String,
+    },
+    /// Either direction, LAN rooms only. `mac` is
+    /// `HMAC-SHA256(lan_key, role || nonce || deviceId)` over the nonce the
+    /// other side issued, hex.
+    Proof {
+        device_id: DeviceId,
+        mac: String,
+    },
+    /// → room. First message on a connection (on the LAN: first after the
+    /// mutual proof).
     Hello {
         device: DeviceInfo,
         protocol_min: u32,
         protocol_max: u32,
         scope: String,
-        /// Present when the room verifies (hosted coordinator). Never stored.
+        /// Present only towards a hosted coordinator over TLS (the room
+        /// verifies it with one proxied ping). Never on the LAN, never stored.
         credential: Option<Credential>,
         session_id: Option<SessionId>,
         session_revision: u32,
@@ -725,6 +764,8 @@ pub enum Msg {
 impl Msg {
     /// Every tag this build understands (the `type` values [`Msg::name`] returns).
     pub const KNOWN: &'static [&'static str] = &[
+        "challenge",
+        "proof",
         "hello",
         "welcome",
         "refuse",
@@ -767,6 +808,8 @@ impl Msg {
     /// Short name for logs.
     pub fn name(&self) -> &'static str {
         match self {
+            Msg::Challenge { .. } => "challenge",
+            Msg::Proof { .. } => "proof",
             Msg::Hello { .. } => "hello",
             Msg::Welcome { .. } => "welcome",
             Msg::Refuse { .. } => "refuse",
@@ -902,7 +945,7 @@ mod tests {
             text.contains("\"data\":{\"epoch\":4,\"sent_at\":1"),
             "{text}"
         );
-        assert!(text.contains("\"protocolVersion\":1"));
+        assert!(text.contains(&format!("\"protocolVersion\":{PROTOCOL}")));
         let back = WireMessage::decode(&text).unwrap();
         assert_eq!(back, m);
     }
@@ -1013,10 +1056,43 @@ mod tests {
 
     #[test]
     fn negotiate_picks_highest_common_and_refuses_below_floor() {
-        assert_eq!(negotiate(1, 1).unwrap(), 1);
+        assert_eq!(negotiate(PROTOCOL_MIN, PROTOCOL_MIN).unwrap(), PROTOCOL_MIN);
         assert_eq!(negotiate(1, 9).unwrap(), PROTOCOL);
         assert!(negotiate(0, 0).is_err());
+        // version 1 peers (credential in every Hello) are refused
+        assert!(negotiate(1, 1).is_err());
         assert!(negotiate(PROTOCOL + 1, PROTOCOL + 5).is_err());
+    }
+
+    #[test]
+    fn credential_debug_redacts_secrets() {
+        let c = Credential {
+            server_url: "https://x".into(),
+            username: "u".into(),
+            token: Some("secret-token".into()),
+            salt: Some("secret-salt".into()),
+            api_key: Some("secret-key".into()),
+            client: "hocket".into(),
+            api_version: "1.16.1".into(),
+        };
+        let s = format!("{c:?}");
+        assert!(!s.contains("secret"), "{s}");
+        assert!(s.contains("<redacted>"));
+        let m = format!(
+            "{:?}",
+            Msg::Hello {
+                device: device("a"),
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL,
+                scope: "s".into(),
+                credential: Some(c),
+                session_id: None,
+                session_revision: 0,
+                held_epoch: None,
+                extra: HashMap::new(),
+            }
+        );
+        assert!(!m.contains("secret"), "{m}");
     }
 
     #[test]

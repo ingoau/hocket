@@ -67,6 +67,8 @@ impl ExternalBackend {
     }
 
     fn send(&self, command: BackendCommand) -> Result<(), BackendError> {
+        // `MediaSource`'s Debug strips the query string (auth token) from
+        // stream URLs, so this never logs a credential.
         tracing::trace!(target: "hocket::audio::external", ?command, "command");
         (self.commands)(command);
         Ok(())

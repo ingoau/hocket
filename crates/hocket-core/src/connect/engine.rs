@@ -21,7 +21,7 @@
 //! Ops are optimistic: applied locally at submission, confirmed by `OpAck`,
 //! rolled back on `OpReject` or when someone else's op commits first.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -30,12 +30,13 @@ use crate::api::{
     ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, Ms, PositionStamp, QueueKey,
     SavedQueue, SessionDocument, Setting, TrackId, TransportLease, TransportState, UndoEntry,
 };
+use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
 use crate::connect::discovery::{scope_hash, PeerAdvert};
 use crate::connect::election::{elect_id, Candidate};
 use crate::connect::lease::HeldLease;
 use crate::connect::replica::ReplicaExt;
-use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
+use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason,
@@ -83,6 +84,7 @@ pub type SyncBase = SyncPoint;
 pub struct EngineConfig {
     pub device: DeviceInfo,
     pub scope: String,
+    /// Sent only to a coordinator over TLS (see [`EngineConfig::allow_insecure_coordinator`]).
     pub credential: Option<Credential>,
     pub coordinator_url: Option<String>,
     /// `ConnectCoordinator` / `DisconnectCoordinator`.
@@ -96,6 +98,16 @@ pub struct EngineConfig {
     /// Require credential verification of inbound LAN peers (the host must
     /// answer `Output::VerifyCredential`).
     pub verify_lan_peers: bool,
+    /// The scope's shared LAN key from
+    /// [`auth::derive_lan_key`](crate::connect::auth::derive_lan_key). LAN
+    /// rooms are served and followed only with one: `None` means this
+    /// device never serves or follows LAN peers (it still advertises
+    /// nothing and refuses inbound sockets).
+    pub lan_key: Option<LanKey>,
+    /// Let the credential travel to a `ws://` coordinator on a private
+    /// (non-loopback) host: the `connect.allowInsecureCoordinator` setting.
+    /// A `ws://` coordinator on a public host is never used.
+    pub allow_insecure_coordinator: bool,
 }
 
 impl EngineConfig {
@@ -113,8 +125,31 @@ impl EngineConfig {
             upstream_idle_ms: DEFAULT_UPSTREAM_IDLE_MS,
             backoff: Backoff::default(),
             verify_lan_peers: false,
+            lan_key: None,
+            allow_insecure_coordinator: false,
         }
     }
+
+    fn room_lan_auth(&self) -> LanAuth {
+        match &self.lan_key {
+            Some(key) => LanAuth::Key {
+                key: key.clone(),
+                device_id: self.device.id.clone(),
+            },
+            None => LanAuth::Closed,
+        }
+    }
+}
+
+/// A `(track, startedAt)` pair this device knows was scrobbled, and by whom.
+/// Persist [`Engine::known_scrobbled`] and hand it back through
+/// [`Engine::restore_known_scrobbled`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownScrobble {
+    pub track_id: TrackId,
+    pub started_at: EpochMs,
+    pub device_id: DeviceId,
 }
 
 /// What the actor feeds the engine.
@@ -130,6 +165,10 @@ pub enum Input {
     DisconnectCoordinator,
     SetLanDiscovery(bool),
     SetCredential(Option<Credential>),
+    /// The scope's LAN key changed (password change); `None` closes the LAN.
+    SetLanKey(Option<LanKey>),
+    /// The `connect.allowInsecureCoordinator` setting changed.
+    SetAllowInsecureCoordinator(bool),
 
     // -- I/O reports -------------------------------------------------------
     /// The upstream socket requested by `Output::Connect` is open.
@@ -371,12 +410,27 @@ enum RemoteState {
     },
 }
 
+/// Where the mutual LAN proof with an upstream leader stands.
+#[derive(Debug, Clone, PartialEq)]
+struct LanHandshake {
+    /// The nonce we challenged the leader with.
+    our_nonce: String,
+    /// The leader answered it correctly.
+    leader_proven: bool,
+    /// The nonce the leader challenged us with.
+    their_nonce: Option<String>,
+    /// Our proof and Hello went out.
+    hello_sent: bool,
+}
+
 #[derive(Debug, Clone)]
 struct Remote {
     tier: ConnectionTier,
     candidates: Vec<String>,
     leader: Option<DeviceId>,
     state: RemoteState,
+    /// LAN tier only.
+    handshake: Option<LanHandshake>,
 }
 
 #[derive(Debug, Clone)]
@@ -496,6 +550,13 @@ pub struct Engine {
     settings: Vec<Setting>,
 
     lan_peers: Vec<PeerAdvert>,
+    /// LAN peers that failed the mutual proof (or refused us): ignored by
+    /// the election until their advert goes away.
+    lan_blocklist: BTreeSet<DeviceId>,
+    /// We followed a LAN leader while a coordinator is configured: that
+    /// leader carries the LAN session to the coordinator, so on the next
+    /// coordinator welcome we adopt without filing and without replaying.
+    lan_deferred: bool,
     last_known_lan: HashMap<DeviceId, String>,
     last_advert: Option<PeerAdvert>,
     last_advert_at: EpochMs,
@@ -515,6 +576,8 @@ impl std::fmt::Debug for Engine {
             .field("inbound", &self.inbound.len())
             .field("owns", &self.held.is_some())
             .field("detached", &self.detached)
+            .field("lan_deferred", &self.lan_deferred)
+            .field("lan_blocklist", &self.lan_blocklist)
             .field("lost_members_at", &self.lost_members_at)
             .field("deferred_scrobbles", &self.deferred_scrobbles.len())
             .field("scrobble_queries", &self.scrobble_queries.len())
@@ -543,6 +606,7 @@ impl Engine {
         let now = clock.now_ms();
         let mut room_cfg = RoomConfig::new(cfg.scope.clone());
         room_cfg.verify = cfg.verify_lan_peers;
+        room_cfg.lan_auth = cfg.room_lan_auth();
         room_cfg.session_id = Some(document.session_id.clone());
         let room = Room::new(room_cfg, clock.clone(), reducer.clone(), None);
         let mut e = Engine {
@@ -595,6 +659,8 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             lan_peers: vec![],
+            lan_blocklist: BTreeSet::new(),
+            lan_deferred: false,
             last_known_lan: HashMap::new(),
             last_advert: None,
             last_advert_at: 0.0,
@@ -626,6 +692,29 @@ impl Engine {
     /// Persist this next to the document.
     pub fn sync_base(&self) -> Option<&SyncBase> {
         self.sync_base.as_ref()
+    }
+
+    /// Every scrobble this device knows about; persist it with the sync
+    /// base so a restarted LAN leader still answers dedupe queries.
+    pub fn known_scrobbled(&self) -> Vec<KnownScrobble> {
+        self.known_scrobbled
+            .iter()
+            .map(|(track_id, started_at, device_id)| KnownScrobble {
+                track_id: track_id.clone(),
+                started_at: *started_at,
+                device_id: device_id.clone(),
+            })
+            .collect()
+    }
+
+    /// Restore what [`Engine::known_scrobbled`] returned before a restart
+    /// (call right after [`Engine::new`]). Seeds the embedded room's log.
+    pub fn restore_known_scrobbled(&mut self, known: Vec<KnownScrobble>) {
+        for k in known {
+            self.learn_scrobbled(&k.track_id, k.started_at, &k.device_id);
+        }
+        let known = self.known_scrobbled.clone();
+        self.room.seed_scrobbles(&known);
     }
 
     pub fn owns_transport(&self) -> bool {
@@ -791,9 +880,11 @@ impl Engine {
         self.picker.is_some()
     }
 
-    /// Our mDNS record, once the listener has a port.
+    /// Our mDNS record, once the listener has a port (and only with a LAN
+    /// key: without one nobody could join us).
     pub fn advert(&self) -> Option<PeerAdvert> {
         let port = self.listener_port?;
+        self.cfg.lan_key.as_ref()?;
         Some(PeerAdvert {
             device_id: self.cfg.device.id.clone(),
             device_name: self.cfg.device.name.clone(),
@@ -834,6 +925,40 @@ impl Engine {
                 self.reevaluate();
             }
             Input::SetCredential(c) => self.cfg.credential = c,
+            Input::SetLanKey(key) => {
+                self.cfg.lan_key = key;
+                self.room.set_lan_auth(self.cfg.room_lan_auth());
+                self.lan_blocklist.clear();
+                // Inbound members were admitted under the old key.
+                let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+                for p in inbound {
+                    self.out.push(Output::WireOut {
+                        peer: p.clone(),
+                        msg: WireMessage::new(Msg::Bye {
+                            reason: "LAN key changed".into(),
+                        }),
+                    });
+                    self.out.push(Output::Disconnect { peer: p.clone() });
+                    let outs = self.room.handle(RoomInput::Disconnected(p));
+                    self.process_room_outputs(outs);
+                }
+                if matches!(
+                    self.remote,
+                    Some(Remote {
+                        tier: ConnectionTier::Lan,
+                        ..
+                    })
+                ) {
+                    self.drop_remote(None);
+                }
+                self.reevaluate();
+                self.emit_connection();
+            }
+            Input::SetAllowInsecureCoordinator(allow) => {
+                self.cfg.allow_insecure_coordinator = allow;
+                self.coordinator_failures = 0;
+                self.reevaluate();
+            }
             Input::Connected { peer, url } => self.on_connected(peer, url),
             Input::ConnectFailed { error } => self.on_upstream_lost(Some(error)),
             Input::Disconnected { peer } => self.on_disconnected(peer),
@@ -854,6 +979,7 @@ impl Engine {
             Input::PeerDiscovered(advert) => self.on_peer_discovered(advert),
             Input::PeerLost { device_id } => {
                 self.lan_peers.retain(|p| p.device_id != device_id);
+                self.lan_blocklist.remove(&device_id);
                 self.reevaluate();
             }
             Input::LocalOp { op } => self.on_local_op(op),
@@ -951,6 +1077,32 @@ impl Engine {
             }) => Some(peer.clone()),
             _ => None,
         }
+    }
+
+    /// The room we are attached to is the one whose revisions anchor
+    /// `sync_base`: the coordinator, or a LAN leader when no coordinator is
+    /// configured at all. While a coordinator exists, a LAN room is a
+    /// stopgap whose leader carries the session back to it, so followers
+    /// keep their coordinator sync point untouched.
+    fn records_sync_base(&self) -> bool {
+        match &self.remote {
+            Some(r) if self.is_connected() => {
+                r.tier == ConnectionTier::Coordinator || self.coordinator_target().is_none()
+            }
+            _ => false,
+        }
+    }
+
+    /// Attached to a LAN leader while a coordinator is configured.
+    fn lan_follower_of_stopgap(&self) -> bool {
+        matches!(
+            &self.remote,
+            Some(Remote {
+                tier: ConnectionTier::Lan,
+                ..
+            })
+        ) && self.is_connected()
+            && self.coordinator_target().is_some()
     }
 
     /// Whether the upstream we submit to is the one whose verdicts count for
@@ -1053,6 +1205,8 @@ impl Engine {
                 RoomOutput::ReplicaChanged => self
                     .out
                     .push(Output::ReplicaChanged(self.room.replica().clone())),
+                // Heartbeat-only: nothing worth persisting on a device.
+                RoomOutput::ReplicaTouched => {}
             }
         }
         if was_serving && !self.is_serving() {
@@ -1128,20 +1282,27 @@ impl Engine {
 
     // -- tier selection ------------------------------------------------------
 
+    /// The coordinator URL we may use: configured, enabled, and acceptable
+    /// for carrying the credential (`wss://`, or `ws://` on loopback, or a
+    /// private host with the insecure override).
     fn coordinator_target(&self) -> Option<String> {
         if !self.cfg.coordinator_enabled {
             return None;
         }
-        self.cfg.coordinator_url.clone()
+        let url = self.cfg.coordinator_url.clone()?;
+        auth::coordinator_url_check(&url, self.cfg.allow_insecure_coordinator)
+            .ok()
+            .map(|_| url)
     }
 
     fn elect_lan_leader(&self) -> Option<DeviceId> {
-        if !self.cfg.lan_enabled || self.lan_peers.is_empty() {
+        if !self.cfg.lan_enabled || self.cfg.lan_key.is_none() || self.lan_peers.is_empty() {
             return None;
         }
         let mut cands: Vec<Candidate> = self
             .lan_peers
             .iter()
+            .filter(|p| !self.lan_blocklist.contains(&p.device_id))
             .map(|p| Candidate {
                 device_id: p.device_id.clone(),
                 session_revision: p.session_revision,
@@ -1160,6 +1321,18 @@ impl Engine {
     fn reevaluate(&mut self) {
         let now = self.now_local_ms();
         let coordinator = self.coordinator_target();
+        if coordinator.is_none() && self.cfg.coordinator_enabled {
+            if let Some(url) = &self.cfg.coordinator_url {
+                if let Err(e) = auth::coordinator_url_check(url, self.cfg.allow_insecure_coordinator)
+                {
+                    let msg = format!("coordinator URL not used: {e}");
+                    if self.last_error.as_deref() != Some(msg.as_str()) {
+                        self.last_error = Some(msg.clone());
+                        self.log("warn", msg);
+                    }
+                }
+            }
+        }
         let leader = self.elect_lan_leader();
         let lan_alternative = leader
             .as_ref()
@@ -1221,6 +1394,7 @@ impl Engine {
                         since: now,
                         attempt: 0,
                     },
+                    handshake: None,
                 });
                 self.out.push(Output::Connect { candidates });
                 self.emit_connection();
@@ -1242,6 +1416,21 @@ impl Engine {
     fn on_became_local(&mut self) {
         if self.remote.is_some() {
             return;
+        }
+        if self.lan_deferred {
+            // We followed a LAN leader that is gone: whatever the LAN did
+            // since our coordinator sync point is now ours to carry, and
+            // only a whole-document push can reproduce it.
+            self.lan_deferred = false;
+            let moved = self
+                .sync_base
+                .as_ref()
+                .map(|b| b.session_id != self.confirmed.session_id || b.revision != self.confirmed.revision)
+                .unwrap_or(false);
+            if moved {
+                self.unsynced_overflow = true;
+                self.unsynced.clear();
+            }
         }
         if self.detached || self.held_remote_epoch.is_some() {
             self.detached = false;
@@ -1391,15 +1580,151 @@ impl Engine {
             attempt,
         };
         if let Some(l) = &r.leader {
-            self.last_known_lan.insert(l.clone(), url);
+            self.last_known_lan.insert(l.clone(), url.clone());
         }
-        let credential = self.cfg.credential.clone();
-        let hello = self.hello_msg(credential);
+        let tier = r.tier;
         self.last_upstream_msg_at = now;
-        self.out.push(Output::WireOut {
-            peer,
-            msg: WireMessage::new(hello),
-        });
+        match tier {
+            ConnectionTier::Coordinator => {
+                // The credential goes to the coordinator only, and only when
+                // the URL passed `coordinator_url_check` (TLS, loopback, or
+                // the explicit insecure override on a private host).
+                let credential = if auth::coordinator_url_check(
+                    &url,
+                    self.cfg.allow_insecure_coordinator,
+                )
+                .is_ok()
+                {
+                    self.cfg.credential.clone()
+                } else {
+                    None
+                };
+                let hello = self.hello_msg(credential);
+                self.out.push(Output::WireOut {
+                    peer,
+                    msg: WireMessage::new(hello),
+                });
+            }
+            _ => {
+                // LAN: say nothing but a nonce until the leader proves it
+                // holds the scope's key. The Hello (and never a credential)
+                // follows its proof.
+                if self.cfg.lan_key.is_none() {
+                    self.out.push(Output::Disconnect { peer });
+                    self.drop_remote(Some("no LAN key".into()));
+                    self.emit_connection();
+                    return;
+                }
+                let nonce = auth::new_nonce();
+                if let Some(r) = &mut self.remote {
+                    r.handshake = Some(LanHandshake {
+                        our_nonce: nonce.clone(),
+                        leader_proven: false,
+                        their_nonce: None,
+                        hello_sent: false,
+                    });
+                }
+                self.out.push(Output::WireOut {
+                    peer,
+                    msg: WireMessage::new(Msg::Challenge { nonce }),
+                });
+            }
+        }
+    }
+
+    /// The LAN leader we are talking to failed the proof (or refused us):
+    /// forget it until its advert goes away and re-run the election.
+    fn reject_lan_leader(&mut self, reason: &str) {
+        let Some(r) = &self.remote else { return };
+        if r.tier != ConnectionTier::Lan {
+            return;
+        }
+        if let Some(l) = r.leader.clone() {
+            self.log(
+                "warn",
+                format!("LAN peer {l} rejected: {reason}; ignoring it until it goes away"),
+            );
+            self.lan_blocklist.insert(l);
+        }
+        self.drop_remote(Some(format!("LAN peer rejected: {reason}")));
+        self.reevaluate();
+        self.emit_connection();
+    }
+
+    /// Frames from a LAN upstream before our Hello went out: only the
+    /// leader's proof and challenge are acceptable. Returns `true` when the
+    /// frame was consumed here.
+    fn on_lan_handshake_frame(&mut self, msg: &Msg) -> bool {
+        let Some(Remote {
+            tier: ConnectionTier::Lan,
+            leader,
+            state: RemoteState::Handshaking { peer, .. },
+            handshake: Some(h),
+            ..
+        }) = &self.remote
+        else {
+            return false;
+        };
+        if h.hello_sent {
+            return false;
+        }
+        let peer = peer.clone();
+        let leader = leader.clone();
+        let mut h = h.clone();
+        match msg {
+            Msg::Proof { device_id, mac } => {
+                let key = self.cfg.lan_key.clone();
+                let ok = key
+                    .as_ref()
+                    .map(|k| {
+                        !h.leader_proven
+                            && Some(device_id) == leader.as_ref()
+                            && auth::verify(k, Role::Leader, &h.our_nonce, device_id, mac)
+                    })
+                    .unwrap_or(false);
+                if !ok {
+                    self.reject_lan_leader("its proof did not check out");
+                    return true;
+                }
+                h.leader_proven = true;
+            }
+            Msg::Challenge { nonce } => {
+                if !auth::nonce_valid(nonce) || h.their_nonce.is_some() {
+                    self.reject_lan_leader("bad challenge");
+                    return true;
+                }
+                h.their_nonce = Some(nonce.clone());
+            }
+            Msg::Refuse { .. } | Msg::Bye { .. } => {
+                // A refusal before we said anything means our keys differ.
+                self.reject_lan_leader("it refused our challenge");
+                return true;
+            }
+            other => {
+                self.reject_lan_leader(&format!("sent {} before proving itself", other.name()));
+                return true;
+            }
+        }
+        if h.leader_proven && !h.hello_sent {
+            if let (Some(theirs), Some(key)) = (h.their_nonce.clone(), self.cfg.lan_key.clone()) {
+                let me = self.cfg.device.id.clone();
+                let mac = auth::prove(&key, Role::Joiner, &theirs, &me);
+                self.out.push(Output::WireOut {
+                    peer: peer.clone(),
+                    msg: WireMessage::new(Msg::Proof { device_id: me, mac }),
+                });
+                let hello = self.hello_msg(None);
+                self.out.push(Output::WireOut {
+                    peer,
+                    msg: WireMessage::new(hello),
+                });
+                h.hello_sent = true;
+            }
+        }
+        if let Some(r) = &mut self.remote {
+            r.handshake = Some(h);
+        }
+        true
     }
 
     fn on_disconnected(&mut self, peer: PeerId) {
@@ -1474,7 +1799,7 @@ impl Engine {
         {
             return;
         }
-        if advert.protocol < PROTOCOL_MIN {
+        if advert.protocol < PROTOCOL_MIN || self.cfg.lan_key.is_none() {
             return;
         }
         match self
@@ -1519,6 +1844,9 @@ impl Engine {
     // -- upstream messages ----------------------------------------------------
 
     fn on_upstream_message(&mut self, msg: WireMessage, from_loopback: bool) {
+        if !from_loopback && self.on_lan_handshake_frame(&msg.msg) {
+            return;
+        }
         match msg.msg {
             Msg::Welcome {
                 session_clock_ms,
@@ -1532,6 +1860,20 @@ impl Engine {
             }
             Msg::Refuse { reason, message } => {
                 self.log("warn", format!("refused: {reason:?}: {message}"));
+                if reason == RefuseReason::Unauthorised
+                    && matches!(
+                        self.remote,
+                        Some(Remote {
+                            tier: ConnectionTier::Lan,
+                            ..
+                        })
+                    )
+                {
+                    // Our keys differ (a password changed somewhere): don't
+                    // hammer it, and let the election look elsewhere.
+                    self.reject_lan_leader("it rejected our proof");
+                    return;
+                }
                 let attempt_bump = if reason == RefuseReason::Unauthorised {
                     4
                 } else {
@@ -1808,6 +2150,8 @@ impl Engine {
                 }
             }
             Msg::Hello { .. }
+            | Msg::Challenge { .. }
+            | Msg::Proof { .. }
             | Msg::Op { .. }
             | Msg::SyncRequest
             | Msg::LeaseHeartbeat { .. }
@@ -1839,6 +2183,24 @@ impl Engine {
                 }
                 _ => return, // a stray welcome from a socket we no longer follow
             }
+        }
+        let via_coordinator = remote
+            && matches!(
+                &self.remote,
+                Some(Remote {
+                    tier: ConnectionTier::Coordinator,
+                    ..
+                })
+            );
+        // Followed a LAN leader while a coordinator is configured: it carries
+        // the LAN session back; we adopt the coordinator's word when we get
+        // there, filing and replaying nothing.
+        let deferred = remote && via_coordinator && self.lan_deferred;
+        if remote && !via_coordinator && self.coordinator_target().is_some() {
+            self.lan_deferred = true;
+        }
+        if via_coordinator {
+            self.lan_deferred = false;
         }
         self.upstream_ready = true;
         self.last_error = None;
@@ -1902,6 +2264,10 @@ impl Engine {
             if !remote {
                 // Our own room mirrors us; nothing to reconcile.
                 self.confirmed = self.doc.clone();
+            } else if deferred {
+                self.adopt(rd.clone(), DocChange::Sync);
+                self.unsynced.clear();
+                self.unsynced_overflow = false;
             } else if fast_forward {
                 if self.unsynced_overflow {
                     let doc = self.doc.clone();
@@ -1939,7 +2305,7 @@ impl Engine {
                 self.unsynced_overflow = false;
             }
         }
-        if remote {
+        if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
                 revision: self.confirmed.revision,
@@ -2168,12 +2534,12 @@ impl Engine {
             self.doc.revision = self.confirmed.revision;
             self.doc.updated_at = self.confirmed.updated_at;
         }
-        if self.is_connected() {
+        if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
                 revision,
             });
-        } else if self.sync_base.is_some() {
+        } else if self.sync_base.is_some() && !self.lan_follower_of_stopgap() {
             if self.unsynced.len() >= UNSYNCED_CAP {
                 self.unsynced_overflow = true;
                 self.unsynced.clear();
@@ -2214,7 +2580,7 @@ impl Engine {
             document: d,
             cause: DocChange::Rollback,
         });
-        if self.is_connected() {
+        if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
                 revision: current_revision,
@@ -2279,11 +2645,20 @@ impl Engine {
                     document: d,
                     cause: DocChange::Remote,
                 });
-                if self.is_connected() {
+                if self.records_sync_base() {
                     self.sync_base = Some(SyncPoint {
                         session_id: self.doc.session_id.clone(),
                         revision,
                     });
+                } else if self.remote.is_none()
+                    && self.sync_base.is_some()
+                    && device_id != self.cfg.device.id
+                {
+                    // Someone else's op landed in our own room (we serve the
+                    // LAN): our own op log no longer reproduces this state, so
+                    // the next fast-forward pushes the whole document.
+                    self.unsynced_overflow = true;
+                    self.unsynced.clear();
                 }
             }
             Err(e) => {
@@ -2308,7 +2683,7 @@ impl Engine {
         let d = self.doc.clone();
         self.out
             .push(Output::DocumentChanged { document: d, cause });
-        if self.is_connected() {
+        if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
                 revision: self.doc.revision,
@@ -2935,13 +3310,76 @@ mod tests {
         }
     }
 
+    fn key() -> LanKey {
+        auth::test_key(b"engine-test-key")
+    }
+
+    fn credential() -> Credential {
+        Credential {
+            server_url: "https://music.example".into(),
+            username: "u".into(),
+            token: Some("tok".into()),
+            salt: Some("salt".into()),
+            api_key: None,
+            client: "hocket".into(),
+            api_version: "1.16.1".into(),
+        }
+    }
+
     fn engine(id: &str) -> (Engine, Arc<TestClock>) {
         let clock = Arc::new(TestClock(AtomicU64::new(10_000)));
         let mut cfg = EngineConfig::new(dev(id), "scope");
         cfg.lan_enabled = false;
+        cfg.lan_key = Some(key());
+        cfg.credential = Some(credential());
         let doc = crate::session::new_document("scope", format!("sid-{id}"), 0.0);
         let e = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, None);
         (e, clock)
+    }
+
+    fn advert(id: &str, rev: u32) -> PeerAdvert {
+        PeerAdvert {
+            device_id: id.into(),
+            device_name: id.into(),
+            platform: Platform::Android,
+            scope_hash: scope_hash("scope"),
+            port: 5,
+            protocol: PROTOCOL,
+            session_revision: rev,
+            serving: false,
+            addresses: vec!["10.0.0.2".into()],
+        }
+    }
+
+    /// Play the leader side of the LAN handshake for an engine that just
+    /// connected upstream on `peer`; returns the engine's outputs after its
+    /// Hello went out.
+    fn lan_leader_proves(e: &mut Engine, peer: &str, leader: &str, key: &LanKey) -> Vec<Output> {
+        let outs = e.handle(Input::Connected {
+            peer: peer.into(),
+            url: "ws://10.0.0.2:5/".into(),
+        });
+        let w = wire_outs(&outs);
+        assert_eq!(w.len(), 1, "only a challenge goes out first: {w:?}");
+        let nonce = match &w[0].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("expected a challenge, got {other:?}"),
+        };
+        let mac = auth::prove(key, Role::Leader, &nonce, leader);
+        let outs = e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: leader.into(),
+                mac,
+            }),
+        });
+        assert!(wire_outs(&outs).is_empty());
+        e.handle(Input::WireIn {
+            peer: peer.into(),
+            msg: WireMessage::new(Msg::Challenge {
+                nonce: auth::new_nonce(),
+            }),
+        })
     }
 
     fn play_op() -> SessionOp {
@@ -3023,12 +3461,14 @@ mod tests {
             url: "wss://c/".into(),
         });
         let w = wire_outs(&outs);
-        assert!(matches!(&w[0], (p, Msg::Hello { session_revision: 1, .. }) if p == "up"));
+        assert!(
+            matches!(&w[0], (p, Msg::Hello { session_revision: 1, credential: Some(_), .. }) if p == "up")
+        );
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
             msg: WireMessage::new(Msg::Welcome {
                 session_clock_ms: 500_000.0,
-                accepted_protocol: 1,
+                accepted_protocol: PROTOCOL,
                 replica: None,
                 members: vec![],
                 extra: Default::default(),
@@ -3090,7 +3530,7 @@ mod tests {
             peer: "up".into(),
             msg: WireMessage::new(Msg::Welcome {
                 session_clock_ms: 10_000.0,
-                accepted_protocol: 1,
+                accepted_protocol: PROTOCOL,
                 replica,
                 members,
                 extra: Default::default(),
@@ -3181,7 +3621,7 @@ mod tests {
             peer: "up2".into(),
             msg: WireMessage::new(Msg::Welcome {
                 session_clock_ms: 100_000.0,
-                accepted_protocol: 1,
+                accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc)),
                 members: vec![],
                 extra: Default::default(),
@@ -3335,7 +3775,7 @@ mod tests {
             peer: "up2".into(),
             msg: WireMessage::new(Msg::Welcome {
                 session_clock_ms: 200_000.0,
-                accepted_protocol: 1,
+                accepted_protocol: PROTOCOL,
                 replica: Some(rep),
                 members: vec![dev("b")],
                 extra: Default::default(),
@@ -3707,17 +4147,6 @@ mod tests {
     fn lan_election_picks_leader_and_connects_or_serves() {
         let (mut e, _) = engine("m");
         e.handle(Input::SetLanDiscovery(true));
-        let advert = |id: &str, rev: u32| PeerAdvert {
-            device_id: id.into(),
-            device_name: id.into(),
-            platform: Platform::Android,
-            scope_hash: scope_hash("scope"),
-            port: 5,
-            protocol: 1,
-            session_revision: rev,
-            serving: false,
-            addresses: vec!["10.0.0.2".into()],
-        };
         // a peer with a higher revision wins: we connect to it
         let outs = e.handle(Input::PeerDiscovered(advert("z", 9)));
         assert!(outs.iter().any(
@@ -3752,15 +4181,37 @@ mod tests {
         foreign.scope_hash = "nope".into();
         e.handle(Input::PeerDiscovered(foreign));
         assert!(e.remote.is_none());
-        // inbound peer joins our room
+        // inbound peer joins our room: challenge, proof, then Hello
         e.handle(Input::ListenerStarted { port: 7 });
         e.handle(Input::PeerConnected { peer: "in1".into() });
+        let nonce = auth::new_nonce();
+        let outs = e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Challenge {
+                nonce: nonce.clone(),
+            }),
+        });
+        let w = wire_outs(&outs);
+        assert!(
+            matches!(&w[0], (p, Msg::Proof { device_id, mac }) if p == "in1" && device_id == "m" && auth::verify(&key(), Role::Leader, &nonce, "m", mac))
+        );
+        let their_nonce = match &w[1].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("expected a challenge, got {other:?}"),
+        };
+        e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: "q".into(),
+                mac: auth::prove(&key(), Role::Joiner, &their_nonce, "q"),
+            }),
+        });
         let outs = e.handle(Input::WireIn {
             peer: "in1".into(),
             msg: WireMessage::new(Msg::Hello {
                 device: dev("q"),
-                protocol_min: 1,
-                protocol_max: 1,
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL,
                 scope: "scope".into(),
                 credential: None,
                 session_id: None,
@@ -3777,6 +4228,408 @@ mod tests {
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::Advertise(Some(a)) if a.serving && a.port == 7)));
+        // a peer that skips the proof is refused
+        e.handle(Input::PeerConnected { peer: "in2".into() });
+        let outs = e.handle(Input::WireIn {
+            peer: "in2".into(),
+            msg: WireMessage::new(Msg::Hello {
+                device: dev("r"),
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL,
+                scope: "scope".into(),
+                credential: None,
+                session_id: None,
+                session_revision: 0,
+                held_epoch: None,
+                extra: Default::default(),
+            }),
+        });
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in2"
+            && matches!(
+                m,
+                Msg::Refuse {
+                    reason: RefuseReason::Unauthorised,
+                    ..
+                }
+            )));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Disconnect { peer } if peer == "in2")));
+    }
+
+    #[test]
+    fn lan_hello_never_carries_the_credential_and_waits_for_the_leaders_proof() {
+        let (mut e, _) = engine("m");
+        e.handle(Input::LocalOp { op: play_op() });
+        e.handle(Input::SetLanDiscovery(true));
+        e.handle(Input::PeerDiscovered(advert("z", 9)));
+        let outs = lan_leader_proves(&mut e, "up", "z", &key());
+        let w = wire_outs(&outs);
+        assert!(matches!(&w[0], (_, Msg::Proof { device_id, .. }) if device_id == "m"));
+        assert!(matches!(
+            &w[1],
+            (
+                _,
+                Msg::Hello {
+                    credential: None,
+                    session_revision: 1,
+                    ..
+                }
+            )
+        ));
+        assert_eq!(w.len(), 2);
+        // and the welcome attaches us as usual
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 10_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: None,
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(e.is_connected());
+        assert_eq!(e.lan_leader().map(String::as_str), Some("z"));
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::Op {
+                op: SessionOp::Replace { .. },
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn rogue_lan_leader_is_blocklisted_and_learns_nothing() {
+        let (mut e, _) = engine("m");
+        e.handle(Input::LocalOp { op: play_op() });
+        e.handle(Input::SetLanDiscovery(true));
+        // two peers: the rogue wins the election with a huge revision
+        e.handle(Input::PeerDiscovered(advert("honest", 3)));
+        let outs = e.handle(Input::PeerDiscovered(advert("rogue", u32::MAX)));
+        assert!(outs.iter().any(|o| matches!(o, Output::Connect { .. })));
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("rogue"));
+        let outs = e.handle(Input::Connected {
+            peer: "up".into(),
+            url: "ws://10.0.0.2:5/".into(),
+        });
+        let nonce = match &wire_outs(&outs)[0].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        // the rogue skips the proof and sends a Welcome to fish for the document
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 0.0,
+                accepted_protocol: PROTOCOL,
+                replica: None,
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(p, m)| p == "up" && !matches!(m, Msg::Bye { .. })));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Disconnect { peer } if peer == "up")));
+        assert!(!e.is_connected());
+        // the election moved on to the honest peer
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
+        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")));
+        // a rogue with the wrong key is rejected at the proof, likewise
+        e.handle(Input::PeerLost {
+            device_id: "rogue".into(),
+        });
+        e.handle(Input::PeerDiscovered(advert("rogue2", u32::MAX)));
+        let outs = e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "ws://10.0.0.2:5/".into(),
+        });
+        let nonce2 = match &wire_outs(&outs)[0].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        let wrong = auth::test_key(b"wrong");
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: "rogue2".into(),
+                mac: auth::prove(&wrong, Role::Leader, &nonce2, "rogue2"),
+            }),
+        });
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
+        assert!(e.lan_blocklist.contains("rogue2"));
+        assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
+        // a proof for the right key but the wrong identity is no better
+        let _ = nonce;
+    }
+
+    #[test]
+    fn without_a_lan_key_the_lan_is_closed() {
+        let (mut e, _) = engine("m");
+        e.handle(Input::SetLanKey(None));
+        e.handle(Input::SetLanDiscovery(true));
+        let outs = e.handle(Input::PeerDiscovered(advert("z", 9)));
+        assert!(!outs.iter().any(|o| matches!(o, Output::Connect { .. })));
+        assert!(e.remote.is_none());
+        e.handle(Input::ListenerStarted { port: 7 });
+        assert!(e.advert().is_none());
+        e.handle(Input::PeerConnected { peer: "in1".into() });
+        let outs = e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Challenge {
+                nonce: auth::new_nonce(),
+            }),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::Refuse { .. })));
+    }
+
+    #[test]
+    fn credential_goes_only_to_a_coordinator_over_tls_or_loopback() {
+        let hello_credential = |url: &str, allow: bool| -> Option<Option<Credential>> {
+            let (mut e, _) = engine("a");
+            e.cfg.allow_insecure_coordinator = allow;
+            let outs = e.handle(Input::SetCoordinatorUrl(Some(url.into())));
+            if !outs.iter().any(|o| matches!(o, Output::Connect { .. })) {
+                return None;
+            }
+            let outs = e.handle(Input::Connected {
+                peer: "up".into(),
+                url: url.into(),
+            });
+            wire_outs(&outs).into_iter().find_map(|(_, m)| match m {
+                Msg::Hello { credential, .. } => Some(credential),
+                _ => None,
+            })
+        };
+        assert!(matches!(hello_credential("wss://c/", false), Some(Some(_))));
+        assert!(matches!(
+            hello_credential("ws://127.0.0.1:7373/", false),
+            Some(Some(_))
+        ));
+        // a plaintext coordinator on a private host needs the explicit override
+        assert!(hello_credential("ws://192.168.1.2:7373/", false).is_none());
+        assert!(matches!(
+            hello_credential("ws://192.168.1.2:7373/", true),
+            Some(Some(_))
+        ));
+        // and a plaintext coordinator on the internet is never used
+        assert!(hello_credential("ws://c.example/", true).is_none());
+        let (mut e, _) = engine("a");
+        let outs = e.handle(Input::SetCoordinatorUrl(Some("ws://c.example/".into())));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Log { level: "warn", .. })));
+        assert!(e.connection_state().error.is_some());
+    }
+
+    #[test]
+    fn lan_follower_keeps_its_coordinator_sync_point_and_files_nothing() {
+        let (mut e, clock) = engine("b");
+        e.cfg.lan_enabled = true;
+        e.cfg.upstream_idle_ms = 1e12;
+        // synced with the coordinator at revision 2 of session "s"
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 2;
+        attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
+        assert_eq!(e.sync_base().unwrap().revision, 2);
+        // the coordinator goes away for good (two failed attempts) and a LAN leader appears
+        e.handle(Input::Disconnected { peer: "up".into() });
+        clock.0.store(20_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::ConnectFailed {
+            error: "down".into(),
+        });
+        clock.0.store(40_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::ConnectFailed {
+            error: "down".into(),
+        });
+        let outs = e.handle(Input::PeerDiscovered(advert("a", 2)));
+        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")));
+        lan_leader_proves(&mut e, "lan", "a", &key());
+        e.handle(Input::WireIn {
+            peer: "lan".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 40_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: Some(replica_with(room_doc.clone())),
+                members: vec![dev("a")],
+                extra: Default::default(),
+            }),
+        });
+        assert!(e.is_connected());
+        assert_eq!(e.lan_leader().map(String::as_str), Some("a"));
+        // the LAN session moves on: the leader's op, and one of ours
+        e.handle(Input::WireIn {
+            peer: "lan".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: play_op(),
+                revision: 3,
+                device_id: "a".into(),
+                op_id: "a-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+        e.handle(Input::LocalOp {
+            op: SessionOp::Next,
+        });
+        e.handle(Input::WireIn {
+            peer: "lan".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "b-2".into(),
+                revision: 4,
+            }),
+        });
+        assert_eq!(e.document().revision, 4);
+        // the coordinator point is untouched and nothing is queued for replay
+        assert_eq!(e.sync_base().unwrap().revision, 2);
+        assert!(!e.has_unsynced());
+        // the coordinator is back, still at revision 2: adopt it, file nothing;
+        // the leader brings the LAN state
+        clock.0.store(200_000, Ordering::SeqCst);
+        let outs = e.handle(Input::Tick);
+        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 200_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: Some(replica_with(room_doc)),
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::Op { .. })));
+        assert_eq!(e.document().revision, 2);
+        assert_eq!(e.connection_state().tier, ConnectionTier::Coordinator);
+    }
+
+    #[test]
+    fn lan_leader_pushes_the_whole_document_when_members_contributed() {
+        let (mut e, clock) = engine("a");
+        e.cfg.lan_enabled = true;
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 2;
+        attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
+        e.handle(Input::Disconnected { peer: "up".into() });
+        // we serve the LAN: a member's op lands in our room
+        e.handle(Input::ListenerStarted { port: 7 });
+        e.handle(Input::PeerConnected { peer: "in1".into() });
+        let nonce = auth::new_nonce();
+        let outs = e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Challenge { nonce }),
+        });
+        let theirs = match &wire_outs(&outs)[1].1 {
+            Msg::Challenge { nonce } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Proof {
+                device_id: "q".into(),
+                mac: auth::prove(&key(), Role::Joiner, &theirs, "q"),
+            }),
+        });
+        e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Hello {
+                device: dev("q"),
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL,
+                scope: "scope".into(),
+                credential: None,
+                session_id: None,
+                session_revision: 0,
+                held_epoch: None,
+                extra: Default::default(),
+            }),
+        });
+        assert!(e.is_serving());
+        e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::Op {
+                base_revision: 2,
+                op: play_op(),
+                device_id: "q".into(),
+                op_id: "q-1".into(),
+                epoch: None,
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+        assert_eq!(e.document().revision, 3);
+        assert!(e.unsynced_overflow);
+        // back on the coordinator, still at 2: one Replace carries the LAN state
+        clock.0.store(100_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 100_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: Some(replica_with(room_doc)),
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::Op {
+                base_revision: 2,
+                op: SessionOp::Replace { document },
+                ..
+            } if document.current.is_some()
+        )));
+    }
+
+    #[test]
+    fn known_scrobbles_round_trip_through_restore() {
+        let (mut e, _) = engine("a");
+        e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        let known = e.known_scrobbled();
+        assert_eq!(known.len(), 1);
+        let json = serde_json::to_string(&known).unwrap();
+        let back: Vec<KnownScrobble> = serde_json::from_str(&json).unwrap();
+        let (mut fresh, _) = engine("a");
+        fresh.restore_known_scrobbled(back);
+        // both the engine and its room remember the pair
+        let outs = fresh.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 1.0,
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
+        assert_eq!(fresh.room().replica().scrobbles.len(), 1);
     }
 
     #[test]

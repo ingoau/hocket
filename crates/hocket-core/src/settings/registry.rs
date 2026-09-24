@@ -78,6 +78,7 @@ pub mod keys {
     pub const SYNC_ENABLED: &str = "sync.enabled";
     pub const CONNECT_COORDINATOR_URL: &str = "connect.coordinatorUrl";
     pub const CONNECT_LAN_DISCOVERY: &str = "connect.lanDiscovery";
+    pub const CONNECT_ALLOW_INSECURE_COORDINATOR: &str = "connect.allowInsecureCoordinator";
     pub const STORAGE_WARN_THRESHOLD_BYTES: &str = "storage.warnThresholdBytes";
     pub const STORAGE_CACHE_MAX_BYTES: &str = "storage.cacheMaxBytes";
     pub const DOWNLOADS_TRANSCODE: &str = "downloads.transcode";
@@ -219,18 +220,15 @@ fn accent_valid(v: &Value) -> Result<(), String> {
     }
 }
 
+/// `connect.coordinatorUrl`: `wss://` anywhere, `ws://` only to a
+/// loopback or private host (and the engine sends the credential over
+/// `ws://` to a private host only when `connect.allowInsecureCoordinator`
+/// is on: see `connect::auth::coordinator_url_check`).
 fn url_valid(v: &Value) -> Result<(), String> {
     match v {
         Value::Null => Ok(()),
         Value::String(s) if s.is_empty() => Ok(()),
-        Value::String(s) => {
-            let u = url::Url::parse(s).map_err(|e| e.to_string())?;
-            if matches!(u.scheme(), "ws" | "wss" | "http" | "https") {
-                Ok(())
-            } else {
-                Err("expected an http(s) or ws(s) URL".into())
-            }
-        }
+        Value::String(s) => crate::connect::auth::coordinator_url_check(s, true),
         _ => Err("expected a URL".into()),
     }
 }
@@ -269,7 +267,10 @@ pub static REGISTRY: &[SettingDef] = &[
         || json!({ "default": { "format": null, "maxBitRate": null, "cannotDecode": [] }, "cellular": { "format": "opus", "maxBitRate": 128, "cannotDecode": [] } }),
         profiles_valid,
     ),
-    def(LYRICS_EXTERNAL_ENABLED, Synced, SettingKind::Bool, || {
+    // Device-local on purpose: fetching external lyrics reveals what you
+    // are listening to, so enabling it on one device must not silently
+    // enable it on a shared one (the provider choice stays synced).
+    def(LYRICS_EXTERNAL_ENABLED, Local, SettingKind::Bool, || {
         json!(false)
     }),
     def(
@@ -366,6 +367,12 @@ pub static REGISTRY: &[SettingDef] = &[
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
     json_def(CONNECT_COORDINATOR_URL, Local, || Value::Null, url_valid),
+    def(
+        CONNECT_ALLOW_INSECURE_COORDINATOR,
+        Local,
+        SettingKind::Bool,
+        || json!(false),
+    ),
     def(CONNECT_LAN_DISCOVERY, Local, SettingKind::Bool, || {
         json!(true)
     }),

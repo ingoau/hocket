@@ -15,6 +15,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Hocket"
         android:usesCleartextTraffic="true">
+        <!-- Cleartext stays allowed app-wide: the server address is the user's own (often a LAN
+             Navidrome on plain http) and a network security config cannot be scoped to a host that
+             is only known at runtime. The setup screen warns prominently for http:// addresses,
+             ExoPlayer never follows an https->http redirect (ExoBackend), and the core only attempts
+             the native-API password login over https or loopback. See android/README.md. -->
 
         <activity
             android:name="app.hocket.MainActivity"
