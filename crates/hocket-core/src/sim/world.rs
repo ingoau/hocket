@@ -1168,8 +1168,15 @@ impl World {
         for (t, s) in &reached {
             let n = self.server.count(t, *s as f64);
             if n != 1 {
+                let by: Vec<&str> = self
+                    .server
+                    .scrobbles
+                    .iter()
+                    .filter(|(t2, s2, _)| t2 == t && (s2 - *s as f64).abs() < 1000.0)
+                    .map(|(_, _, d)| d.as_str())
+                    .collect();
                 self.violations.push(format!(
-                    "[{now:.0}] scrobble ({t}, {s}) submitted {n} times"
+                    "[{now:.0}] scrobble ({t}, {s}) submitted {n} times (by {by:?})"
                 ));
             }
         }
