@@ -87,7 +87,7 @@ function AvailableOffline() {
       <div className="row offline-head">
         <span className="muted small grow">{t("downloads.offlineHint")}</span>
         <span className="muted small" data-testid="available-offline-count">{t("downloads.offlineCount", { count: total })}</span>
-        <button type="button" className="btn sm" disabled={!total} onClick={() => play(0)}><Icon name="play" size={12} style={{ fill: "currentColor" }} /> {t("downloads.playOffline")}</button>
+        <button type="button" className="btn sm" disabled={!total} onClick={() => play(0)}><Icon name="play" size={12} filled /> {t("downloads.playOffline")}</button>
       </div>
       <TrackTable tracks={rows} total={total} columns={["art", "title", "artist", "album", "duration", "offline"]} scope="available-offline" label={t("downloads.tab.offline")} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("downloads.offlineEmpty")} testId="available-offline-table" />
     </div>

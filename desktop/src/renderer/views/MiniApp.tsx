@@ -25,9 +25,9 @@ export function MiniApp() {
         <div className="artist">{track?.artist ?? ""}</div>
         <SeekBar durationMs={track?.durationMs} compact />
         <div className="controls">
-          <button type="button" className="btn icon sm" aria-label={t("player.previous")} onClick={() => d({ type: "previous" })}><Icon name="previous" size={14} style={{ fill: "currentColor" }} /></button>
-          <button type="button" className="btn icon sm" aria-label={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })}><Icon name={playing ? "pause" : "play"} size={16} style={{ fill: "currentColor" }} /></button>
-          <button type="button" className="btn icon sm" aria-label={t("player.next")} onClick={() => d({ type: "next" })}><Icon name="next" size={14} style={{ fill: "currentColor" }} /></button>
+          <button type="button" className="btn icon sm" aria-label={t("player.previous")} onClick={() => d({ type: "previous" })}><Icon name="previous" size={14} filled /></button>
+          <button type="button" className="btn icon sm" aria-label={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })}><Icon name={playing ? "pause" : "play"} size={16} filled /></button>
+          <button type="button" className="btn icon sm" aria-label={t("player.next")} onClick={() => d({ type: "next" })}><Icon name="next" size={14} filled /></button>
           {track ? <Heart on={track.loved} size={13} onToggle={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /> : null}
           <span className="spacer" />
           <button type="button" className={`btn icon sm ${win.alwaysOnTop ? "on" : ""}`} aria-pressed={win.alwaysOnTop} aria-label={t("mini.pin")} title={t("mini.pin")} onClick={() => bridge().window.setAlwaysOnTop(!win.alwaysOnTop)}><Icon name="pin" size={13} /></button>

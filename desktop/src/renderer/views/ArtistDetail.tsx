@@ -29,7 +29,7 @@ export function ArtistDetail({ id }: { id: string }) {
           <div className="muted">{a ? t("artist.albumsCount", { albums: a.albumCount, songs: a.songCount }) : ""}</div>
           {a?.biography ? <div className="small muted" style={{ maxWidth: 600 }}>{a.biography}</div> : null}
           <div className="actions">
-            <button type="button" className="btn primary" onClick={() => play(false)}><Icon name="play" size={14} style={{ fill: "currentColor" }} /> {t("album.play")}</button>
+            <button type="button" className="btn primary" onClick={() => play(false)}><Icon name="play" size={14} filled /> {t("album.play")}</button>
             <button type="button" className="btn tonal" onClick={() => play(true)}><Icon name="shuffle" size={14} /> {t("album.shuffle")}</button>
             {a ? <Heart on={a.loved} onToggle={() => bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} /> : null}
           </div>

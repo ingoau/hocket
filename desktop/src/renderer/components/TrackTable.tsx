@@ -332,9 +332,9 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
     case "index":
       return (
         <div className={`${cls} index`} role="gridcell">
-          {playing ? <><Icon name="play" size={12} style={{ fill: "currentColor", color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{track.trackNumber ?? index + 1}</span>}
+          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{track.trackNumber ?? index + 1}</span>}
           {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
-          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} style={{ fill: "currentColor" }} /></button> : null}
+          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
         </div>
       );
     case "art":

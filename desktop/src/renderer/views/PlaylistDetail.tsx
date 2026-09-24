@@ -35,7 +35,7 @@ export function PlaylistDetail({ id }: { id: string }) {
           <div className="muted">{t("playlist.tracks", { count: p?.songCount ?? 0, duration: fmtDuration(p?.durationMs ?? 0) })}{p?.comment ? ` · ${p.comment}` : ""}</div>
           {p?.isSmart ? <div className="small muted"><Icon name="info" size={12} /> {t("playlists.readOnly")}</div> : null}
           <div className="actions">
-            <button type="button" className="btn primary" onClick={() => play()} {...primer.bind(rows[0]?.id)} data-testid="playlist-play"><Icon name="play" size={14} style={{ fill: "currentColor" }} /> {t("album.play")}</button>
+            <button type="button" className="btn primary" onClick={() => play()} {...primer.bind(rows[0]?.id)} data-testid="playlist-play"><Icon name="play" size={14} filled /> {t("album.play")}</button>
             <button type="button" className="btn tonal" onClick={() => play(0, true)}><Icon name="shuffle" size={14} /> {t("album.shuffle")}</button>
             <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => p && openMenuFromButton(e, { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-more"><Icon name="more" /></button>
           </div>

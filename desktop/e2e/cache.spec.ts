@@ -163,12 +163,12 @@ test.describe("cached and downloaded badges", () => {
     const cached = page.getByTestId("album-tracks").locator('[data-testid="offline-badge"][data-state="cached"]');
     await expect(cached.first()).toBeVisible();
     await expect(cached.first().getByRole("img", { name: "Cached" })).toBeVisible();
-    const cachedIcon = await cached.first().locator("svg").getAttribute("class");
+    const cachedIcon = await cached.first().locator("svg").getAttribute("data-icon");
     // A downloaded album: every row is Downloaded, with a different icon.
     await gotoAlbum(app, page, await albumWhere(page, "someDownloaded"));
     const dl = page.getByTestId("album-tracks").locator('[data-testid="offline-badge"][data-state="downloaded"]');
     await expect(dl.first().getByRole("img", { name: "Downloaded" })).toBeVisible();
-    expect(await dl.first().locator("svg").getAttribute("class")).not.toBe(cachedIcon);
+    expect(await dl.first().locator("svg").getAttribute("data-icon")).not.toBe(cachedIcon);
     for (const theme of ["light", "dark"] as const) {
       await setTheme(page, theme);
       await expectNoViolations(page, `${theme} album with downloaded badges`);

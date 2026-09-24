@@ -28,7 +28,7 @@ export function Filters() {
               <span style={{ display: "block" }}>{filterName(f)}{isBuiltinFilter(f.id) ? <span className="badge" style={{ marginLeft: 8 }}>{t("filters.builtin")}</span> : null}</span>
               <span className="small muted" style={{ display: "block" }}>{t("sort.label", { sort: t(`sort.${f.sort}` as never) })}{f.limit ? ` · ${t("filters.limit")} ${f.limit}` : ""}</span>
             </button>
-            <button type="button" className="btn" aria-label={`${t("filters.play")}: ${filterName(f)}`} onClick={() => play(f.id)}><Icon name="play" size={13} style={{ fill: "currentColor" }} /> {t("filters.play")}</button>
+            <button type="button" className="btn" aria-label={`${t("filters.play")}: ${filterName(f)}`} onClick={() => play(f.id)}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
             {/* Built-ins can't be deleted (the core would only drop a saved override). */}
             {isBuiltinFilter(f.id) ? <span /> : <button type="button" className="btn icon" aria-label={`${t("filters.delete")}: ${f.name}`} onClick={() => bridge().dispatch({ type: "deleteFilter", data: { id: f.id } })}><Icon name="trash" size={14} /></button>}
           </div>

@@ -171,7 +171,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
                   {it.subtitle ? <div className="t2" title={it.subtitle}>{it.subtitle}</div> : null}
                   {it.badge ? <span className="badge tile-badge" style={{ position: "absolute", top: 10, left: 10 }}><Icon name={it.badge} size={11} title={t("a11y.downloaded")} /></span> : null}
                   {/* Not a Tab stop: Enter opens, Shift+F10 has Play; the pointer gets the shortcut button. */}
-                  {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button> : null}
+                  {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={16} filled /></button> : null}
                 </div>
               );
             })}
