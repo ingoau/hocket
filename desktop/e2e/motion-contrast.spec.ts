@@ -135,7 +135,7 @@ test.describe("motion, contrast and zoom", () => {
         });
         expect(texts.length).toBeGreaterThan(5);
         // Photograph the background alone: hide everything drawn over it.
-        await page.addStyleTag({ content: ".fullscreen .left, .fullscreen .side, .fullscreen .close { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => el.setAttribute("data-e2e-hide", "")));
+        await page.addStyleTag({ content: ".fullscreen .left, .fullscreen .side, .fullscreen .close { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => (el as Element).setAttribute("data-e2e-hide", "")));
         const png = (await page.screenshot()).toString("base64");
         await page.evaluate(() => document.querySelector("[data-e2e-hide]")?.remove());
         const worst = await page.evaluate(async ({ png, texts }) => {
@@ -257,7 +257,6 @@ test.describe("motion, contrast and zoom", () => {
       const problems = await page.evaluate(() => {
         const out: string[] = [];
         const vw = document.documentElement.clientWidth;
-        const vh = document.documentElement.clientHeight;
         if (document.documentElement.scrollWidth > vw + 1) out.push(`document scrolls sideways: ${document.documentElement.scrollWidth} > ${vw}`);
         const name = (el: Element) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}.${(el.getAttribute("class") ?? "").split(" ").join(".")} "${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 30)}"`;
         for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {

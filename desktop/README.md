@@ -22,7 +22,10 @@ pnpm test           # vitest: reducer, position extrapolation, selection model,
                     # shortcut parser, palette ranking, lyrics mapping, accent extraction
 pnpm test:e2e       # Playwright Electron e2e (needs a display: `xvfb-run -a pnpm test:e2e` on a
                     # headless Linux box; run `pnpm build` first). e2e/*.spec.ts except native.spec.ts
-                    # run against the FakeCore; e2e/native.spec.ts runs the REAL core (native addon,
+                    # run against the FakeCore (a11y.spec: axe over every view in both themes;
+                    # keyboard-a11y.spec: keyboard-only walkthrough; motion-contrast.spec: reduced
+                    # motion, measured contrast, forced colours, 200% zoom);
+                    # e2e/native.spec.ts runs the REAL core (native addon,
                     # skipped when native/ isn't built) against e2e/fake-navidrome.ts, a small
                     # Subsonic JSON server: setup → sync → play → queue → rate → undo → lyrics →
                     # settings persistence → credential replay across a restart.
@@ -184,6 +187,32 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
   own always-off setting.
 - Lyrics tiers are honoured honestly: syllables → AMLL words, line tier → one word per
   line, unsynced → a static list. Agents map to duet alignment, background lines to `isBG`.
+
+## Accessibility
+
+- Landmarks: banner (top bar, with a skip link as the first Tab stop), the sidebar `nav`, `main`,
+  the side panel `aside`, the player bar region. Modals (dialogs, the palette, the fullscreen
+  player) make everything else `inert`, trap Tab, and hand focus back to what opened them.
+- Composite widgets are one Tab stop each: the songs table and album grid are ARIA grids with a
+  roving tab stop (arrows, Home/End, PageUp/Down, type-ahead, Enter plays/opens, 0–5 rate); the
+  queue is a listbox with `aria-activedescendant` (Enter plays from the item, Delete removes,
+  Alt+Up/Down reorders); shelves and tile lists rove with arrows (`lib/roving.ts`); tabs, rating
+  radio groups, splitters and sliders take arrows. Shift+F10 or the context-menu key opens the
+  focused item's menu. Space/Enter press the focused button and arrows move the focused slider
+  instead of the global play/seek keys (`widgetOwnsKey` in `store/keyboard.ts`).
+- Seek and volume are sliders with spoken values (`lib/a11y.ts`: "1 minute 32 seconds of
+  3 minutes 32 seconds", "45%"); a polite live region announces track changes, nothing else.
+- Lyrics: the AMLL renderer is `aria-hidden`; a labelled list of whole lines with `aria-current`
+  on the active line is always there. Reduced motion, more contrast, forced colours or the
+  "Animate lyrics word by word" switch (Settings → Appearance, device-local) show that list
+  instead, statically highlighted; reduced motion also swaps the fluid background for a still.
+- Colour: every accent-derived colour is computed per theme from the (possibly artwork) accent
+  by `lib/contrast.ts` so text reaches 4.5:1 and the focus ring 3:1 on every surface and tint;
+  the fullscreen scrim is sized from the cover's brightest colour. `contrast.test.ts` checks the
+  stylesheet's tokens. Forced-colours styles keep selection, focus, toggles and the seek fill.
+- Below 900 CSS px (a 1280 px window at 200% zoom) the sidebar becomes an icon rail, the side
+  panel a drawer (Q/L or the chevron open it, Escape closes it), the player bar two rows, and
+  the track table drops low-priority columns (`fitColumns`).
 
 ## Packaging
 

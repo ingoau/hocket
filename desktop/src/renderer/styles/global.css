@@ -599,8 +599,8 @@ button.qrow { width: 100%; }
   h1 { font-size: 22px; }
   .app { grid-template-rows: auto minmax(0, 1fr) auto; }
   .app-body { grid-template-columns: 52px minmax(0, 1fr); position: relative; }
-  .sidebar .section-title, .nav-item span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .nav-item { justify-content: center; padding: 0; }
+  .sidebar .section-title, .sidebar .nav-item span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sidebar .nav-item { justify-content: center; padding: 0; }
   .sidebar-scroll, .sidebar-foot { padding: 4px; }
   .sidebar > .resize-handle { display: none; }
   .right-panel.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(340px, calc(100% - 52px)); z-index: 20; box-shadow: var(--shadow); }

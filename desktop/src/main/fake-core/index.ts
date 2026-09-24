@@ -606,6 +606,9 @@ export class FakeCore implements CoreHandle {
         return;
       case "touch":
         return;
+      case "setBackendCapabilities":
+        // The fake core serves plain URLs; it has no core stream reader to switch to.
+        return;
       default: {
         const never: never = cmd;
         void never;
