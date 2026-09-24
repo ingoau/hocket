@@ -369,3 +369,28 @@ async fn one_address_cannot_open_connections_without_bound() {
         other => panic!("expected an HTTP 429, got {:?}", other.map(|_| ())),
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_socket_that_never_says_hello_is_dropped() {
+    let (app, url, _stop) = start(Args::for_tests()).await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(app.connection_count(), 1);
+    // silent: the server hangs up after HELLO_TIMEOUT, no room was opened
+    let ended = tokio::time::timeout(
+        hocket_coordinator::HELLO_TIMEOUT + Duration::from_secs(3),
+        async {
+            loop {
+                match ws.next().await {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        },
+    )
+    .await;
+    assert!(ended.is_ok(), "the silent socket was never closed");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(app.connection_count(), 0);
+    assert_eq!(app.room_count(), 0);
+}
