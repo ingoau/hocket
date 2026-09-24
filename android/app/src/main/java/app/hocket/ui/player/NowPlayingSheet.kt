@@ -177,6 +177,8 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed) {
             restore = { NowPlayingSheetState(SheetValue.valueOf(it)) },
         )
         val MINI_HEIGHT: Dp = 64.dp
+        /** The gap the floating mini player keeps above the navigation bar (or the screen's bottom inset). */
+        val MINI_GAP: Dp = 8.dp
         /** A release moves the sheet to the other anchor once it has travelled this share of the distance. */
         const val POSITIONAL_THRESHOLD = 0.3f
         /** Release speed that settles in the fling's direction regardless of position (Material's default). */
@@ -222,7 +224,7 @@ internal class HeroGeometry {
         val HERO_ELEVATION: Dp = 16.dp
         /** The floating mini player's side margin, gap above the navigation bar, and corners. */
         val MINI_MARGIN: Dp = 12.dp
-        val MINI_GAP: Dp = 8.dp
+        val MINI_GAP: Dp = NowPlayingSheetState.MINI_GAP
         val MINI_CORNER: Dp = 32.dp
         /** How much the artwork shrinks while paused (Navic). */
         const val PAUSED_SCALE = 0.86f

@@ -201,7 +201,10 @@ internal fun NowPlayingPage(onOpenAlbum: (String) -> Unit, onOpenArtist: (String
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp), contentAlignment = Alignment.Center) {
-                    HeroArtwork(track?.coverArt, track?.title, hero, artworkHidden, artworkScale, Modifier.widthIn(max = 420.dp).fillMaxWidth(), onPreviewToggle)
+                    // As large as fits beside the controls on one screen (Metrolist), never tiny: on short
+                    // screens and at large font sizes the page scrolls instead.
+                    val artMax = (viewport - CONTROLS_HEIGHT).coerceIn(160.dp, 420.dp)
+                    HeroArtwork(track?.coverArt, track?.title, hero, artworkHidden, artworkScale, Modifier.widthIn(max = artMax).fillMaxWidth(), onPreviewToggle)
                 }
                 if (track == null) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(bottom = 32.dp)) {
@@ -290,6 +293,9 @@ internal fun NowPlayingPage(onOpenAlbum: (String) -> Unit, onOpenArtist: (String
     if (more && track != null) ActionSheet(Commands.tracks(listOf(track.id)), track.title, track.artist, onDismiss = { more = false },
         onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } })
 }
+
+/** Roughly what the info, seek bar and transport below the artwork need at the default font size. */
+private val CONTROLS_HEIGHT = 480.dp
 
 @Composable
 private fun NoticeLine(text: String, color: Color) {
