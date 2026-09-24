@@ -113,7 +113,7 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
                 "getMusicFolders" -> Triple(200, wrap(""""musicFolders":{"musicFolder":[{"id":1,"name":"Music"}]}"""), "application/json")
                 "getArtists" -> Triple(200, fixture("artists"), "application/json")
                 "getArtist" -> Triple(200, wrap(""""artist":{"id":"ar1","name":"Boards of Canada","albumCount":2,"album":${albumsJson()}}"""), "application/json")
-                "getAlbumList2" -> Triple(200, if ((q["offset"]?.toIntOrNull() ?: 0) == 0) fixture("album_list2") else wrap(""albumList2":{"album":[]}"), "application/json")
+                "getAlbumList2" -> Triple(200, if ((q["offset"]?.toIntOrNull() ?: 0) == 0) fixture("album_list2") else wrap("""albumList2":{"album":[]}"""), "application/json")
                 "getAlbum" -> Triple(200, wrap(""""album":${albumWithSongs(q["id"] ?: "al1")}"""), "application/json")
                 "getSong" -> Triple(200, wrap(""""song":${songJson(q["id"] ?: "s1")}"""), "application/json")
                 "search3" -> Triple(200, if ((q["songOffset"]?.toIntOrNull() ?: 0) == 0 && (q["albumOffset"]?.toIntOrNull() ?: 0) == 0 && (q["artistOffset"]?.toIntOrNull() ?: 0) == 0) fixture("search3") else fixture("search3_empty"), "application/json")
@@ -121,20 +121,20 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
                 "getPlaylist" -> Triple(200, fixture("playlist"), "application/json")
                 "getGenres" -> Triple(200, fixture("genres"), "application/json")
                 "getScanStatus" -> Triple(200, fixture("scan_status"), "application/json")
-                "getStarred2" -> Triple(200, wrap(""starred2":{"artist":[],"album":[],"song":[]}"), "application/json")
+                "getStarred2" -> Triple(200, wrap("""starred2":{"artist":[],"album":[],"song":[]}"""), "application/json")
                 "getLyricsBySongId" -> Triple(200, fixture("lyrics_v2"), "application/json")
-                "getSimilarSongs2" -> Triple(200, wrap(""similarSongs2":{"song":[]}"), "application/json")
-                "getTopSongs" -> Triple(200, wrap(""topSongs":{"song":[]}"), "application/json")
-                "getRandomSongs" -> Triple(200, wrap(""randomSongs":{"song":[]}"), "application/json")
+                "getSimilarSongs2" -> Triple(200, wrap("""similarSongs2":{"song":[]}"""), "application/json")
+                "getTopSongs" -> Triple(200, wrap("""topSongs":{"song":[]}"""), "application/json")
+                "getRandomSongs" -> Triple(200, wrap("""randomSongs":{"song":[]}"""), "application/json")
                 "getCoverArt" -> Triple(200, png(), "image/png")
                 "stream", "download" -> Triple(200, wav(), "audio/wav")
                 "setRating" -> { q["id"]?.let { ratings[it] = q["rating"]?.toIntOrNull() ?: 0 }; Triple(200, ok.toByteArray(), "application/json") }
                 "star" -> { q["id"]?.let { starred += it }; Triple(200, ok.toByteArray(), "application/json") }
                 "unstar" -> { q["id"]?.let { starred -= it }; Triple(200, ok.toByteArray(), "application/json") }
                 "scrobble" -> { q["id"]?.let { scrobbles += it to (q["submission"] != "false") }; Triple(200, ok.toByteArray(), "application/json") }
-                "getNowPlaying" -> Triple(200, wrap(""nowPlaying":{"entry":[]}"), "application/json")
+                "getNowPlaying" -> Triple(200, wrap("""nowPlaying":{"entry":[]}"""), "application/json")
                 "savePlayQueue", "createPlaylist", "updatePlaylist", "deletePlaylist" -> Triple(200, ok.toByteArray(), "application/json")
-                else -> Triple(200, wrap(""error":{"code":70,"message":"unknown endpoint $endpoint"}").let { it }, "application/json")
+                else -> Triple(200, wrap("""error":{"code":70,"message":"unknown endpoint $endpoint"}"""), "application/json")
             }
             respond(ex, status, body, type)
         } catch (e: Exception) {
