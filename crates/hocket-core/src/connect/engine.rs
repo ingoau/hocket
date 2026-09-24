@@ -739,7 +739,7 @@ impl Engine {
             .iter()
             .map(|r| (&r.track_id, r.started_at, &r.device_id));
         let known = self.known_scrobbled.iter().map(|(t, s, d)| (t, *s, d));
-        for (track_id, started_at, device_id) in own_room.chain(known) {
+        for (track_id, started_at, device_id) in known.chain(own_room) {
             if out
                 .iter()
                 .any(|k| &k.track_id == track_id && (k.started_at - started_at).abs() < 1000.0)
@@ -1240,14 +1240,15 @@ impl Engine {
 
     /// Everything this device knows was scrobbled, as room announcements.
     fn announce_known_scrobbles(&mut self) {
-        let known: Vec<(TrackId, EpochMs, DeviceId)> = self
-            .known_scrobbled
-            .iter()
-            .rev()
-            .take(64)
-            .cloned()
-            .collect();
-        for (track_id, started_at, device_id) in known {
+        // Our own room's log too: a LAN leader carries what its members
+        // scrobbled to the coordinator it joins.
+        let known: Vec<KnownScrobble> = self.known_scrobbled().into_iter().rev().take(64).collect();
+        for KnownScrobble {
+            track_id,
+            started_at,
+            device_id,
+        } in known
+        {
             self.upstream_send(Msg::ScrobbleSubmitted {
                 track_id,
                 started_at,
@@ -3266,10 +3267,18 @@ impl Engine {
     // -- scrobbling -------------------------------------------------------------
 
     fn on_scrobble_reached(&mut self, track_id: TrackId, started_at: EpochMs) {
-        if self
-            .known_scrobbled
-            .iter()
-            .any(|(t, s, _)| t == &track_id && (s - started_at).abs() < 1000.0)
+        let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
+        let me = self.cfg.device.id.clone();
+        // What we know, and what our own room judged for other devices (a
+        // LAN leader that has since moved on to the coordinator still knows
+        // its members' scrobbles).
+        if self.known_scrobbled.iter().any(|(t, s, _)| same(t, *s))
+            || self
+                .room
+                .replica()
+                .scrobbles
+                .iter()
+                .any(|r| r.device_id != me && same(&r.track_id, r.started_at))
         {
             // This play was already scrobbled (by us or by whoever handed it
             // over); nobody needs to be asked.
@@ -5175,6 +5184,34 @@ mod tests {
             .known_scrobbled()
             .iter()
             .any(|k| k.track_id == current.track_id && k.device_id == "b"));
+    }
+
+    #[test]
+    fn a_lan_leader_carries_its_members_scrobbles_to_the_coordinator() {
+        let (mut e, _) = engine("m");
+        admit_inbound(&mut e, "in1", "q");
+        e.handle(Input::WireIn {
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                query_id: "q-1".into(),
+                track_id: "t".into(),
+                started_at: 5_000.0,
+                device_id: "q".into(),
+            }),
+        });
+        // the leader takes the play over and reaches it itself: q has it
+        let outs = e.handle(Input::ScrobbleReached {
+            track_id: "t".into(),
+            started_at: 5_000.0,
+        });
+        assert_eq!(scrobble_verdicts(&outs), vec![false]);
+        // joining the coordinator, it announces q's scrobble there
+        let outs = attach(&mut e, None, vec![]);
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "up"
+            && matches!(
+                m,
+                Msg::ScrobbleSubmitted { track_id, device_id, .. } if track_id == "t" && device_id == "q"
+            )));
     }
 
     #[test]
