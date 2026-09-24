@@ -66,13 +66,15 @@ fun AccountSettingsScreen(nav: NavHostController) {
     val sync = setting(SettingKeys.SYNC_ENABLED)
     var signOut by remember { mutableStateOf(false) }
     SubScreen(nav, stringResource(R.string.settings_category_account)) {
+        // The server login is kept on this device only (the keystore); the sync switch has its registry scope.
         server?.let { s ->
-            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), tag = "server.info")
+            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
             SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = "server.syncNow")
             SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = "server.fullSync")
-            SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove")
         }
-        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), tag = "sync.master")
+        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
+        // Destructive, and last: nothing below it to hit by mistake.
+        server?.let { SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove", destructive = true) { Icon(Icons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) } }
     }
     // Sign-out goes through CoreHost.removeServer: the stored login is removed before RemoveServer,
     // so nothing can replay it and resurrect the server.
@@ -94,17 +96,53 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         val accentValue = accent.string
         val dynamicLabel = stringResource(R.string.settings_accent_dynamic)
         SettingRow(stringResource(R.string.settings_accent), scope = accent.scope, tag = "display.accent")
-        // The swatches' visible label is a dot: each is spoken by its colour name.
-        val accentNames = mapOf("#6750A4" to stringResource(R.string.settings_accent_purple), "#1B6B5E" to stringResource(R.string.settings_accent_teal), "#B3261E" to stringResource(R.string.settings_accent_red))
-        ChoiceRow(
-            listOf<Pair<String?, String>>(null to dynamicLabel) + accentNames.keys.map { it to "●" },
-            isSelected = { hex -> if (hex == null) accentValue == null else accentValue.equals(hex, true) },
+        AccentChoices(
+            dynamicLabel = dynamicLabel,
+            swatches = ACCENTS.map { (hex, name) -> hex to stringResource(name) },
+            selected = accentValue,
             onSelect = { hex -> if (hex == null) accent.setRaw("null") else accent.setString(hex) },
-            describe = { hex -> hex?.let { accentNames[it] } },
             modifier = Modifier.padding(horizontal = 16.dp),
         )
         SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope, tag = "display.artworkColour")
         SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope, tag = "display.animatedBackground")
+    }
+}
+
+/** The accent presets: `display.accent` hex and the colour's name. */
+internal val ACCENTS = listOf("#6750A4" to R.string.settings_accent_purple, "#1B6B5E" to R.string.settings_accent_teal, "#B3261E" to R.string.settings_accent_red)
+
+internal fun accentColour(hex: String): Color = Color(android.graphics.Color.parseColor(hex))
+
+/**
+ * "Dynamic" as a toggle button, then one round swatch per preset in its real colour. The swatches
+ * are radio buttons spoken by their colour name ("Teal, selected"); the selected one has a ring and
+ * a check.
+ */
+@Composable
+private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, String>>, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier) {
+    FlowRow(modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+        ToggleButton(checked = selected == null, onCheckedChange = { onSelect(null) }) { Text(dynamicLabel, maxLines = 1) }
+        swatches.forEach { (hex, name) ->
+            val isSelected = selected.equals(hex, ignoreCase = true)
+            val colour = accentColour(hex)
+            Box(
+                Modifier.size(48.dp)
+                    .selectable(selected = isSelected, role = Role.RadioButton, onClick = { onSelect(hex) })
+                    .semantics { contentDescription = name }
+                    .testTag("accent.$hex"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape)
+                        .then(if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                        .padding(if (isSelected) 5.dp else 0.dp)
+                        .clip(CircleShape).background(colour),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isSelected) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
     }
 }
 
@@ -130,8 +168,10 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         val capValue = if (shown == 0) stringResource(R.string.settings_saved_cap_zero) else stringResource(R.string.saved_cap, shown)
         SettingRow(capLabel, capValue, savedCap.scope, tag = "queue.savedCap")
         LabelledSlider(
-            value = dragging, onValueChange = { dragging = it }, onValueChangeFinished = { client.dispatch(Commands.setSavedQueueCap(dragging.roundToInt())) },
-            valueRange = 0f..50f, steps = 49, label = capLabel, valueText = capValue,
+            value = dragging, onValueChange = { dragging = it }, onValueChangeFinished = { dragging = dragging.roundToInt().toFloat(); client.dispatch(Commands.setSavedQueueCap(dragging.roundToInt())) },
+            // Continuous to the eye (49 tick dots crowded the track); snapped to whole queues on release
+            // and for TalkBack's adjust, and the value is the row's subtitle above.
+            valueRange = 0f..50f, steps = 49, showTicks = false, label = capLabel, valueText = capValue,
             modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")

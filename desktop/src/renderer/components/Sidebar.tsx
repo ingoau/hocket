@@ -6,6 +6,8 @@ import { useApp, type ViewName } from "../store/app";
 import { useActions, useQuery } from "../store/queries";
 import { openContextMenu } from "./ContextMenu";
 import { Icon } from "./Icon";
+import { filterName } from "../lib/filters";
+import { AVAILABLE_OFFLINE_FILTER_ID } from "@shared/constants";
 
 export function Sidebar() {
   const route = useApp((s) => s.route);
@@ -37,7 +39,7 @@ export function Sidebar() {
   const items = (navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
     .filter((it) => it.id !== "navigateSettings")
     .map((it) => ({ ...it, view: NAV_VIEWS[it.id] as ViewName | undefined }));
-  const isActive = (v: ViewName | undefined) => !!v && (route.view === v || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
+  const isActive = (v: ViewName | undefined) => !!v && ((route.view === v && !(v === "downloads" && route.param === "offline")) || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter")));
 
   return (
     <nav className="sidebar" aria-label={t("nav.library")} data-testid="sidebar">
@@ -50,12 +52,18 @@ export function Sidebar() {
           </a>
         ))}
         {filters.length ? <div className="section-title">{t("nav.savedFilters")}</div> : null}
-        {filters.map((f) => (
-          <a key={f.id} href="#" className={`nav-item ${route.view === "filter" && route.id === f.id ? "active" : ""}`} aria-current={route.view === "filter" && route.id === f.id ? "page" : undefined} title={f.name} onClick={(e) => { e.preventDefault(); navigate({ view: "filter", id: f.id }); }}>
-            <Icon name="filter" size={15} />
-            <span>{f.name}</span>
-          </a>
-        ))}
+        {filters.map((f) => {
+          // "Available offline" opens its track list (Downloads → Available offline), not the builder.
+          const offline = f.id === AVAILABLE_OFFLINE_FILTER_ID;
+          const active = offline ? route.view === "downloads" && route.param === "offline" : route.view === "filter" && route.id === f.id;
+          const name = filterName(f);
+          return (
+            <a key={f.id} href="#" className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={name} onClick={(e) => { e.preventDefault(); navigate(offline ? { view: "downloads", param: "offline" } : { view: "filter", id: f.id }); }} data-testid={offline ? "nav-available-offline" : undefined}>
+              <Icon name={offline ? "cached" : "filter"} size={15} />
+              <span>{name}</span>
+            </a>
+          );
+        })}
         {(playlists ?? []).length ? <div className="section-title">{t("nav.playlistsSection")}</div> : null}
         {(playlists ?? []).map((p) => (
           <a key={p.id} href="#" className={`nav-item ${route.view === "playlist" && route.id === p.id ? "active" : ""}`} aria-current={route.view === "playlist" && route.id === p.id ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "playlist", id: p.id }); }} onContextMenu={(e) => void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} title={p.isSmart ? `${p.name} · ${t("playlists.smart")}` : p.name}>

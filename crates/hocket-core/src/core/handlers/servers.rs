@@ -711,6 +711,9 @@ impl Actor {
         if self.playback.loaded && self.owns_transport() {
             self.refresh_next();
         }
+        if state.kind != NetworkKind::Offline {
+            self.clear_offline_skips();
+        }
     }
 }
 

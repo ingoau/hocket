@@ -90,7 +90,7 @@ object FilterText {
     val textFields = setOf(FilterField.Title, FilterField.Album, FilterField.Artist, FilterField.AlbumArtist, FilterField.Genre, FilterField.FilePath, FilterField.FileType, FilterField.Comment, FilterField.Key, FilterField.Mood, FilterField.Lyrics, FilterField.InPlaylist)
     val numberFields = setOf(FilterField.Year, FilterField.PlayCount, FilterField.Rating, FilterField.Duration, FilterField.BitRate, FilterField.DiscNumber, FilterField.TrackNumber, FilterField.Bpm, FilterField.Energy, FilterField.LocalPlayCount)
     val dateFields = setOf(FilterField.DateAdded, FilterField.DateModified, FilterField.LastPlayed, FilterField.LocalLastPlayed)
-    val boolFields = setOf(FilterField.Loved, FilterField.HasCoverArt, FilterField.Compilation, FilterField.Downloaded, FilterField.Cached)
+    val boolFields = setOf(FilterField.Loved, FilterField.HasCoverArt, FilterField.Compilation, FilterField.Downloaded, FilterField.Cached, FilterField.AvailableOffline)
 
     fun opsFor(field: FilterField): List<FilterOp> = when (field) {
         in textFields -> listOf(FilterOp.Is, FilterOp.IsNot, FilterOp.Contains, FilterOp.NotContains, FilterOp.StartsWith, FilterOp.EndsWith)

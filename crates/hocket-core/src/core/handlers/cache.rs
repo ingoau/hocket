@@ -5,10 +5,10 @@
 //! counters behind the "data saved" figure.
 
 use crate::api::*;
-use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 use crate::core::{ActorMsg, Internal};
 use crate::downloads::CacheSignal;
+use crate::session::{Effect, QueueOp};
 use crate::settings::keys;
 
 /// Leaving a track before this (or before half of it, when shorter) is an
@@ -132,7 +132,11 @@ impl Actor {
             .map(|c| c.key.clone());
         if current.as_deref() == Some(key.as_str()) && self.owns_transport() {
             self.playback.want_playing = true;
-            self.local_op(SessionOp::SkipUnavailable { key });
+            // Marked as an offline skip (cleared when the network returns),
+            // not as a failure; the offline notice already said why.
+            self.local_reduced_op(QueueOp::SkipOffline { key }, |e| {
+                !matches!(e, Effect::Skipped { .. })
+            });
         }
     }
 

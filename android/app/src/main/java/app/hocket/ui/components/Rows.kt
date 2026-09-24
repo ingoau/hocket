@@ -18,11 +18,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.outlined.OfflineBolt
+import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -108,19 +109,26 @@ fun SelectableRow(
     ) { content() }
 }
 
-/** The spoken description of a track row: "Tally, twenty one pilots, 3:32, loved, downloaded". */
+/** The spoken description of a track row: "Tally, twenty one pilots, 3:32, loved". */
 @Composable
 fun trackLabel(track: TrackSummary): String {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
     return listOfNotNull(
         stringResource(R.string.row_track_a11y, track.title, artist, formatClock(track.durationMs)),
         if (track.loved) stringResource(R.string.row_state_loved) else null,
-        when (track.offline) {
-            OfflineState.Downloaded -> stringResource(R.string.row_state_downloaded)
-            OfflineState.Cached -> stringResource(R.string.row_state_cached)
-            else -> null
-        },
     ).joinToString(", ")
+}
+
+/**
+ * The spoken offline state of a row ("downloaded" / "cached, available offline"), read as part of
+ * the row's state after its label; null when the item needs the network (a partial cache entry
+ * counts as not cached).
+ */
+@Composable
+fun offlineStateText(state: OfflineState): String? = when (state) {
+    OfflineState.Downloaded -> stringResource(R.string.row_state_downloaded)
+    OfflineState.Cached -> stringResource(R.string.row_state_cached)
+    else -> null
 }
 
 /**
@@ -183,7 +191,9 @@ fun TrackRow(
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     SelectableRow(
         selected, selectionActive, onClick, onToggleSelect, label, modifier,
-        state = if (nowPlaying) stringResource(R.string.row_state_playing) else null,
+        // "playing, downloaded": the row's state, merged with its label into one item.
+        state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
+            .joinToString(", ").ifEmpty { null },
         actions = actions,
         clickLabel = stringResource(R.string.action_play),
     ) {
@@ -229,14 +239,20 @@ fun TrackRow(
     }
 }
 
-/** Downloaded / cached marker. [describe] false inside rows, whose label already says it. */
+/**
+ * Downloaded / cached marker: a filled "download for offline" disc for a pinned download, an
+ * outlined bolt for a complete stream-cache entry (plays offline until evicted); nothing for a
+ * partial entry or an uncached item. [describe] false inside rows, whose state already says it.
+ */
 @Composable
 fun OfflineBadge(state: OfflineState, describe: Boolean = true) {
-    when (state) {
-        OfflineState.Downloaded -> { Icon(Icons.Filled.OfflinePin, if (describe) stringResource(R.string.badge_downloaded) else null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
-        OfflineState.Cached -> { Icon(Icons.Filled.DownloadDone, if (describe) stringResource(R.string.badge_cached) else null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
-        else -> Unit
+    val (icon, text, tint) = when (state) {
+        OfflineState.Downloaded -> Triple(Icons.Filled.DownloadForOffline, R.string.badge_downloaded, MaterialTheme.colorScheme.primary)
+        OfflineState.Cached -> Triple(Icons.Outlined.OfflineBolt, R.string.badge_cached, MaterialTheme.colorScheme.onSurfaceVariant)
+        else -> return
     }
+    Icon(icon, if (describe) stringResource(text) else null, tint = tint, modifier = Modifier.size(16.dp).testTag("offlineBadge.${state.string}"))
+    Spacer(Modifier.width(4.dp))
 }
 
 @Composable
@@ -286,9 +302,8 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
     val label = listOfNotNull(
         stringResource(R.string.row_playlist_a11y, playlist.name, playlist.songCount.toInt()),
         if (playlist.isSmart) stringResource(R.string.badge_smart) else null,
-        when (playlist.offline) { OfflineState.Downloaded -> stringResource(R.string.row_state_downloaded); OfflineState.Cached -> stringResource(R.string.row_state_cached); else -> null },
     ).joinToString(", ")
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
+    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
             Spacer(Modifier.width(14.dp))

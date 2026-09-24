@@ -588,6 +588,7 @@ impl Actor {
                 outcome,
             } => self.on_prefetch_done(track_id, generation, outcome),
             Internal::SkipOffline { key } => self.on_skip_offline(key),
+            Internal::ClearOfflineSkips => self.clear_offline_skips(),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);

@@ -224,6 +224,57 @@ impl Actor {
         true
     }
 
+    /// A local-only reducer op (one the wire does not carry): reduced here
+    /// against the engine's document and submitted as a whole-document
+    /// `Replace`, which every peer, older builds included, adopts. Not
+    /// undoable on its own. `false` when it did not apply or changed nothing.
+    pub(crate) fn local_reduced_op(&mut self, op: QueueOp, keep: impl Fn(&Effect) -> bool) -> bool {
+        let Some(engine) = &self.engine else {
+            return false;
+        };
+        let before = engine.document().clone();
+        let (history_cap, saved) = self.reducer_policy.get();
+        let ctx = ReduceCtx {
+            now: engine.now_session_ms(),
+            position_ms: self.playback.position_now(self.now()),
+            history_cap,
+            saved,
+            entropy: self.entropy.as_ref(),
+        };
+        let (document, effects) = match reduce(&before, op, &ctx) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(target: "hocket_core", "local op not applicable: {e}");
+                return false;
+            }
+        };
+        if crate::connect::same_session_state(&before, &document) {
+            return false;
+        }
+        self.pending_effects = Some(effects.into_iter().filter(|e| keep(e)).collect());
+        self.engine_input(Input::LocalOp {
+            op: SessionOp::Replace { document },
+        });
+        self.pending_effects = None;
+        true
+    }
+
+    /// Back online: items skipped only because this device was offline
+    /// play again (a real load failure keeps its mark). Synced to peers; no
+    /// undo entry, and an undo that restores the marks is cleared again.
+    pub(crate) fn clear_offline_skips(&mut self) {
+        if self.is_offline() {
+            return;
+        }
+        let pending = self
+            .doc()
+            .is_some_and(|d| !crate::session::offline_skipped(d).is_empty());
+        if pending && self.local_reduced_op(QueueOp::ClearOfflineSkips, |_| true) {
+            self.cache.offline_skips = 0;
+            self.cache.offline_notice = false;
+        }
+    }
+
     /// A public queue command: undo snapshot around the op.
     pub(crate) fn queue_command(&mut self, cmd: Command) {
         let Some(op) = SessionOp::from_command(&cmd) else {
@@ -839,6 +890,8 @@ impl Actor {
                 }
                 self.playback.want_playing = self.playback.playing;
                 self.local_op(SessionOp::Replace { document: doc });
+                // A snapshot taken offline carries offline marks.
+                self.clear_offline_skips();
             }
             UndoAction::Cas(mutations) => self.run_cas(&result.entry_id, &label, mutations, redo),
             UndoAction::Nothing => {}

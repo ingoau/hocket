@@ -12,6 +12,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Download
@@ -149,19 +154,34 @@ fun AppRoot(
         val server = servers.firstOrNull()
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
+        val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            when {
-                !started || !ready -> LoadingScreen()
-                server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
-                else -> MainShell()
-            }
-            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) { data -> Snackbar(data) }
-            if (BuildConfig.DEBUG && client.kind == CoreKind.Fake) {
-                Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer)) {
-                    Text(stringResource(R.string.debug_fake_core_banner), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            // The debug banner is laid out in flow above the app (never over its top bars): it takes
+            // the status-bar inset and consumes it, so the screens below do not pad for it again.
+            Column(Modifier.fillMaxSize()) {
+                if (fakeBanner) FakeCoreBanner()
+                Box(Modifier.weight(1f).fillMaxWidth().then(if (fakeBanner) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
+                    when {
+                        !started || !ready -> LoadingScreen()
+                        server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
+                        else -> MainShell()
+                    }
                 }
             }
+            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) { data -> Snackbar(data) }
         }
+    }
+}
+
+/** The status bar and the top/side display cutout: what the banner pads for and consumes. */
+private val BannerInsets: WindowInsets
+    @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+
+/** Debug builds on the fake core say so at the top of the screen. */
+@Composable
+private fun FakeCoreBanner() {
+    Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).windowInsetsPadding(BannerInsets).testTag("debug.fakeCoreBanner")) {
+        Text(stringResource(R.string.debug_fake_core_banner), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
     }
 }
 
@@ -191,13 +211,34 @@ fun LoadingScreen() {
     }
 }
 
-/** Event.Toast -> snackbar with its single action dispatching `action_command`; Event.Error -> snackbar. */
+/** The core's offline PlayerNotice texts (hocket-core core/handlers/cache.rs), shown localised as snackbars. */
+internal const val OFFLINE_NOTICE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
+internal const val OFFLINE_NOTICE_NOTHING = "Nothing in the queue is available offline"
+
+/**
+ * Event.Toast -> snackbar with its single action dispatching `action_command`; Event.Error ->
+ * snackbar; the offline PlayerNotices -> snackbar.
+ */
 @Composable
 private fun ToastCollector(host: SnackbarHostState) {
     val client = LocalCoreClient.current
     val authPrefix = stringResource(R.string.error_auth)
     val networkPrefix = stringResource(R.string.error_network)
+    val offlineSkipping = stringResource(R.string.player_notice_offline_skipping)
+    val offlineNothing = stringResource(R.string.player_notice_offline_nothing)
     LaunchedEffect(client) {
+        // The core's offline notices (going offline mid-queue) also show as a snackbar: the mini
+        // player's notice line is easy to miss when the queue silently skips.
+        launch {
+            client.playerNotice.collect { notice ->
+                val text = when (notice) {
+                    OFFLINE_NOTICE_SKIPPING -> offlineSkipping
+                    OFFLINE_NOTICE_NOTHING -> offlineNothing
+                    else -> null
+                } ?: return@collect
+                host.showSnackbar(text, duration = SnackbarDuration.Long)
+            }
+        }
         launch {
             client.toasts.collect { toast ->
                 val result = host.showSnackbar(toast.message, actionLabel = toast.actionLabel, duration = if (toast.durationMs > 6000u) SnackbarDuration.Long else SnackbarDuration.Short)
@@ -356,6 +397,7 @@ private fun AppNavHost(nav: NavHostController, modifier: Modifier) {
         composable<Route.Search> { SearchScreen(nav) }
         composable<Route.Settings> { SettingsScreen(nav) }
         composable<Route.Downloads> { DownloadsScreen(nav) }
+        composable<Route.AvailableOffline> { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
         composable<Route.Filters> { FiltersScreen(nav) }
         composable<Route.FilterBuilder> { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }
         composable<Route.Stats> { StatsScreen(nav) }

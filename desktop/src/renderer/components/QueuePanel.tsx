@@ -16,6 +16,7 @@ import { EMPTY_SELECTION, isSelected, selectOnly, selectRange, toggle } from "..
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { EmptyState } from "./EmptyState";
 
@@ -155,6 +156,7 @@ function QueueRow({ id, entry, kind, large, selected, focused, sortable, onClick
         <div className="t1" style={large ? { fontSize: 15 } : undefined}>{entry.track.title}</div>
         <div className="t2">{sub}</div>
       </div>
+      <OfflineBadge state={entry.track.offline} size={12} />
       <span className="dur">{fmtTime(entry.track.durationMs)}</span>
       {entry.item.unavailable ? <span className="sr-only">{t("queue.unavailable")}</span> : null}
     </div>

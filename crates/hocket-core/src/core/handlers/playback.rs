@@ -331,6 +331,16 @@ impl Actor {
         }
         if owns {
             self.playback.consecutive_skips = 0;
+            // Taking over from a device that skipped tracks while offline:
+            // here they may play.
+            if self
+                .doc()
+                .is_some_and(|d| !crate::session::offline_skipped(d).is_empty())
+            {
+                let _ = self.tx.send(crate::core::ActorMsg::Internal(
+                    crate::core::Internal::ClearOfflineSkips,
+                ));
+            }
             if !self.playback.loaded {
                 if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                     let position = self.resume_position_for(&item);

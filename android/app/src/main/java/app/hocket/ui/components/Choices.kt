@@ -59,7 +59,8 @@ fun ActionRow(actions: List<Pair<String, () -> Unit>>, modifier: Modifier = Modi
  * A slider with a spoken label and value ("Preamp, +3.0 dB" rather than a bare percentage) in a
  * 48 dp tall slot. The expressive slider itself is 44 dp, below the minimum target, so the slot is
  * the accessibility node: it carries the range and the adjust action (snapped to [steps]) and the
- * slider inside is drawn and dragged only.
+ * slider inside is drawn and dragged only. [showTicks] false draws a continuous track for a long
+ * range (dozens of tick dots are noise) while the adjust action still snaps to [steps].
  */
 @Composable
 fun LabelledSlider(
@@ -71,6 +72,7 @@ fun LabelledSlider(
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
+    showTicks: Boolean = true,
 ) {
     androidx.compose.foundation.layout.Box(
         modifier.heightIn(min = 48.dp).clearAndSetSemantics {
@@ -90,6 +92,6 @@ fun LabelledSlider(
         },
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
-        androidx.compose.material3.Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = steps, onValueChangeFinished = onValueChangeFinished, modifier = Modifier.fillMaxWidth())
+        androidx.compose.material3.Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = if (showTicks) steps else 0, onValueChangeFinished = onValueChangeFinished, modifier = Modifier.fillMaxWidth())
     }
 }

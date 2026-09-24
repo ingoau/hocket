@@ -180,6 +180,9 @@ pub enum Internal {
     SkipOffline {
         key: QueueKey,
     },
+    /// Clear offline skip marks if online (posted when this device takes
+    /// transport, so it never runs inside the lease reaction).
+    ClearOfflineSkips,
     /// An album-primer fetch ended.
     PrimeDone {
         generation: u64,

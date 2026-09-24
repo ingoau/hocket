@@ -6,7 +6,7 @@
 import type { CSSProperties } from "react";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BatteryMedium, Bug, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
-  Cloud, CloudOff, Command, Copy, Disc3, Download, Ellipsis, ExternalLink, FastForward, Filter, Folder, GripVertical, Heart, HeartOff,
+  Cloud, CloudOff, Command, Copy, Disc3, Download, Ellipsis, ExternalLink, FastForward, Filter, Folder, GripVertical, HardDrive, Heart, HeartOff,
   History, House, Infinity as InfinityIcon, Info, LayoutGrid, ListEnd, ListFilterPlus, ListMusic, ListPlus, ListStart, LoaderCircle,
   Maximize2, MicVocal, Minus, MonitorSmartphone, Moon, Music, Network, Pause, Pencil, PictureInPicture2, Pin, PinOff, Play, Plus,
   Redo2, Repeat, Repeat1, Rewind, RotateCcw, Search, Settings, Shuffle, SkipBack, SkipForward, Square, SquareCheck, Star, StarOff,
@@ -22,7 +22,7 @@ const ICONS: Record<string, LucideIcon> = {
   queue: ListMusic, lyrics: MicVocal, fullscreen: Maximize2, mini: PictureInPicture2, devices: MonitorSmartphone,
   search: Search, command: Command, settings: Settings,
   home: House, album: Disc3, artist: User, playlist: ListMusic, playlistAdd: ListPlus, song: Music, genre: LayoutGrid,
-  download: Download, downloadOff: CloudOff, filter: Filter, filterAdd: ListFilterPlus, stats: ChartColumn, info: Info,
+  download: Download, downloadOff: CloudOff, cached: HardDrive, filter: Filter, filterAdd: ListFilterPlus, stats: ChartColumn, info: Info,
   remove: Minus, trash: Trash2, edit: Pencil, close: X, check: Check,
   chevronDown: ChevronDown, chevronRight: ChevronRight, chevronLeft: ChevronLeft, chevronUp: ChevronUp,
   arrowDown: ArrowDown, arrowUp: ArrowUp, back: ArrowLeft, forwardArrow: ArrowRight, undo: Undo2, redo: Redo2,

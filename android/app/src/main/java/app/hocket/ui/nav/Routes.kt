@@ -9,6 +9,7 @@ sealed interface Route {
     @Serializable data object Search : Route
     @Serializable data object Settings : Route
     @Serializable data object Downloads : Route
+    @Serializable data object AvailableOffline : Route
     @Serializable data object Filters : Route
     @Serializable data class FilterBuilder(val id: String? = null) : Route
     @Serializable data object Stats : Route

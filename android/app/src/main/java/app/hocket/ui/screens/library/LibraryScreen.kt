@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +20,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.outlined.OfflineBolt
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,6 +29,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -55,6 +59,12 @@ import app.hocket.R
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
+import app.hocket.core.api.Filter
+import app.hocket.core.api.FilterField
+import app.hocket.core.api.FilterNode
+import app.hocket.core.api.FilterOp
+import app.hocket.core.api.FilterRule
+import app.hocket.core.api.FilterValue
 import app.hocket.core.api.Genre
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.QueryResult
@@ -112,6 +122,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
     val scope = rememberCoroutineScope()
     var sort by rememberSaveable { mutableStateOf(SortOrder.Default) }
     var descending by rememberSaveable { mutableStateOf(false) }
+    var offlineOnly by rememberSaveable { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var jobs by remember { mutableStateOf(false) }
     var detail by rememberSaveable(stateSaver = detailSaver) { mutableStateOf<DetailTarget?>(null) }
@@ -166,7 +177,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                         0 -> AlbumsTab(serverId, sort, descending, ::open)
                         1 -> ArtistsTab(serverId, ::open)
                         2 -> PlaylistsTab(serverId, ::open)
-                        3 -> SongsTab(serverId, sort, descending, nav)
+                        3 -> SongsTab(serverId, sort, descending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it })
                         else -> GenresTab(serverId, ::open)
                     }
                 }
@@ -174,7 +185,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                     scope.launch {
                         when (pager.currentPage) {
                             0 -> (client.query(Queries.albumCount(serverId)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Albums, it.toInt()) }
-                            3 -> (client.query(Queries.trackCount(serverId)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Tracks, it.toInt()) }
+                            3 -> (client.query(Queries.trackCount(serverId, if (offlineOnly) availableOfflineFilter(client.filters.value).root else null)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Tracks, it.toInt()) }
                             else -> Unit
                         }
                     }
@@ -263,30 +274,62 @@ private fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     }
 }
 
+/** The rule of the core's built-in "Available offline" filter (downloaded, or complete in the stream cache). */
+fun availableOfflineFilter(filters: List<Filter>): Filter = filters.firstOrNull { it.id == BUILTIN_AVAILABLE_OFFLINE }
+    ?: Filter(BUILTIN_AVAILABLE_OFFLINE, "Available offline", FilterNode.All(listOf(FilterNode.Rule(FilterRule(FilterField.AvailableOffline, FilterOp.IsTrue, FilterValue.Bool(true))))), SortOrder.Artist, false, null)
+
+const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
+
+/**
+ * The songs list over the track page cache. [offlineOnly] narrows it to the built-in "Available
+ * offline" filter; with [onOfflineOnlyChange] the list starts with the chip that toggles it.
+ */
 @Composable
-private fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, nav: NavHostController) {
+internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, nav: NavHostController, offlineOnly: Boolean = false, onOfflineOnlyChange: ((Boolean) -> Unit)? = null) {
     val client = LocalCoreClient.current
+    val filters by client.filters.collectAsStateWithLifecycle()
     val effectiveSort = if (sort == SortOrder.Default) SortOrder.Title else sort
-    val key = remember(serverId, effectiveSort, descending) { TrackListKey(serverId, effectiveSort, descending) }
+    val offlineFilter = availableOfflineFilter(filters)
+    val filterRoot = if (offlineOnly) offlineFilter.root else null
+    val key = remember(serverId, effectiveSort, descending, filterRoot) { TrackListKey(serverId, effectiveSort, descending, filterRoot) }
     val state by client.trackPages.state(key).collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
     var sheetFor by remember { mutableStateOf<app.hocket.core.api.Track?>(null) }
-    val allSongsLabel = stringResource(R.string.library_songs)
+    val listLabel = stringResource(if (offlineOnly) R.string.available_offline else R.string.library_songs)
     LaunchedEffect(key, state.generation) { client.trackPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Tracks) client.setSelectionTotal(state.total) }
-    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+    val empty = state.known && state.total == 0
+    if (empty && onOfflineOnlyChange == null) {
+        if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
+        else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
+        return
+    }
+    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
+        if (onOfflineOnlyChange != null) item(key = "chips") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                FilterChip(
+                    selected = offlineOnly, onClick = { onOfflineOnlyChange(!offlineOnly) },
+                    label = { Text(stringResource(R.string.available_offline)) },
+                    leadingIcon = { Icon(if (offlineOnly) Icons.Filled.Check else Icons.Outlined.OfflineBolt, null, Modifier.size(FilterChipDefaults.IconSize)) },
+                    modifier = Modifier.testTag("library.availableOffline"),
+                )
+            }
+        }
+        if (empty) item(key = "empty") {
+            if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
+            else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
+        }
         val count = if (state.known) state.total else 0
         items(count, key = { i -> state.item(i, client.trackPages.pageSize)?.id ?: "ph$i" }) { i ->
             val track = state.item(i, client.trackPages.pageSize)
             LaunchedEffect(i, state.generation) { client.trackPages.ensure(key, i) }
             if (track != null) {
                 TrackRow(track.toSummary(), onClick = {
-                    // Play the sorted library as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
-                    val ctx = Commands.adHocContext(serverId, allSongsLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
+                    // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
+                    val ctx = Commands.adHocContext(serverId, listLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
                     client.dispatch(Commands.playContext(ctx, startIndex = state.pages.toSortedMap().values.flatten().indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
                 }, onMore = { sheetFor = track }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)

@@ -152,7 +152,7 @@
     <string name="row_state_playing">playing</string>
     <string name="row_state_loved">loved</string>
     <string name="row_state_downloaded">downloaded</string>
-    <string name="row_state_cached">available offline</string>
+    <string name="row_state_cached">cached, available offline</string>
     <string name="a11y_select">Select</string>
     <string name="a11y_deselect">Deselect</string>
     <string name="a11y_open">Open</string>
@@ -498,9 +498,9 @@
     <string name="settings_autoplay_short">Autoplay</string>
     <string name="settings_summary_saved_cap">%1$d recent queues</string>
     <string name="settings_summary_streaming">Format and bitrate per network</string>
-    <string name="settings_summary_downloads">%1$s downloaded · %2$s cache</string>
+    <string name="settings_summary_downloads">%1$s downloaded · %2$s cache · %3$s saved</string>
     <string name="settings_summary_external_lyrics">External lyrics</string>
-    <string name="settings_summary_backup">Export, import, diagnostics</string>
+    <string name="settings_summary_backup">Export · Import · Diagnostics</string>
     <string name="settings_sleep_default">Default sleep timer</string>
     <string name="settings_lyrics_default_offset">Default timing offset</string>
     <string name="settings_lyrics_translations">Show translations</string>
@@ -539,7 +539,8 @@
     <string name="error_network">Can’t reach the server</string>
     <string name="error_details">Details</string>
     <string name="year_and_count">%1$d · %2$d tracks</string>
-    <string name="dot_separator"> · </string>
+    <!-- Quoted: aapt trims unquoted leading/trailing spaces, which glued summaries together ("On·10"). -->
+    <string name="dot_separator">" · "</string>
     <plurals name="a11y_stars">
         <item quantity="one">%1$d star</item>
         <item quantity="other">%1$d stars</item>
@@ -563,4 +564,55 @@
     <string name="settings_accent_purple">Purple</string>
     <string name="settings_accent_teal">Teal</string>
     <string name="settings_accent_red">Red</string>
+    <!-- Stream cache (Downloads & storage) -->
+    <string name="settings_cache_usage">Stream cache</string>
+    <string name="settings_cache_usage_body">%1$s complete · %2$s partial · of %3$s</string>
+    <string name="settings_cache_budget">Cache size</string>
+    <string name="settings_cache_budget_auto">Automatic (currently %1$s)</string>
+    <string name="settings_cache_budget_auto_short">Automatic</string>
+    <string name="settings_cache_budget_custom">Custom: %1$s</string>
+    <string name="settings_cache_budget_body">Automatic uses up to a tenth of the storage space, at most 2 GB.</string>
+    <string name="settings_data_saved">Data saved</string>
+    <string name="settings_data_saved_body">%1$s played from this device · %2$s fetched from the server</string>
+    <string name="settings_prefetch_mobile">Prefetch upcoming songs on mobile data</string>
+    <string name="settings_prefetch_mobile_body">Caches the next songs in the queue on metered or cellular connections too.</string>
+    <string name="settings_available_offline_body">Downloads and fully cached songs</string>
+    <string name="available_offline">Available offline</string>
+    <string name="available_offline_empty_title">Nothing available offline</string>
+    <string name="available_offline_empty_body">Download music, or play it once online, and it shows up here.</string>
+    <string name="player_notice_offline_skipping">Offline: skipping songs that aren\'t downloaded or cached</string>
+    <string name="player_notice_offline_nothing">Nothing in the queue is available offline</string>
+    <string name="a11y_accent_selected">selected</string>
+
+    <!-- Customise: the registry's action labels (actions/defs.rs), by action id. -->
+    <string name="action_label_play">Play</string>
+    <string name="action_label_play_shuffled">Shuffle play</string>
+    <string name="action_label_play_next">Play next</string>
+    <string name="action_label_play_later">Play later</string>
+    <string name="action_label_add_to_playlist">Add to playlist</string>
+    <string name="action_label_love">Love</string>
+    <string name="action_label_unlove">Unlove</string>
+    <string name="action_label_rate0">Clear rating</string>
+    <string name="action_label_rate1">Rate 1 star</string>
+    <string name="action_label_rate2">Rate 2 stars</string>
+    <string name="action_label_rate3">Rate 3 stars</string>
+    <string name="action_label_rate4">Rate 4 stars</string>
+    <string name="action_label_rate5">Rate 5 stars</string>
+    <string name="action_label_download">Download</string>
+    <string name="action_label_unpin">Remove download</string>
+    <string name="action_label_go_to_album">Go to album</string>
+    <string name="action_label_go_to_artist">Go to artist</string>
+    <string name="action_label_remove_from_queue">Remove from queue</string>
+    <string name="action_label_remove_from_playlist">Remove from playlist</string>
+    <string name="action_label_restore_saved_queue">Restore queue</string>
+    <string name="action_label_pin_saved_queue">Pin queue</string>
+    <string name="action_label_unpin_saved_queue">Unpin queue</string>
+    <string name="action_label_save_queue_as_playlist">Save queue as playlist</string>
+    <string name="action_label_delete_saved_queue">Delete saved queue</string>
+    <string name="action_label_delete_playlist">Delete playlist</string>
+    <string name="action_label_previous">Previous track</string>
+    <string name="action_label_toggle_play">Play / pause</string>
+    <string name="action_label_next">Next track</string>
+    <string name="action_label_shuffle">Shuffle</string>
+    <string name="action_label_repeat">Repeat</string>
 </resources>

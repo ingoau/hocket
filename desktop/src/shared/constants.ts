@@ -43,3 +43,16 @@ export function artworkUrl(token: string | undefined): string | undefined {
   if (!token || !ART_TOKEN_RE.test(token)) return undefined;
   return `${ART_SCHEME}://${ART_HOST}/${token}`;
 }
+
+/**
+ * PlayerNotice texts the core emits offline (crates/hocket-core/src/core/
+ * handlers/cache.rs); the renderer shows them as a banner with a way to the
+ * "Available offline" list. FakeCore emits the same.
+ */
+export const OFFLINE_NOTICE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached";
+export const OFFLINE_NOTICE_NOTHING = "Nothing in the queue is available offline";
+export const OFFLINE_NOTICES: readonly string[] = [OFFLINE_NOTICE_SKIPPING, OFFLINE_NOTICE_NOTHING];
+
+/** Built-in filters' ids (crates/hocket-core/src/filters/mod.rs `default_filters`). */
+export const BUILTIN_FILTER_PREFIX = "builtin:";
+export const AVAILABLE_OFFLINE_FILTER_ID = "builtin:available-offline";

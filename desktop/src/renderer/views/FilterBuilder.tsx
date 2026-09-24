@@ -7,12 +7,13 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { Icon } from "../components/Icon";
+import { filterName, isBuiltinFilter } from "../lib/filters";
 import { Artwork } from "../components/Artwork";
 
 const TEXT_FIELDS: FilterField[] = ["title", "album", "artist", "albumArtist", "genre", "filePath", "fileType", "comment", "lyrics", "key", "mood"];
 const NUM_FIELDS: FilterField[] = ["year", "playCount", "rating", "duration", "bitRate", "discNumber", "trackNumber", "bpm", "energy", "localPlayCount"];
 const DATE_FIELDS: FilterField[] = ["dateAdded", "dateModified", "lastPlayed", "localLastPlayed"];
-const BOOL_FIELDS: FilterField[] = ["loved", "hasCoverArt", "compilation", "downloaded", "cached"];
+const BOOL_FIELDS: FilterField[] = ["loved", "hasCoverArt", "compilation", "downloaded", "cached", "availableOffline"];
 const OPS: Record<"text" | "num" | "date" | "bool" | "list", FilterOp[]> = {
   text: ["is", "isNot", "contains", "notContains", "startsWith", "endsWith"],
   num: ["is", "isNot", "gt", "lt", "inTheRange"],
@@ -78,7 +79,7 @@ export function FilterBuilder({ id }: { id: string }) {
   return (
     <div className="view" data-testid="view-filter-builder">
       <div className="view-header">
-        <h1>{existing ? existing.name : t("filters.builder")}</h1>
+        <h1>{existing ? filterName(existing) : t("filters.builder")}</h1>
         <div className="actions">
           <span className="muted" data-testid="filter-count">{preview ? t("filters.count", { count: preview.count }) : <Icon name="spinner" className="spin" size={13} />}</span>
           <button type="button" className="btn" onClick={play} disabled={!preview?.count}><Icon name="play" size={13} style={{ fill: "currentColor" }} /> {t("filters.play")}</button>
@@ -103,7 +104,7 @@ export function FilterBuilder({ id }: { id: string }) {
             <button type="button" className="btn" disabled={!valid || !preview?.capability.serverExpressible || !nativeApi} title={!nativeApi ? t("filters.smartUnavailable") : undefined} onClick={() => bridge().dispatch({ type: "createSmartPlaylist", data: { server_id: serverId, filter, name: filter.name } })}>{t("filters.smartPlaylist")}</button>
             <button type="button" className="btn" disabled={!valid} onClick={() => bridge().dispatch({ type: "createStaticPlaylistFromFilter", data: { server_id: serverId, filter, name: filter.name } })}>{t("filters.staticPlaylist")}</button>
             <button type="button" className="btn" disabled={!valid} onClick={() => void exportNsp()} data-testid="filter-export">{t("filters.exportNsp")}</button>
-            {existing ? <button type="button" className="btn danger" onClick={() => { bridge().dispatch({ type: "deleteFilter", data: { id: existing.id } }); navigate({ view: "filters" }); }}>{t("filters.delete")}</button> : null}
+            {existing && !isBuiltinFilter(existing.id) ? <button type="button" className="btn danger" onClick={() => { bridge().dispatch({ type: "deleteFilter", data: { id: existing.id } }); navigate({ view: "filters" }); }}>{t("filters.delete")}</button> : null}
           </div>
         </div>
         <div>
@@ -157,7 +158,7 @@ function RuleEditor({ rule, onChange, onRemove }: { rule: FilterRule; onChange: 
   const fields = useMemo(() => [...FilterFieldValues], []);
   return (
     <div className="rule" data-testid="rule">
-      <select className="select" value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{f}{["downloaded", "cached", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</select>
+      <select className="select" value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{f}{["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</select>
       <select className="select" value={rule.op} onChange={(e) => setOp(e.target.value as FilterOp)} aria-label="Operator">{ops.map((o) => <option key={o} value={o}>{OP_LABEL[o]}</option>)}</select>
       {v.type === "text" ? <input className="input" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "text", data: e.target.value } })} aria-label="Value" data-testid="rule-value" /> : null}
       {v.type === "number" ? <input className="input" type="number" step="any" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "number", data: Number(e.target.value) } })} aria-label="Value" style={{ width: 100 }} /> : null}

@@ -109,7 +109,15 @@ class FakeCore(
     private var keyCounter = 0
     private var idCounter = 0
     private var advanceJob: kotlinx.coroutines.Job? = null
-    private var storage = StorageSummary(1.8e9, 6.4e8, 1.2e8, warnThreshold, 2.4e10)
+    private var storage = StorageSummary(
+        downloadsBytes = 1.8e9, cacheBytes = 6.4e8, imagesBytes = 1.2e8, warnThresholdBytes = warnThreshold, freeBytes = 2.4e10,
+        partialCacheBytes = 9.6e7, cacheBudgetBytes = AUTO_CACHE_BUDGET, cacheBudgetAuto = true,
+        servedFromDiskBytes = 3.1e9, fetchedBytes = 5.2e9, dataSavedBytes = 2.7e9,
+    )
+    private val primed = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    /** `album:<id>` / `track:<id>` for every PrimeAlbum / PrimeTrack received, in order (for tests). */
+    val primeRequests: List<String> get() = primed.toList()
 
     init {
         devices += DeviceInfo(deviceId, "This phone", Platform.Android, "0.1.0", true, false, now(), true)
@@ -144,6 +152,7 @@ class FakeCore(
         def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_CACHE_MAX_BYTES, "2147483648.0", SettingScope.DeviceLocal)
+        def(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_TRANSCODE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_WIFI_ONLY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.SLEEP_DEFAULT_MINUTES, "30", SettingScope.AccountSynced)
@@ -162,6 +171,10 @@ class FakeCore(
             FilterNode.Rule(FilterRule(FilterField.Downloaded, FilterOp.IsTrue, FilterValue.Bool(true))),
             FilterNode.Rule(FilterRule(FilterField.FileType, FilterOp.Is, FilterValue.Text("flac"))),
         )), SortOrder.Title, false, null)
+        // The core's built-in (see filters::default_filters).
+        filters += Filter(BUILTIN_AVAILABLE_OFFLINE, "Available offline", FilterNode.All(listOf(
+            FilterNode.Rule(FilterRule(FilterField.AvailableOffline, FilterOp.IsTrue, FilterValue.Bool(true))),
+        )), SortOrder.Artist, false, null)
         pins += Pin(PinTarget.Playlist(PinTargetPlaylistInner("pl0")), "Late night", library.playlist("pl0")?.coverArt, 18u, 18u, 4.1e8, now() - 5 * 86_400_000.0, false)
         pins += Pin(PinTarget.Album(PinTargetAlbumInner("al3")), library.album("al3")?.name ?: "Album", "al3", 9u, 6u, 2.2e8, now() - 3_600_000.0, false)
         problems += Problem("p1", "job-sync-old", "Couldn't fetch artwork for 3 albums", "HTTP 502 from the server while fetching cover art.", now() - 900_000.0, true)
@@ -437,7 +450,7 @@ class FakeCore(
     }
 
     // -- filters -----------------------------------------------------------------------------------
-    private val localOnly = setOf(FilterField.Downloaded, FilterField.Cached, FilterField.LocalPlayCount, FilterField.LocalLastPlayed, FilterField.InPlaylist)
+    private val localOnly = setOf(FilterField.Downloaded, FilterField.Cached, FilterField.AvailableOffline, FilterField.LocalPlayCount, FilterField.LocalLastPlayed, FilterField.InPlaylist)
 
     private fun fields(node: FilterNode): List<FilterField> = when (node) {
         is FilterNode.Rule -> listOf(node.data.field)
@@ -471,6 +484,7 @@ class FakeCore(
         val bool: Boolean? = when (r.field) {
             FilterField.Loved -> t.loved; FilterField.HasCoverArt -> t.coverArt != null; FilterField.Compilation -> false
             FilterField.Downloaded -> t.offline == OfflineState.Downloaded; FilterField.Cached -> t.offline == OfflineState.Cached
+            FilterField.AvailableOffline -> t.offline == OfflineState.Downloaded || t.offline == OfflineState.Cached
             FilterField.Lyrics -> library.lyricsByTrack[t.id] != null; else -> null
         }
         val date: Double? = when (r.field) {
@@ -537,7 +551,25 @@ class FakeCore(
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(pickerOpen, devices.filter { !it.isSelf })))
             }
             Command.Shutdown -> advanceJob?.cancel()
-            is Command.SetNetworkState -> { network = c.data.state }
+            is Command.SetNetworkState -> {
+                val wasOffline = network?.kind == NetworkKind.Offline
+                network = c.data.state
+                val offline = c.data.state.kind == NetworkKind.Offline
+                // Like the core: offline, only downloads and complete cache entries play; say so.
+                if (offline && !wasOffline && current != null) {
+                    val queued = (listOfNotNull(current) + insertions + queueView().upcoming.map { it.item }).mapNotNull { library.track(it.trackId) }
+                    val playable = queued.count { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
+                    playerNotice = when {
+                        playable == 0 -> OFFLINE_NOTHING
+                        playable < queued.size -> OFFLINE_SKIPPING
+                        else -> null
+                    }
+                    if (playerNotice != null) emit(Event.PlayerNotice(EventPlayerNoticeInner(playerNotice)))
+                } else if (!offline && wasOffline && playerNotice != null) {
+                    playerNotice = null
+                    emit(Event.PlayerNotice(EventPlayerNoticeInner(null)))
+                }
+            }
             is Command.SetVisibility -> Unit
             is Command.SetBatterySaver -> { batterySaver = c.data.enabled; emit(Event.Snapshot(EventSnapshotInner(snapshot()))) }
 
@@ -698,8 +730,10 @@ class FakeCore(
             is Command.Scrobble -> Unit
 
             is Command.Pin -> pin(c.data.target, c.data.transcode)
+            is Command.PrimeAlbum -> primed += "album:${c.data.album_id}"
+            is Command.PrimeTrack -> primed += "track:${c.data.track_id}"
             is Command.Unpin -> { pins.removeAll { it.target == c.data.target }; emitPins(); toast("Download removed") }
-            Command.ClearStreamCache -> { storage = storage.copy(cacheBytes = 0.0); emit(Event.StorageChanged(EventStorageChangedInner(storage))); toast("Stream cache cleared") }
+            Command.ClearStreamCache -> { storage = storage.copy(cacheBytes = 0.0, partialCacheBytes = 0.0); emit(Event.StorageChanged(EventStorageChangedInner(storage))); toast("Stream cache cleared") }
             // The fake plays nothing through a backend: stream capabilities change nothing here.
             is Command.SetBackendCapabilities -> Unit
             is Command.SetStorageWarnThreshold -> { warnThreshold = c.data.bytes; emitPins() }
@@ -1079,6 +1113,13 @@ class FakeCore(
         settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
+        if (key == SettingKeys.STORAGE_CACHE_MAX_BYTES) {
+            // Unset or at the default: the automatic budget.
+            val bytes = value.toDoubleOrNull()
+            val auto = bytes == null || value == defaults[key]
+            storage = storage.copy(cacheBudgetAuto = auto, cacheBudgetBytes = if (auto) AUTO_CACHE_BUDGET else bytes)
+            emit(Event.StorageChanged(EventStorageChangedInner(storage)))
+        }
     }
 
     private fun lyricsFor(id: TrackId): Lyrics? = library.lyricsByTrack[id]?.let { it.copy(offsetMs = lyricsOffsets[id] ?: 0) }
@@ -1285,6 +1326,12 @@ class FakeCore(
     }
 
     companion object {
+        /** The core's automatic stream-cache budget on a roomy volume: min(2 GiB, 10% of the space). */
+        const val AUTO_CACHE_BUDGET = 2.0 * 1024 * 1024 * 1024
+        const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
+        /** The core's offline PlayerNotice texts (core/handlers/cache.rs). */
+        const val OFFLINE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
+        const val OFFLINE_NOTHING = "Nothing in the queue is available offline"
         fun defaultBands() = listOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0).map { EqBand(it, 0.0, 1.0) }
     }
 }

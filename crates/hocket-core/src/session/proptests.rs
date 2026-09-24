@@ -180,6 +180,8 @@ fn op() -> impl Strategy<Value = QueueOp> {
         queue_mode().prop_map(|mode| QueueOp::SetQueueMode { mode }),
         any_key().prop_map(|key| QueueOp::JumpToQueueItem { key }),
         any_key().prop_map(|key| QueueOp::SkipUnavailable { key }),
+        any_key().prop_map(|key| QueueOp::SkipOffline { key }),
+        Just(QueueOp::ClearOfflineSkips),
         prop::collection::vec(any_key(), 1..3).prop_map(|keys| QueueOp::RemoveQueueItems { keys }),
         (any_key(), 0u32..10).prop_map(|(key, to_index)| QueueOp::MoveQueueItem { key, to_index }),
         track_ids().prop_map(|track_ids| QueueOp::PlayNext {
@@ -274,6 +276,17 @@ fn check_invariants(doc: &SessionDocument) {
     let p = Permutation::from_state(doc.shuffle.as_ref(), n);
     assert!(is_bijection(p.order()));
     assert_eq!(p.len(), n);
+    // The offline set only names stored items that are still marked.
+    for key in crate::session::offline_skipped(doc) {
+        assert!(
+            doc.current
+                .iter()
+                .chain(doc.history.iter())
+                .chain(doc.insertions.iter())
+                .any(|i| i.key == key && i.unavailable),
+            "offline set names {key}, which is not a marked item"
+        );
+    }
 }
 
 proptest! {

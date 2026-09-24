@@ -42,7 +42,7 @@ export function Router() {
     case "search":
       return <SearchView query={route.param ?? ""} />;
     case "downloads":
-      return <Downloads />;
+      return <Downloads tab={route.param} />;
     case "filters":
       return <Filters />;
     case "filter":

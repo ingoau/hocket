@@ -33,6 +33,19 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
@@ -64,24 +77,65 @@ fun setting(key: String): SettingHandle {
 }
 
 @Composable
-fun ScopeBadge(scope: SettingScope?) {
+fun ScopeBadge(scope: SettingScope?, modifier: Modifier = Modifier) {
     when (scope) {
-        SettingScope.AccountSynced -> Badge(stringResource(R.string.settings_scope_synced), container = MaterialTheme.colorScheme.tertiaryContainer)
-        SettingScope.DeviceLocal, null -> Badge(stringResource(R.string.settings_scope_local))
+        SettingScope.AccountSynced -> Badge(scopeLabel(scope), modifier, container = MaterialTheme.colorScheme.tertiaryContainer)
+        SettingScope.DeviceLocal, null -> Badge(scopeLabel(scope), modifier)
     }
 }
+
+@Composable
+private fun scopeLabel(scope: SettingScope?): String =
+    stringResource(if (scope == SettingScope.AccountSynced) R.string.settings_scope_synced else R.string.settings_scope_local)
+
+/** Row titles: bodyLarge with a tighter line height, so a wrapped title reads as one block. */
+@Composable
+private fun titleStyle(): TextStyle = MaterialTheme.typography.bodyLarge.copy(lineHeight = 20.sp)
+
+/**
+ * A setting's title with its scope badge INLINE after the last word: when the title wraps, the
+ * badge follows it on the last line instead of sitting in a column of its own between the text
+ * and the trailing switch. The badge is drawn only; its text is part of the title's text (", This
+ * device"), so a screen reader reads it once, after the title.
+ */
+@Composable
+fun SettingTitle(title: String, scope: SettingScope?, color: Color = Color.Unspecified, modifier: Modifier = Modifier) {
+    val style = titleStyle()
+    if (scope == null) { Text(title, style = style, color = color, modifier = modifier); return }
+    val badgeText = scopeLabel(scope)
+    val badgeStyle = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val size = remember(badgeText, badgeStyle, density) { measurer.measure(badgeText, badgeStyle).size }
+    // Gap before the badge + the badge's own padding (6 dp each side, 2 dp top and bottom).
+    val (width, height) = with(density) { (BadgeGap + size.width.toDp() + 12.dp).toSp() to (size.height.toDp() + 4.dp).toSp() }
+    val text = buildAnnotatedString {
+        append(title)
+        appendInlineContent(SCOPE_BADGE, ", $badgeText")
+    }
+    val inline = mapOf(
+        SCOPE_BADGE to InlineTextContent(Placeholder(width, height, PlaceholderVerticalAlign.TextCenter)) {
+            Row(Modifier.clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(BadgeGap)); ScopeBadge(scope) }
+        },
+    )
+    Text(text, style = style, color = color, inlineContent = inline, modifier = modifier)
+}
+
+private const val SCOPE_BADGE = "scopeBadge"
+private val BadgeGap = 8.dp
 
 /** Test tag of a settings row with the stable id [id] (see the settings screens' `tag` arguments). */
 fun settingTag(id: String) = "setting.$id"
 
+/**
+ * A settings row: title (with its [scope] badge inline), optional subtitle, optional trailing
+ * content. [destructive] draws the title in the error colour (sign out).
+ */
 @Composable
-fun SettingRow(title: String, subtitle: String? = null, scope: SettingScope? = null, onClick: (() -> Unit)? = null, tag: String? = null, trailing: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().let { if (tag != null) it.testTag(settingTag(tag)) else it }.let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+fun SettingRow(title: String, subtitle: String? = null, scope: SettingScope? = null, onClick: (() -> Unit)? = null, tag: String? = null, destructive: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).let { if (tag != null) it.testTag(settingTag(tag)) else it }.let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
-                if (scope != null) { Spacer(Modifier.width(8.dp)); ScopeBadge(scope) }
-            }
+            SettingTitle(title, scope, color = if (destructive) MaterialTheme.colorScheme.error else Color.Unspecified)
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         if (trailing != null) { Spacer(Modifier.width(12.dp)); trailing() }
@@ -101,10 +155,7 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subt
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
-                if (scope != null) { Spacer(Modifier.width(8.dp)); ScopeBadge(scope) }
-            }
+            SettingTitle(title, scope)
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Spacer(Modifier.width(12.dp))

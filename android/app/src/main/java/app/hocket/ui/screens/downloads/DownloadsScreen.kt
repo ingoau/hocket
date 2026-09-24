@@ -38,6 +38,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.outlined.OfflineBolt
+import androidx.compose.material3.ListItem
+import androidx.compose.ui.platform.testTag
+import app.hocket.ui.nav.Route
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
@@ -71,11 +77,18 @@ fun DownloadsScreen(nav: NavHostController) {
             )
         },
     ) { padding ->
-        if (pins.isEmpty()) {
-            EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body), Modifier.padding(padding))
-            return@Scaffold
-        }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+            // Everything that plays offline: downloads plus complete stream-cache entries.
+            item(key = "availableOffline") {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.available_offline)) },
+                    supportingContent = { Text(stringResource(R.string.settings_available_offline_body)) },
+                    leadingContent = { Icon(Icons.Outlined.OfflineBolt, null) },
+                    trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                    modifier = Modifier.clickable { nav.navigate(Route.AvailableOffline) }.testTag("downloads.availableOffline"),
+                )
+            }
+            if (pins.isEmpty()) item(key = "empty") { EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body)) }
             if (warn != null && storage.downloadsBytes > warn) {
                 item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
             }

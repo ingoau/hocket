@@ -42,7 +42,7 @@
 //! **Revision.** The revision is bumped exactly once per op that changed the
 //! document (compared without revision / `updated_at`); no-ops leave it alone.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::api::{
     AutoplayProvider, Command, ContextKind, EpochMs, Ms, PlayContextArgs, QueueContext, QueueItem,
@@ -137,6 +137,19 @@ pub enum QueueOp {
     SkipUnavailable {
         key: QueueKey,
     },
+    /// `SkipUnavailable` because this device is offline and the item is
+    /// neither downloaded nor cached: the same mark, plus the key in the
+    /// document's offline set (see [`offline_skipped`]) so that coming back
+    /// online can clear it. Local only: not a wire op; the actor pushes the
+    /// result as a whole-document replace, which every peer (older builds
+    /// included) adopts.
+    SkipOffline {
+        key: QueueKey,
+    },
+    /// Clear the marks of every item in the offline set, and the set. Real
+    /// failures ([`QueueOp::SkipUnavailable`]) stay marked. Local only, like
+    /// [`QueueOp::SkipOffline`].
+    ClearOfflineSkips,
     AppendAutoplay {
         items: Vec<AutoplayItem>,
     },
@@ -397,6 +410,50 @@ pub fn derive(doc: &SessionDocument) -> DerivedQueue {
     }
 }
 
+/// Top-level document field (kept in [`SessionDocument::extra`], so the
+/// public document shape is unchanged) listing the keys of items marked
+/// unavailable only because the owning device was offline. A build that
+/// predates it sees plain marks (skipped until jumped to) and carries the
+/// field along untouched.
+pub const OFFLINE_SKIPPED_FIELD: &str = "offlineSkipped";
+
+/// Keys marked unavailable because the device was offline (see
+/// [`OFFLINE_SKIPPED_FIELD`]). Malformed content reads as empty.
+pub fn offline_skipped(doc: &SessionDocument) -> BTreeSet<QueueKey> {
+    doc.extra
+        .get(OFFLINE_SKIPPED_FIELD)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+fn set_offline_skipped(doc: &mut SessionDocument, keys: &BTreeSet<QueueKey>) {
+    if keys.is_empty() {
+        doc.extra.remove(OFFLINE_SKIPPED_FIELD);
+    } else if let Ok(raw) = serde_json::to_string(keys) {
+        doc.extra.insert(OFFLINE_SKIPPED_FIELD.into(), raw);
+    }
+}
+
+/// Keep the offline set to items that are still stored and still marked: a
+/// jump clears the mark, history drops old items, removal drops the item.
+/// Documents without the field are untouched.
+fn prune_offline_skipped(doc: &mut SessionDocument) {
+    if !doc.extra.contains_key(OFFLINE_SKIPPED_FIELD) {
+        return;
+    }
+    let marked: HashSet<&str> = doc
+        .current
+        .iter()
+        .chain(doc.history.iter())
+        .chain(doc.insertions.iter())
+        .filter(|i| i.unavailable)
+        .map(|i| i.key.as_str())
+        .collect();
+    let mut keys = offline_skipped(doc);
+    keys.retain(|k| marked.contains(k.as_str()));
+    set_offline_skipped(doc, &keys);
+}
+
 /// Reduce one op. Never panics, whatever the document or op.
 pub fn reduce(
     doc: &SessionDocument,
@@ -413,6 +470,7 @@ pub fn reduce(
         start_position: &mut start_position,
     };
     r.apply(op)?;
+    prune_offline_skipped(&mut next);
     if next.current.as_ref().map(|c| &c.key) != doc.current.as_ref().map(|c| &c.key) {
         effects.insert(
             0,
@@ -525,7 +583,40 @@ impl Reducer<'_, '_> {
                 Ok(())
             }
             QueueOp::Previous => self.previous(None),
-            QueueOp::SkipUnavailable { key } => self.skip_unavailable(&key),
+            QueueOp::SkipUnavailable { key } => {
+                // A real failure: whatever the item was skipped for before,
+                // it is not an offline mark any more.
+                let mut offline = offline_skipped(self.doc);
+                if offline.remove(&key) {
+                    set_offline_skipped(self.doc, &offline);
+                }
+                self.skip_unavailable(&key)
+            }
+            QueueOp::SkipOffline { key } => {
+                self.skip_unavailable(&key)?;
+                if self.is_marked(&key) {
+                    let mut offline = offline_skipped(self.doc);
+                    offline.insert(key);
+                    set_offline_skipped(self.doc, &offline);
+                }
+                Ok(())
+            }
+            QueueOp::ClearOfflineSkips => {
+                let offline = offline_skipped(self.doc);
+                let d = &mut *self.doc;
+                for item in d
+                    .current
+                    .iter_mut()
+                    .chain(d.history.iter_mut())
+                    .chain(d.insertions.iter_mut())
+                {
+                    if offline.contains(&item.key) {
+                        item.unavailable = false;
+                    }
+                }
+                set_offline_skipped(self.doc, &BTreeSet::new());
+                Ok(())
+            }
             QueueOp::AppendAutoplay { items } => {
                 for it in items {
                     let key = self.ctx.entropy.next_key();
@@ -1294,6 +1385,16 @@ impl Reducer<'_, '_> {
             }
         }
         Err(ReduceError::UnknownKey(key.into()))
+    }
+
+    /// A stored item with this key carries the unavailable mark.
+    fn is_marked(&self, key: &str) -> bool {
+        let d = &*self.doc;
+        d.current
+            .iter()
+            .chain(d.history.iter())
+            .chain(d.insertions.iter())
+            .any(|i| i.key == key && i.unavailable)
     }
 
     fn skip_unavailable(&mut self, key: &str) -> Result<(), ReduceError> {
@@ -2125,6 +2226,78 @@ mod tests {
             },
         );
         assert_eq!(upcoming_tracks(&r), vec!["a-t1"]);
+    }
+
+    #[test]
+    fn offline_marks_clear_and_real_failures_stay() {
+        let e = DeterministicEntropy::new(21);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 1),
+            Some(0),
+            false,
+        );
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["off1".into(), "broken".into(), "off2".into(), "ok".into()],
+            },
+        );
+        let keys: Vec<QueueKey> = d.insertions.iter().map(|i| i.key.clone()).collect();
+        let (off1, broken, off2) = (keys[0].clone(), keys[1].clone(), keys[2].clone());
+        // The current item goes offline-skipped; the others are marked while queued.
+        let (d, _) = step(&d, &e, QueueOp::Next);
+        assert_eq!(cur_track(&d), "off1");
+        let (d, fx) = step(&d, &e, QueueOp::SkipOffline { key: off1.clone() });
+        assert!(fx.contains(&Effect::Skipped { key: off1.clone() }));
+        assert_eq!(cur_track(&d), "broken");
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::SkipUnavailable {
+                key: broken.clone(),
+            },
+        );
+        let (d, _) = step(&d, &e, QueueOp::SkipOffline { key: off2.clone() });
+        assert_eq!(cur_track(&d), "ok");
+        assert_eq!(
+            offline_skipped(&d),
+            [off1.clone(), off2.clone()].into_iter().collect()
+        );
+        // An older build sees the set as an opaque top-level field.
+        let json = super::super::save(&d).unwrap();
+        assert!(json.contains(OFFLINE_SKIPPED_FIELD), "{json}");
+        let (c, fx) = step(&d, &e, QueueOp::ClearOfflineSkips);
+        assert!(fx.is_empty(), "{fx:?}");
+        assert!(offline_skipped(&c).is_empty());
+        assert!(!c.extra.contains_key(OFFLINE_SKIPPED_FIELD));
+        let marked = |doc: &SessionDocument, k: &str| {
+            doc.history
+                .iter()
+                .chain(doc.insertions.iter())
+                .any(|i| i.key == k && i.unavailable)
+        };
+        assert!(!marked(&c, &off1));
+        assert!(!marked(&c, &off2));
+        assert!(marked(&c, &broken), "a load failure stays marked");
+        assert!(c.revision > d.revision);
+        // Nothing to clear is a no-op.
+        let (c2, _) = step(&c, &e, QueueOp::ClearOfflineSkips);
+        assert!(same_state(&c, &c2));
+        // A later real failure of an offline-skipped item is a real failure.
+        let (j, _) = step(&d, &e, QueueOp::SkipUnavailable { key: off1.clone() });
+        assert!(!offline_skipped(&j).contains(&off1));
+        // A jump clears the mark and drops the key from the set.
+        let (j, _) = step(&d, &e, QueueOp::JumpToQueueItem { key: off2.clone() });
+        assert_eq!(offline_skipped(&j), [off1.clone()].into_iter().collect());
+        // A plain mark from an older build (no set) is never cleared.
+        let mut old = d.clone();
+        old.extra.clear();
+        let (o, _) = step(&old, &e, QueueOp::ClearOfflineSkips);
+        assert!(marked(&o, &off1) && marked(&o, &off2));
     }
 
     #[test]

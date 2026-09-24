@@ -40,8 +40,8 @@ use crate::util::Clock;
 
 pub use document::{load, new_document, save, validate, DocumentError, SESSION_SCHEMA_VERSION};
 pub use reducer::{
-    derive, previous_should_restart, reduce, AutoplayItem, DerivedQueue, Effect, QueueOp,
-    ReduceCtx, ReduceError, DEFAULT_HISTORY_CAP,
+    derive, offline_skipped, previous_should_restart, reduce, AutoplayItem, DerivedQueue, Effect,
+    QueueOp, ReduceCtx, ReduceError, DEFAULT_HISTORY_CAP, OFFLINE_SKIPPED_FIELD,
 };
 pub use saved::{merge_saved_queues, SavedQueuePolicy};
 

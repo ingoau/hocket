@@ -64,6 +64,9 @@ object Commands {
 
     fun pin(target: PinTarget, transcode: Boolean = false) = Command.Pin(CommandPinInner(target, transcode))
     fun unpin(target: PinTarget) = Command.Unpin(CommandUnpinInner(target))
+    /** The album primer (fire and forget): the core routes it to the device that owns playback. */
+    fun primeAlbum(albumId: AlbumId) = Command.PrimeAlbum(CommandPrimeAlbumInner(albumId))
+    fun primeTrack(trackId: TrackId) = Command.PrimeTrack(CommandPrimeTrackInner(trackId))
     fun setStorageWarnThreshold(bytes: Double?) = Command.SetStorageWarnThreshold(CommandSetStorageWarnThresholdInner(bytes))
 
     fun cancelJob(id: JobId) = Command.CancelJob(CommandCancelJobInner(id))

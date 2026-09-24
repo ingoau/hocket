@@ -59,6 +59,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
@@ -145,9 +149,34 @@ private fun DetailScaffold(
     }
 }
 
+/** How long an album page stays resumed and on screen before its first track is primed. */
+internal const val PRIME_DWELL_MS = 2_000L
+
+/**
+ * The album primer: once per visit, when the page has been resumed (on screen, app in front) for
+ * [PRIME_DWELL_MS] without a break, ask the core to prime the album's first seconds so pressing
+ * play starts from disk. Leaving or backgrounding before then restarts the wait; a new visit (the
+ * page composed again) may prime again, which the core deduplicates. The core decides whether
+ * priming is allowed (the playback owner's network and battery state).
+ */
+@Composable
+fun PrimeAlbumOnDwell(albumId: String) {
+    val client = LocalCoreClient.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val primed = remember(albumId) { java.util.concurrent.atomic.AtomicBoolean(false) }
+    LaunchedEffect(albumId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (primed.get()) return@repeatOnLifecycle
+            delay(PRIME_DWELL_MS)
+            if (primed.compareAndSet(false, true)) client.dispatch(Commands.primeAlbum(albumId))
+        }
+    }
+}
+
 @Composable
 fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
+    PrimeAlbumOnDwell(id)
     val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
     var album by remember { mutableStateOf<Album?>(null) }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }

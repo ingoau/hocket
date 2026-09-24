@@ -13,6 +13,8 @@ import { fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
+import { OfflineBadge } from "./OfflineBadge";
+import type { Primer } from "../lib/use-prime";
 
 export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -93,10 +95,12 @@ export interface TrackTableProps {
   testId?: string;
   /** Accessible name of the grid (defaults to "Tracks"). */
   label?: string;
+  /** Play intent (hover on a row's play button, or keyboard focus resting on a row) primes the track. */
+  primer?: Primer;
 }
 
 export function TrackTable(props: TrackTableProps) {
-  const { tracks, total, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId } = props;
+  const { tracks, total, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId, primer } = props;
   const parentRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -294,7 +298,8 @@ export function TrackTable(props: TrackTableProps) {
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
                 style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size }}
-                onFocus={(e) => { if (e.target === e.currentTarget && vi.index !== focusIdx) setFocusIdx(vi.index); }}
+                onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(tr?.id); }}
+                onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(tr?.id); }}
                 onClick={(e) => click(e, vi.index)}
                 onDoubleClick={() => tr && onPlay(vi.index, tr)}
                 onContextMenu={(e) => onContext(e, vi.index)}
@@ -306,7 +311,7 @@ export function TrackTable(props: TrackTableProps) {
                 data-track-id={tr?.id}
               >
                 {columns.map((c) => (
-                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} />
+                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} />
                 ))}
               </div>
             );
@@ -317,7 +322,7 @@ export function TrackTable(props: TrackTableProps) {
   );
 }
 
-function Cell({ col, track, index, playing, serverId }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string }) {
+function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer }) {
   const navigate = useApp((s) => s.navigate);
   const cls = COLUMNS[col].num ? "td num" : "td";
   // Controls inside rows are not Tab stops: the row is (roving), and its
@@ -325,7 +330,13 @@ function Cell({ col, track, index, playing, serverId }: { col: ColumnId; track: 
   if (!track) return <div className={cls} role="gridcell">{col === "title" ? <span className="faint">…</span> : ""}</div>;
   switch (col) {
     case "index":
-      return <div className={cls} role="gridcell">{playing ? <><Icon name="play" size={12} style={{ fill: "currentColor", color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : (track.trackNumber ?? index + 1)}</div>;
+      return (
+        <div className={`${cls} index`} role="gridcell">
+          {playing ? <><Icon name="play" size={12} style={{ fill: "currentColor", color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{track.trackNumber ?? index + 1}</span>}
+          {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
+          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} style={{ fill: "currentColor" }} /></button> : null}
+        </div>
+      );
     case "art":
       return <div className="td" role="gridcell"><Artwork id={track.coverArt} size={64} className="art" /></div>;
     case "title":
@@ -351,7 +362,7 @@ function Cell({ col, track, index, playing, serverId }: { col: ColumnId; track: 
     case "bpm":
       return <div className={cls} role="gridcell">{track.sonic?.bpm ? Math.round(track.sonic.bpm) : ""}</div>;
     case "offline":
-      return <div className="td" role="gridcell">{track.offline === "downloaded" ? <Icon name="download" size={12} className="offline" title={t("col.offline")} /> : null}</div>;
+      return <div className="td" role="gridcell"><OfflineBadge state={track.offline} size={12} /></div>;
   }
   void serverId;
   return null;
