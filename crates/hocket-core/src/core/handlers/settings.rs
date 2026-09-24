@@ -304,7 +304,11 @@ impl Actor {
         self.persist_registry();
         if include_device_local {
             if let Ok(v) = serde_json::to_value(&doc.audio) {
-                if self.settings.set_value(keys::AUDIO_SETTINGS, v, now).is_ok() {
+                if self
+                    .settings
+                    .set_value(keys::AUDIO_SETTINGS, v, now)
+                    .is_ok()
+                {
                     out.applied.push(keys::AUDIO_SETTINGS.into());
                 }
             }

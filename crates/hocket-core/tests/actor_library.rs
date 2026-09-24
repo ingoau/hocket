@@ -939,10 +939,19 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
     )), "{:?}", t.events.all().iter().filter(|e| matches!(e, Event::Toast{..})).collect::<Vec<_>>());
 }
 
-/// `ImportConfig`: account-synced keys the document changes are fed to the
-/// Connect engine (a peer sees them, instead of reverting the import on its
-/// next merge); device-local keys stay untouched unless
-/// `include_device_local` is set, and even then never travel.
+async fn setting_of(t: &TestCore, key: &str) -> Setting {
+    match t.query(Query::Setting { key: key.into() }).await {
+        QueryResult::SettingDetail(Some(s)) => s,
+        other => panic!("{key}: {other:?}"),
+    }
+}
+
+/// `ImportConfig` on two paired cores (LAN): account-synced keys the
+/// document changes are broadcast like a local edit (the peer sees them
+/// instead of reverting the import on its next merge); a far-future
+/// `updatedAt` is clamped to now so it cannot pin the value against later
+/// edits; device-local keys stay untouched unless `include_device_local` is
+/// set, and even then never travel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_asked() {
     use hocket_core::core::io::memory::MemoryNet;
@@ -953,19 +962,9 @@ async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_aske
     let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     assert_eq!(a.snapshot().await.devices.len(), 2, "a and b paired");
-    let setting = |t: &TestCore, key: &str| {
-        let key = key.to_string();
-        let t = t.clone_handle();
-        async move {
-            match t.query(Query::Setting { key }).await {
-                QueryResult::SettingDetail(Some(s)) => s.value,
-                other => panic!("{other:?}"),
-            }
-        }
-    };
 
-    // The document comes from a third device (later timestamps than
-    // anything a and b hold): a synced key and a device-local key.
+    // The document comes from a third, unconnected device: a synced key and
+    // a device-local key, with the synced key stamped far in the future.
     let c = TestCore::start_on("c", server, None, 3, clock.clone()).await;
     c.run(Command::SetSetting {
         key: "queue.savedCap".into(),
@@ -981,7 +980,7 @@ async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_aske
         include_secrets: false,
     })
     .await;
-    let doc = c
+    let exported = c
         .events
         .all()
         .into_iter()
@@ -990,15 +989,31 @@ async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_aske
             _ => None,
         })
         .unwrap();
+    let mut parsed: ConfigDocument = serde_json::from_str(&exported).unwrap();
+    let far_future = clock.now_ms() + 10.0 * 365.0 * 86_400_000.0;
+    parsed
+        .settings
+        .iter_mut()
+        .find(|s| s.key == "queue.savedCap")
+        .expect("exported")
+        .updated_at = far_future;
+    let doc = serde_json::to_string(&parsed).unwrap();
 
     a.run(Command::ImportConfig {
         document: doc.clone(),
         include_device_local: false,
     })
     .await;
-    assert_eq!(setting(&a, "queue.savedCap").await, "5");
+    let cap = setting_of(&a, "queue.savedCap").await;
+    assert_eq!(cap.value, "5");
+    assert!(
+        cap.updated_at <= clock.now_ms(),
+        "future updatedAt clamped to now: {} > {}",
+        cap.updated_at,
+        clock.now_ms()
+    );
     assert_eq!(
-        setting(&a, "display.theme").await,
+        setting_of(&a, "display.theme").await.value,
         "\"system\"",
         "device-local keys are left alone by default"
     );
@@ -1010,21 +1025,43 @@ async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_aske
         "the import says what it left alone: {:?}",
         a.events.all()
     );
-    // The synced key reached the engine: b learns it.
+    // The synced key went out through the engine: b learns it.
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
-    assert_eq!(setting(&b, "queue.savedCap").await, "5", "b got the import");
+    assert_eq!(
+        setting_of(&b, "queue.savedCap").await.value,
+        "5",
+        "b got the import"
+    );
 
+    // Because the stamp was clamped, a later normal edit on b still wins.
+    b.run(Command::SetSetting {
+        key: "queue.savedCap".into(),
+        value: "7".into(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(
+        setting_of(&a, "queue.savedCap").await.value,
+        "7",
+        "an imported far-future stamp must not pin the value"
+    );
+
+    // Opting in takes the device-local key too, but it never travels.
     a.run(Command::ImportConfig {
         document: doc,
         include_device_local: true,
     })
     .await;
-    assert_eq!(setting(&a, "display.theme").await, "\"dark\"");
+    assert_eq!(setting_of(&a, "display.theme").await.value, "\"dark\"");
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
     assert_eq!(
-        setting(&b, "display.theme").await,
+        setting_of(&b, "display.theme").await.value,
         "\"system\"",
         "device-local keys never travel"
     );
-    assert_eq!(setting(&b, "queue.savedCap").await, "5");
+    assert_eq!(
+        setting_of(&b, "queue.savedCap").await.value,
+        "5",
+        "the re-import (stamped now) is newer than b's edit and reaches b"
+    );
 }
