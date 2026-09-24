@@ -1,132 +1,227 @@
 package app.hocket.ui.queue
 
 import android.os.SystemClock
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.DragInteraction
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AllInclusive
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.SecondaryScrollableTabRow
-import androidx.compose.material3.Tab
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButtonColors
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueSource
+import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.SelectionKind
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ActionSheet
+import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.ListArtCorner
+import app.hocket.ui.components.OfflineBadge
+import app.hocket.ui.components.RatingDialog
 import app.hocket.ui.components.SelectionToolbar
-import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.offlineStateText
+import app.hocket.ui.components.trackLabel
+import app.hocket.ui.components.trackRowActions
+import app.hocket.core.ActionIds
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /** How long after the user last scrolled the queue it stops following the current track. */
 private const val USER_SCROLL_GRACE_MS = 8_000L
 
-/** Queue / Recent / History share one panel (design: saved queues, global undo on Android). */
+private const val NOW_KEY = "hdr:c"
+private const val FOOTER_KEY = "footer"
+
+/** Kept for existing callers: the queue list with its mode header. */
 @Composable
-fun QueuePanel(modifier: Modifier = Modifier) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
+
+/**
+ * The player's queue, Apple Music style: a fixed header of shuffle / repeat / autoplay toggles over
+ * ONE list of history (scrolled away above), now playing, "Playing next" and "Continue playing".
+ * Everything is drawn on a transparent background so the player's artwork gradient shows through;
+ * colours come from [LocalContentColor] and the (artwork-derived) [MaterialTheme].
+ * [contentPadding] pads the list only (e.g. room for controls drawn over its bottom edge).
+ */
+@Composable
+fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues()) {
+    val dir = LocalLayoutDirection.current
     Column(modifier) {
-        // Scrollable tabs: at large font sizes the labels keep their size and the row scrolls,
-        // instead of a button group pushing items into an (empty) overflow.
-        val labels = listOf(stringResource(R.string.player_tab_queue), stringResource(R.string.player_tab_recent), stringResource(R.string.player_tab_history))
-        SecondaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 16.dp, containerColor = androidx.compose.ui.graphics.Color.Transparent) {
-            labels.forEachIndexed { i, label ->
-                Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label, maxLines = 1) }, modifier = Modifier.testTag("queue.tab.$i"))
-            }
-        }
-        when (tab) {
-            0 -> QueueTimeline(Modifier.fillMaxSize())
-            1 -> RecentQueuesList(Modifier.fillMaxSize())
-            else -> UndoHistoryPanel(Modifier.fillMaxSize())
-        }
+        QueueModeHeader(
+            Modifier.fillMaxWidth()
+                .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = 4.dp, bottom = 8.dp),
+        )
+        QueueTimeline(Modifier.fillMaxWidth().weight(1f), contentPadding)
     }
 }
 
-private sealed interface Row {
-    data class Header(val id: String, val text: String) : Row
-    data class Item(val entry: QueueEntry, val section: Section) : Row
+/** Shuffle, repeat (off / all / one) and autoplay as three equal tonal pills. */
+@Composable
+private fun QueueModeHeader(modifier: Modifier = Modifier) {
+    val client = LocalCoreClient.current
+    val queue by client.queue.collectAsStateWithLifecycle()
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ModeToggle(
+            checked = queue.shuffle, onCheckedChange = { client.dispatch(Commands.setShuffle(it)) },
+            icon = Icons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f),
+        )
+        ModeToggle(
+            checked = queue.repeat != RepeatMode.Off,
+            onCheckedChange = { client.dispatch(Commands.setRepeat(when (queue.repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })) },
+            icon = if (queue.repeat == RepeatMode.One) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+            label = stringResource(R.string.action_label_repeat),
+            state = stringResource(when (queue.repeat) { RepeatMode.Off -> R.string.player_repeat_off; RepeatMode.All -> R.string.player_repeat_all; RepeatMode.One -> R.string.player_repeat_one }),
+            tag = "queue.repeat", modifier = Modifier.weight(1f),
+        )
+        ModeToggle(
+            checked = queue.autoplay, onCheckedChange = { client.dispatch(Commands.setAutoplay(it)) },
+            icon = Icons.Filled.AllInclusive, label = stringResource(R.string.player_autoplay), tag = "queue.infinite", modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, icon: ImageVector, label: String, tag: String, modifier: Modifier = Modifier, state: String? = null) {
+    val content = LocalContentColor.current
+    // Off: a faint wash of the content colour over the artwork backdrop; on: the scheme's primary.
+    val container by animateColorAsState(if (checked) MaterialTheme.colorScheme.primary else content.copy(alpha = 0.12f), label = "modeContainer")
+    val foreground by animateColorAsState(if (checked) MaterialTheme.colorScheme.onPrimary else content, label = "modeContent")
+    FilledTonalToggleButton(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors = ToggleButtonColors(
+            containerColor = container, contentColor = foreground,
+            disabledContainerColor = container.copy(alpha = 0.06f), disabledContentColor = foreground.copy(alpha = 0.38f),
+            checkedContainerColor = container, checkedContentColor = foreground,
+        ),
+        modifier = modifier.heightIn(min = 40.dp).testTag(tag).semantics { contentDescription = label; if (state != null) stateDescription = state },
+    ) { Icon(icon, null) }
+}
+
+private sealed interface Line {
+    data class Header(val id: String, val title: String, val subtitle: String? = null, val clear: Clear? = null) : Line
+    data class Item(val entry: QueueEntry, val section: Section) : Line
+    data object Footer : Line
     enum class Section { History, Current, Next, Upcoming, Autoplay }
+    enum class Clear { History, Next }
 }
 
 /**
- * The one scrollable timeline: history above (dimmed), the current item, then "Playing next"
- * (insertions) and "Continuing from <context>" (the permuted context), then autoplay with its "why".
- * Drag handles reorder (haptics), swipe removes (undo toast from the core), tap jumps.
+ * The one scrollable list: history above (oldest first), the current item, then "Playing next"
+ * (insertions) and "Continue playing · From <context>" (the permuted context), then autoplay with
+ * its "why". It opens at "Now playing" so history is only revealed by scrolling up. Drag handles
+ * reorder (haptics), swipe removes (undo toast from the core), tap jumps (history: play again).
  */
 @Composable
-fun QueueTimeline(modifier: Modifier = Modifier) {
+private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.QueueItems
     val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
     var sheetFor by remember { mutableStateOf<QueueEntry?>(null) }
-    val historyLabel = stringResource(R.string.queue_history)
+    var ratingFor by remember { mutableStateOf<QueueEntry?>(null) }
+    val historyLabel = stringResource(R.string.queue_section_history)
     val nowLabel = stringResource(R.string.queue_now)
     val nextLabel = stringResource(R.string.queue_playing_next)
-    val continuingLabel = queue.contextLabel?.let { stringResource(R.string.queue_continuing, it) } ?: stringResource(R.string.queue_up_next)
+    val continueLabel = stringResource(R.string.queue_section_continue)
+    val fromLabel = queue.contextLabel?.let { stringResource(R.string.queue_section_from, it) }
     val autoplayLabel = stringResource(R.string.queue_autoplay_section)
     val removeLabel = stringResource(R.string.action_remove_from_queue)
     val moveUpLabel = stringResource(R.string.a11y_move_up)
     val moveDownLabel = stringResource(R.string.a11y_move_down)
-    val rows: List<Row> = remember(queue, historyLabel, nowLabel, nextLabel, continuingLabel, autoplayLabel) {
+    val rows: List<Line> = remember(queue, historyLabel, nowLabel, nextLabel, continueLabel, fromLabel, autoplayLabel) {
         buildList {
-            if (queue.history.isNotEmpty()) { add(Row.Header("h", historyLabel)); queue.history.forEach { add(Row.Item(it, Row.Section.History)) } }
-            queue.current?.let { add(Row.Header("c", nowLabel)); add(Row.Item(it, Row.Section.Current)) }
-            if (queue.playingNext.isNotEmpty()) { add(Row.Header("n", nextLabel)); queue.playingNext.forEach { add(Row.Item(it, Row.Section.Next)) } }
+            if (queue.history.isNotEmpty()) {
+                add(Line.Header("h", historyLabel, clear = Line.Clear.History))
+                queue.history.forEach { add(Line.Item(it, Line.Section.History)) }
+            }
+            queue.current?.let { add(Line.Header("c", nowLabel)); add(Line.Item(it, Line.Section.Current)) }
+            if (queue.playingNext.isNotEmpty()) {
+                add(Line.Header("n", nextLabel, clear = Line.Clear.Next))
+                queue.playingNext.forEach { add(Line.Item(it, Line.Section.Next)) }
+            }
             val (auto, ctx) = queue.upcoming.partition { it.item.source is QueueSource.Autoplay }
-            if (ctx.isNotEmpty()) { add(Row.Header("u", continuingLabel)); ctx.forEach { add(Row.Item(it, Row.Section.Upcoming)) } }
-            if (auto.isNotEmpty()) { add(Row.Header("a", autoplayLabel)); auto.forEach { add(Row.Item(it, Row.Section.Autoplay)) } }
+            if (ctx.isNotEmpty()) { add(Line.Header("u", continueLabel, fromLabel)); ctx.forEach { add(Line.Item(it, Line.Section.Upcoming)) } }
+            if (auto.isNotEmpty()) { add(Line.Header("a", autoplayLabel)); auto.forEach { add(Line.Item(it, Line.Section.Autoplay)) } }
+            if (isNotEmpty()) add(Line.Footer)
         }
     }
     if (queue.current == null && rows.isEmpty()) {
@@ -147,7 +242,7 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
     }
     // Follow the current track, but never fight the user: no auto-scroll while a finger is on the
     // list or for a while after they last scrolled it (Metrolist/Navic leave a browsed queue alone).
-    var lastUserScroll by remember { mutableLongStateOf(0L) }
+    var lastUserScroll by remember { mutableLongStateOf(-USER_SCROLL_GRACE_MS) }
     var userDragging by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         listState.interactionSource.interactions.collect { i ->
@@ -157,36 +252,64 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
             }
         }
     }
-    var firstScroll by remember { mutableStateOf(true) }
+    // Room below the last row so "Now playing" can reach the top even when little follows it
+    // (otherwise the list clamps and history shows): the viewport minus what follows the header.
+    val hasHistory = queue.history.isNotEmpty()
+    var tailPx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(listState, hasHistory) {
+        if (!hasHistory) { tailPx = 0; return@LaunchedEffect }
+        snapshotFlow { listState.layoutInfo }.collect { info ->
+            val visible = info.visibleItemsInfo
+            val now = visible.firstOrNull { it.key == NOW_KEY } ?: return@collect
+            val footer = visible.firstOrNull { it.key == FOOTER_KEY }
+            val viewport = info.viewportSize.height - info.beforeContentPadding - info.afterContentPadding
+            tailPx = if (footer == null) 0 else (viewport - (footer.offset + footer.size - now.offset)).coerceAtLeast(0)
+        }
+    }
+    var positioned by remember { mutableStateOf(false) }
     LaunchedEffect(queue.current?.item?.key) {
-        val idx = rows.indexOfFirst { it is Row.Item && it.section == Row.Section.Current }
-        if (idx <= 0) return@LaunchedEffect
-        val target = (idx - 1).coerceAtLeast(0)
+        // "Now playing" at the top; history stays above, reached by scrolling up.
+        val target = rows.indexOfFirst { it is Line.Header && it.id == "c" }
+        if (target < 0) return@LaunchedEffect
+        fun leaveAlone() = userDragging || listState.isScrollInProgress || SystemClock.uptimeMillis() - lastUserScroll < USER_SCROLL_GRACE_MS
         when {
             // Opening the queue: start at the current track, without an animation.
-            firstScroll -> listState.scrollToItem(target)
-            userDragging || listState.isScrollInProgress -> {}
-            SystemClock.uptimeMillis() - lastUserScroll < USER_SCROLL_GRACE_MS -> {}
+            !positioned -> listState.scrollToItem(target)
+            leaveAlone() -> return@LaunchedEffect
             else -> listState.animateScrollToItem(target)
         }
-        firstScroll = false
+        positioned = true
+        // The tail spacer catches up a frame after the rows change; settle on the header then.
+        repeat(2) { withFrameNanos { } }
+        if (listState.firstVisibleItemIndex != target && !leaveAlone()) listState.scrollToItem(target)
     }
     Box(modifier) {
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 120.dp), modifier = Modifier.fillMaxSize().testTag("queue.list")) {
-            items(rows, key = { r -> when (r) { is Row.Header -> "hdr:" + r.id; is Row.Item -> r.entry.item.key } }) { row ->
+        LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize().testTag("queue.list")) {
+            items(rows, key = { r -> when (r) { is Line.Header -> "hdr:" + r.id; is Line.Item -> r.entry.item.key; Line.Footer -> FOOTER_KEY } }) { row ->
                 when (row) {
-                    is Row.Header -> androidx.compose.material3.Text(row.text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() })
-                    is Row.Item -> {
+                    is Line.Header -> SectionTitle(row.title, row.subtitle, clear = row.clear?.let { c ->
+                        when (c) {
+                            Line.Clear.History -> stringResource(R.string.queue_clear_history) to { client.dispatch(Commands.removeQueueItems(queue.history.map { it.item.key })) }
+                            Line.Clear.Next -> stringResource(R.string.queue_clear_insertions) to { client.dispatch(Command.ClearInsertions) }
+                        }
+                    })
+                    Line.Footer -> Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        if (queue.totalUpcoming.toInt() > queue.upcoming.size) Text(stringResource(R.string.queue_more_upcoming, queue.totalUpcoming.toInt() - queue.upcoming.size), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = { client.dispatch(Command.ClearQueue) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.queue_clear)) }
+                        Spacer(Modifier.height(24.dp))
+                    }
+                    is Line.Item -> {
                         val entry = row.entry
-                        val draggable = row.section == Row.Section.Next || row.section == Row.Section.Upcoming
+                        val draggable = row.section == Line.Section.Next || row.section == Line.Section.Upcoming || row.section == Line.Section.Autoplay
+                        val removable = row.section != Line.Section.Current
                         val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.45f }, confirmValueChange = { v ->
                             if (v != SwipeToDismissBoxValue.Settled) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); haptics.performHapticFeedback(HapticFeedbackType.Confirm); true } else false
                         })
                         ReorderableItem(reorderable, key = entry.item.key, enabled = draggable) { _ ->
                             SwipeToDismissBox(
                                 state = dismiss,
-                                enableDismissFromStartToEnd = row.section != Row.Section.Current,
-                                enableDismissFromEndToStart = row.section != Row.Section.Current,
+                                enableDismissFromStartToEnd = removable,
+                                enableDismissFromEndToStart = removable,
                                 backgroundContent = {
                                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp), contentAlignment = if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
                                         // Decorative: the row's "Remove from queue" action is the accessible path.
@@ -194,44 +317,143 @@ fun QueueTimeline(modifier: Modifier = Modifier) {
                                     }
                                 },
                             ) {
-                                val why = (entry.item.source as? QueueSource.Autoplay)?.data?.reason
                                 // Accessible alternatives to the swipe (remove) and the drag handle (move).
                                 val index = movable.indexOf(entry.item.key)
                                 val extra = buildList {
-                                    if (row.section != Row.Section.Current) add(CustomAccessibilityAction(removeLabel) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); true })
+                                    if (removable) add(CustomAccessibilityAction(removeLabel) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); true })
                                     if (draggable && index > 0) add(CustomAccessibilityAction(moveUpLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index - 1)); true })
                                     if (draggable && index >= 0 && index < movable.lastIndex) add(CustomAccessibilityAction(moveDownLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index + 1)); true })
                                 }
                                 // Transparent at rest (the player's backdrop shows through); an opaque
                                 // surface only while swiped, to cover the remove background.
                                 val swipeSurface = MaterialTheme.colorScheme.surfaceContainerHighest
-                                Column(Modifier.drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) }.alpha(if (row.section == Row.Section.History) 0.55f else 1f)) {
-                                    TrackRow(entry.track, onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) }, onMore = { sheetFor = entry },
-                                        actionTarget = Commands.queueItems(listOf(entry.item.key)), extraActions = extra,
-                                        selected = selecting && selection.contains(entry.item.key), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
-                                        nowPlaying = row.section == Row.Section.Current,
-                                        trailing = if (draggable) ({
-                                            Icon(Icons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(start = 8.dp).draggableHandle(onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) }, onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) }))
-                                        }) else null)
-                                    if (entry.item.unavailable == true) Text(stringResource(R.string.queue_unavailable), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp))
-                                    why?.let { Text(stringResource(R.string.player_autoplay_reason, it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp)) }
-                                }
+                                QueueRow(
+                                    entry = entry,
+                                    section = row.section,
+                                    selected = selecting && selection.contains(entry.item.key),
+                                    selecting = selecting,
+                                    extraActions = extra,
+                                    onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) },
+                                    onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
+                                    onMore = { sheetFor = entry },
+                                    onRate = { ratingFor = entry },
+                                    modifier = Modifier.drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) },
+                                    handle = if (draggable) ({
+                                        Box(
+                                            Modifier.size(48.dp).draggableHandle(
+                                                onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                                                onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) },
+                                            ),
+                                            contentAlignment = Alignment.Center,
+                                        ) { Icon(Icons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                    }) else null,
+                                )
                             }
                         }
                     }
                 }
             }
-            item {
-                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly) {
-                    TextButton(onClick = { client.dispatch(Command.ClearInsertions) }, enabled = queue.playingNext.isNotEmpty()) { Text(stringResource(R.string.queue_clear_insertions)) }
-                    TextButton(onClick = { client.dispatch(Command.ClearQueue) }) { Text(stringResource(R.string.queue_clear)) }
-                }
-                if (queue.totalUpcoming.toInt() > queue.upcoming.size) Text(stringResource(R.string.queue_more_upcoming, queue.totalUpcoming.toInt() - queue.upcoming.size), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 16.dp))
-                Spacer(Modifier.height(24.dp))
-            }
+            item(key = "tail") { Spacer(Modifier.height(with(density) { tailPx.toDp() })) }
         }
         SelectionToolbar(Modifier.align(Alignment.BottomCenter))
     }
     sheetFor?.let { e -> ActionSheet(Commands.queueItems(listOf(e.item.key)), e.track.title, e.track.artist, onDismiss = { sheetFor = null }) }
+    ratingFor?.let { e ->
+        RatingDialog(current = e.track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), Commands.queueItems(listOf(e.item.key)))); ratingFor = null }, onDismiss = { ratingFor = null })
+    }
+}
+
+/** A section title in the reference's style: semibold title, optional subtitle, "Clear" on the right. */
+@Composable
+private fun SectionTitle(title: String, subtitle: String?, clear: Pair<String, () -> Unit>?) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        clear?.let { (spoken, onClear) ->
+            TextButton(onClick = onClear, modifier = Modifier.semantics { contentDescription = spoken }) {
+                Text(stringResource(R.string.queue_section_clear), color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/**
+ * One queue row: 48 dp artwork, title and artist, and a drag handle for reorderable items; no
+ * opaque container. It speaks like a track row (label, "playing" / offline state, row menu as
+ * actions) with the queue's remove / move actions added. Long press starts multi-select.
+ */
+@Composable
+private fun QueueRow(
+    entry: QueueEntry,
+    section: Line.Section,
+    selected: Boolean,
+    selecting: Boolean,
+    extraActions: List<CustomAccessibilityAction>,
+    onClick: () -> Unit,
+    onToggleSelect: () -> Unit,
+    onMore: () -> Unit,
+    onRate: () -> Unit,
+    modifier: Modifier = Modifier,
+    handle: (@Composable () -> Unit)? = null,
+) {
+    val track = entry.track
+    val haptics = LocalHapticFeedback.current
+    val current = section == Line.Section.Current
+    val actions = trackRowActions(track, Commands.queueItems(listOf(entry.item.key)), onRate = onRate, onMore = onMore, extra = extraActions)
+    val state = listOfNotNull(if (current) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline)).joinToString(", ").ifEmpty { null }
+    val label = trackLabel(track)
+    val selectLabel = stringResource(R.string.a11y_select)
+    val deselectLabel = stringResource(R.string.a11y_deselect)
+    val playLabel = stringResource(R.string.action_play)
+    val content = LocalContentColor.current
+    val wash by animateColorAsState(if (selected) content.copy(alpha = 0.14f) else Color.Transparent, label = "queueRowSelected")
+    val dim = if (section == Line.Section.History) 0.7f else 1f
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(wash)
+            .combinedClickable(
+                indication = ripple(),
+                interactionSource = null,
+                onClick = { if (selecting) onToggleSelect() else onClick() },
+                onClickLabel = if (!selecting) playLabel else if (selected) deselectLabel else selectLabel,
+                onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onToggleSelect() },
+                onLongClickLabel = if (selected) deselectLabel else selectLabel,
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription = label
+                if (selecting) this.selected = selected
+                if (state != null) stateDescription = state
+                if (actions.isNotEmpty()) customActions = actions
+            },
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp, end = if (handle != null) 4.dp else 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                if (selected) Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (current) {
+                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = content.copy(alpha = content.alpha * dim))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OfflineBadge(track.offline, describe = false)
+                    Text(track.artist ?: stringResource(R.string.unknown_artist), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.let { it.copy(alpha = it.alpha * dim) })
+                }
+            }
+            handle?.invoke()
+        }
+        if (entry.item.unavailable == true) Text(stringResource(R.string.queue_unavailable), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp))
+        (entry.item.source as? QueueSource.Autoplay)?.data?.reason?.let {
+            Text(stringResource(R.string.player_autoplay_reason, it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp))
+        }
+    }
 }

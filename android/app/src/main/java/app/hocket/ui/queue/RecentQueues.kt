@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -39,7 +41,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -131,11 +136,30 @@ fun UndoHistoryPanel(modifier: Modifier = Modifier) {
     }
 }
 
-/** Full-screen route for saved queues (from Home "see all"). */
+/**
+ * Full-screen route for saved queues (Home "see all", Library "Recent queues"): pinned and recent
+ * queues, plus the undo history in a sheet (both used to be tabs of the player's queue).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SavedQueuesScreen(nav: NavHostController) {
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.home_saved_queues)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }) }) { padding ->
+    var undoHistory by remember { mutableStateOf(false) }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(stringResource(R.string.home_saved_queues)) },
+            actions = {
+                IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(Icons.Filled.History, stringResource(R.string.queue_undo_history)) }
+                AccountButton()
+            },
+            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+        )
+    }) { padding ->
         RecentQueuesList(Modifier.fillMaxSize().padding(padding))
+    }
+    if (undoHistory) {
+        ModalBottomSheet(onDismissRequest = { undoHistory = false }) {
+            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
+            UndoHistoryPanel(Modifier.fillMaxWidth().heightIn(min = 240.dp))
+        }
     }
 }

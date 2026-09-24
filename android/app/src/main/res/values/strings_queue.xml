@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The player's queue list (history, now playing, playing next, continue playing). -->
+<resources>
+    <string name="queue_section_history">History</string>
+    <string name="queue_section_continue">Continue playing</string>
+    <string name="queue_section_from">From %1$s</string>
+    <string name="queue_section_clear">Clear</string>
+    <string name="queue_clear_history">Clear history</string>
+    <string name="queue_undo_history">Undo history</string>
+</resources>
