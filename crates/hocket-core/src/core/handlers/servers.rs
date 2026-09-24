@@ -24,8 +24,10 @@ pub fn server_id_for(url: &str, username: &str) -> String {
     hex::encode(&d[..8])
 }
 
-/// Why a server URL was rejected by [`validate_server_url`].
+/// A server URL from `AddServer`: `http(s)://` with a host and no embedded
+/// credentials. The error is the reason, for the toast.
 pub(crate) fn validate_server_url(url: &str) -> Result<url::Url, String> {
+    let url = url.trim();
     let base = url::Url::parse(url).map_err(|e| e.to_string())?;
     if base.cannot_be_a_base() {
         return Err("not an http(s) address".into());
@@ -33,6 +35,15 @@ pub(crate) fn validate_server_url(url: &str) -> Result<url::Url, String> {
     match base.scheme() {
         "http" | "https" => {}
         other => return Err(format!("unsupported scheme {other:?}; use http or https")),
+    }
+    // The parser folds `http:///rest` into `http://rest/`; the host must be
+    // what the user typed, not a path segment promoted to one.
+    let authority = url
+        .get(base.scheme().len()..)
+        .and_then(|rest| rest.strip_prefix("://"))
+        .unwrap_or("");
+    if authority.is_empty() || authority.starts_with(['/', '\\']) {
+        return Err("no host".into());
     }
     if base.host_str().is_none_or(str::is_empty) {
         return Err("no host".into());
@@ -190,6 +201,7 @@ impl Actor {
             self.last_doc = None;
         } else if rekeyed {
             self.flush_persistence(true);
+            self.save_position();
             self.engine = None;
             self.scope = None;
             self.last_doc = None;

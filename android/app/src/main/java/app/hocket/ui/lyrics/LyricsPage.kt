@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -60,11 +62,14 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
 
 /**
- * Native lyrics renderer. Syllable tier: continuous per-syllable gradient sweep driven by the
- * extrapolated position at frame rate; line tier: per-line highlight (syllables are never
- * fabricated); unsynced: scrollable text. Active line focus with scale, depth-of-field blur on
- * inactive lines, duet sides, background sub-voices smaller and dimmer, tap to seek, offset control,
- * fluid background. Throttled to 30 fps in battery saver and stopped when not visible.
+ * Native lyrics renderer. Syllable tier: continuous per-syllable gradient sweep from each line's own
+ * cue timings, driven by the extrapolated position (`PositionStamp` + clock, [CoreClient.positionNow])
+ * at frame rate, never by event arrival; line tier: per-line highlight (syllables are never
+ * fabricated); unsynced: scrollable text. Lines that overlap (a background vocal or duet voice over
+ * the main line) are lit and swept together; the focus (scale, scroll) stays on the main voice.
+ * Depth-of-field blur on inactive lines, duet sides, background sub-voices smaller and dimmer, tap
+ * to seek, offset control, fluid background. Throttled to 30 fps in battery saver and stopped when
+ * not visible.
  */
 @Composable
 fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier) {
@@ -130,58 +135,96 @@ private fun OffsetControl(doc: Lyrics, onOffset: (Int) -> Unit) {
     }
 }
 
+/** Semantics the renderer publishes per lyric line, so tests can see the sweep without reading pixels. */
+object LyricsSemantics {
+    /** Per-syllable 0..1 progress of a syllable-tier line (empty for other tiers). */
+    val Sweep = SemanticsPropertyKey<List<Float>>("LyricSweep")
+    /** `main` or `bg` (a background sub-voice line, rendered smaller and dimmer). */
+    val Voice = SemanticsPropertyKey<String>("LyricVoice")
+    /** The line is lit: primary, or singing over the primary line right now. */
+    val Lit = SemanticsPropertyKey<Boolean>("LyricLit")
+    /** The line the view scrolls to and scales up (the main voice, even when a background line is primary). */
+    val Focused = SemanticsPropertyKey<Boolean>("LyricFocused")
+    var SemanticsPropertyReceiver.lyricSweep by Sweep
+    var SemanticsPropertyReceiver.lyricVoice by Voice
+    var SemanticsPropertyReceiver.lyricLit by Lit
+    var SemanticsPropertyReceiver.lyricFocused by Focused
+}
+
+/**
+ * The line the list follows: the cursor's primary line, unless that is a background sub-voice line
+ * singing over a main line that is still running, in which case the main line keeps the focus.
+ */
+internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
+    val primary = cursor.lineIndex
+    if (primary < 0 || !doc.lines[primary].background) return primary
+    return cursor.activeLines.firstOrNull { !doc.lines[it].background } ?: primary
+}
+
 @Composable
 private fun LyricsList(doc: Lyrics, positionMs: Long, onSeek: (Long) -> Unit, modifier: Modifier) {
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
+    val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     val listState = rememberLazyListState()
     var userScrolling by remember { mutableStateOf(false) }
     LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) userScrolling = true }
-    LaunchedEffect(cursor.lineIndex) {
-        if (cursor.lineIndex >= 0 && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(cursor.lineIndex, scrollOffset = -220)
+    LaunchedEffect(focus) {
+        if (focus >= 0 && !listState.isScrollInProgress) {
+            listState.animateScrollToItem(focus, scrollOffset = -220)
             userScrolling = false
         }
     }
     val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
     LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
         itemsIndexed(doc.lines) { i, line ->
-            val active = i == cursor.lineIndex && !cursor.inGap
-            val distance = if (cursor.lineIndex < 0) 2 else kotlin.math.abs(i - cursor.lineIndex)
+            // Lit: the primary line (until the gap state) and every line singing over it right now
+            // (duet, background). Each lit line sweeps its own syllables from the same position.
+            val lit = (i == cursor.lineIndex && !cursor.inGap) || (i != cursor.lineIndex && i in cursor.activeLines)
+            val distance = if (focus < 0) 2 else kotlin.math.abs(i - focus)
             val side = line.agent?.let { sides[it] } ?: 0
-            LyricLineView(i, line, doc.tier, active, distance, side, cursor, onClick = { line.startMs?.let { onSeek((it.toLong() - doc.offsetMs).coerceAtLeast(0)) } })
+            // The core compares `position - offset` against the line start, so seeking to a line's
+            // start means `start + offset` in audio time.
+            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } })
         }
         if (cursor.inGap) item { Text(stringResource(R.string.lyrics_instrumental), color = Color.White, modifier = Modifier.padding(8.dp)) }
     }
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, active: Boolean, distance: Int, side: Int, cursor: LyricsCursor, onClick: () -> Unit) {
-    val scale by animateFloatAsState(if (active) 1f else 0.92f, label = "lineScale")
-    val blur = if (active || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
-    val alpha = if (tier == LyricsTier.Unsynced) 1f else if (active) 1f else (0.55f - distance * 0.06f).coerceAtLeast(0.25f)
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, onClick: () -> Unit) {
+    val scale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
+    val blur = if (lit || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
+    val alpha = if (tier == LyricsTier.Unsynced) 1f else if (lit) 1f else (0.55f - distance * 0.06f).coerceAtLeast(0.25f)
+    // Background sub-voices: smaller, lighter weight and dimmer than the main voice.
     val baseSize = if (line.background) 18.sp else 28.sp
+    val weight = if (line.background) FontWeight.Medium else FontWeight.Bold
     val desc = stringResource(R.string.lyrics_line_a11y, line.text)
+    // Syllable sweep from this line's own timing (a background line lit beside its main line sweeps
+    // independently); held at 1 once the line has ended, 0 before it starts.
+    val sweep = remember(line, tier, cursor.effectiveMs) { if (tier == LyricsTier.Syllable) LyricsCursor.sweep(line, cursor.effectiveMs) else emptyList() }
     Column(
         Modifier.fillMaxWidth().padding(vertical = 8.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f) }
             .blur(blur).alpha(alpha)
             .clickable(enabled = line.startMs != null, onClick = onClick)
-            .semantics { contentDescription = desc },
+            .semantics {
+                contentDescription = desc
+                this[LyricsSemantics.Sweep] = sweep
+                this[LyricsSemantics.Voice] = if (line.background) "bg" else "main"
+                this[LyricsSemantics.Lit] = lit
+                this[LyricsSemantics.Focused] = focused
+            }
+            .testTag("lyrics.line.$index"),
         horizontalAlignment = if (side == 1) Alignment.End else Alignment.Start,
     ) {
         val activeColor = Color.White
         val inactiveColor = Color.White.copy(alpha = if (line.background) 0.45f else 0.6f)
-        val style = TextStyle(fontSize = baseSize, fontWeight = FontWeight.Bold, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
+        val style = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
         when {
             tier == LyricsTier.Syllable && line.syllables.isNotEmpty() -> {
                 FlowRow(horizontalArrangement = if (side == 1) Arrangement.End else Arrangement.Start) {
                     line.syllables.forEachIndexed { si, s ->
-                        val progress = when {
-                            !active -> if (index < cursor.lineIndex || (index == cursor.lineIndex && cursor.inGap)) 1f else 0f
-                            si < cursor.syllableIndex -> 1f
-                            si == cursor.syllableIndex -> cursor.syllableProgress
-                            else -> 0f
-                        }
+                        val progress = sweep.getOrElse(si) { 0f }
                         val brush = when (progress) {
                             0f -> Brush.horizontalGradient(listOf(inactiveColor, inactiveColor))
                             1f -> Brush.horizontalGradient(listOf(activeColor, activeColor))
@@ -191,12 +234,12 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, active:
                     }
                 }
             }
-            tier == LyricsTier.Line && active -> {
+            tier == LyricsTier.Line && lit -> {
                 // Per-line highlight: a soft sweep across the line by lineProgress; no syllables invented.
-                val p = cursor.lineProgress
+                val p = if (index == cursor.lineIndex) cursor.lineProgress else 1f
                 Text(line.text, style = style.copy(brush = Brush.horizontalGradient(0f to activeColor, (p - 0.15f).coerceAtLeast(0f) to activeColor, (p + 0.15f).coerceAtMost(1f) to inactiveColor, 1f to inactiveColor)))
             }
-            else -> Text(line.text, style = style, color = if (active) activeColor else inactiveColor)
+            else -> Text(line.text, style = style, color = if (lit) activeColor else inactiveColor)
         }
         line.translation?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.6f)) }
     }

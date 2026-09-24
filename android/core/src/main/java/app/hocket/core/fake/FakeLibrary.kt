@@ -27,7 +27,7 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
 
     private val verses = listOf(
         "We drove out past the harbour lights", "And the radio was only static", "You said the city never sleeps", "But tonight it's holding its breath",
-        "Every window was a photograph", "Of someone else's summer", "I kept the change in my coat pocket", "Just to hear it when I walk",
+        "Every window was a photograph", "Of someone else's naïve summer", "I kept the change in my coat pocket", "Just to hear it when I walk",
         "Open water, open water", "Take me somewhere I can float", "All the lanterns on the shoreline", "Are counting down to morning",
     )
 
@@ -190,33 +190,65 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
         return w[(i * 11) % w.size].let { if (i % 13 == 0) "$it (Reprise)" else it }
     }
 
+    /**
+     * Syllable-synced lyrics in the shape Navidrome's `enhanced=true` answer takes (see
+     * [EnhancedLyrics]): a main agent, a duet voice on lines 8-11, a background-vocal agent whose
+     * cue lines sing over lines 3 (starting with the line, as in the real "Tally" payload) and 9
+     * (starting mid-line), inclusive byte offsets with words split into joined syllables, one line
+     * without cues (line 6, line tier for that line only), a multi-byte word (line 5), every line
+     * ending before the next starts (the last syllable is held, never swept) and a long
+     * instrumental gap before line 8.
+     */
     private fun syllableLyrics(t: Track): Lyrics {
-        val lines = ArrayList<LyricLine>()
+        val lines = ArrayList<RawLine>()
+        val cueLines = ArrayList<RawCueLine>()
         var cursor = 8_000L
         val step = ((t.durationMs.toLong() - 16_000L) / verses.size).coerceAtLeast(3_000L)
         verses.forEachIndexed { li, text ->
-            val words = text.split(" ")
+            if (li == 8) cursor += 6_000L // instrumental gap: longer than the cursor's GAP_MS
             val lineDur = (step * 0.8).toLong()
-            val syllables = ArrayList<LyricSyllable>()
-            var sc = cursor
-            val each = lineDur / words.size
-            for ((wi, word) in words.withIndex()) {
-                // Split longer words into two syllables so the sweep has intra-word joins.
-                if (word.length > 5) {
-                    val cut = word.length / 2
-                    syllables += LyricSyllable(word.substring(0, cut), sc.toUInt(), (sc + each / 2).toUInt(), joined = true)
-                    syllables += LyricSyllable(word.substring(cut), (sc + each / 2).toUInt(), (sc + each).toUInt(), joined = wi == words.lastIndex)
-                } else {
-                    syllables += LyricSyllable(word, sc.toUInt(), (sc + each).toUInt(), joined = wi == words.lastIndex)
-                }
-                sc += each
-            }
+            lines += RawLine(cursor, text)
             val agent = if (li in 8..11) "v2" else "v1"
-            val background = li == 9
-            lines += LyricLine(cursor.toUInt(), (cursor + lineDur).toUInt(), text, syllables, agent, background, if (li % 4 == 0) "(translation of line ${li + 1})" else null)
+            if (li == 6) {
+                cueLines += RawCueLine(li, cursor, cursor + lineDur, text, agent, emptyList())
+            } else {
+                cueLines += RawCueLine(li, cursor, cursor + lineDur, text, agent, cuesFor(text, cursor, lineDur))
+            }
+            if (li == 3 || li == 9) {
+                val bgText = "(Yeah, yeah)"
+                val bgStart = if (li == 3) cursor else cursor + lineDur / 2
+                val bgDur = lineDur / 2
+                cueLines += RawCueLine(li, bgStart, bgStart + bgDur, bgText, "__nd_bg__|$agent", cuesFor(bgText, bgStart, bgDur))
+            }
             cursor += step
         }
-        return Lyrics(t.id, LyricsTier.Syllable, "en", t.artist, t.title, listOf(LyricsAgent("v1", null, 0u), LyricsAgent("v2", "Duet", 1u)), lines, LyricsSource.Server, 0)
+        val raw = RawStructuredLyrics(
+            displayArtist = t.artist, displayTitle = t.title, lang = "en", synced = true,
+            agents = listOf(RawAgent("v1", "main"), RawAgent("v2", "voice", "Duet"), RawAgent("__nd_bg__|v1", "bg"), RawAgent("__nd_bg__|v2", "bg")),
+            line = lines, cueLine = cueLines,
+        )
+        return EnhancedLyrics.adapt(t.id, raw)
+    }
+
+    /** Cues over [text]'s words, evenly spread across [durationMs]; words longer than five letters are split into two joined syllables. */
+    private fun cuesFor(text: String, startMs: Long, durationMs: Long): List<RawCue> {
+        val words = text.split(" ")
+        val each = durationMs / words.size
+        val cues = ArrayList<RawCue>()
+        var byte = 0
+        var at = startMs
+        for (word in words) {
+            val parts = if (word.length > 5) listOf(word.substring(0, word.length / 2), word.substring(word.length / 2)) else listOf(word)
+            val partDur = each / parts.size
+            for (part in parts) {
+                val bytes = part.toByteArray(Charsets.UTF_8).size
+                cues += RawCue(at, at + partDur, part, byteStart = byte, byteEnd = byte + bytes - 1)
+                byte += bytes
+                at += partDur
+            }
+            byte += 1 // the space
+        }
+        return cues
     }
 
     private fun lineLyrics(t: Track): Lyrics {

@@ -11,10 +11,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
 /** A fake core + client on the main dispatcher, the way the app wires them. */
-class TestCore(startWithServer: Boolean = true, startPlaying: Boolean = true, seed: Long = 7) {
-    val fake = FakeCore(seed = seed, startWithServer = startWithServer, startPlaying = startPlaying, timers = false, dispatcher = Dispatchers.Unconfined)
+class TestCore(startWithServer: Boolean = true, startPlaying: Boolean = true, seed: Long = 7, now: () -> Double = { System.currentTimeMillis().toDouble() }) {
+    val fake = FakeCore(seed = seed, startWithServer = startWithServer, startPlaying = startPlaying, timers = false, now = now, dispatcher = Dispatchers.Unconfined)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val client = CoreClient(fake, scope)
+    /** The same clock stamps positions in the fake and extrapolates them in the client. */
+    val client = CoreClient(fake, scope, now)
 
     fun start() = client.requestSnapshot()
 }

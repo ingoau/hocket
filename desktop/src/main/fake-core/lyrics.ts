@@ -2,6 +2,8 @@
 // exercised: syllable (with duets and background lines), line, unsynced, none.
 import type { LyricLine, LyricSyllable, Lyrics, Track } from "@core/api";
 import { Rng, hash32 } from "./random";
+import { adaptEnhanced } from "./enhanced-lyrics";
+import { SHOWCASE_TRACK_ID, showcaseLyrics } from "./showcase-lyrics";
 
 const WORDS = ["hold", "the", "light", "we", "carry", "home", "through", "every", "silver", "street", "and", "wait", "for", "morning", "to", "find", "us", "here", "again", "under", "paper", "skies", "you", "said", "nothing", "lasts", "but", "this", "does", "slowly", "burning", "down", "the", "harbour", "line"];
 
@@ -14,6 +16,8 @@ function lineText(rng: Rng, n: number): string[] {
 }
 
 export function lyricsFor(track: Track, offsetMs: number): Lyrics | undefined {
+  // One track carries a real enhanced (syllable + background agent) document.
+  if (track.id === SHOWCASE_TRACK_ID) return adaptEnhanced(track.id, showcaseLyrics(), offsetMs);
   const h = hash32(track.id);
   const bucket = h % 10;
   if (bucket >= 8) return undefined; // 20% have no lyrics

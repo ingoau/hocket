@@ -461,12 +461,137 @@ fn lossy_and_reordering_network_still_converges() {
     w.assert_ok();
 }
 
+/// A hostile host on the LAN: right scope, wrong key, adverts that win
+/// every election. Nobody follows it, nobody admits it, it sees nothing
+/// but challenges, and no `Hello` on the LAN ever carries a credential.
+#[test]
+fn hostile_lan_peer_is_never_admitted_and_lan_hellos_carry_no_credential() {
+    let mut cfg = WorldConfig::new(11);
+    cfg.devices = 3;
+    cfg.topology = Topology::Lan;
+    cfg.hostile = true;
+    cfg.keep_logs = true;
+    let mut w = World::new(cfg);
+    w.run_for(8_000.0);
+    let rogue = w.hostile_index().unwrap();
+    let serving: Vec<&str> = w.devices[..3]
+        .iter()
+        .filter(|d| d.engine.is_serving())
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(serving.len(), 1, "one honest LAN coordinator: {serving:?}");
+    assert_eq!(
+        w.devices[..3]
+            .iter()
+            .filter(|d| d.engine.is_connected() && !d.engine.is_serving())
+            .count(),
+        2,
+        "the other two honest devices follow it"
+    );
+    assert!(!w.devices[rogue].engine.is_connected());
+    let t = tracks(&w, 4);
+    w.perform(Action::PlayTracks {
+        device: 1,
+        tracks: t.clone(),
+    });
+    w.perform(Action::ClaimTransport {
+        device: 1,
+        takeover: false,
+    });
+    w.run_for(2_000.0);
+    w.perform(Action::Next { device: 2 });
+    w.run_for(2_000.0);
+    for d in &w.devices[..3] {
+        assert_eq!(
+            d.engine.document().current.as_ref().unwrap().track_id,
+            t[1],
+            "{}",
+            d.id
+        );
+    }
+    assert!(
+        w.devices[rogue].engine.document().current.is_none(),
+        "the rogue never saw the session"
+    );
+    assert_eq!(w.devices[rogue].engine.room().member_count(), 0);
+    assert!(w.lan_hellos > 0, "honest devices did join each other");
+    w.finish();
+    w.assert_ok();
+}
+
+/// Devices with a coordinator configured but unreachable form a LAN room,
+/// keep playing, and when the coordinator returns the LAN session carries
+/// over: nothing is filed as "session moved on", the queue is not reverted.
+#[test]
+fn lan_session_carries_over_when_the_coordinator_returns() {
+    let mut cfg = WorldConfig::new(12);
+    cfg.devices = 3;
+    cfg.topology = Topology::LanThenCoordinator;
+    cfg.coordinator_returns_ms = 40_000.0;
+    cfg.keep_logs = true;
+    let mut w = World::new(cfg);
+    let start = w.now();
+    w.run_for(10_000.0);
+    let serving = w.devices.iter().filter(|d| d.engine.is_serving()).count();
+    assert_eq!(serving, 1, "the LAN elected a room while the coordinator is down");
+    let t = tracks(&w, 5);
+    w.perform(Action::PlayTracks {
+        device: 0,
+        tracks: t.clone(),
+    });
+    w.perform(Action::ClaimTransport {
+        device: 0,
+        takeover: false,
+    });
+    w.run_for(2_000.0);
+    w.perform(Action::Next { device: 1 });
+    w.run_for(2_000.0);
+    w.perform(Action::Next { device: 2 });
+    w.run_for(2_000.0);
+    for d in &w.devices {
+        assert_eq!(
+            d.engine.document().current.as_ref().unwrap().track_id,
+            t[2],
+            "{} on the LAN",
+            d.id
+        );
+    }
+    // the coordinator returns at 40 s; everyone moves back to it
+    w.run_until(start + 41_000.0);
+    w.run_for(20_000.0);
+    for d in &w.devices {
+        assert!(d.engine.is_connected(), "{} back on the coordinator", d.id);
+        assert!(d.engine.lan_leader().is_none(), "{} left the LAN room", d.id);
+        assert_eq!(
+            d.engine.document().current.as_ref().unwrap().track_id,
+            t[2],
+            "{} kept the LAN session",
+            d.id
+        );
+        assert_eq!(d.filed_count, 0, "{} filed nothing", d.id);
+    }
+    let room_doc = &w.coordinator.as_ref().unwrap().room.replica().document;
+    assert_eq!(room_doc.current.as_ref().unwrap().track_id, t[2]);
+    assert_eq!(owner(&w).as_deref(), Some("dev-a"));
+    w.finish();
+    w.assert_ok();
+}
+
 /// Seeds with an open bug, excluded from the batches so the harness stays a
 /// gate for everything else. Reproduce one with `random_single_seed_from_env`.
 /// Empty at the moment; keep it that way.
 const KNOWN_FAILING: &[u64] = &[];
 
 fn run_seeds(range: std::ops::Range<u64>, topology: Topology, actions: usize) {
+    run_seeds_with(range, topology, actions, |_| {});
+}
+
+fn run_seeds_with(
+    range: std::ops::Range<u64>,
+    topology: Topology,
+    actions: usize,
+    tweak: impl Fn(&mut WorldConfig),
+) {
     for seed in range {
         if KNOWN_FAILING.contains(&seed) {
             continue;
@@ -475,6 +600,7 @@ fn run_seeds(range: std::ops::Range<u64>, topology: Topology, actions: usize) {
         cfg.devices = 2 + (seed % 3) as usize;
         cfg.topology = topology;
         cfg.keep_logs = true;
+        tweak(&mut cfg);
         if seed.is_multiple_of(4) {
             cfg.conditions = Conditions {
                 delay_ms: 60.0,
@@ -507,7 +633,19 @@ fn random_scenarios_lan() {
     run_seeds(1000..1060, Topology::Lan, 30);
 }
 
-/// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1] [HOCKET_SIM_ACTIONS=<n>] cargo test ... random_single_seed -- --nocapture`.
+#[test]
+fn random_scenarios_lan_with_a_hostile_peer() {
+    run_seeds_with(2000..2030, Topology::Lan, 30, |cfg| cfg.hostile = true);
+}
+
+#[test]
+fn random_scenarios_lan_then_coordinator() {
+    run_seeds_with(3000..3040, Topology::LanThenCoordinator, 30, |cfg| {
+        cfg.coordinator_returns_ms = 30_000.0 + (cfg.seed % 7) as f64 * 20_000.0;
+    });
+}
+
+/// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1 | HOCKET_SIM_LAN_THEN_COORDINATOR=1] [HOCKET_SIM_HOSTILE=1] [HOCKET_SIM_ACTIONS=<n>] cargo test ... random_single_seed -- --nocapture`.
 /// The batches use 40 actions for coordinator seeds and 30 for LAN ones (60 for batch 3).
 #[test]
 fn random_single_seed_from_env() {
@@ -517,6 +655,8 @@ fn random_single_seed_from_env() {
     let seed: u64 = seed.parse().expect("HOCKET_SIM_SEED must be a number");
     let topology = if std::env::var("HOCKET_SIM_LAN").is_ok() {
         Topology::Lan
+    } else if std::env::var("HOCKET_SIM_LAN_THEN_COORDINATOR").is_ok() {
+        Topology::LanThenCoordinator
     } else {
         Topology::Coordinator
     };
@@ -524,6 +664,10 @@ fn random_single_seed_from_env() {
     cfg.devices = 2 + (seed % 3) as usize;
     cfg.topology = topology;
     cfg.keep_logs = true;
+    cfg.hostile = std::env::var("HOCKET_SIM_HOSTILE").is_ok();
+    if topology == Topology::LanThenCoordinator {
+        cfg.coordinator_returns_ms = 30_000.0 + (seed % 7) as f64 * 20_000.0;
+    }
     if seed.is_multiple_of(4) {
         cfg.conditions = Conditions {
             delay_ms: 60.0,

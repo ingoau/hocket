@@ -3,7 +3,7 @@
 // reduced rate unfocused, 30 fps cap in battery saver), tap-to-seek and the
 // per-track offset. The same component renders compact (right panel) and
 // large (fullscreen).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DomLyricPlayer, type LyricLineMouseEvent } from "@applemusic-like-lyrics/core";
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
@@ -11,6 +11,7 @@ import { useApp } from "../store/app";
 import { extrapolate, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
+import { LYRICS_SCALE, LYRICS_SIZES, setLyricsSize, useLyricsSize } from "../lib/lyrics-size";
 import { Icon } from "./Icon";
 import { SK } from "@shared/settings-keys";
 
@@ -25,6 +26,7 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<DomLyricPlayer | undefined>(undefined);
   const mapped = useMemo(() => mapLyrics(lyrics), [lyrics]);
+  const size = useLyricsSize();
   const stampRef = useRef(stamp);
   stampRef.current = stamp;
 
@@ -105,15 +107,15 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   const sourceLabel = lyrics.source === "server" ? t("lyrics.source.server") : lyrics.source === "external" ? t("lyrics.source.external") : t("lyrics.source.embedded");
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier}>
-      {mapped.synced ? <div ref={host} className={`amll-host ${variant}`} /> : <StaticLyrics lines={mapped.lines} variant={variant} />}
+      {mapped.synced ? <div ref={host} className={`amll-host ${variant}`} style={{ "--lyrics-scale": LYRICS_SCALE[size] } as CSSProperties} data-testid="amll-host" data-size={size} /> : <StaticLyrics lines={mapped.lines} variant={variant} size={LYRICS_SCALE[size]} />}
       {showTools ? <LyricsTools lyrics={lyrics} tierLabel={tierLabel} sourceLabel={sourceLabel} /> : null}
     </div>
   );
 }
 
-function StaticLyrics({ lines, variant }: { lines: AmllLine[]; variant: "compact" | "large" }) {
+function StaticLyrics({ lines, variant, size }: { lines: AmllLine[]; variant: "compact" | "large"; size: number }) {
   return (
-    <div className="lyrics-static" style={variant === "large" ? { fontSize: 24 } : undefined}>
+    <div className="lyrics-static" style={{ fontSize: `calc(${variant === "large" ? 24 : 15}px * ${size})` }}>
       {lines.map((l, i) => (
         <div key={i} className={`${l.isBG ? "bg" : ""} ${l.isDuet ? "duet" : ""}`}>{l.words.map((w) => w.word).join("")}</div>
       ))}
@@ -137,7 +139,23 @@ function LyricsTools({ lyrics, tierLabel, sourceLabel }: { lyrics: Lyrics; tierL
       <span className="mono" style={{ minWidth: 48, textAlign: "center" }}>{offset > 0 ? "+" : ""}{(offset / 1000).toFixed(1)}s</span>
       <button type="button" className="btn icon sm" aria-label="+100 ms" onClick={() => apply(offset + 100)}><Icon name="plus" size={10} /></button>
       {offset !== 0 ? <button type="button" className="btn sm ghost" onClick={() => apply(0)}>{t("lyrics.offsetReset")}</button> : null}
+      <span>·</span>
+      <LyricsSizeControl />
     </div>
+  );
+}
+
+/** Small / medium / large, device-local; shared by every lyrics view in this window. */
+export function LyricsSizeControl() {
+  const size = useLyricsSize();
+  return (
+    <span className="lyrics-size" role="radiogroup" aria-label={t("lyrics.size")} data-testid="lyrics-size">
+      {LYRICS_SIZES.map((s) => (
+        <button key={s} type="button" role="radio" aria-checked={size === s} className={`btn icon sm ${size === s ? "on" : ""}`} title={t(`lyrics.size.${s}` as never)} aria-label={t(`lyrics.size.${s}` as never)} onClick={() => setLyricsSize(s)} data-testid={`lyrics-size-${s}`}>
+          {s === "small" ? "S" : s === "medium" ? "M" : "L"}
+        </button>
+      ))}
+    </span>
   );
 }
 

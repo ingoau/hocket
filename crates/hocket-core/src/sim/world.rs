@@ -32,7 +32,7 @@ use crate::connect::engine::Input;
 use crate::connect::replica::{MemoryReplicaStore, ReplicaStore};
 use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{scope_key, TransportCommand};
+use crate::connect::wire::{scope_key, Msg, TransportCommand, WireMessage};
 use crate::connect::{same_session_state, SessionOp};
 use crate::sim::clock::{quantize, to_micros, DeviceClock, SimTime};
 use crate::sim::device::{DeviceEffect, Library, Persisted, SimDevice};
@@ -53,6 +53,11 @@ pub enum Topology {
     Coordinator,
     /// No coordinator: LAN election among the devices.
     Lan,
+    /// A coordinator is configured but unreachable at first, so the devices
+    /// form a LAN room; it comes back at
+    /// [`WorldConfig::coordinator_returns_ms`] (or at the latest when the
+    /// world heals for its final checks) and everyone moves back to it.
+    LanThenCoordinator,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +70,13 @@ pub struct WorldConfig {
     pub max_skew_ms: f64,
     pub library_size: usize,
     pub keep_logs: bool,
+    /// Add one hostile device after the honest ones: same scope, wrong LAN
+    /// key and credential, adverts that always win the election. It gets no
+    /// user actions; the invariants check that it is never admitted anywhere
+    /// and never receives anything but the handshake.
+    pub hostile: bool,
+    /// `LanThenCoordinator`: when the coordinator becomes reachable.
+    pub coordinator_returns_ms: f64,
 }
 
 impl WorldConfig {
@@ -77,7 +89,19 @@ impl WorldConfig {
             max_skew_ms: 2_000.0,
             library_size: 24,
             keep_logs: false,
+            hostile: false,
+            coordinator_returns_ms: 90_000.0,
         }
+    }
+
+    /// Whether devices run LAN discovery and elections.
+    pub fn lan_on(&self) -> bool {
+        self.topology != Topology::Coordinator
+    }
+
+    /// Whether a hosted coordinator exists (reachable or not).
+    pub fn has_coordinator(&self) -> bool {
+        self.topology != Topology::Lan
     }
 }
 
@@ -184,6 +208,8 @@ pub enum Action {
     Clean {
         device: usize,
     },
+    /// `LanThenCoordinator`: the coordinator becomes reachable.
+    CoordinatorReturns,
 }
 
 pub struct World {
@@ -200,11 +226,17 @@ pub struct World {
     schedule_seq: u64,
     pub actions_run: Vec<(EpochMs, Action)>,
     crashed: BTreeMap<usize, Persisted>,
-    device_rev_watermark: Vec<Option<u32>>,
+    /// (room, revision) high-water mark per device: monotonic while attached
+    /// to the same room.
+    device_rev_watermark: Vec<Option<(String, u32)>>,
+    /// `LanThenCoordinator`: the coordinator is still unreachable.
+    coordinator_down: bool,
     /// Since when a device has held an epoch the room already moved past.
     stale_owner_since: Vec<Option<EpochMs>>,
     pub violations: Vec<String>,
     pub events: u64,
+    /// `Hello` frames sent to LAN peers (all checked to carry no credential).
+    pub lan_hellos: u64,
     lan_adverts: BTreeMap<usize, crate::connect::discovery::PeerAdvert>,
 }
 
@@ -216,7 +248,7 @@ impl World {
         let library = Arc::new(Library::synthetic(cfg.library_size));
         let mut net = Network::new(cfg.conditions);
         let coordinator = match cfg.topology {
-            Topology::Coordinator => {
+            Topology::Coordinator | Topology::LanThenCoordinator => {
                 net.bind(COORDINATOR_URL, COORDINATOR_NODE);
                 let mut rc = RoomConfig::new(scope.clone()).verified();
                 rc.session_id = Some("coordinator-session".into());
@@ -243,32 +275,74 @@ impl World {
             schedule_seq: 0,
             actions_run: vec![],
             crashed: BTreeMap::new(),
-            device_rev_watermark: vec![None; cfg.devices],
-            stale_owner_since: vec![None; cfg.devices],
+            device_rev_watermark: vec![None; cfg.devices + usize::from(cfg.hostile)],
+            stale_owner_since: vec![None; cfg.devices + usize::from(cfg.hostile)],
+            coordinator_down: cfg.topology == Topology::LanThenCoordinator,
             violations: vec![],
             events: 0,
+            lan_hellos: 0,
             lan_adverts: BTreeMap::new(),
             cfg: cfg.clone(),
         };
-        for i in 0..cfg.devices {
+        for i in 0..cfg.devices + usize::from(cfg.hostile) {
             let skew = rng.random_range(-cfg.max_skew_ms..=cfg.max_skew_ms);
             let clock = Arc::new(DeviceClock::new(time.clone(), skew));
-            let url =
-                matches!(cfg.topology, Topology::Coordinator).then(|| COORDINATOR_URL.to_string());
+            let url = cfg.has_coordinator().then(|| COORDINATOR_URL.to_string());
             let mut d = SimDevice::new(
                 &device_name(i),
                 &scope,
                 clock,
                 library.clone(),
                 url,
-                cfg.topology == Topology::Lan,
+                cfg.lan_on(),
                 None,
             );
             d.keep_log = cfg.keep_logs;
+            if i >= cfg.devices {
+                // The hostile device: right scope, wrong secrets.
+                d.handle(Input::SetLanKey(Some(crate::connect::auth::test_key(
+                    b"hostile",
+                ))));
+                d.handle(Input::SetCredential(Some(
+                    crate::connect::wire::Credential {
+                        server_url: "https://music.example".into(),
+                        username: "user".into(),
+                        token: Some("stolen-nothing".into()),
+                        salt: Some("salt".into()),
+                        api_key: None,
+                        client: "hocket-rogue".into(),
+                        api_version: "1.16.1".into(),
+                    },
+                )));
+            }
             w.devices.push(d);
+        }
+        if w.coordinator_down {
+            for i in 0..w.devices.len() {
+                let id = w.devices[i].id.clone();
+                w.net.partition(&id, COORDINATOR_NODE);
+            }
+            w.schedule(
+                w.now() + cfg.coordinator_returns_ms,
+                Action::CoordinatorReturns,
+            );
         }
         w.pump_effects();
         w
+    }
+
+    /// Index of the hostile device, if the world has one.
+    pub fn hostile_index(&self) -> Option<usize> {
+        self.cfg.hostile.then_some(self.cfg.devices)
+    }
+
+    fn is_hostile(&self, i: usize) -> bool {
+        self.hostile_index() == Some(i)
+    }
+
+    /// The honest devices' indices.
+    fn honest(&self) -> std::ops::Range<usize> {
+        0..self.cfg.devices
     }
 
     pub fn now(&self) -> EpochMs {
@@ -503,6 +577,7 @@ impl World {
                             self.net.connect(now, &mut self.rng, &id, &candidates)
                         }
                         DeviceEffect::Send { peer, msg } => {
+                            self.check_outbound_frame(i, &peer, &msg);
                             self.net.send(now, &mut self.rng, &id, &peer, msg)
                         }
                         DeviceEffect::Close { peer } => self.net.close(now, &id, &peer),
@@ -523,6 +598,11 @@ impl World {
                             match advert {
                                 Some(mut a) => {
                                     a.addresses = vec![format!("10.0.0.{}", i + 1)];
+                                    if self.is_hostile(i) {
+                                        // A rogue advertises whatever wins the election.
+                                        a.session_revision = u32::MAX;
+                                        a.serving = true;
+                                    }
                                     self.lan_adverts.insert(i, a);
                                 }
                                 None => {
@@ -552,9 +632,48 @@ impl World {
         }
     }
 
+    /// Invariant 8: nothing secret leaves a device towards a LAN peer. A
+    /// `Hello` to anything but the coordinator never carries a credential,
+    /// and a hostile peer only ever sees the handshake (a challenge, a proof
+    /// as the answering leader, a refusal or a goodbye): never a `Hello`,
+    /// `Welcome`, op or document.
+    fn check_outbound_frame(&mut self, from: usize, peer: &str, msg: &WireMessage) {
+        let id = self.devices[from].id.clone();
+        let Some(target) = self.net.peer_target(&id, peer) else {
+            return;
+        };
+        let now = self.now();
+        if target != COORDINATOR_NODE {
+            if let Msg::Hello { credential, .. } = &msg.msg {
+                self.lan_hellos += 1;
+                if credential.is_some() {
+                    self.violations.push(format!(
+                        "[{now:.0}] {id} sent a credential in a Hello to LAN peer {target}"
+                    ));
+                }
+            }
+        }
+        let to_hostile = self
+            .hostile_index()
+            .map(|h| self.devices[h].id == target)
+            .unwrap_or(false);
+        if to_hostile && !self.is_hostile(from) {
+            let handshake = matches!(
+                msg.msg,
+                Msg::Challenge { .. } | Msg::Proof { .. } | Msg::Refuse { .. } | Msg::Bye { .. }
+            );
+            if !handshake {
+                self.violations.push(format!(
+                    "[{now:.0}] {id} sent {} to the hostile peer {target}",
+                    msg.msg.name()
+                ));
+            }
+        }
+    }
+
     /// mDNS: everyone on the LAN sees everyone's current record.
     fn broadcast_adverts(&mut self) {
-        if self.cfg.topology != Topology::Lan {
+        if !self.cfg.lan_on() {
             return;
         }
         let adverts: Vec<(usize, crate::connect::discovery::PeerAdvert)> = self
@@ -590,6 +709,15 @@ impl World {
     pub fn perform(&mut self, action: Action) {
         let now = self.now();
         self.actions_run.push((now, action.clone()));
+        if action == Action::CoordinatorReturns {
+            self.coordinator_down = false;
+            for i in 0..self.devices.len() {
+                let id = self.devices[i].id.clone();
+                self.net.heal(&id, COORDINATOR_NODE);
+            }
+            self.pump_effects();
+            return;
+        }
         let dev = |a: &Action| -> usize {
             match a {
                 Action::PlayTracks { device, .. }
@@ -613,6 +741,7 @@ impl World {
                 | Action::Wake { device }
                 | Action::Lossy { device, .. }
                 | Action::Clean { device } => *device,
+                Action::CoordinatorReturns => unreachable!("handled above"),
             }
         };
         let i = dev(&action);
@@ -707,9 +836,12 @@ impl World {
                         .coordinator
                         .is_some()
                         .then(|| COORDINATOR_URL.to_string());
-                    let lan = self.cfg.topology == Topology::Lan;
+                    let lan = self.cfg.lan_on();
                     let keep_log = self.devices[i].keep_log;
                     let mut fresh = SimDevice::new(&id, &scope, clock, library, url, lan, Some(p));
+                    if self.coordinator_down {
+                        self.net.partition(&id, COORDINATOR_NODE);
+                    }
                     fresh.keep_log = keep_log;
                     fresh.log = std::mem::take(&mut self.devices[i].log);
                     fresh.scrobbles_reached =
@@ -754,7 +886,7 @@ impl World {
             }
         }
         self.pump_effects();
-        if self.cfg.topology == Topology::Lan {
+        if self.cfg.lan_on() {
             self.broadcast_adverts();
         }
     }
@@ -783,12 +915,16 @@ impl World {
     fn heal_device(&mut self, i: usize) {
         let id = self.devices[i].id.clone();
         for o in self.other_nodes(i) {
+            if o == COORDINATOR_NODE && self.coordinator_down {
+                continue;
+            }
             self.net.heal(&id, &o);
         }
     }
 
     /// Heal every fault and wake/restart everyone.
     pub fn heal_everything(&mut self) {
+        self.coordinator_down = false;
         self.net.heal_all();
         let sleeping: Vec<usize> = self
             .devices
@@ -834,20 +970,15 @@ impl World {
         if d.asleep {
             return None;
         }
-        match self.cfg.topology {
-            Topology::Coordinator => d
-                .engine
-                .is_connected()
-                .then(|| COORDINATOR_NODE.to_string()),
-            Topology::Lan => {
-                if d.engine.is_serving() {
-                    Some(d.id.clone())
-                } else if d.engine.is_connected() {
-                    d.engine.lan_leader().map(|l| l.to_string())
-                } else {
-                    None
-                }
+        if d.engine.is_serving() {
+            Some(d.id.clone())
+        } else if d.engine.is_connected() {
+            match d.engine.lan_leader() {
+                Some(l) => Some(l.to_string()),
+                None => Some(COORDINATOR_NODE.to_string()),
             }
+        } else {
+            None
         }
     }
 
@@ -907,22 +1038,25 @@ impl World {
                 ));
             }
         }
-        // 2. device confirmed revision monotonic while attached
+        // 2. device confirmed revision monotonic while attached to one room
+        //    (moving rooms, e.g. from a LAN leader back to the coordinator,
+        //    legitimately adopts that room's revision)
         for i in 0..self.devices.len() {
             let d = &self.devices[i];
-            if self.room_key(i).is_some() && d.engine.pending_count() == 0 {
-                let rev = d.engine.document().revision;
-                if let Some(w) = self.device_rev_watermark[i] {
-                    if rev < w {
-                        self.violations.push(format!(
-                            "[{now:.0}] {} revision went from {w} to {rev} while attached",
-                            d.id
-                        ));
+            match (self.room_key(i), d.engine.pending_count() == 0) {
+                (Some(room), true) => {
+                    let rev = d.engine.document().revision;
+                    if let Some((w_room, w)) = &self.device_rev_watermark[i] {
+                        if *w_room == room && rev < *w {
+                            self.violations.push(format!(
+                                "[{now:.0}] {} revision went from {w} to {rev} while attached to {room}",
+                                d.id
+                            ));
+                        }
                     }
+                    self.device_rev_watermark[i] = Some((room, rev));
                 }
-                self.device_rev_watermark[i] = Some(rev);
-            } else {
-                self.device_rev_watermark[i] = None;
+                _ => self.device_rev_watermark[i] = None,
             }
         }
         // 7. filing never leaves local ops behind
@@ -934,6 +1068,35 @@ impl World {
                 ));
             }
         }
+        // 8. a hostile device is never admitted anywhere and never gets in
+        if let Some(h) = self.hostile_index() {
+            let rogue = self.devices[h].id.clone();
+            if self.devices[h].engine.is_connected() {
+                self.violations.push(format!(
+                    "[{now:.0}] hostile {rogue} is attached to an honest room ({:?})",
+                    self.devices[h].engine.lan_leader()
+                ));
+            }
+            for i in self.honest() {
+                let d = &self.devices[i];
+                if d.engine.room().has_member(&rogue) {
+                    self.violations
+                        .push(format!("[{now:.0}] {} admitted hostile {rogue}", d.id));
+                }
+                if d.engine.lan_leader().map(|l| l == &rogue).unwrap_or(false)
+                    && d.engine.is_connected()
+                {
+                    self.violations
+                        .push(format!("[{now:.0}] {} follows hostile {rogue}", d.id));
+                }
+            }
+            if let Some(c) = &self.coordinator {
+                if c.room.has_member(&rogue) {
+                    self.violations
+                        .push(format!("[{now:.0}] coordinator admitted hostile {rogue}"));
+                }
+            }
+        }
     }
 
     /// Checks that only hold once the network is healed and quiet.
@@ -942,7 +1105,8 @@ impl World {
         // 5. convergence: every attached device holds its room's document,
         //    and (LAN) the healed network has settled on one room.
         if self.cfg.topology == Topology::Lan {
-            let rooms: BTreeSet<String> = (0..self.devices.len())
+            let rooms: BTreeSet<String> = self
+                .honest()
                 .filter_map(|i| self.room_key(i))
                 .collect();
             if rooms.len() > 1 {
@@ -951,9 +1115,9 @@ impl World {
                 ));
             }
         }
-        for i in 0..self.devices.len() {
+        for i in self.honest() {
             let room_doc = match self.cfg.topology {
-                Topology::Coordinator => self
+                Topology::Coordinator | Topology::LanThenCoordinator => self
                     .coordinator
                     .as_ref()
                     .map(|c| c.room.replica().document.clone()),
@@ -966,9 +1130,14 @@ impl World {
             if d.asleep {
                 continue;
             }
-            if self.cfg.topology == Topology::Coordinator && !d.engine.is_connected() {
-                self.violations
-                    .push(format!("[{now:.0}] {} not connected after heal", d.id));
+            if self.cfg.has_coordinator()
+                && self.room_key(i).as_deref() != Some(COORDINATOR_NODE)
+            {
+                self.violations.push(format!(
+                    "[{now:.0}] {} not on the coordinator after heal (room {:?})",
+                    d.id,
+                    self.room_key(i)
+                ));
                 continue;
             }
             if d.engine.pending_count() != 0 {
@@ -989,7 +1158,8 @@ impl World {
         }
         // 3. scrobbles: every reached pair exactly once
         let mut reached: BTreeSet<(String, i64)> = BTreeSet::new();
-        for d in &self.devices {
+        for i in self.honest() {
+            let d = &self.devices[i];
             for (t, s) in &d.scrobbles_reached {
                 reached.insert((t.clone(), *s as i64));
             }
@@ -1009,7 +1179,8 @@ impl World {
                 ));
             }
         }
-        for d in &self.devices {
+        for i in self.honest() {
+            let d = &self.devices[i];
             if !d.outbox.is_empty() && !d.asleep {
                 self.violations.push(format!(
                     "[{now:.0}] {} has {} scrobbles without a verdict; engine {:?}",
@@ -1023,8 +1194,8 @@ impl World {
         if let Some(c) = &self.coordinator {
             let owner = c.room.live_owner();
             let owning: Vec<String> = self
-                .devices
-                .iter()
+                .honest()
+                .map(|i| &self.devices[i])
                 .filter(|d| d.owns() && !d.asleep)
                 .map(|d| d.id.clone())
                 .collect();

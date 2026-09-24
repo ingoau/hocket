@@ -400,7 +400,25 @@ function Appearance() {
       <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
       <Toggle settingKey={SK.displayAnimatedBackground} title={t("settings.animatedBackground")} />
+      <LyricsSizeRow />
     </>
+  );
+}
+
+function LyricsSizeRow() {
+  const size = useLyricsSize();
+  return (
+    <div className="setting-row">
+      <div className="label">
+        <div className="title">{t("settings.lyricsSize")}<span className="badge" title="deviceLocal">{t("settings.scope.local")}</span></div>
+        <div className="desc">{t("settings.lyricsSizeDesc")}</div>
+      </div>
+      <div className="control">
+        <select className="select" value={size} onChange={(e) => setLyricsSize(e.target.value as LyricsSize)} aria-label={t("settings.lyricsSize")} data-testid="setting-lyrics-size">
+          {LYRICS_SIZES.map((v) => <option key={v} value={v}>{t(`lyrics.size.${v}` as never)}</option>)}
+        </select>
+      </div>
+    </div>
   );
 }
 

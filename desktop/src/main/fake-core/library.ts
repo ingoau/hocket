@@ -1,6 +1,7 @@
 // A plausible library of a few thousand tracks, deterministic from a seed.
 import type { Album, Artist, Genre, Playlist, Track, TrackSummary } from "@core/api";
 import { Rng, hash32 } from "./random";
+import { SHOWCASE_DURATION_MS, SHOWCASE_TITLE, SHOWCASE_TRACK_ID } from "./showcase-lyrics";
 
 const FIRST = ["Silver", "Night", "Paper", "Glass", "Velvet", "Iron", "Cold", "Wild", "Quiet", "Electric", "Hollow", "Golden", "Broken", "Blue", "Neon", "Slow", "Last", "Empty", "Little", "Northern"];
 const SECOND = ["Harbour", "Machines", "Gardens", "Signal", "Wolves", "Lanterns", "Cities", "Mirrors", "Orchards", "Rivers", "Stations", "Voices", "Fires", "Horizons", "Bridges", "Sisters", "Engines", "Fields", "Lights", "Coast"];

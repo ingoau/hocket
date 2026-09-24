@@ -170,6 +170,8 @@ pub struct Room {
     unknown: Vec<Unknown>,
     dirty: bool,
     touched: bool,
+    /// Some peer was admitted since this room was opened (or restored).
+    admitted_any: bool,
     last_sweep: EpochMs,
     out: Vec<RoomOutput>,
 }
@@ -213,6 +215,7 @@ impl Room {
             unknown: vec![],
             dirty: false,
             touched: false,
+            admitted_any: false,
             last_sweep: now,
             out: vec![],
         }
@@ -242,6 +245,12 @@ impl Room {
 
     pub fn revision(&self) -> u32 {
         self.replica.document.revision
+    }
+
+    /// Whether any peer was ever admitted to this room instance. A room
+    /// that only ever refused sockets holds nothing worth persisting.
+    pub fn ever_admitted(&self) -> bool {
+        self.admitted_any
     }
 
     pub fn member_count(&self) -> usize {
@@ -650,6 +659,7 @@ impl Room {
         }
         device.is_self = false;
         device.last_seen = now;
+        self.admitted_any = true;
         self.replica.touch_device(&device, now);
         // A second Hello on the same socket re-admits rather than duplicates.
         self.members.retain(|m| m.peer != peer);
