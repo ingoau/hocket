@@ -98,6 +98,9 @@ pub struct RawLine {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawAgent {
+    /// Required by the spec, but a missing one must not sink the whole
+    /// document (the subsonic client's types default it too).
+    #[serde(default)]
     pub id: String,
     /// `main`, `voice`, `bg`, `group`.
     #[serde(default)]

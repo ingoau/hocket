@@ -32,10 +32,11 @@
   --bg-sunken: #ebebef;
   --bg-hover: rgba(0, 0, 0, 0.05);
   --bg-active: rgba(0, 0, 0, 0.09);
-  /* Text colours reach 4.5:1 on every surface (contrast.test.ts parses this block). */
+  /* Text colours reach 4.5:1 on every surface, hovered and pressed ones
+     included (contrast.test.ts parses this block and the dark one). */
   --fg: #1b1b1f;
-  --fg-muted: #55555e;
-  --fg-faint: #64646d;
+  --fg-muted: #51515a;
+  --fg-faint: #5b5b64;
   --border: rgba(0, 0, 0, 0.11);
   --border-strong: rgba(0, 0, 0, 0.22);
   --danger: #a1231c;
@@ -44,9 +45,9 @@
   --ok: #17683a;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.1);
   --selection: color-mix(in srgb, var(--accent-tint) 22%, transparent);
-  --accent-text: #5e4fd2;
+  --accent-text: #5649bc;
   --accent-inverse: #8271fe;
-  --accent-tint: #c7c0f9;
+  --accent-tint: #8777fd;
   --focus-ring: #6f5cff;
 }
 
@@ -58,19 +59,19 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-active: rgba(255, 255, 255, 0.11);
   --fg: #ececf1;
-  --fg-muted: #a8a8b3;
-  --fg-faint: #8f8f9a;
+  --fg-muted: #acacb5;
+  --fg-faint: #9f9fa8;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.2);
-  --danger: #ff6b6b;
+  --danger: #ff7a7a;
   --danger-fg: #000000;
   --warn: #f0b04a;
   --ok: #4ccb84;
   --shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
   --selection: color-mix(in srgb, var(--accent-tint) 30%, transparent);
-  --accent-text: #8d7ffc;
+  --accent-text: #9f93fa;
   --accent-inverse: #6453e3;
-  --accent-tint: #463b98;
+  --accent-tint: #6f5cff;
   --focus-ring: #6f5cff;
 }
 
@@ -510,6 +511,8 @@ button.qrow { width: 100%; }
 .fullscreen .side .panel { flex: 1; min-height: 0; overflow: auto; border-radius: 10px; }
 .fullscreen .close { position: absolute; top: 14px; right: 14px; z-index: 2; color: #fff; }
 .fullscreen .qrow { height: 46px; }
+/* Sticky section headers scroll over the rows: a dark glass, not the theme's light sunken grey. */
+.fullscreen .queue-section { background: rgba(12, 12, 16, 0.85); }
 .fullscreen .related-row { display: flex; gap: 10px; padding: 8px 10px; align-items: center; border-radius: 6px; }
 .fullscreen .related-row:hover { background: var(--bg-hover); }
 .fullscreen .related-row .art { width: 40px; height: 40px; border-radius: 4px; }

@@ -56,18 +56,25 @@ describe("theme tokens in global.css", () => {
       expect(c.selection).toContain(`${Math.round(t.selectionPct * 100)}%`);
     });
 
-    it(`${theme}: body text, muted text and faint text reach 4.5:1 on every surface`, () => {
+    /** The three surfaces, plain and under the hover and pressed overlays (--bg-hover, --bg-active). */
+    const surfaces = (): [string, Rgb][] => ["bg", "bg-elev", "bg-sunken"].flatMap((bg) => {
+      const base = P(c[bg] as string);
+      const overlay = (v: string): Rgb => composite(P(v), Number(/,\s*([\d.]+)\)$/.exec(v)?.[1] ?? 0), base);
+      return [[bg, base], [`${bg}+hover`, overlay(c["bg-hover"] as string)], [`${bg}+active`, overlay(c["bg-active"] as string)]] as [string, Rgb][];
+    });
+
+    it(`${theme}: body text, muted text and faint text reach 4.5:1 on every surface, hovered and pressed`, () => {
       for (const fg of ["fg", "fg-muted", "fg-faint"]) {
-        for (const bg of ["bg", "bg-elev", "bg-sunken"]) expect(contrast(P(c[fg] as string), P(c[bg] as string)), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        for (const [name, surface] of surfaces()) expect(contrast(P(c[fg] as string), surface), `${fg} on ${name}`).toBeGreaterThanOrEqual(4.5);
       }
     });
 
     it(`${theme}: status colours read at 4.5:1 as text on the surfaces and on their own 14% badge tint`, () => {
       for (const status of ["danger", "warn", "ok"]) {
         const col = P(c[status] as string);
+        for (const [name, surface] of surfaces()) expect(contrast(col, surface), `${status} on ${name}`).toBeGreaterThanOrEqual(4.5);
         for (const bg of ["bg", "bg-elev", "bg-sunken"]) {
           const surface = P(c[bg] as string);
-          expect(contrast(col, surface), `${status} on ${bg}`).toBeGreaterThanOrEqual(4.5);
           expect(contrast(col, mix(surface, col, 0.14)), `${status} badge on ${bg}`).toBeGreaterThanOrEqual(4.5);
         }
         expect(contrast(P(c["danger-fg"] as string), P(c.danger as string)), "text on a danger fill").toBeGreaterThanOrEqual(4.5);

@@ -501,7 +501,10 @@ pub struct StructuredLyrics {
     pub line: Vec<LyricLineBody>,
     #[serde(default)]
     pub agents: Vec<LyricAgent>,
-    #[serde(default)]
+    /// Cue lines without an `index` (older drafts) pair up with `line[]`
+    /// positionally, which [`de_cue_lines`] resolves at parse time so every
+    /// consumer sees an index.
+    #[serde(default, deserialize_with = "de_cue_lines")]
     pub cue_line: Vec<CueLine>,
 }
 
@@ -531,7 +534,10 @@ pub struct LyricAgent {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CueLine {
-    #[serde(default)]
+    /// The `line[]` entry this belongs to. [`CUE_INDEX_NONE`] when the
+    /// server's index names no line (negative, out of range, or absent in a
+    /// document where other cue lines have one).
+    #[serde(default = "cue_index_missing", deserialize_with = "de_cue_index")]
     pub index: u32,
     #[serde(default)]
     pub start: Option<i64>,
@@ -555,11 +561,54 @@ pub struct LyricCue {
     #[serde(default)]
     pub value: String,
     /// 0-based, inclusive byte offsets into the parent cue line's `value`
-    /// (Navidrome: `"I"` at the start of a line is `0..=0`).
+    /// (Navidrome: `"I"` at the start of a line is `0..=0`). Signed so a
+    /// bogus negative offset degrades that cue (the lyrics adapter ignores
+    /// offsets that do not describe the line) instead of failing the whole
+    /// response.
     #[serde(default)]
-    pub byte_start: Option<u32>,
+    pub byte_start: Option<i64>,
     #[serde(default)]
-    pub byte_end: Option<u32>,
+    pub byte_end: Option<i64>,
+    /// Navidrome's model carries an agent per cue too.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+/// [`CueLine::index`] for a cue line that belongs to no `line[]` entry.
+pub const CUE_INDEX_NONE: u32 = u32::MAX - 1;
+/// Parse-time marker for a cue line with no `index` at all.
+const CUE_INDEX_MISSING: u32 = u32::MAX;
+
+fn cue_index_missing() -> u32 {
+    CUE_INDEX_MISSING
+}
+
+fn de_cue_index<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    Ok(match Option::<i64>::deserialize(d)? {
+        None => CUE_INDEX_MISSING,
+        Some(i) => u32::try_from(i)
+            .ok()
+            .filter(|&i| i < CUE_INDEX_NONE)
+            .unwrap_or(CUE_INDEX_NONE),
+    })
+}
+
+/// Unindexed cue lines pair with `line[]` by position when none has an
+/// index; mixed in with indexed ones they belong to no line. Mirrors
+/// `lyrics::adapt`, which sees these after the actor's JSON round trip.
+fn de_cue_lines<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CueLine>, D::Error> {
+    let mut lines = Vec::<CueLine>::deserialize(d)?;
+    let all_missing = lines.iter().all(|c| c.index == CUE_INDEX_MISSING);
+    for (i, c) in lines.iter_mut().enumerate() {
+        if c.index == CUE_INDEX_MISSING {
+            c.index = if all_missing {
+                u32::try_from(i).unwrap_or(CUE_INDEX_NONE).min(CUE_INDEX_NONE)
+            } else {
+                CUE_INDEX_NONE
+            };
+        }
+    }
+    Ok(lines)
 }
 
 // -- Artist info / similarity ----------------------------------------------
@@ -841,5 +890,172 @@ mod tests {
         assert_eq!(parse_iso_ms("0001-01-01T00:00:00Z"), None);
         assert_eq!(parse_iso_ms("garbage"), None);
         assert_eq!(parse_iso_ms(""), None);
+    }
+}
+
+#[cfg(test)]
+mod envelope_never_panics {
+    use super::*;
+    use crate::connect::wire::arbitrary_json::{json, mutated};
+    use crate::subsonic::client::parse_envelope;
+    use crate::subsonic::convert::*;
+    use proptest::prelude::*;
+
+    const WORDS: &[&str] = &[
+        "subsonic-response", "status", "ok", "failed", "version", "error", "code", "message",
+        "song", "album", "artist", "albumList2", "randomSongs", "searchResult3", "playlists",
+        "playlist", "entry", "genres", "genre", "value", "songCount", "albumCount", "starred2",
+        "artists", "index", "id", "title", "name", "duration", "track", "discNumber", "year",
+        "bitRate", "size", "userRating", "starred", "played", "created", "changed", "updated",
+        "replayGain", "trackGain", "albumPeak", "bpm", "moods", "albumArtists", "owner",
+        "readonly", "lyricsList", "structuredLyrics", "cueLine", "cue", "byteStart", "byteEnd",
+        "2024-05-01T12:34:56.789Z", "2024-05-01T14:34:56+02:00", "0001-01-01T00:00:00Z",
+        "9999-99-99T99:99:99.999999999-99:99",
+    ];
+
+    const SEARCH3: &str = include_str!("fixtures/search3.json");
+    const PLAYLIST: &str = include_str!("fixtures/playlist.json");
+    const ALBUM_LIST2: &str = include_str!("fixtures/album_list2.json");
+    const LYRICS_V2: &str = include_str!("fixtures/lyrics_v2.json");
+
+    fn song(c: &Child) {
+        let t = track_from_child("s", c);
+        assert!(t.rating <= 5);
+        let _ = summary_of(&t);
+        let _ = child_changed_ms(c);
+    }
+
+    /// Parse like the client does, then run every mapping into api types.
+    fn check(body: &[u8]) {
+        if let Ok(s) = std::str::from_utf8(body) {
+            if let Some(ms) = parse_iso_ms(s) {
+                assert!(ms.is_finite());
+            }
+        }
+        let _ = serde_json::from_slice::<NativeLogin>(body);
+        let _ = serde_json::from_slice::<NativePlaylist>(body);
+        let Ok(r) = parse_envelope(body) else { return };
+        for c in r.song.iter().chain(r.album.iter().flat_map(|a| &a.song)) {
+            song(c);
+        }
+        for s in [&r.random_songs, &r.songs_by_genre, &r.similar_songs2, &r.top_songs]
+            .into_iter()
+            .flatten()
+        {
+            s.song.iter().for_each(song);
+        }
+        if let Some(s) = &r.search_result3 {
+            s.song.iter().for_each(song);
+            for a in &s.album {
+                let _ = album_from_id3("s", a);
+                let _ = album_changed_ms(a);
+            }
+            for a in &s.artist {
+                let _ = artist_from_id3("s", a);
+            }
+        }
+        for a in r.album_list2.iter().flat_map(|l| &l.album) {
+            assert!(album_from_id3("s", a).rating <= 5);
+        }
+        for p in r.playlists.iter().flat_map(|p| &p.playlist) {
+            let _ = playlist_from_body("s", Some("me"), p);
+        }
+        for g in r.genres.iter().flat_map(|g| &g.genre) {
+            let _ = genre_from_body(g);
+        }
+        if let Some(p) = &r.playlist {
+            p.entry.iter().for_each(song);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn arbitrary_bytes(b in prop::collection::vec(any::<u8>(), 0..256)) {
+            check(&b);
+        }
+
+        #[test]
+        fn arbitrary_payloads(
+            key in prop::sample::select(WORDS),
+            v in json(WORDS),
+        ) {
+            let body = serde_json::json!({ "subsonic-response": { "status": "ok", key: v } });
+            check(body.to_string().as_bytes());
+        }
+
+        #[test]
+        fn mutated_fixtures(s in prop_oneof![
+            mutated(SEARCH3), mutated(PLAYLIST), mutated(ALBUM_LIST2), mutated(LYRICS_V2)
+        ]) {
+            check(s.as_bytes());
+        }
+
+        #[test]
+        fn iso_timestamps(s in "[0-9+-]{0,5}-[0-9+-]{0,3}-[0-9+-]{0,3}([Tt ][0-9:.+-]{0,24}[Zz]?)?") {
+            if let Some(ms) = parse_iso_ms(&s) {
+                prop_assert!(ms.is_finite());
+            }
+        }
+    }
+
+    /// Cue lines in the client's types must mean what `lyrics::raw` makes of
+    /// the same JSON, because the actor re-reads them as `lyrics::raw`
+    /// through a JSON round trip (fuzz target `lyrics_structured`).
+    fn via_actor(body: &str) -> Vec<crate::lyrics::raw::StructuredLyrics> {
+        let r = parse_envelope(body.as_bytes()).unwrap();
+        let entries = r.lyrics_list.unwrap().structured_lyrics;
+        serde_json::from_value(serde_json::to_value(&entries).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn fuzz_regression_unindexed_cue_lines_pair_by_position() {
+        let body = r#"{"subsonic-response":{"status":"ok","lyricsList":{"structuredLyrics":[{"synced":true,
+            "line":[{"start":0,"value":"a b"},{"start":500,"value":"c d"}],
+            "cueLine":[{"value":"a b","cue":[{"start":0,"value":"a"},{"start":200,"value":"b"}]},
+                       {"value":"c d","cue":[{"start":500,"value":"c"},{"start":700,"value":"d"}]}]}]}}}"#;
+        let raw = via_actor(body);
+        assert_eq!(
+            raw[0].cue_line.iter().map(|c| c.index).collect::<Vec<_>>(),
+            vec![Some(0), Some(1)],
+            "was [0, 0]: every unindexed cue line landed on line 0"
+        );
+        let direct = crate::lyrics::LyricsListResponse::parse(body).unwrap();
+        let src = crate::api::LyricsSource::Server;
+        assert_eq!(
+            crate::lyrics::adapt_list("t", &raw, src),
+            crate::lyrics::adapt_list("t", direct.entries(), src)
+        );
+        let l = crate::lyrics::adapt_list("t", &raw, src).unwrap();
+        assert_eq!(l.lines.len(), 2);
+        assert_eq!(l.lines[1].syllables.len(), 2);
+    }
+
+    #[test]
+    fn fuzz_regression_bad_cue_offsets_and_indices_do_not_sink_the_response() {
+        // Negative byte offsets used to fail the whole envelope (u32 fields);
+        // a negative or huge index names no line; a cue's agent survives.
+        let body = r#"{"subsonic-response":{"status":"ok","lyricsList":{"structuredLyrics":[{"synced":true,
+            "agents":[{"id":"bg","role":"bg"}],
+            "line":[{"start":0,"value":"a"}],
+            "cueLine":[{"index":0,"value":"a","cue":[{"start":0,"value":"a","byteStart":-4,"byteEnd":-1}]},
+                       {"index":0,"value":"(oh)","cue":[{"start":100,"value":"(oh)","agentId":"bg"}]},
+                       {"index":-1,"value":"x","cue":[{"start":0,"value":"x"}]},
+                       {"index":99999999999,"value":"y","cue":[{"start":0,"value":"y"}]},
+                       {"value":"z","cue":[{"start":0,"value":"z"}]}]}]}}}"#;
+        let raw = via_actor(body);
+        let idx: Vec<_> = raw[0].cue_line.iter().map(|c| c.index).collect();
+        assert_eq!(idx[..2], [Some(0), Some(0)]);
+        assert!(idx[2..].iter().all(|i| i.is_some_and(|i| i >= i64::from(CUE_INDEX_NONE))));
+        assert_eq!(raw[0].cue_line[0].cue[0].byte_start, Some(-4));
+        assert_eq!(raw[0].cue_line[1].cue[0].agent_id.as_deref(), Some("bg"));
+        let src = crate::api::LyricsSource::Server;
+        let direct = crate::lyrics::LyricsListResponse::parse(body).unwrap();
+        let l = crate::lyrics::adapt_list("t", &raw, src);
+        assert_eq!(l, crate::lyrics::adapt_list("t", direct.entries(), src));
+        let l = l.unwrap();
+        assert_eq!(l.lines.len(), 2);
+        assert!(l.lines[1].background, "per-cue agent marks the sub-voice line");
     }
 }

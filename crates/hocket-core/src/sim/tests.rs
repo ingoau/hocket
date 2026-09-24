@@ -623,7 +623,9 @@ fn lan_leader_restart_keeps_the_scrobble_dedupe_log() {
         device: leader,
         takeover: false,
     });
-    w.run_for(11_000.0);
+    // (a second past the scrobble point: the leader's verdict waits for
+    // the member to echo its claim)
+    w.run_for(12_000.0);
     assert_eq!(w.server.scrobbles.len(), 1, "the leader scrobbled t0");
     // the leader is killed mid-track and comes back a moment later
     w.perform(Action::Crash {
@@ -704,6 +706,7 @@ fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
     w.run_for(35_000.0);
     w.perform(Action::ResumeHere { device: member });
     w.run_for(20_000.0);
+    if std::env::var("HOCKET_SIM_TRACE").is_ok() { for d in &w.devices { for l in &d.log { eprintln!("{l}"); } } }
     let started_at = w.devices[leader].scrobbles_reached[0].1;
     assert_eq!(
         w.server.count("t0", started_at),

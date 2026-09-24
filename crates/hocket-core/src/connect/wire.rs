@@ -1220,3 +1220,202 @@ mod tests {
         ));
     }
 }
+
+/// Proptest strategies for "never panics on arbitrary input" tests of the
+/// JSON parsers (wire, subsonic, lyrics, settings, NSP). The fuzz targets
+/// under `fuzz/` explore far more; these keep a cheap version in `cargo test`.
+#[cfg(test)]
+pub(crate) mod arbitrary_json {
+    use proptest::prelude::*;
+    use serde_json::{Map, Value};
+
+    /// Numbers that sit on the edges parsers get wrong.
+    const EDGE_INTS: &[i64] = &[
+        0,
+        1,
+        -1,
+        2,
+        500,
+        i32::MAX as i64,
+        i32::MIN as i64,
+        u32::MAX as i64,
+        u32::MAX as i64 + 1,
+        i64::MAX,
+        i64::MIN,
+    ];
+
+    fn leaf(words: &'static [&'static str]) -> impl Strategy<Value = Value> {
+        prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::from),
+            prop::sample::select(EDGE_INTS).prop_map(Value::from),
+            any::<i64>().prop_map(Value::from),
+            any::<u64>().prop_map(Value::from),
+            any::<f64>()
+                .prop_filter("JSON has no NaN/inf", |f| f.is_finite())
+                .prop_map(Value::from),
+            "\\PC{0,12}".prop_map(Value::from),
+            prop::sample::select(words).prop_map(Value::from),
+        ]
+    }
+
+    fn key(words: &'static [&'static str]) -> impl Strategy<Value = String> {
+        prop_oneof![
+            4 => prop::sample::select(words).prop_map(String::from),
+            1 => "\\PC{0,6}",
+        ]
+    }
+
+    /// Arbitrary JSON whose keys and strings are mostly drawn from `words`
+    /// (the field names and enum tags the parser knows), so values land in
+    /// the parser's real fields instead of being ignored as unknown keys.
+    pub(crate) fn json(words: &'static [&'static str]) -> impl Strategy<Value = Value> {
+        leaf(words).prop_recursive(6, 96, 8, move |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+                prop::collection::vec((key(words), inner), 0..8)
+                    .prop_map(|kv| Value::Object(kv.into_iter().collect::<Map<_, _>>())),
+            ]
+        })
+    }
+
+    /// `seed` with a handful of byte edits (overwrite, insert, delete) and
+    /// an optional truncation: mostly-valid documents with a local defect.
+    pub(crate) fn mutated(seed: &'static str) -> impl Strategy<Value = String> {
+        let len = seed.len().max(1);
+        (
+            prop::collection::vec((0..len, any::<u8>(), 0u8..3), 0..6),
+            prop::option::of(0..len),
+        )
+            .prop_map(move |(edits, cut)| {
+                let mut b = seed.as_bytes().to_vec();
+                for (pos, byte, kind) in edits {
+                    let pos = pos.min(b.len());
+                    match kind {
+                        0 if pos < b.len() => b[pos] = byte,
+                        1 => b.insert(pos, byte),
+                        _ if pos < b.len() => {
+                            b.remove(pos);
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(c) = cut {
+                    b.truncate(c);
+                }
+                String::from_utf8_lossy(&b).into_owned()
+            })
+    }
+}
+
+#[cfg(test)]
+mod decode_never_panics {
+    use super::arbitrary_json::{json, mutated};
+    use super::*;
+    use crate::api::Query;
+    use proptest::prelude::*;
+
+    const WORDS: &[&str] = &[
+        "protocolVersion", "msg", "type", "data", "device", "id", "name", "platform", "linux",
+        "appVersion", "playing", "ready", "lastSeen", "isSelf", "protocolMin", "protocolMax",
+        "scope", "credential", "sessionId", "sessionRevision", "heldEpoch", "base_revision", "op",
+        "device_id", "op_id", "epoch", "at", "position_ms", "document", "revision", "reason",
+        "sent_at", "t0", "queues", "settings", "key", "value", "updatedAt", "playTracks",
+        "server_id", "track_ids", "start_index", "label", "shuffle", "save_outgoing", "nonce",
+        "mac", "from", "command", "play", "seekTo",
+    ];
+
+    const HELLO: &str = r#"{"protocolVersion":2,"msg":{"type":"hello","data":{"device":{"id":"a","name":"A","platform":"linux","appVersion":"0.1","playing":false,"ready":false,"lastSeen":0.0,"isSelf":false},"protocolMin":2,"protocolMax":2,"scope":"https://nd|me","credential":null,"sessionId":"s1","sessionRevision":3,"heldEpoch":1}}}"#;
+    const OP: &str = r#"{"protocolVersion":2,"msg":{"type":"op","data":{"base_revision":3,"op":{"type":"playTracks","data":{"server_id":"srv","track_ids":["t1","t2"],"start_index":1,"label":"x","shuffle":false,"save_outgoing":true}},"device_id":"d","op_id":"o","epoch":2,"at":1.0,"position_ms":0}},"traceId":"abc"}"#;
+
+    /// Decode must not panic; whatever decodes re-encodes and decodes back
+    /// to itself (a room relays what it receives).
+    fn check(text: &str) {
+        if let Ok(m) = WireMessage::decode(text) {
+            let again = m.encode().unwrap();
+            assert_eq!(WireMessage::decode(&again).unwrap(), m, "{again}");
+        }
+    }
+
+    fn check_api(bytes: &[u8]) {
+        if let Ok(c) = serde_json::from_slice::<Command>(bytes) {
+            let s = serde_json::to_string(&c).unwrap();
+            assert_eq!(serde_json::from_str::<Command>(&s).unwrap(), c);
+        }
+        if let Ok(q) = serde_json::from_slice::<Query>(bytes) {
+            let s = serde_json::to_string(&q).unwrap();
+            assert_eq!(serde_json::from_str::<Query>(&s).unwrap(), q);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn arbitrary_text(s in "\\PC{0,256}") {
+            check(&s);
+        }
+
+        #[test]
+        fn known_tags_with_arbitrary_payloads(
+            tag in prop::sample::select(Msg::KNOWN),
+            data in json(WORDS),
+            extra in json(WORDS),
+        ) {
+            let mut frame = serde_json::json!({
+                "protocolVersion": 2,
+                "msg": { "type": tag, "data": data },
+            });
+            if let Value::Object(m) = extra {
+                for (k, v) in m {
+                    frame.as_object_mut().unwrap().entry(k).or_insert(v);
+                }
+            }
+            check(&frame.to_string());
+        }
+
+        #[test]
+        fn mutated_frames(s in prop_oneof![mutated(HELLO), mutated(OP)]) {
+            check(&s);
+        }
+
+        #[test]
+        fn api_json_arbitrary(v in json(WORDS), s in "\\PC{0,64}") {
+            check_api(v.to_string().as_bytes());
+            check_api(s.as_bytes());
+        }
+    }
+
+    #[test]
+    fn deeply_nested_frame_is_an_error_not_a_stack_overflow() {
+        for open in ["[", "{\"a\":"] {
+            let deep = format!("{{\"protocolVersion\":2,\"x\":{}", open.repeat(100_000));
+            assert!(WireMessage::decode(&deep).is_err());
+            assert!(serde_json::from_str::<Command>(&deep).is_err());
+        }
+        // Nesting inside the round-tripped `extra` map, just under serde's
+        // recursion limit, survives.
+        let nested = format!(
+            "{{\"protocolVersion\":2,\"msg\":{{\"type\":\"syncRequest\"}},\"x\":{}1{}}}",
+            "[".repeat(120),
+            "]".repeat(120)
+        );
+        check(&nested);
+        assert!(WireMessage::decode(&nested).is_ok());
+    }
+
+    #[test]
+    fn oversized_frame_decodes_in_bounded_time() {
+        // A frame at the transport's cap, mostly one unknown string field.
+        let pad = "x".repeat(crate::connect::transport::MAX_FRAME_BYTES);
+        let frame = format!(
+            "{{\"protocolVersion\":2,\"msg\":{{\"type\":\"bye\",\"data\":{{\"reason\":\"{pad}\"}}}}}}"
+        );
+        check(&frame);
+        let many = format!(
+            "{{\"protocolVersion\":2,\"msg\":{{\"type\":\"savedQueuesSync\",\"data\":{{\"queues\":[{}]}}}}}}",
+            vec!["{}"; 100_000].join(",")
+        );
+        assert!(WireMessage::decode(&many).is_err());
+    }
+}

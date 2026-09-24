@@ -104,8 +104,8 @@ export type ThemeName = "light" | "dark";
 
 /** The theme surfaces and text colours; mirrored from global.css (contrast.test.ts checks they match). */
 export const THEME_COLOURS: Record<ThemeName, { bg: string; elev: string; sunken: string; fg: string; muted: string; faint: string; softPct: number; selectionPct: number }> = {
-  light: { bg: "#f4f4f6", elev: "#ffffff", sunken: "#ebebef", fg: "#1b1b1f", muted: "#55555e", faint: "#64646d", softPct: 0.18, selectionPct: 0.22 },
-  dark: { bg: "#121214", elev: "#1c1c20", sunken: "#0d0d0f", fg: "#ececf1", muted: "#a8a8b3", faint: "#8f8f9a", softPct: 0.18, selectionPct: 0.3 },
+  light: { bg: "#f4f4f6", elev: "#ffffff", sunken: "#ebebef", fg: "#1b1b1f", muted: "#51515a", faint: "#5b5b64", softPct: 0.18, selectionPct: 0.22 },
+  dark: { bg: "#121214", elev: "#1c1c20", sunken: "#0d0d0f", fg: "#ececf1", muted: "#acacb5", faint: "#9f9fa8", softPct: 0.18, selectionPct: 0.3 },
 };
 
 export interface AccentTokens {

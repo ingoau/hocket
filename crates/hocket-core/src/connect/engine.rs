@@ -1978,6 +1978,7 @@ impl Engine {
     }
 
     fn on_wire_in(&mut self, peer: PeerId, msg: WireMessage) {
+        if matches!(msg.msg, Msg::ScrobbleSubmitted { .. }) { eprintln!("DBG {} wire in from {peer}: {:?} inbound={:?} remote={:?}", self.cfg.device.id, msg.msg, self.inbound, self.remote.as_ref().map(|r| &r.state)); }
         if self.inbound.contains(&peer) {
             let was_serving = self.is_serving();
             let outs = self.room.handle(RoomInput::Message(peer, msg));
@@ -2396,6 +2397,7 @@ impl Engine {
         started_at: EpochMs,
         device_id: DeviceId,
     ) {
+        eprintln!("DBG {} got leader claim {track_id} {device_id}", self.cfg.device.id);
         let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
         self.learn_scrobbled(&track_id, started_at, &device_id);
         let mut ours: Vec<(TrackId, EpochMs)> = vec![];

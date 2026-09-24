@@ -7,3 +7,4 @@ Cargo.lock
 work/
 logs/
 run.sh
+sync-wt.sh

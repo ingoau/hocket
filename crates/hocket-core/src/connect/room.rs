@@ -370,7 +370,9 @@ impl Room {
             started_at: c.started_at,
             device_id: c.device_id.clone(),
         };
+        eprintln!("DBG announce {:?}", msg);
         self.broadcast(msg, Some(LOOPBACK));
+        eprintln!("DBG out {:?}", self.out.len());
     }
 
     /// Settle a claim: answer the loopback and the held member queries.
@@ -413,6 +415,7 @@ impl Room {
         started_at: EpochMs,
         now: EpochMs,
     ) {
+        eprintln!("DBG room query peer={peer} dev={device_id} q={query_id} t={track_id} members={:?} unconf={}", self.members.iter().map(|m| m.peer.clone()).collect::<Vec<_>>(), self.unconfirmed.len());
         if let Some(i) = self.unconfirmed_index(&track_id, started_at) {
             let c = &mut self.unconfirmed[i];
             if peer == LOOPBACK {
@@ -1256,6 +1259,7 @@ impl Room {
                 started_at,
                 device_id: d,
             } => {
+                eprintln!("DBG room submitted peer={peer} d={d} t={track_id}");
                 if peer != LOOPBACK {
                     if let Some(i) = self.unconfirmed_index(&track_id, started_at) {
                         // A member echoing our own device's claim: it knows the

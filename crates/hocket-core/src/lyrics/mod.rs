@@ -23,6 +23,8 @@ pub mod lrc;
 pub mod raw;
 
 #[cfg(test)]
+mod lyrics_never_panics;
+#[cfg(test)]
 mod tests;
 
 pub use adapt::{adapt_entry, adapt_list, from_plain_text, pick_main};

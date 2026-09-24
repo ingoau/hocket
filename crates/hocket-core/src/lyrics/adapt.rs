@@ -63,7 +63,7 @@ fn adapt_entry_mapped(
     entry: &StructuredLyrics,
     source: LyricsSource,
 ) -> (Lyrics, Vec<Option<usize>>) {
-    let shift = entry.offset.unwrap_or(0) * SERVER_OFFSET_SIGN;
+    let shift = entry.offset.unwrap_or(0).saturating_mul(SERVER_OFFSET_SIGN);
     let agents = build_agents(entry);
     let bg_ids: Vec<&str> = entry
         .agents
@@ -90,11 +90,13 @@ fn adapt_entry_mapped(
         let start_ms = if synced {
             raw.start
                 .or(cue_line.and_then(|c| c.start))
-                .map(|s| to_ms(s + shift))
+                .map(|s| to_ms(s.saturating_add(shift)))
         } else {
             None
         };
-        let mut end_ms = cue_line.and_then(|c| c.end).map(|e| to_ms(e + shift));
+        let mut end_ms = cue_line
+            .and_then(|c| c.end)
+            .map(|e| to_ms(e.saturating_add(shift)));
         let (text, syllables) = match cue_line {
             Some(cl) => {
                 let text = if cl.value.is_empty() {
@@ -184,10 +186,10 @@ fn sub_voice_line(cl: &RawCueLine, shift: i64, bg_ids: &[&str]) -> Option<LyricL
         .iter()
         .find_map(|c| c.start)
         .or(cl.start)
-        .map(|s| to_ms(s + shift));
+        .map(|s| to_ms(s.saturating_add(shift)));
     let end = cl
         .end
-        .map(|e| to_ms(e + shift))
+        .map(|e| to_ms(e.saturating_add(shift)))
         .or_else(|| syllables.last().map(|s| s.end_ms));
     let agent = cue_line_agent(cl).map(str::to_string);
     let background = agent.as_deref().is_some_and(|a| bg_ids.contains(&a));
@@ -250,17 +252,17 @@ fn syllables_from(cl: &RawCueLine, shift: i64) -> Vec<LyricSyllable> {
             }
             continue;
         }
-        let start = cue.start.unwrap_or(0) + shift;
+        let start = cue.start.unwrap_or(0).saturating_add(shift);
         let end = cue
             .end
-            .map(|e| e + shift)
+            .map(|e| e.saturating_add(shift))
             .or_else(|| {
                 cues[i + 1..]
                     .iter()
                     .find_map(|n| n.start)
-                    .map(|s| s + shift)
+                    .map(|s| s.saturating_add(shift))
             })
-            .or_else(|| cl.end.map(|e| e + shift))
+            .or_else(|| cl.end.map(|e| e.saturating_add(shift)))
             .unwrap_or(start);
         let mut text = cue.value.trim_end().to_string();
         let trailing_space = cue.value.ends_with(char::is_whitespace);
@@ -303,9 +305,12 @@ fn byte_gap<'a>(line: &'a str, cue: &RawCue, next: &RawCue) -> Option<&'a str> {
     let value = cue.value.trim_end();
     // The cue's own text pins its end; if the offset points elsewhere, the
     // inclusive `byteEnd` does.
-    let end_excl = match line.get(bs..bs + value.len()) {
-        Some(at) if at == value => bs + value.len(),
-        _ => be.checked_add(1)?,
+    let own_end = bs
+        .checked_add(value.len())
+        .filter(|&e| line.get(bs..e) == Some(value));
+    let end_excl = match own_end {
+        Some(e) => e,
+        None => be.checked_add(1)?,
     };
     if nbs < end_excl {
         return None;
@@ -363,7 +368,7 @@ fn attach_translation(
                 .iter()
                 .zip(&translation.line)
                 .all(|(m, t)| match (m.start, t.start) {
-                    (Some(a), Some(b)) => (a - b).abs() <= 500,
+                    (Some(a), Some(b)) => a.abs_diff(b) <= 500,
                     (None, None) => true,
                     _ => false,
                 });

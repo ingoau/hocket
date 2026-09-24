@@ -37,20 +37,23 @@ fn parse_timestamp(s: &str) -> Option<Ms> {
     let frac_ms: u64 = match frac {
         None => 0,
         Some(f) => {
-            let digits: String = f.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if digits.is_empty() || digits.len() != f.len() {
+            if f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit()) {
                 return None;
             }
-            let n: u64 = digits.parse().ok()?;
-            match digits.len() {
-                1 => n * 100,
-                2 => n * 10,
-                3 => n,
-                _ => n / 10u64.pow(digits.len() as u32 - 3),
-            }
+            // Milliseconds are the first three digits, right-padded: `.5` is
+            // 500, `.05` is 50, `.123456` is 123. Never parse the whole run
+            // of digits (it can be arbitrarily long).
+            f.bytes()
+                .chain(std::iter::repeat(b'0'))
+                .take(3)
+                .fold(0, |acc, b| acc * 10 + u64::from(b - b'0'))
         }
     };
-    let total = min * 60_000 + sec * 1000 + frac_ms;
+    // Minutes are unbounded in the format; saturate rather than overflow.
+    let total = min
+        .saturating_mul(60_000)
+        .saturating_add(sec * 1000)
+        .saturating_add(frac_ms);
     Some(total.min(u64::from(u32::MAX)) as Ms)
 }
 
@@ -118,12 +121,18 @@ pub fn lrc_to_lyrics(track_id: &str, doc: &LrcDocument, source: LyricsSource) ->
     if doc.lines.is_empty() {
         return None;
     }
-    let shift = -doc.offset_ms;
+    // The tag is any i64 the file says; saturate so `[offset:-9223372036854775808]`
+    // cannot overflow.
+    let shift = doc.offset_ms.saturating_neg();
     let mut lines: Vec<LyricLine> = doc
         .lines
         .iter()
         .map(|l| LyricLine {
-            start_ms: Some((i64::from(l.start_ms) + shift).clamp(0, i64::from(u32::MAX)) as Ms),
+            start_ms: Some(
+                i64::from(l.start_ms)
+                    .saturating_add(shift)
+                    .clamp(0, i64::from(u32::MAX)) as Ms,
+            ),
             end_ms: None,
             text: l.text.clone(),
             syllables: vec![],

@@ -87,7 +87,11 @@ pub fn parse_document(json: &str) -> Result<ConfigDocument, ConfigError> {
         Value::Object(o) => o,
         _ => return Err(ConfigError::Invalid("top level must be an object".into())),
     };
-    let version = obj.get("version").and_then(Value::as_u64).unwrap_or(0) as u32;
+    // Saturate, never truncate: `4294967297` is a far-future document, not v1.
+    let version = obj
+        .get("version")
+        .and_then(Value::as_u64)
+        .map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX));
     if version > CONFIG_VERSION {
         return Err(ConfigError::TooNew(version));
     }

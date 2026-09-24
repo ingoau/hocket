@@ -267,6 +267,11 @@ pub fn from_nsp(document: &str, fallback_name: &str) -> Result<Filter, FilterErr
             descending = !descending;
         }
     }
+    // Random has no direction (and export writes none), so `-random` or
+    // `order: desc` must not leave a flag that silently vanishes on re-export.
+    if sort == SortOrder::Random {
+        descending = false;
+    }
     let limit = lower
         .get("limit")
         .and_then(Value::as_u64)

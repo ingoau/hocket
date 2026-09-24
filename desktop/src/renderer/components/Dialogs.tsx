@@ -213,7 +213,9 @@ function TrackInfo({ trackId }: { trackId: string }) {
           <div className="muted truncate">{tr.artist}</div>
         </div>
       </div>
-      <dl className="list info-list" style={{ padding: 6 }}>
+      {/* Scrolls when long: focusable so the keyboard can scroll it. */}
+      <div className="list" style={{ padding: 6 }} tabIndex={0} role="group" aria-labelledby="dialog-title">
+      <dl className="info-list">
         {rows.filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => (
           <div key={k} className="row small" style={{ padding: "2px 4px" }}>
             <dt className="muted" style={{ width: 90, flex: "0 0 auto" }}>{k}</dt>
@@ -221,6 +223,7 @@ function TrackInfo({ trackId }: { trackId: string }) {
           </div>
         ))}
       </dl>
+      </div>
       <div className="buttons">
         {tr.path ? <button type="button" className="btn" onClick={() => bridge().shell.showItemInFolder(tr.path as string)}><Icon name="folder" size={14} /> {t("action.showInFolder")}</button> : null}
         <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>

@@ -74,9 +74,17 @@ impl LyricsCursor {
             .collect();
 
         // Primary line: latest start ≤ effective. Try the cached line and its
-        // successor first, then fall back to a scan.
+        // successor first, then fall back to a scan. The shortcut only holds
+        // when the timed starts are in order; servers do not promise that
+        // (overlapping duet and background lines), and a cursor that answers
+        // differently depending on where it was last frame would flicker.
+        let sorted = starts
+            .iter()
+            .flatten()
+            .zip(starts.iter().flatten().skip(1))
+            .all(|(a, b)| a <= b);
         let mut line = None;
-        if let Some(last) = self.last_line {
+        if let (Some(last), true) = (self.last_line, sorted) {
             let ok_here = starts
                 .get(last)
                 .copied()
