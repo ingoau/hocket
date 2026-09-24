@@ -514,6 +514,8 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
     let t = TestCore {
         core,
         backend: scripted,
+        sources: Default::default(),
+        upstream: Default::default(),
         clock,
         server: server.clone(),
         events,

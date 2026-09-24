@@ -11,6 +11,7 @@ import { fetchActions } from "../store/queries";
 import { useApp } from "../store/app";
 import { executeAction, type ActionContext } from "../store/actions";
 import { Icon, hasIcon } from "./Icon";
+import { handOnFocus } from "../lib/focus";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
@@ -76,7 +77,10 @@ export function ContextMenu() {
     returnFocus = null;
     const current = document.activeElement;
     const focusLost = !current || current === document.body || !!current.closest?.("[role=menu]");
-    if (el && el.isConnected && focusLost && !useApp.getState().dialog) el.focus({ preventScroll: true });
+    // A dialog the action opened takes the trigger over (lib/focus handOnFocus) and restores it itself.
+    if (useApp.getState().dialog || useApp.getState().paletteOpen) return;
+    handOnFocus(null);
+    if (el && el.isConnected && focusLost) el.focus({ preventScroll: true });
   }, [menu]);
 
   useEffect(() => {
@@ -98,6 +102,7 @@ export function ContextMenu() {
   if (!menu) return null;
   const run = (a: ActionDescriptor) => {
     if (!a.enabled) return;
+    handOnFocus(returnFocus);
     close();
     void executeAction(a.id, menu.target, menu.context);
   };

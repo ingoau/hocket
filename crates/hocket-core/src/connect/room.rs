@@ -1959,6 +1959,131 @@ mod tests {
         ));
     }
 
+    fn scrobble_query(peer: &str, dev: &str, id: &str) -> RoomInput {
+        RoomInput::Message(
+            peer.into(),
+            WireMessage::new(Msg::ScrobbleDedupeQuery {
+                query_id: id.into(),
+                track_id: "t".into(),
+                started_at: 100.0,
+                device_id: dev.into(),
+            }),
+        )
+    }
+
+    fn scrobble_submitted(peer: &str, dev: &str) -> RoomInput {
+        RoomInput::Message(
+            peer.into(),
+            WireMessage::new(Msg::ScrobbleSubmitted {
+                track_id: "t".into(),
+                started_at: 100.4,
+                device_id: dev.into(),
+            }),
+        )
+    }
+
+    fn answers(outs: &[RoomOutput], peer: &str) -> Vec<(String, bool)> {
+        sent(outs, peer)
+            .into_iter()
+            .filter_map(|m| match m {
+                Msg::ScrobbleDedupeAnswer {
+                    query_id,
+                    duplicate,
+                } => Some((query_id.clone(), *duplicate)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A LAN leader's room with the leader (the loopback) and one member.
+    fn leader_room() -> Room {
+        let (mut r, _) = room();
+        join(&mut r, LOOPBACK, "leader");
+        join(&mut r, "p1", "a");
+        r
+    }
+
+    #[test]
+    fn leader_claim_waits_for_a_member_echo() {
+        let mut r = leader_room();
+        let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        assert!(answers(&outs, LOOPBACK).is_empty(), "no verdict yet");
+        assert_eq!(
+            sent(&outs, "p1"),
+            vec![&Msg::ScrobbleSubmitted {
+                track_id: "t".into(),
+                started_at: 100.0,
+                device_id: "leader".into(),
+            }],
+            "the member hears of the claim"
+        );
+        assert!(r.is_unconfirmed_scrobble("t", 100.0));
+        // the leader's retry re-announces it (a lossy link ate the first)
+        let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        assert!(answers(&outs, LOOPBACK).is_empty());
+        assert_eq!(sent(&outs, "p1").len(), 1);
+        // a member that reached the same play waits behind the claim
+        let outs = r.handle(scrobble_query("p1", "a", "m1"));
+        assert!(answers(&outs, "p1").is_empty(), "held, not answered");
+        // the echo settles both
+        let outs = r.handle(scrobble_submitted("p1", "leader"));
+        assert_eq!(answers(&outs, LOOPBACK), vec![("q1".to_string(), false)]);
+        assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
+        assert!(!r.is_unconfirmed_scrobble("t", 100.0));
+        // settled: a later retry is answered at once
+        let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q2"));
+        assert_eq!(answers(&outs, LOOPBACK), vec![("q2".to_string(), false)]);
+    }
+
+    #[test]
+    fn leader_claim_loses_to_a_scrobble_from_elsewhere() {
+        let mut r = leader_room();
+        r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        // a member back from the other side of a partition, where "b"
+        // took the play over and scrobbled it
+        let outs = r.handle(scrobble_submitted("p1", "b"));
+        assert_eq!(answers(&outs, LOOPBACK), vec![("q1".to_string(), true)]);
+        assert_eq!(r.replica().scrobbles.len(), 1);
+        assert_eq!(r.replica().scrobbles[0].device_id, "b");
+    }
+
+    #[test]
+    fn lone_leader_and_member_claims_are_answered_at_once() {
+        let (mut r, _) = room();
+        join(&mut r, LOOPBACK, "leader");
+        let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        assert_eq!(answers(&outs, LOOPBACK), vec![("q1".to_string(), false)]);
+        let mut r = leader_room();
+        let outs = r.handle(scrobble_query("p1", "a", "m1"));
+        assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), false)]);
+        assert!(!r.has_unconfirmed_scrobbles());
+    }
+
+    #[test]
+    fn withdrawn_claim_frees_the_pair_and_confirmed_claim_stands() {
+        let mut r = leader_room();
+        r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        r.handle(scrobble_query("p1", "a", "m1"));
+        let outs = r.withdraw_unconfirmed_scrobbles();
+        assert!(answers(&outs, LOOPBACK).is_empty());
+        assert!(answers(&outs, "p1").is_empty());
+        assert!(r.replica().scrobbles.is_empty(), "the claim left the log");
+        // the member asks again and gets the play; the leader then doesn't
+        let outs = r.handle(scrobble_query("p1", "a", "m1"));
+        assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), false)]);
+        let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q2"));
+        assert_eq!(answers(&outs, LOOPBACK), vec![("q2".to_string(), true)]);
+
+        // confirmed on the host's own judgement: held members hear "duplicate"
+        let mut r = leader_room();
+        r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
+        r.handle(scrobble_query("p1", "a", "m1"));
+        let outs = r.confirm_scrobble("t", 100.0);
+        assert!(answers(&outs, LOOPBACK).is_empty());
+        assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
+        assert_eq!(r.replica().scrobbles[0].device_id, "leader");
+    }
+
     #[test]
     fn member_timeout_and_duplicate_device() {
         let (mut r, clock) = room();
