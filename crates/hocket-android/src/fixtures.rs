@@ -580,7 +580,7 @@ mod tests {
         let lyrics = hocket_core::lyrics::adapt_response("tally", &response).expect("lyrics");
         assert_eq!(lyrics.tier, LyricsTier::Syllable);
         std::fs::create_dir_all(&root).expect("create fixtures dir");
-        let text = serde_json::to_string_pretty(&json!(lyrics)).expect("serialise lyrics");
+        let text = serde_json::to_string(&json!(lyrics)).expect("serialise lyrics");
         std::fs::write(root.join("lyrics-enhanced-adapted.json"), text + "\n")
             .expect("write fixture");
     }

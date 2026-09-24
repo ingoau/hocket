@@ -113,6 +113,24 @@ class LyricsCursorTest {
     }
 
     @Test
+    fun aShortBackgroundLineNeverOpensTheGapWhileItsMainLineIsSung() {
+        // The bg line (primary: it starts with its main line and is later in the list) ends at 2 s;
+        // the main line runs to 9 s and the next line starts at 20 s.
+        val doc = Lyrics("t", LyricsTier.Syllable, null, null, null, emptyList(), listOf(
+            line(1000, 9000, "A long main line", listOf(syl("A", 1000, 3000), syl("long", 3000, 9000))),
+            bgLine(1000, 2000, "(ooh)", listOf(syl("(ooh)", 1000, 2000))),
+            line(20_000, 21_000, "Next", listOf(syl("Next", 20_000, 21_000))),
+        ), LyricsSource.Server, 0)
+        val during = LyricsCursor.at(doc, 5000)
+        assertEquals(1, during.lineIndex)
+        assertEquals(listOf(0), during.activeLines)
+        assertFalse("the main voice is still singing", during.inGap)
+        // After everything ended (plus the grace), the 11 s wait before "Next" is an instrumental.
+        assertFalse(LyricsCursor.at(doc, 9500).inGap)
+        assertTrue(LyricsCursor.at(doc, 10_500).inGap)
+    }
+
+    @Test
     fun linesNeedNotBeSortedByStart() {
         // A sub-voice line placed after its main line may start later than the next main line.
         val doc = lyrics(LyricsTier.Syllable, listOf(

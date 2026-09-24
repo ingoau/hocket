@@ -34,7 +34,7 @@ data class LyricsCursor(
     val syllableProgress: Float,
     /** 0..1 within the active line (line + syllable tiers). */
     val lineProgress: Float,
-    /** True when between timed lines: a gap longer than [GAP_MS], entered [GAP_GRACE_MS] after the line ended. */
+    /** True when between timed lines: nothing is being sung, the next line is more than [GAP_MS] after the last one ended, and [GAP_GRACE_MS] have passed since. */
     val inGap: Boolean,
     /** Every line containing the position (duets, background vocals); holds [lineIndex] while that line runs. */
     val activeLines: List<Int> = if (lineIndex >= 0) listOf(lineIndex) else emptyList(),
@@ -72,8 +72,16 @@ data class LyricsCursor(
             val line = lines[active]
             val start = line.startMs!!.toLong()
             val end = lineEnd(lines, active)
-            val nextStart = nextTimedStart(lines, active)
-            val inGap = nextStart != null && nextStart - end > GAP_MS && position >= end + GAP_GRACE_MS && position < nextStart
+            // The gap is between everything sung so far and the next line to start, not just after
+            // the primary line: a background line that starts late and ends early is often the
+            // primary while its main line is still being sung.
+            var sungUntil = Long.MIN_VALUE
+            var nextStart: Long? = null
+            for (i in lines.indices) {
+                val s = lines[i].startMs?.toLong() ?: continue
+                if (s <= position) sungUntil = maxOf(sungUntil, lineEnd(lines, i)) else if (nextStart == null || s < nextStart) nextStart = s
+            }
+            val inGap = activeLines.isEmpty() && nextStart != null && nextStart - sungUntil > GAP_MS && position >= sungUntil + GAP_GRACE_MS
             val lineProgress = if (end > start) ((position - start).toFloat() / (end - start)).coerceIn(0f, 1f) else 1f
 
             if (lyrics.tier != LyricsTier.Syllable || line.syllables.isEmpty()) {

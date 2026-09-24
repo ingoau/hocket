@@ -1,6 +1,9 @@
 package app.hocket.core.fake
 
+import app.hocket.core.HocketJson
+import app.hocket.core.api.Lyrics
 import app.hocket.core.api.LyricsTier
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -111,5 +114,60 @@ class EnhancedLyricsTest {
         val doc = EnhancedLyrics.adapt("t", RawStructuredLyrics(synced = false, line = listOf(RawLine(null, "a"), RawLine(null, "b"))))
         assertEquals(LyricsTier.Unsynced, doc.tier)
         assertTrue(doc.lines.all { it.startMs == null && it.syllables.isEmpty() })
+    }
+
+    /** Navidrome's real answer for "Tally", read from the core's fixtures (single source of truth). */
+    private fun tallyRaw(): String {
+        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        while (dir != null) {
+            val f = File(dir, "crates/hocket-core/src/subsonic/fixtures/lyrics_enhanced.json")
+            if (f.exists()) return f.readText()
+            dir = dir.parentFile
+        }
+        error("lyrics_enhanced.json not found above ${System.getProperty("user.dir")}")
+    }
+
+    @Test
+    fun theFakesAdapterAgreesWithTheCoreOnTheRealNavidromeAnswer() {
+        // Written by `cargo test -p hocket-android write_enhanced_lyrics_fixture` from the core's own adapter.
+        val expected = HocketJson.json.decodeFromString(Lyrics.serializer(), javaClass.getResourceAsStream("/lyrics-enhanced-adapted.json")!!.use { it.readBytes().decodeToString() })
+        val actual = EnhancedLyrics.adaptList("tally", EnhancedLyrics.parseOpenSubsonic(tallyRaw()))!!
+        assertEquals(expected.lines.size, actual.lines.size)
+        expected.lines.zip(actual.lines).forEachIndexed { i, (e, a) -> assertEquals("line $i", e, a) }
+        assertEquals(expected, actual)
+        assertEquals(LyricsTier.Syllable, actual.tier)
+        assertEquals(13, actual.lines.count { it.background })
+    }
+
+    @Test
+    fun theFakeCoreServesTheRealAnswerAtTheSyllableTier() = kotlinx.coroutines.test.runTest {
+        val core = FakeCore(timers = false, dispatcher = kotlinx.coroutines.Dispatchers.Unconfined)
+        val track = core.library.lyricsByTrack.keys.first()
+        val served = core.serveServerLyrics(track, tallyRaw())!!
+        assertEquals(LyricsTier.Syllable, served.tier)
+        val answered = (core.query(app.hocket.core.Queries.lyrics(track)) as app.hocket.core.api.QueryResult.LyricsResult).data!!
+        assertEquals(served, answered)
+        assertTrue(answered.lines.any { it.background && it.syllables.size >= 2 })
+    }
+
+    @Test
+    fun serverOffsetAndCueLevelAgentsFollowTheCore() {
+        val entry = RawStructuredLyrics(
+            synced = true, offset = 200, agents = agents,
+            line = listOf(RawLine(1_000, "Hey you")),
+            cueLine = listOf(
+                RawCueLine(0, 1_000, 2_000, "Hey you", null, listOf(RawCue(1_000, 1_400, "Hey", 0, 2, "v1"), RawCue(1_400, 2_000, "you", 4, 6, "v1"))),
+                RawCueLine(0, 1_500, 2_000, "(you)", null, listOf(RawCue(1_500, 2_000, "(you)", 0, 4, "__nd_bg__|v1"))),
+            ),
+        )
+        val l = EnhancedLyrics.adapt("t", entry)
+        // A positive server offset means the lyrics are early: every timestamp moves 200 ms earlier.
+        assertEquals(800u, l.lines[0].startMs)
+        assertEquals(800u, l.lines[0].syllables[0].startMs)
+        assertEquals(1_800u, l.lines[0].endMs)
+        // The voice comes from the cues when the cue line names none.
+        assertEquals("v1", l.lines[0].agent)
+        assertTrue(l.lines[1].background)
+        assertEquals(1_300u, l.lines[1].startMs)
     }
 }

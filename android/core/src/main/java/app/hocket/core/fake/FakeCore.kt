@@ -196,6 +196,20 @@ class FakeCore(
         scope.cancel()
     }
 
+    /**
+     * Serves [trackId]'s lyrics from an OpenSubsonic `getLyricsBySongId` answer (e.g. Navidrome's
+     * `enhanced=true` document), adapted the way the real core adapts a server answer
+     * ([EnhancedLyrics]); announces them with `LyricsChanged`. Returns what is now served.
+     */
+    fun serveServerLyrics(trackId: TrackId, openSubsonicJson: String): Lyrics? {
+        val lyrics = EnhancedLyrics.adaptList(trackId, EnhancedLyrics.parseOpenSubsonic(openSubsonicJson))
+        scope.launch {
+            library.lyricsByTrack[trackId] = lyrics
+            emit(Event.LyricsChanged(EventLyricsChangedInner(trackId, lyricsFor(trackId))))
+        }
+        return lyrics
+    }
+
     /** Test helper: apply a command and wait for it. */
     suspend fun dispatchAndWait(command: Command) = withContext(dispatcher) { handle(command) }
 

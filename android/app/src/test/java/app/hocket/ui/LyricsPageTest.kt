@@ -58,6 +58,93 @@ class LyricsPageTest {
         compose.waitForIdle()
     }
 
+    /**
+     * The page runs a frame loop for as long as it is shown, so the test clock is advanced by hand
+     * (an automatic clock would wait forever for an idle frame).
+     */
+    private fun advanceUntil(what: String, condition: () -> Boolean) {
+        repeat(600) { if (condition()) return; compose.mainClock.advanceTimeByFrame() }
+        throw AssertionError("timed out waiting for $what")
+    }
+
+    private fun exists(tag: String) = runCatching { compose.onNodeWithTag(tag).assertExists() }.isSuccess
+
+    /** Opens the page and starts playing [trackId] from 0 at [clock]. */
+    private fun open(trackId: String) {
+        core.fake.events.onEach { events += it }.launchIn(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        compose.mainClock.autoAdvance = false
+        compose.setThemedContent(core) { LyricsPage(visible = true) }
+        core.start()
+        advanceUntil("the core to start") { core.client.started.value }
+        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(trackId), 0, "Lyrics test"))
+        advanceUntil("$trackId to play") { core.client.nowPlaying.value?.track?.id == trackId }
+        advanceUntil("the lyrics to show") { exists("lyrics.line.0") }
+    }
+
+    /** What the renderer must show for [line] at [t]: each syllable swept by its own cue start/end. */
+    private fun expectedSweep(line: app.hocket.core.api.LyricLine, t: Long): List<Float> = line.syllables.map { s ->
+        val start = s.startMs.toLong(); val end = s.endMs.toLong()
+        when { t < start -> 0f; t >= end -> 1f; else -> (t - start).toFloat() / (end - start) }
+    }
+
+    /** Navidrome's real `enhanced=true` answer for "Tally", from the core's fixtures. */
+    private fun tallyRaw(): String {
+        var dir: java.io.File? = java.io.File(System.getProperty("user.dir")).absoluteFile
+        while (dir != null) {
+            val f = java.io.File(dir, "crates/hocket-core/src/subsonic/fixtures/lyrics_enhanced.json")
+            if (f.exists()) return f.readText()
+            dir = dir.parentFile
+        }
+        error("lyrics_enhanced.json not found")
+    }
+
+    @Test
+    fun theRealSyllableLyricsSweepPerSyllableFromTheExtrapolatedPosition() {
+        // The fake core serves Navidrome's real answer for "Tally", adapted the way the core adapts it,
+        // on the longest track so the position is never clamped by the duration.
+        val track = core.fake.library.lyricsByTrack.keys.maxBy { id -> core.fake.library.track(id)?.durationMs ?: 0u }
+        val doc = core.fake.serveServerLyrics(track, tallyRaw())!!
+        assertEquals(LyricsTier.Syllable, doc.tier)
+        open(track)
+        // "Lost it all at a discount" with the background "(Yeah, yeah)" sung over its end.
+        val main = doc.lines.indexOfFirst { it.text == "Lost it all at a discount" }
+        val bg = main + 1
+        assertTrue(doc.lines[bg].background)
+        val s = doc.lines[main].syllables
+        val eventsBefore = events.size
+        val stampBefore = core.client.transport.value.position
+        for (k in listOf(0, 2, s.lastIndex)) {
+            val t = (s[k].startMs.toLong() + s[k].endMs.toLong()) / 2
+            at(t)
+            assertSweep(expectedSweep(doc.lines[main], t), sweep(main))
+            assertEquals("the syllable being sung is half swept", 0.5f, sweep(main)[k], 0.05f)
+            assertTrue(lit(main))
+            assertEquals("main", voice(main))
+        }
+        // The background vocal: rendered as a sub-voice line, lit and swept by its own cues while the
+        // main line still runs.
+        val b = doc.lines[bg].syllables
+        val tb = (b[0].startMs.toLong() + b[0].endMs.toLong()) / 2
+        at(tb)
+        assertEquals("bg", voice(bg))
+        assertTrue(lit(bg))
+        assertSweep(expectedSweep(doc.lines[bg], tb), sweep(bg))
+        assertFalse("the main voice keeps the focus", focused(bg))
+        // Once both have been sung (before the next line): the main line stays lit and held at 1, the
+        // finished background line goes dim, whichever of the two the cursor calls primary.
+        val done = maxOf(doc.lines[main].endMs!!.toLong(), doc.lines[bg].endMs!!.toLong()) + 100
+        assertTrue("the fixture shape: a pause before the next line", done < doc.lines[bg + 1].startMs!!.toLong())
+        at(done)
+        assertTrue(lit(main))
+        assertTrue(focused(main))
+        assertFalse(lit(bg))
+        assertSweep(s.map { 1f }, sweep(main))
+        assertSweep(b.map { 1f }, sweep(bg))
+        // All of it from the stamp and the clock: no event arrived while the sweep moved.
+        assertEquals(eventsBefore, events.size)
+        assertEquals(stampBefore, core.client.transport.value.position)
+    }
+
     private fun assertSweep(expected: List<Float>, actual: List<Float>) {
         assertEquals(expected.size, actual.size)
         expected.zip(actual).forEach { (e, a) -> assertEquals("sweep $expected vs $actual", e, a, 0.03f) }
@@ -65,14 +152,8 @@ class LyricsPageTest {
 
     /** Starts the fake playing (from 0, at [clock]) a track with syllable lyrics and opens the page on it. */
     private fun play(): Lyrics {
-        core.fake.events.onEach { events += it }.launchIn(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
-        compose.setThemedContent(core) { LyricsPage(visible = true) }
-        core.start()
-        compose.waitUntil(5_000) { core.client.started.value }
         val (trackId, doc) = core.fake.library.lyricsByTrack.entries.first { it.value?.tier == LyricsTier.Syllable && it.value!!.lines.any { l -> l.background } }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(trackId), 0, "Lyrics test"))
-        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == trackId }
-        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("lyrics.line.0").assertExists() }.isSuccess }
+        open(trackId)
         return doc!!
     }
 
@@ -109,11 +190,15 @@ class LyricsPageTest {
         assertSweep(s.indices.map { i -> if (i < 3) 1f else if (i == 3) 0.5f else 0f }, sweep(main))
         assertEquals(eventsBefore, events.size)
 
-        // Past the line's end but before the next line starts: every syllable held at 1, still lit (no flash).
+        // Past the line's end but before the next line starts: every syllable held at 1, still lit (no
+        // flash); the background line, which ended half-way through, is dim although the cursor
+        // calls it the primary line.
         at(doc.lines[main].endMs!!.toLong() + 200)
         assertSweep(s.map { 1f }, sweep(main))
         assertTrue(lit(main))
+        assertTrue(focused(main))
         assertSweep(doc.lines[bg].syllables.map { 1f }, sweep(bg))
+        assertFalse(lit(bg))
     }
 
     @Test
@@ -160,7 +245,7 @@ class LyricsPageTest {
         val s = doc.lines[main].syllables
         // A positive offset shows the lyrics later: at the syllable's own start nothing has been sung yet.
         core.client.dispatch(Commands.setLyricsOffset(doc.trackId, 400))
-        compose.waitUntil(5_000) { core.client.lyrics.value[doc.trackId]?.offsetMs == 400 }
+        advanceUntil("the offset") { core.client.lyrics.value[doc.trackId]?.offsetMs == 400 }
         at(s[1].startMs.toLong())
         val effective = s[1].startMs.toLong() - 400
         assertSweep(s.indices.map { i -> if (i == 0) ((effective - s[0].startMs.toLong()).toFloat() / (s[0].endMs.toLong() - s[0].startMs.toLong())).coerceIn(0f, 1f) else 0f }, sweep(main))

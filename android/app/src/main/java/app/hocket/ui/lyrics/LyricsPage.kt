@@ -153,12 +153,16 @@ object LyricsSemantics {
 
 /**
  * The line the list follows: the cursor's primary line, unless that is a background sub-voice line
- * singing over a main line that is still running, in which case the main line keeps the focus.
+ * (it starts with or after the line it is sung over, so it is often the later-starting primary). The
+ * focus then stays on the main voice: the main line the adapter placed it after, whether or not
+ * that line is still running, so a finished background line never outranks it.
  */
 internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
     val primary = cursor.lineIndex
     if (primary < 0 || !doc.lines[primary].background) return primary
-    return cursor.activeLines.firstOrNull { !doc.lines[it].background } ?: primary
+    cursor.activeLines.firstOrNull { !doc.lines[it].background }?.let { return it }
+    for (i in primary downTo 0) if (!doc.lines[i].background && doc.lines[i].startMs != null) return i
+    return primary
 }
 
 @Composable
@@ -177,9 +181,10 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, onSeek: (Long) -> Unit, mo
     val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
     LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
         itemsIndexed(doc.lines) { i, line ->
-            // Lit: the primary line (until the gap state) and every line singing over it right now
-            // (duet, background). Each lit line sweeps its own syllables from the same position.
-            val lit = (i == cursor.lineIndex && !cursor.inGap) || (i != cursor.lineIndex && i in cursor.activeLines)
+            // Lit: every line being sung right now (main, duet, background), and the focused main
+            // line held after it ends until the gap state. Each lit line sweeps its own syllables
+            // from the same position; a finished background line goes dim with its main line.
+            val lit = i in cursor.activeLines || (i == focus && !cursor.inGap)
             val distance = if (focus < 0) 2 else kotlin.math.abs(i - focus)
             val side = line.agent?.let { sides[it] } ?: 0
             // The core compares `position - offset` against the line start, so seeking to a line's
