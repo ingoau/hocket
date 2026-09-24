@@ -531,7 +531,9 @@ impl StreamReader {
                         src.attach(row);
                     }
                     Ok((None, c)) => changed.extend(c),
-                    Err(e) => tracing::warn!(target: "hocket_core", error = %e, "stream cache lookup"),
+                    Err(e) => {
+                        tracing::warn!(target: "hocket_core", error = %e, "stream cache lookup")
+                    }
                 }
             }
             Err(e) => tracing::warn!(target: "hocket_core", error = %e, "stream cache lookup"),
@@ -864,10 +866,7 @@ impl CacheSource {
             offset: self.offset,
             total_length: self.total,
             length: self.end.map(|e| e.saturating_sub(self.offset)),
-            content_type: self
-                .content_type
-                .clone()
-                .or(self.token.mime_type.clone()),
+            content_type: self.content_type.clone().or(self.token.mime_type.clone()),
         })
     }
 
@@ -1054,7 +1053,9 @@ impl CacheSource {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        let range = match (pos, gap_end) {
+        // To the end of the stream: open-ended (what a plain seek sends).
+        let bounded = gap_end.filter(|e| Some(*e) != self.total);
+        let range = match (pos, bounded) {
             (0, None) => None,
             (p, None) => Some(format!("bytes={p}-")),
             (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
@@ -1122,7 +1123,9 @@ impl CacheSource {
             if self.served > 0 {
                 // Bytes of the old stream already went out: the player
                 // must start over.
-                return Err(StreamError::Network("the stream changed on the server".into()));
+                return Err(StreamError::Network(
+                    "the stream changed on the server".into(),
+                ));
             }
         } else {
             self.total = self.total.or(total);
@@ -1263,7 +1266,11 @@ impl CacheSource {
         }
         let add = std::mem::take(&mut e.pending);
         e.pending_bytes = 0;
-        match self.sh.downloads.cache_merge(&e.key, &add, total, ct.as_deref()) {
+        match self
+            .sh
+            .downloads
+            .cache_merge(&e.key, &add, total, ct.as_deref())
+        {
             Ok(out) => {
                 if !out.accepted {
                     // The entry was dropped or replaced meanwhile.
@@ -1304,7 +1311,11 @@ fn downloads_profile_key(p: Option<&TranscodingProfile>) -> String {
 
 /// `audio/flac; x=y` → `audio/flac`.
 fn base_type(ct: &str) -> String {
-    ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+    ct.split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// A body the server sends instead of audio when `stream` fails with

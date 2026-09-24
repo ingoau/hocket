@@ -657,6 +657,8 @@ pub enum FilterField {
     // Local-only fields (not server-expressible):
     Downloaded,
     Cached,
+    /// Playable with no network: downloaded or fully in the stream cache.
+    AvailableOffline,
     LocalPlayCount,
     LocalLastPlayed,
     InPlaylist,

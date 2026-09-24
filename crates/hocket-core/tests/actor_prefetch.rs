@@ -106,12 +106,16 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
         .set_behaviour("t1", UpstreamBehaviour::StallAfter(50_000));
     play_album(&t, 3, 0).await;
     for _ in 0..100 {
-        if !temp_files(&t).is_empty() {
+        if t.core.stream_open_handles() > 0 && t.upstream.stream_requests("t1") > 0 {
             break;
         }
         run_real(&t, 250.0).await;
     }
-    assert_eq!(temp_files(&t).len(), 1, "t1's prefetch is in flight");
+    assert_eq!(
+        t.core.stream_open_handles(),
+        1,
+        "t1's prefetch is in flight"
+    );
     // Another context: t1 is no longer among the next two.
     t.run(Command::PlayTracks {
         server_id: t.server_id.clone(),
@@ -123,8 +127,11 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
     .await;
     wait_cached(&t, "t4").await;
     wait_cached(&t, "t5").await;
-    wait_no_temp(&t).await;
+    wait_handles_closed(&t).await;
+    // The cancelled fetch keeps what it got as a partial entry.
     assert_eq!(offline(&t, "t1").await, OfflineState::None);
+    let row = row_of(&t, "t1");
+    assert_eq!((row.complete, row.spans.as_str()), (false, "0-50000"));
     assert_eq!(
         t.upstream.stream_requests("t2"),
         0,
@@ -252,7 +259,10 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     for _ in 0..80 {
         TestCore::run_all_for(&[&a, &b], 250.0).await;
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        if offline(&b, "t1").await == OfflineState::Cached && !temp_files(&b).is_empty() {
+        if offline(&b, "t1").await == OfflineState::Cached
+            && b.upstream.stream_requests("t2") > 0
+            && b.core.stream_open_handles() > 0
+        {
             in_flight = true;
             break;
         }
@@ -271,7 +281,7 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     for _ in 0..120 {
         TestCore::run_all_for(&[&a, &b], 250.0).await;
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        if a.upstream.stream_requests("t2") > 0 && temp_files(&b).is_empty() {
+        if a.upstream.stream_requests("t2") > 0 && b.core.stream_open_handles() == 0 {
             moved = true;
             break;
         }
@@ -279,9 +289,9 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     assert!(a.backend.is_playing(), "a took over");
     assert!(
         moved,
-        "a: {:?} b temp: {:?}",
+        "a: {:?} b handles: {}",
         a.upstream.calls(),
-        temp_files(&b)
+        b.core.stream_open_handles()
     );
     assert_eq!(offline(&b, "t2").await, OfflineState::None);
     let b_calls = b.upstream.calls().len();

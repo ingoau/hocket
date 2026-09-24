@@ -222,7 +222,9 @@ impl Downloads {
     pub fn source_tag(&self, server_id: &str, track_id: &str) -> DbResult<Option<String>> {
         self.inner.db.with_conn(|c| {
             Ok(c.query_row(
-                &format!("SELECT {SOURCE_TAG_SQL} FROM tracks t WHERE t.server_id = ?1 AND t.id = ?2"),
+                &format!(
+                    "SELECT {SOURCE_TAG_SQL} FROM tracks t WHERE t.server_id = ?1 AND t.id = ?2"
+                ),
                 params![server_id, track_id],
                 |r| r.get::<_, String>(0),
             )
@@ -232,8 +234,9 @@ impl Downloads {
 
     fn rows_where(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> DbResult<Vec<CacheRow>> {
         self.inner.db.with_conn(|c| {
-            let mut st =
-                c.prepare_cached(&format!("SELECT {ROW_COLUMNS} FROM cache_entries WHERE {clause}"))?;
+            let mut st = c.prepare_cached(&format!(
+                "SELECT {ROW_COLUMNS} FROM cache_entries WHERE {clause}"
+            ))?;
             let rows = st.query_map(args, CacheRow::from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
@@ -687,7 +690,7 @@ impl Downloads {
             } else {
                 row.spans.max_end()
             };
-            if !len.is_some_and(|l| l >= needed) {
+            if len.is_none_or(|l| l < needed) {
                 self.drop_row(&row, &mut changed)?;
             }
         }
@@ -789,7 +792,12 @@ impl Downloads {
     }
 
     /// Record a fact eviction weighs about a track.
-    pub fn cache_signal(&self, server_id: &str, track_id: &str, signal: CacheSignal) -> DbResult<()> {
+    pub fn cache_signal(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        signal: CacheSignal,
+    ) -> DbResult<()> {
         let now = self.now();
         let set = match signal {
             CacheSignal::Autoplay => "autoplay = 1",

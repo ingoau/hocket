@@ -266,6 +266,13 @@ pub const FIELDS: &[FieldInfo] = &[
         "(tracks.offline = 1)",
     ),
     f(
+        FilterField::AvailableOffline,
+        FieldKind::Bool,
+        Expressibility::Local,
+        "availableoffline",
+        "(tracks.offline IN (1, 2))",
+    ),
+    f(
         FilterField::LocalPlayCount,
         FieldKind::Number,
         Expressibility::Local,

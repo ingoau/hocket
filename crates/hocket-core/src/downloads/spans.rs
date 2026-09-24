@@ -82,7 +82,11 @@ impl SpanSet {
 
     /// Whether `[0, total)` is covered.
     pub fn covers(&self, total: u64) -> bool {
-        total > 0 && self.spans.first().is_some_and(|(a, b)| *a == 0 && *b >= total)
+        total > 0
+            && self
+                .spans
+                .first()
+                .is_some_and(|(a, b)| *a == 0 && *b >= total)
     }
 
     /// Bytes held.

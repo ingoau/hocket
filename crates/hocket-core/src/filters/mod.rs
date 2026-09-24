@@ -167,6 +167,18 @@ pub fn default_filters() -> Vec<Filter> {
             None,
         ),
         builtin(
+            "available-offline",
+            "Available offline",
+            FilterNode::All(vec![rule(
+                FilterField::AvailableOffline,
+                FilterOp::IsTrue,
+                FilterValue::Bool(true),
+            )]),
+            SortOrder::Artist,
+            false,
+            None,
+        ),
+        builtin(
             "recently-played",
             "Recently played",
             FilterNode::Any(vec![

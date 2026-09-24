@@ -94,6 +94,10 @@ pub fn field_value(field: FilterField, track: &Track, facts: &LocalFacts) -> Fie
         FilterField::Mood => V::Text(track.sonic.as_ref().and_then(|s| s.mood.clone())),
         FilterField::Downloaded => V::Bool(track.offline == OfflineState::Downloaded),
         FilterField::Cached => V::Bool(track.offline == OfflineState::Cached),
+        FilterField::AvailableOffline => V::Bool(matches!(
+            track.offline,
+            OfflineState::Cached | OfflineState::Downloaded
+        )),
         FilterField::LocalPlayCount => V::Number(Some(f64::from(facts.local_play_count))),
         FilterField::LocalLastPlayed => V::Date(facts.local_last_played),
         FilterField::InPlaylist => V::Playlists(facts.playlist_ids.clone()),

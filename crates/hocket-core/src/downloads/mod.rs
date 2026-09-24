@@ -2421,4 +2421,282 @@ mod tests {
         );
         assert!(file_url(Path::new("/a/b c.flac")).starts_with("file:///a/b%20c.flac"));
     }
+
+    fn write_at(path: &Path, at: u64, data: &[u8]) {
+        use std::io::{Seek, Write};
+        let mut f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        f.seek(std::io::SeekFrom::Start(at)).unwrap();
+        f.write_all(data).unwrap();
+    }
+
+    fn opus96() -> TranscodingProfile {
+        TranscodingProfile {
+            format: Some("opus".into()),
+            max_bit_rate: Some(96),
+            cannot_decode: vec![],
+        }
+    }
+
+    /// Spans merge into one partial row; a different total is refused; the
+    /// row is promoted in place when they cover the stream; partial bytes
+    /// count against the budget.
+    #[test]
+    fn partial_entries_merge_and_promote_in_place() {
+        let f = fixture();
+        let off = |id: &str| f.db.track(id).unwrap().unwrap().offline;
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "t0",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!row.complete && row.spans.is_empty());
+        assert_eq!(
+            std::fs::metadata(&row.path).unwrap().len(),
+            1000,
+            "sparse, full length"
+        );
+        let key = row.key();
+        write_at(&row.path, 0, &[1u8; 400]);
+        write_at(&row.path, 600, &[3u8; 400]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(0, 400), Some(1000), None)
+                .unwrap();
+        assert!(out.accepted && !out.complete);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(600, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.accepted && !out.complete && out.changed.is_empty());
+        assert_eq!(f.dl.cache_bytes().unwrap(), 800.0);
+        assert_eq!(f.dl.partial_cache_bytes().unwrap(), 800.0);
+        assert_eq!(off("t0"), OfflineState::None);
+        assert!(f
+            .dl
+            .cache_lookup("srv", "t0", None, false)
+            .unwrap()
+            .is_none());
+        let (partial, _) = f.dl.cache_partial("srv", "t0", None).unwrap();
+        assert_eq!(partial.unwrap().spans.encode(), "0-400,600-1000");
+        // A second writer joins the same row.
+        let again =
+            f.dl.cache_begin("srv", "t0", None, Some("flac"), Some(1000), None, None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(again.path, row.path);
+        // Another length: the stream changed, the merge is refused.
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(400, 600), Some(999), None)
+                .unwrap();
+        assert!(!out.accepted);
+        write_at(&row.path, 400, &[2u8; 200]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(400, 600), Some(1000), None)
+                .unwrap();
+        assert!(out.accepted && out.complete);
+        assert_eq!(out.changed, vec![("srv".to_string(), "t0".to_string())]);
+        assert_eq!(off("t0"), OfflineState::Cached);
+        let e =
+            f.dl.cache_lookup("srv", "t0", None, false)
+                .unwrap()
+                .unwrap();
+        assert_eq!((e.path, e.bytes), (row.path.clone(), 1000));
+        assert_eq!(f.dl.partial_cache_bytes().unwrap(), 0.0);
+        // begin on a complete entry writes nothing.
+        assert!(f
+            .dl
+            .cache_begin("srv", "t0", None, Some("flac"), Some(1000), None, None)
+            .unwrap()
+            .is_none());
+        // A row whose file shrank is a miss that removes it.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&row.path)
+            .unwrap()
+            .set_len(10)
+            .unwrap();
+        assert!(f
+            .dl
+            .cache_lookup("srv", "t0", None, false)
+            .unwrap()
+            .is_none());
+        assert_eq!(off("t0"), OfflineState::None);
+        assert!(f.dl.cache_rows("srv", "t0").unwrap().is_empty());
+        // A new partial row with a length that disagrees is reset.
+        let r =
+            f.dl.cache_begin("srv", "t1", None, None, Some(500), None, None)
+                .unwrap()
+                .unwrap();
+        f.dl.cache_merge(&r.key(), &spans::SpanSet::of(0, 100), Some(500), None)
+            .unwrap();
+        let r2 =
+            f.dl.cache_begin("srv", "t1", None, None, Some(700), None, None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            (r2.path.clone(), r2.total, r2.spans.is_empty()),
+            (r.path, Some(700), true)
+        );
+        // An empty row a failed fetch left is discarded.
+        f.dl.cache_discard_if_empty(&r2.key()).unwrap();
+        assert!(f.dl.cache_rows("srv", "t1").unwrap().is_empty());
+        assert!(!r2.path.exists());
+    }
+
+    /// A complete original serves a transcoded request (unless the platform
+    /// cannot decode it), and makes transcoded variants redundant.
+    #[test]
+    fn a_complete_original_serves_every_quality_and_replaces_variants() {
+        let f = fixture();
+        let prof = opus96();
+        let tp =
+            f.dl.cache_path_unique("srv", "t1", Some(&prof), Some("opus"));
+        std::fs::create_dir_all(tp.parent().unwrap()).unwrap();
+        std::fs::write(&tp, vec![0u8; 300]).unwrap();
+        f.dl.cache_put("srv", "t1", Some(&prof), &tp, 300.0, Some("audio/ogg"))
+            .unwrap();
+        assert_eq!(
+            f.dl.cache_lookup("srv", "t1", Some(&prof), false)
+                .unwrap()
+                .unwrap()
+                .profile,
+            "opus-96"
+        );
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "t1",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        write_at(&row.path, 0, &[1u8; 1000]);
+        let out =
+            f.dl.cache_merge(&row.key(), &spans::SpanSet::of(0, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.complete);
+        assert!(!tp.exists(), "the transcode is redundant now");
+        let rows = f.dl.cache_rows("srv", "t1").unwrap();
+        assert_eq!(rows.len(), 1);
+        let e =
+            f.dl.cache_lookup("srv", "t1", Some(&prof), false)
+                .unwrap()
+                .unwrap();
+        assert_eq!((e.profile.as_str(), e.path), ("", row.path.clone()));
+        // A profile that transcodes because the format cannot be decoded
+        // never gets the original.
+        f.db.with_conn(|c| {
+            c.execute("UPDATE tracks SET suffix = 'ape' WHERE id = 't1'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        let forced = TranscodingProfile {
+            format: Some("flac".into()),
+            max_bit_rate: None,
+            cannot_decode: vec!["ape".into()],
+        };
+        assert!(f
+            .dl
+            .cache_lookup("srv", "t1", Some(&forced), false)
+            .unwrap()
+            .is_none());
+        assert!(!f.dl.original_decodable("srv", "t1", Some(&forced)).unwrap());
+        assert!(f.dl.original_decodable("srv", "t1", Some(&prof)).unwrap());
+        assert_eq!(
+            profile_from_key("opus-96"),
+            Some(TranscodingProfile {
+                cannot_decode: vec![],
+                ..opus96()
+            })
+        );
+        assert_eq!(profile_from_key("raw-128").unwrap().format, None);
+        assert_eq!(profile_from_key(""), None);
+    }
+
+    /// Eviction weighs ratings, play counts and signals over plain LRU,
+    /// deterministically, and still skips files in use.
+    #[test]
+    fn eviction_is_scored_keeping_what_the_listener_cares_about() {
+        let f = fixture();
+        let put = |id: &str, last: f64, complete: bool| {
+            let p = f.dl.cache_path_unique("srv", id, None, Some("flac"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, vec![0u8; 1000]).unwrap();
+            f.dl.cache_put("srv", id, None, &p, 1000.0, None).unwrap();
+            f.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE cache_entries SET last_used_at = ?2, complete = ?3, spans = CASE WHEN ?3 = 1 THEN spans ELSE '0-1000' END, total_bytes = CASE WHEN ?3 = 1 THEN total_bytes ELSE 5000 END WHERE track_id = ?1",
+                    rusqlite::params![id, last, complete as i64],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            p
+        };
+        let day = 86_400_000.0;
+        let base = 1.0e12;
+        f.dl.set_cache_budget(1e12);
+        let p0 = put("t0", base + 100.0, true); // plain
+        let p1 = put("t1", base - 20.0 * day, true); // loved, used long ago
+        let p2 = put("t2", base - 10.0 * day, true); // played often
+        let p3 = put("t3", base + 200.0, true); // autoplay one-off
+        let p4 = put("t4", base + 300.0, true); // skipped early
+        let p5 = put("t5", base + 400.0, false); // primed, never played
+        f.db.set_track_loved("t1", true).unwrap();
+        for i in 0..5 {
+            f.db.record_play("srv", "t2", base + f64::from(i), 60_000, false, "dev")
+                .unwrap();
+        }
+        f.dl.cache_signal("srv", "t3", CacheSignal::Autoplay)
+            .unwrap();
+        f.db.record_play("srv", "t3", base, 60_000, false, "dev")
+            .unwrap();
+        f.dl.cache_signal("srv", "t4", CacheSignal::Skipped)
+            .unwrap();
+        f.dl.cache_signal("srv", "t5", CacheSignal::Primed).unwrap();
+        let order: Vec<String> =
+            f.dl.eviction_order()
+                .unwrap()
+                .into_iter()
+                .map(|(r, _)| r.track_id)
+                .collect();
+        assert_eq!(order, ["t5", "t4", "t3", "t0", "t2", "t1"]);
+        // The primed entry is protected while in use: the next one goes.
+        f.dl.acquire_reader(&p5);
+        f.dl.set_cache_budget(5000.0);
+        assert_eq!(
+            f.dl.evict_over_budget().unwrap(),
+            vec![("srv".to_string(), "t4".to_string())]
+        );
+        assert!(p5.exists() && !p4.exists());
+        f.dl.release_reader(&p5);
+        f.dl.set_cache_budget(4000.0);
+        f.dl.enforce_cache_budget().unwrap();
+        assert!(!p5.exists() && p3.exists(), "released: it goes first");
+        f.dl.set_cache_budget(2000.0);
+        f.dl.enforce_cache_budget().unwrap();
+        assert!(!p3.exists() && !p0.exists());
+        assert!(p1.exists() && p2.exists(), "loved and often played stay");
+        // Playing the primed track clears the flag.
+        f.dl.cache_signal("srv", "t5", CacheSignal::Played).unwrap();
+        let primed: i64 =
+            f.db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT primed FROM cache_signals WHERE track_id = 't5'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(primed, 0);
+    }
 }

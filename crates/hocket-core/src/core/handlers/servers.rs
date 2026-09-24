@@ -580,6 +580,12 @@ impl Actor {
             let servers = self.server_infos();
             self.emit(Event::ServersChanged { servers });
             self.reconcile_playlist_pins();
+            // Cached audio of tracks whose file changed on the server is stale.
+            match self.downloads.invalidate_changed_sources() {
+                Ok(changed) if !changed.is_empty() => self.on_stream_cache_changed(changed),
+                Ok(_) => {}
+                Err(e) => self.log("warn", format!("stream cache invalidation: {e}")),
+            }
             // The queue view may have been rendered from bare summaries.
             self.emit_queue();
         }

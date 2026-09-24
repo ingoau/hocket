@@ -328,6 +328,14 @@ fn cases() -> Vec<(FilterNode, Vec<&'static str>)> {
         ),
         (r(F::Cached, O::IsTrue, FilterValue::Bool(true)), vec!["b"]),
         (
+            r(F::AvailableOffline, O::IsTrue, FilterValue::Bool(true)),
+            vec!["a", "b"],
+        ),
+        (
+            r(F::AvailableOffline, O::IsFalse, FilterValue::Bool(true)),
+            vec!["c", "d", "e"],
+        ),
+        (
             r(F::Downloaded, O::IsFalse, FilterValue::Bool(true)),
             vec!["b", "c", "d", "e"],
         ),
@@ -877,7 +885,11 @@ fn local_rule_strategy() -> impl Strategy<Value = FilterNode> {
     use FilterField as F;
     prop_oneof![
         (
-            prop_oneof![Just(F::Downloaded), Just(F::Cached)],
+            prop_oneof![
+                Just(F::Downloaded),
+                Just(F::Cached),
+                Just(F::AvailableOffline)
+            ],
             any::<bool>()
         )
             .prop_map(|(f, b)| r(
@@ -1019,4 +1031,11 @@ fn defaults_are_valid_and_evaluate() {
         vec!["a"]
     );
     assert!(!capability(&downloaded, ServerCaps::default()).server_expressible);
+    let offline = default_filters()
+        .into_iter()
+        .find(|f| f.id == "builtin:available-offline")
+        .unwrap();
+    let mut ids = mem_ids(&rows, &offline.root, offline.sort, false, None);
+    ids.sort();
+    assert_eq!(ids, vec!["a", "b"], "downloaded and fully cached");
 }

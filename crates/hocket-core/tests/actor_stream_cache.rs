@@ -198,11 +198,9 @@ async fn aborted_reads_and_dropped_connections_keep_their_bytes_and_resume_with_
     assert_eq!(offline(&t, "t2").await, OfflineState::None);
     // Partial bytes count against the budget.
     match t.query(Query::Storage).await {
-        QueryResult::Storage(s) => assert_eq!(
-            s.cache_bytes,
-            200_000.0 + 50_000.0 + row.bytes,
-            "{s:?}"
-        ),
+        QueryResult::Storage(s) => {
+            assert_eq!(s.cache_bytes, 200_000.0 + 50_000.0 + row.bytes, "{s:?}")
+        }
         other => panic!("{other:?}"),
     }
     t.core.shutdown().await;
@@ -529,5 +527,63 @@ async fn an_external_backend_without_the_capability_keeps_the_direct_url() {
     t.run(Command::SetBackendCapabilities { core_stream: false })
         .await;
     assert!(source(&t, "t0").await.url.starts_with("https://"));
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_library_sync_that_sees_a_track_change_drops_its_cached_audio() {
+    let t = started("server-change", 3).await;
+    let s0 = source(&t, "t0").await;
+    read_from(&t, &s0.url, 0).await.unwrap();
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    let s1 = source(&t, "t1").await;
+    read_from(&t, &s1.url, 1000).await.unwrap();
+    let s2 = source(&t, "t2").await;
+    read_from(&t, &s2.url, 0).await.unwrap();
+    wait_offline(&t, "t2", OfflineState::Cached).await;
+    wait_handles_closed(&t).await;
+    assert_eq!(cache_rows(&t).len(), 3);
+    let old0 = row_of(&t, "t0").path;
+    // t0 and t1 are replaced on the server (another size and suffix); t2
+    // is untouched.
+    for id in ["t0", "t1"] {
+        let mut c = hocket_core::subsonic::fake::FakeServer::song(
+            id,
+            &format!("Track {id}"),
+            "al0",
+            "ar0",
+            100.0,
+        );
+        c.track = Some(1);
+        c.size = Some(5000.0);
+        c.suffix = Some("mp3".into());
+        c.content_type = Some("audio/mpeg".into());
+        t.server.add_song(c);
+    }
+    t.events.clear();
+    t.run(Command::SyncLibrary {
+        server_id: t.server_id.clone(),
+        full: true,
+    })
+    .await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    wait_offline(&t, "t0", OfflineState::None).await;
+    let rows = cache_rows(&t);
+    assert_eq!(
+        rows.iter().map(|r| r.track_id.as_str()).collect::<Vec<_>>(),
+        vec!["t2"],
+        "{rows:?}"
+    );
+    assert!(!std::path::Path::new(&old0).exists());
+    assert_eq!(offline(&t, "t2").await, OfflineState::Cached);
+    // The next play fetches the new file.
+    read_from(&t, &source(&t, "t0").await.url, 0).await.unwrap();
+    assert_eq!(t.upstream.stream_requests("t0"), 2);
     t.core.shutdown().await;
 }
