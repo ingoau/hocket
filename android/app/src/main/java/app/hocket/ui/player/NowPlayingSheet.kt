@@ -133,6 +133,11 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed) {
      */
     suspend fun settle(velocity: Float) {
         if (collapsedOffset <= 0f || draggable.offset.isNaN()) return
+        // A page's fling can end long after the sheet has settled (a list flinging back to its
+        // top): with the sheet resting on an anchor, or already animating (a tap on the mini
+        // player expanding it), there is nothing to settle, and animating would interrupt that.
+        if (draggable.isAnimationRunning) return
+        if (kotlin.math.abs(draggable.offset - draggable.anchors.positionOf(draggable.settledValue)) < 0.5f) return
         draggable.animateTo(targetFor(velocity), Motion.sheet)
     }
 

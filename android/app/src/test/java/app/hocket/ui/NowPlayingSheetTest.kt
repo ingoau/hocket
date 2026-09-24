@@ -144,11 +144,13 @@ class NowPlayingSheetTest {
      */
     private fun advanceUntil(what: String, condition: () -> Boolean) {
         repeat(600) { if (condition()) return; compose.mainClock.advanceTimeByFrame() }
-        throw AssertionError("timed out waiting for $what")
+        throw AssertionError("timed out waiting for $what (sheet top ${runCatching { sheetTop() }.getOrNull()}, content top ${contentTop()})")
     }
 
     private fun sheetTop(): Float = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot.top
-    private fun sheetOpen(): Boolean = sheetTop() <= 1f
+    /** Where the app's content starts: below the debug fake-core banner, which is laid out in flow above it. */
+    private fun contentTop(): Float = runCatching { compose.onNodeWithTag("debug.fakeCoreBanner").fetchSemanticsNode().boundsInRoot.bottom }.getOrDefault(0f)
+    private fun sheetOpen(): Boolean = sheetTop() <= contentTop() + 1f
     private fun sheetCollapsed(): Boolean = displayed("miniPlayer") && sheetTop() > compose.onRoot().fetchSemanticsNode().size.height / 2f
 
     /** A vertical drag starting near the top of [tag], [by] px down over [millis]. */
@@ -180,7 +182,8 @@ class NowPlayingSheetTest {
             // Slow but past the positional threshold: dismissed.
             dragDown(tag, height * 0.5f, 4_000)
             advanceUntil("the sheet to settle collapsed") { sheetCollapsed() }
-            // Open again and fling it away.
+            // Open again (while the page's own fling may still be running: its late settle must
+            // not interrupt the expand) and fling it away.
             open()
             dragDown(tag, height * 0.2f, 60)
             advanceUntil("the fling to dismiss the sheet") { sheetCollapsed() }

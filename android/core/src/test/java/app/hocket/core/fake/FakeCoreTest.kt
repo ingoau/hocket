@@ -226,4 +226,54 @@ class FakeCoreTest {
 
     private fun <T> kotlinx.coroutines.test.TestScope.async(block: suspend () -> T): kotlinx.coroutines.Deferred<T> =
         this.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { block() }
+
+    // -- stream cache ------------------------------------------------------------------------------
+
+    @Test
+    fun primeCommandsAreRecordedInOrder() = runTest {
+        val core = core()
+        core.dispatchAndWait(Commands.primeAlbum("al1"))
+        core.dispatchAndWait(Commands.primeTrack("t9"))
+        assertEquals(listOf("album:al1", "track:t9"), core.primeRequests)
+    }
+
+    @Test
+    fun theCacheBudgetIsAutomaticUntilSetAndAgainAfterAReset() = runTest {
+        val core = core()
+        suspend fun storage() = (core.query(Query.Storage) as QueryResult.Storage).data
+        assertEquals(true, storage().cacheBudgetAuto)
+        assertEquals(FakeCore.AUTO_CACHE_BUDGET, storage().cacheBudgetBytes!!, 0.0)
+        assertTrue(storage().partialCacheBytes!! < storage().cacheBytes)
+        core.dispatchAndWait(Commands.setSetting("storage.cacheMaxBytes", "4.0E9"))
+        assertEquals(false, storage().cacheBudgetAuto)
+        assertEquals(4e9, storage().cacheBudgetBytes!!, 0.0)
+        core.dispatchAndWait(Commands.resetSetting("storage.cacheMaxBytes"))
+        assertEquals(true, storage().cacheBudgetAuto)
+        core.dispatchAndWait(Command.ClearStreamCache)
+        assertEquals(0.0, storage().partialCacheBytes!!, 0.0)
+    }
+
+    @Test
+    fun theAvailableOfflineBuiltInMatchesDownloadedAndCachedTracks() = runTest {
+        val core = core()
+        val filters = (core.query(Query.Filters) as QueryResult.Filters).data
+        val builtin = filters.single { it.id == FakeCore.BUILTIN_AVAILABLE_OFFLINE }
+        val preview = (core.query(Query.FilterPreview(QueryFilterPreviewInner(builtin))) as QueryResult.Preview).data
+        val expected = core.library.tracks.count { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
+        assertEquals(expected, preview.count.toInt())
+        assertFalse("local-only", preview.capability.serverExpressible)
+    }
+
+    @Test
+    fun goingOfflineWithUnplayableTracksQueuedRaisesTheOfflineNotice() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        val notice = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.PlayerNotice>().first { it.data.message != null } }
+        core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
+        val msg = notice.await().data.message
+        assertTrue(msg == FakeCore.OFFLINE_SKIPPING || msg == FakeCore.OFFLINE_NOTHING)
+        val cleared = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.PlayerNotice>().first() }
+        core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, false, null)))
+        assertNull(cleared.await().data.message)
+    }
 }

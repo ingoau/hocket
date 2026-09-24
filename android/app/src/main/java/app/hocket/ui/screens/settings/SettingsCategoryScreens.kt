@@ -208,6 +208,9 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
 /** Custom stream-cache budgets offered next to "Automatic" (decimal, as sizes are shown). */
 internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 4e9, 8e9, 16e9)
 
+/** "500 MB", "4 GB": round choice labels, like the warning threshold's. */
+private fun budgetChoiceLabel(bytes: Double): String = if (bytes < 1e9) "${(bytes / 1e6).toInt()} MB" else "${(bytes / 1e9).toInt()} GB"
+
 /**
  * Downloads & storage: the downloads screen, the stream cache (usage, budget, prefetch on mobile
  * data, data saved), Wi-Fi only and the storage warning.
@@ -234,7 +237,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         val partial = storage.partialCacheBytes ?: 0.0
         val complete = (storage.cacheBytes - partial).coerceAtLeast(0.0)
         val budget = storage.cacheBudgetBytes ?: 0.0
-        SettingRow(stringResource(R.string.settings_cache_usage), stringResource(R.string.settings_cache_usage_body, formatBytes(complete), formatBytes(partial), formatBytes(budget)), tag = "storage.cacheUsage")
+        SettingRow(stringResource(R.string.settings_cache_in_use), stringResource(R.string.settings_cache_usage_body, formatBytes(complete), formatBytes(partial), formatBytes(budget)), tag = "storage.cacheUsage")
         if (budget > 0) {
             LinearProgressIndicator(progress = { (storage.cacheBytes / budget).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp).clearAndSetSemantics { })
         }
@@ -243,7 +246,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         val autoLabel = stringResource(R.string.settings_cache_budget_auto, formatBytes(budget))
         SettingRow(stringResource(R.string.settings_cache_budget), if (auto) autoLabel else stringResource(R.string.settings_cache_budget_custom, formatBytes(budget)), cacheMax.scope, tag = "storage.cacheMaxBytes")
         ChoiceRow(
-            listOf<Pair<Double?, String>>(null to autoLabel) + CACHE_BUDGET_CHOICES.map { it to formatBytes(it) },
+            listOf<Pair<Double?, String>>(null to stringResource(R.string.settings_cache_budget_auto_short)) + CACHE_BUDGET_CHOICES.map { it to budgetChoiceLabel(it) },
             isSelected = { b -> if (b == null) auto else !auto && kotlin.math.abs(budget - b) < 1e6 },
             onSelect = { b -> if (b == null) client.dispatch(Commands.resetSetting(SettingKeys.STORAGE_CACHE_MAX_BYTES)) else cacheMax.setDouble(b) },
             modifier = Modifier.padding(horizontal = 16.dp).testTag("storage.cacheMaxBytes.choices"),

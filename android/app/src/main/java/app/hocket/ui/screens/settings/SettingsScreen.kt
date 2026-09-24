@@ -200,7 +200,7 @@ private fun SettingsCategory.summary(): String {
         SettingsCategory.Streaming -> stringResource(R.string.settings_summary_streaming)
         SettingsCategory.Downloads -> {
             val storage by client.storage.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), formatBytes(storage.dataSavedBytes ?: 0.0))
+            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))
         }
         SettingsCategory.Lyrics -> stringResource(R.string.settings_summary_external_lyrics) + ": " + on(setting(SettingKeys.LYRICS_EXTERNAL_ENABLED).bool ?: false) +
             dot + stringResource(R.string.lyrics_offset_value, setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS).int ?: 0)

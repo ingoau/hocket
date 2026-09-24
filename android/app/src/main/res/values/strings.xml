@@ -498,7 +498,7 @@
     <string name="settings_autoplay_short">Autoplay</string>
     <string name="settings_summary_saved_cap">%1$d recent queues</string>
     <string name="settings_summary_streaming">Format and bitrate per network</string>
-    <string name="settings_summary_downloads">%1$s downloaded · %2$s cache · %3$s saved</string>
+    <string name="settings_summary_downloads">%1$s downloaded · %2$s cache</string>
     <string name="settings_summary_external_lyrics">External lyrics</string>
     <string name="settings_summary_backup">Export · Import · Diagnostics</string>
     <string name="settings_sleep_default">Default sleep timer</string>
@@ -566,6 +566,7 @@
     <string name="settings_accent_red">Red</string>
     <!-- Stream cache (Downloads & storage) -->
     <string name="settings_cache_usage">Stream cache</string>
+    <string name="settings_cache_in_use">In use</string>
     <string name="settings_cache_usage_body">%1$s complete · %2$s partial · of %3$s</string>
     <string name="settings_cache_budget">Cache size</string>
     <string name="settings_cache_budget_auto">Automatic (currently %1$s)</string>

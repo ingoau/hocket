@@ -88,7 +88,7 @@ class RowSemanticsTest {
     fun readOnlyRowsOfferNoMenuActions() {
         val core = TestCore(startPlaying = false)
         core.start()
-        val track = core.fake.library.tracks.first().toSummary()
+        val track = core.fake.library.tracks.first().toSummary().copy(offline = app.hocket.core.api.OfflineState.None)
         compose.setThemedContent(core) { TrackRow(track, onClick = {}, modifier = Modifier.testTag("row")) }
         assertEquals(emptyList<String>(), compose.onNodeWithTag("row").fetchSemanticsNode().actions())
         assertNull(compose.onNodeWithTag("row").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription))

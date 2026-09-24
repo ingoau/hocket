@@ -107,10 +107,12 @@ fun SettingTitle(title: String, scope: SettingScope?, color: Color = Color.Unspe
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val size = remember(badgeText, badgeStyle, density) { measurer.measure(badgeText, badgeStyle).size }
-    // Gap before the badge + the badge's own padding (6 dp each side, 2 dp top and bottom).
+    // The space and a small gap before the badge + the badge's own padding (6 dp each side, 2 dp top and bottom).
     val (width, height) = with(density) { (BadgeGap + size.width.toDp() + 12.dp).toSp() to (size.height.toDp() + 4.dp).toSp() }
+    // A breaking space before the badge: when it does not fit it starts the next line flush left.
     val text = buildAnnotatedString {
         append(title)
+        append(' ')
         appendInlineContent(SCOPE_BADGE, ", $badgeText")
     }
     val inline = mapOf(
@@ -122,7 +124,7 @@ fun SettingTitle(title: String, scope: SettingScope?, color: Color = Color.Unspe
 }
 
 private const val SCOPE_BADGE = "scopeBadge"
-private val BadgeGap = 8.dp
+private val BadgeGap = 2.dp
 
 /** Test tag of a settings row with the stable id [id] (see the settings screens' `tag` arguments). */
 fun settingTag(id: String) = "setting.$id"
@@ -177,7 +179,7 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.screen"),
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(title, modifier = Modifier.semantics { heading() }) },
+                title = { Text(title, modifier = Modifier.semantics { heading() }.testTag("settings.title")) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )
