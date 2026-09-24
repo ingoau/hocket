@@ -17,6 +17,7 @@ use crate::subsonic::SubsonicApi;
 use crate::util::Clock;
 
 use super::io::memory::MemoryNet;
+use super::stream_proxy::{StreamUpstream, UpstreamRequest, UpstreamResponse};
 use super::io::ConnectIo;
 use super::{BackendChoice, Core, CoreError, Deps, EventSink, LateSink, PollFn, PresetServer};
 
@@ -102,6 +103,17 @@ impl Core {
         clock: Arc<dyn Clock>,
         opts: TestOptions,
     ) -> Result<Core, CoreError> {
+        Self::new_for_test_upstream(config, clock, opts, Arc::new(FakeUpstream::new()))
+    }
+
+    /// [`Core::new_for_test_with`] with the server side of the loopback
+    /// stream proxy supplied by the test.
+    pub fn new_for_test_upstream(
+        config: CoreConfig,
+        clock: Arc<dyn Clock>,
+        opts: TestOptions,
+        upstream: Arc<dyn StreamUpstream>,
+    ) -> Result<Core, CoreError> {
         let io: Arc<dyn ConnectIo> = match &opts.net {
             Some(net) => net.io(&config.device_id, true),
             None => Arc::new(NoNet),
@@ -128,6 +140,7 @@ impl Core {
             server,
             seed: Some(opts.seed),
             manual_tick: true,
+            stream_upstream: Some(upstream),
         };
         let handle = tokio::runtime::Handle::current();
         Core::with_runtime(config, handle, None, deps)
@@ -201,6 +214,11 @@ impl EventLog {
 pub struct TestCore {
     pub core: Core,
     pub backend: Arc<ScriptedBackend>,
+    /// Every source the backend was handed (`load`, its `next`, `set_next`,
+    /// `pre_buffer`), in order.
+    pub sources: Arc<Mutex<Vec<MediaSource>>>,
+    /// What the stream proxy fetches from "the server".
+    pub upstream: Arc<FakeUpstream>,
     pub clock: Arc<SimTime>,
     pub server: FakeServer,
     pub events: Arc<EventLog>,
@@ -288,9 +306,15 @@ impl TestCore {
             audio: AudioMode::None,
             coordinator_listen: None,
         };
-        let (backend, scripted) = TestBackend::scripted(clock.clone());
+        let (mut backend, scripted) = TestBackend::scripted(clock.clone());
+        let sources: Arc<Mutex<Vec<MediaSource>>> = Arc::default();
+        backend.backend = Arc::new(RecordingBackend {
+            inner: backend.backend.clone(),
+            sources: sources.clone(),
+        });
+        let upstream = Arc::new(FakeUpstream::new());
         let server_id = server.server_id().to_string();
-        let core = Core::new_for_test_with(
+        let core = Core::new_for_test_upstream(
             config,
             clock.clone(),
             TestOptions {
@@ -302,6 +326,7 @@ impl TestCore {
                 lyrics_http: None,
                 seed,
             },
+            upstream.clone(),
         )
         .expect("core");
         let events = Arc::new(EventLog::default());
@@ -311,6 +336,8 @@ impl TestCore {
         TestCore {
             core,
             backend: scripted,
+            sources,
+            upstream,
             clock,
             server,
             events,
@@ -441,4 +468,273 @@ pub fn seeded_server_with_id(server_id: &str, n: usize, duration_s: f64) -> Fake
         s.add_song(c);
     }
     s
+}
+
+/// Passes every call to `inner`, recording the sources it hands over.
+struct RecordingBackend {
+    inner: Arc<dyn PlaybackBackend>,
+    sources: Arc<Mutex<Vec<MediaSource>>>,
+}
+
+impl PlaybackBackend for RecordingBackend {
+    fn load(
+        &self,
+        source: MediaSource,
+        next: Option<MediaSource>,
+        position_ms: u32,
+        play: bool,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        {
+            let mut s = self.sources.lock();
+            s.push(source.clone());
+            s.extend(next.clone());
+        }
+        self.inner.load(source, next, position_ms, play)
+    }
+    fn set_next(
+        &self,
+        next: Option<MediaSource>,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.sources.lock().extend(next.clone());
+        self.inner.set_next(next)
+    }
+    fn play(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.play()
+    }
+    fn pause(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.pause()
+    }
+    fn stop(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.stop()
+    }
+    fn seek(&self, position_ms: u32) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.seek(position_ms)
+    }
+    fn set_volume(&self, volume: f64) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_volume(volume)
+    }
+    fn pre_buffer(
+        &self,
+        source: MediaSource,
+        position_ms: u32,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.sources.lock().push(source.clone());
+        self.inner.pre_buffer(source, position_ms)
+    }
+    fn discard_pre_buffer(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.discard_pre_buffer()
+    }
+    fn set_gapless(&self, enabled: bool) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_gapless(enabled)
+    }
+    fn set_output_device(
+        &self,
+        id: Option<String>,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_output_device(id)
+    }
+    fn output_devices(&self) -> Vec<OutputDevice> {
+        self.inner.output_devices()
+    }
+    fn set_exclusive(&self, exclusive: bool) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_exclusive(exclusive)
+    }
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+}
+
+/// How [`FakeUpstream`] answers `stream` for one track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamBehaviour {
+    /// The media, honouring `Range`.
+    Serve,
+    /// This many bytes, then nothing ever again (a stalled connection).
+    StallAfter(usize),
+    /// This many bytes, then a connection error.
+    FailAfter(usize),
+    /// HTTP 200 with a Subsonic JSON error envelope.
+    ErrorEnvelope,
+}
+
+/// One `stream` request the fake saw.
+#[derive(Debug, Clone)]
+pub struct UpstreamCall {
+    pub track_id: String,
+    pub range: Option<String>,
+    pub url: url::Url,
+}
+
+#[derive(Default)]
+struct FakeUpstreamState {
+    media: std::collections::HashMap<String, (bytes::Bytes, String)>,
+    behaviour: std::collections::HashMap<String, UpstreamBehaviour>,
+    calls: Vec<UpstreamCall>,
+}
+
+/// In-memory server side of the stream proxy: serves registered media by
+/// the `id` query parameter (or 64 KiB of deterministic bytes), honours
+/// `Range`, counts requests, and can stall, fail or answer with an error
+/// envelope per track.
+#[derive(Default)]
+pub struct FakeUpstream {
+    state: Mutex<FakeUpstreamState>,
+}
+
+impl FakeUpstream {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_media(&self, track_id: &str, bytes: Vec<u8>, content_type: &str) {
+        self.state
+            .lock()
+            .media
+            .insert(track_id.into(), (bytes.into(), content_type.into()));
+    }
+
+    pub fn set_behaviour(&self, track_id: &str, b: UpstreamBehaviour) {
+        self.state.lock().behaviour.insert(track_id.into(), b);
+    }
+
+    /// The bytes served for a track.
+    pub fn media(&self, track_id: &str) -> bytes::Bytes {
+        self.entry(track_id).0
+    }
+
+    fn entry(&self, track_id: &str) -> (bytes::Bytes, String) {
+        self.state
+            .lock()
+            .media
+            .get(track_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                let seed = format!("audio:{track_id}:");
+                let bytes: Vec<u8> = seed.bytes().cycle().take(64 * 1024).collect();
+                (bytes.into(), "audio/mpeg".into())
+            })
+    }
+
+    pub fn calls(&self) -> Vec<UpstreamCall> {
+        self.state.lock().calls.clone()
+    }
+
+    /// `stream` requests for one track.
+    pub fn stream_requests(&self, track_id: &str) -> usize {
+        self.state
+            .lock()
+            .calls
+            .iter()
+            .filter(|c| c.track_id == track_id)
+            .count()
+    }
+}
+
+impl StreamUpstream for FakeUpstream {
+    fn fetch(
+        &self,
+        request: UpstreamRequest,
+    ) -> futures::future::BoxFuture<'static, Result<UpstreamResponse, String>> {
+        use futures::StreamExt;
+        let track_id = request
+            .url
+            .query_pairs()
+            .find(|(k, _)| k == "id")
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default();
+        let (media, content_type) = self.entry(&track_id);
+        let behaviour = {
+            let mut st = self.state.lock();
+            st.calls.push(UpstreamCall {
+                track_id: track_id.clone(),
+                range: request.range.clone(),
+                url: request.url.clone(),
+            });
+            st.behaviour
+                .get(&track_id)
+                .copied()
+                .unwrap_or(UpstreamBehaviour::Serve)
+        };
+        Box::pin(async move {
+            if behaviour == UpstreamBehaviour::ErrorEnvelope {
+                let body = br#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":70,"message":"not found"}}}"#;
+                return Ok(UpstreamResponse {
+                    status: 200,
+                    content_type: Some("application/json".into()),
+                    content_length: Some(body.len() as u64),
+                    content_range: None,
+                    accept_ranges: None,
+                    body: futures::stream::iter([Ok(bytes::Bytes::from_static(body))]).boxed(),
+                });
+            }
+            let len = media.len() as u64;
+            let start = request
+                .range
+                .as_deref()
+                .and_then(|r| r.strip_prefix("bytes="))
+                .and_then(|r| r.split_once('-'))
+                .and_then(|(a, _)| a.parse::<u64>().ok());
+            let (status, from, content_range) = match start {
+                Some(s) if s < len => (206, s, Some(format!("bytes {s}-{}/{len}", len - 1))),
+                Some(_) => {
+                    return Ok(UpstreamResponse {
+                        status: 416,
+                        content_type: None,
+                        content_length: None,
+                        content_range: Some(format!("bytes */{len}")),
+                        accept_ranges: Some("bytes".into()),
+                        body: futures::stream::empty().boxed(),
+                    })
+                }
+                None => (200, 0, None),
+            };
+            let slice = media.slice(from as usize..);
+            let content_length = Some(slice.len() as u64);
+            let chunks: Vec<Result<bytes::Bytes, String>> = slice
+                .chunks(16 * 1024)
+                .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+                .collect();
+            let body = match behaviour {
+                UpstreamBehaviour::StallAfter(n) => {
+                    let head: Vec<_> = split_at_bytes(chunks, n);
+                    futures::stream::iter(head)
+                        .chain(futures::stream::pending())
+                        .boxed()
+                }
+                UpstreamBehaviour::FailAfter(n) => {
+                    let head: Vec<_> = split_at_bytes(chunks, n);
+                    futures::stream::iter(head)
+                        .chain(futures::stream::iter([Err("connection reset".to_string())]))
+                        .boxed()
+                }
+                _ => futures::stream::iter(chunks).boxed(),
+            };
+            Ok(UpstreamResponse {
+                status,
+                content_type: Some(content_type),
+                content_length,
+                content_range,
+                accept_ranges: Some("bytes".into()),
+                body,
+            })
+        })
+    }
+}
+
+/// The chunks covering the first `n` bytes (the last one truncated).
+fn split_at_bytes(
+    chunks: Vec<Result<bytes::Bytes, String>>,
+    n: usize,
+) -> Vec<Result<bytes::Bytes, String>> {
+    let mut left = n;
+    let mut out = vec![];
+    for c in chunks.into_iter().flatten() {
+        if left == 0 {
+            break;
+        }
+        let take = c.len().min(left);
+        out.push(Ok(c.slice(..take)));
+        left -= take;
+    }
+    out
 }

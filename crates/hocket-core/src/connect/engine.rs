@@ -2384,10 +2384,12 @@ impl Engine {
 
     /// A LAN leader claimed a scrobble of its own play and waits for a
     /// member to know about it before it submits (see the room's
-    /// `UnconfirmedScrobble`). Remember it and echo it back. When we reached
-    /// the same play ourselves and wait for our own verdict, stay quiet:
-    /// the room settles both claims, and echoing would vouch for knowledge
-    /// we would drop again if our verdict went elsewhere.
+    /// `UnconfirmedScrobble`). Remember it and echo it back. The claim came
+    /// first in the leader's room, so if we reached the same play ourselves
+    /// our own verdict is "duplicate" whatever happens next: the leader
+    /// submits it once it hears an echo, or asks again later and finds
+    /// its own claim in whatever we announce, or judges it alone after the
+    /// grace.
     fn on_leader_claimed_scrobble(
         &mut self,
         track_id: TrackId,
@@ -2395,18 +2397,29 @@ impl Engine {
         device_id: DeviceId,
     ) {
         let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
-        let own_pending = self
-            .deferred_scrobbles
-            .iter()
-            .any(|d| same(&d.track_id, d.started_at))
-            || self
-                .scrobble_queries
-                .values()
-                .any(|q| same(&q.track_id, q.started_at));
-        if own_pending {
-            return;
-        }
         self.learn_scrobbled(&track_id, started_at, &device_id);
+        let mut ours: Vec<(TrackId, EpochMs)> = vec![];
+        self.deferred_scrobbles.retain(|d| {
+            let hit = same(&d.track_id, d.started_at);
+            if hit {
+                ours.push((d.track_id.clone(), d.started_at));
+            }
+            !hit
+        });
+        self.scrobble_queries.retain(|_, q| {
+            let hit = same(&q.track_id, q.started_at);
+            if hit {
+                ours.push((q.track_id.clone(), q.started_at));
+            }
+            !hit
+        });
+        for (track_id, started_at) in ours {
+            self.out.push(Output::Scrobble {
+                track_id,
+                started_at,
+                allowed: false,
+            });
+        }
         self.upstream_send(Msg::ScrobbleSubmitted {
             track_id,
             started_at,
@@ -3411,8 +3424,7 @@ impl Engine {
     /// still the upstream the queries behind them wait as deferred
     /// scrobbles (the grace still counting from the first wait), to be
     /// judged against whatever the rest of the session did meanwhile.
-    fn withdraw_own_room_claims(&mut self, now: EpochMs) {
-        let _ = now;
+    fn withdraw_own_room_claims(&mut self) {
         if self.room.has_unconfirmed_scrobbles() {
             let outs = self.room.withdraw_unconfirmed_scrobbles();
             self.process_room_outputs(outs);
@@ -3549,7 +3561,7 @@ impl Engine {
 
         let authoritative = self.upstream_authoritative();
         if self.remote.is_some() || !authoritative {
-            self.withdraw_own_room_claims(now);
+            self.withdraw_own_room_claims();
         }
         if authoritative {
             self.retry_scrobble_queries(now);

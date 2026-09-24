@@ -33,7 +33,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use http_body_util::combinators::BoxBody;
+use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::header::{self, HeaderValue};
@@ -57,7 +57,7 @@ const FILE_CHUNK: usize = 64 * 1024;
 /// Chunks buffered between the upstream reader and a slow player.
 const TEE_BUFFER: usize = 16;
 
-type Body = BoxBody<Bytes, std::io::Error>;
+type Body = UnsyncBoxBody<Bytes, std::io::Error>;
 
 // ---------------------------------------------------------------------------
 // Upstream seam
@@ -345,7 +345,7 @@ async fn accept_loop(listener: tokio::net::TcpListener, shared: Arc<Shared>) {
 fn empty() -> Body {
     Empty::<Bytes>::new()
         .map_err(|never: Infallible| match never {})
-        .boxed()
+        .boxed_unsync()
 }
 
 fn status(code: StatusCode) -> Response<Body> {
@@ -559,7 +559,7 @@ async fn serve_file(
                 }
             },
         );
-        BodyExt::boxed(StreamBody::new(stream))
+        BodyExt::boxed_unsync(StreamBody::new(stream))
     };
     let mut r = Response::new(body);
     *r.status_mut() = code;
@@ -683,7 +683,7 @@ async fn serve_upstream(
         tee(shared, token, up)
     } else {
         let stream = up.body.map(|c| c.map(Frame::data).map_err(std::io::Error::other));
-        BodyExt::boxed(StreamBody::new(stream))
+        BodyExt::boxed_unsync(StreamBody::new(stream))
     };
     *r.body_mut() = body;
     r
@@ -781,7 +781,7 @@ fn tee(shared: &Shared, token: &Token, up: UpstreamResponse) -> Body {
     let stream = futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|c| (c.map(Frame::data), rx))
     });
-    BodyExt::boxed(StreamBody::new(stream))
+    BodyExt::boxed_unsync(StreamBody::new(stream))
 }
 
 async fn open_temp(tmp: &Path) -> std::io::Result<tokio::fs::File> {

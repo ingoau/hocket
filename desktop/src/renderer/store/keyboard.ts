@@ -6,6 +6,7 @@ import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { useApp } from "./app";
 import { Keymap, chordFromEvent, isTextInput } from "./shortcuts";
 import { executeAction } from "./actions";
+import { openContextMenuFromKeyboard } from "../components/ContextMenu";
 
 export function useKeymap(): Keymap {
   const shortcuts = useApp((s) => s.shortcuts);
@@ -29,6 +30,49 @@ export function firesInTextField(id: string): boolean {
   return TEXT_ALLOWED.has(id);
 }
 
+/** What the global handler needs to know about the focused element. */
+export interface KeyTarget {
+  tag: string;
+  type?: string;
+  role?: string | null;
+  href?: boolean;
+}
+
+export function describeTarget(target: EventTarget | null): KeyTarget | undefined {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return undefined;
+  return { tag: el.tagName.toLowerCase(), type: (el as HTMLInputElement).type?.toLowerCase(), role: el.getAttribute("role"), href: el.hasAttribute("href") };
+}
+
+const ACTIVATES = new Set(["button", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "link"]);
+const ARROW_ROLES = new Set(["slider", "spinbutton", "tab", "tablist", "radio", "radiogroup", "menu", "menuitem", "menuitemcheckbox", "menuitemradio", "separator", "scrollbar"]);
+const NAV_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
+
+/**
+ * Whether an unmodified key belongs to the focused control rather than the
+ * global keymap: Space/Enter activate buttons, links, checkboxes, tabs and
+ * menu items (so Space on a focused button presses it instead of toggling
+ * playback), and arrows move sliders, radios, tabs, menus and splitters (so
+ * ArrowLeft on the volume slider lowers the volume instead of seeking).
+ * Lists and grids handle their own arrows and stop them before this runs.
+ */
+export function widgetOwnsKey(key: string, mods: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, target: KeyTarget | undefined): boolean {
+  if (!target || mods.ctrlKey || mods.metaKey || mods.altKey) return false;
+  const role = target.role ?? "";
+  if (key === " " || key === "Enter") {
+    if (target.tag === "button" || target.tag === "summary" || target.tag === "select") return true;
+    if (target.tag === "a" && target.href) return true;
+    if (target.tag === "input" && ["checkbox", "radio", "button", "submit", "reset", "color", "file"].includes(target.type ?? "")) return true;
+    return ACTIVATES.has(role);
+  }
+  if (NAV_KEYS.has(key)) {
+    if (target.tag === "select") return true;
+    if (target.tag === "input" && ["range", "radio", "number"].includes(target.type ?? "")) return true;
+    return ARROW_ROLES.has(role);
+  }
+  return false;
+}
+
 export function useGlobalKeyboard(enabled = true): void {
   const keymap = useKeymap();
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -36,6 +80,12 @@ export function useGlobalKeyboard(enabled = true): void {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
+      // The context-menu key and Shift+F10 open the focused item's context menu.
+      if ((e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) && !isTextInput(e.target)) {
+        if (openContextMenuFromKeyboard()) e.preventDefault();
+        return;
+      }
+      if (widgetOwnsKey(e.key, e, describeTarget(e.target))) return;
       const chord = chordFromEvent(e, platform);
       if (!chord) return;
       const ids = keymap.lookup(chord);

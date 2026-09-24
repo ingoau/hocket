@@ -38,6 +38,8 @@ export interface ContextMenuState {
   actions: ActionDescriptor[];
   /** Extra renderer-only context (e.g. playlist id for "remove from playlist"). */
   context?: { playlistId?: string; indices?: number[]; savedQueueId?: string };
+  /** Opened with the context-menu key / Shift+F10: the first item starts active. */
+  keyboard?: boolean;
 }
 
 export type DialogState =

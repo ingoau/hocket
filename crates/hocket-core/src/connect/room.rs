@@ -325,14 +325,16 @@ impl Room {
     /// quiet, or it left for another room): every claim no member
     /// acknowledged is taken out of the log, unanswered, so that whatever
     /// the rest of the session did with the play meanwhile decides when the
-    /// host asks again. Member queries held behind a claim are judged now.
+    /// host asks again. Member queries held behind a claim are dropped
+    /// unanswered too: a member still waiting asks again and is judged
+    /// then, one that gave up (it learned of the claim) must not leave a
+    /// claim of its own behind.
     pub fn withdraw_unconfirmed_scrobbles(&mut self) -> Vec<RoomOutput> {
         let now = self.now();
         for c in std::mem::take(&mut self.unconfirmed) {
             self.replica
                 .forget_scrobble(&c.track_id, c.started_at, now);
             self.dirty = true;
-            self.judge_held(&c, now);
         }
         self.flush()
     }
