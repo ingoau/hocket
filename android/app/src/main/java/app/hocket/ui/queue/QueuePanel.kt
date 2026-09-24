@@ -83,6 +83,8 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
+import app.hocket.core.api.QueueKey
+import app.hocket.core.api.QueueView
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.SelectionKind
@@ -98,11 +100,15 @@ import app.hocket.ui.components.offlineStateText
 import app.hocket.ui.components.trackLabel
 import app.hocket.ui.components.trackRowActions
 import app.hocket.core.ActionIds
+import kotlinx.coroutines.delay
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /** How long after the user last scrolled the queue it stops following the current track. */
 private const val USER_SCROLL_GRACE_MS = 8_000L
+
+/** How long a dropped drag keeps its order on screen waiting for the core's queue. */
+private const val DROP_SETTLE_MS = 2_000L
 
 private const val NOW_KEY = "hdr:c"
 private const val FOOTER_KEY = "footer"
@@ -182,10 +188,58 @@ private sealed interface Line {
 }
 
 /**
+ * A drag in progress (or just dropped): the movable keys (playing next + upcoming) in the order the
+ * finger has put them, over the queue as it was when the drag started. The core re-keys an item
+ * that moves (a context item's `ctx-<index>` follows the context list; one moved into playing next
+ * gets a new key), so sending a move per slot lost the dragged item after the first one. The list
+ * reorders this local copy while the finger is down and the core gets ONE move when it lifts;
+ * [dropped] keeps the new order on screen until the core's queue arrives.
+ */
+private data class QueueDrag(val base: QueueView, val key: QueueKey, val order: List<QueueKey>, val dropped: Boolean = false)
+
+/** Playing next + upcoming keys: the combined index `MoveQueueItem` takes. */
+private fun QueueView.movableKeys(): List<QueueKey> = playingNext.map { it.item.key } + upcoming.map { it.item.key }
+
+private data class TimelineLabels(val history: String, val now: String, val next: String, val continuing: String, val from: String?, val autoplay: String)
+
+/**
+ * The timeline's rows for [queue]; with a [drag], its items in the drag's order. The dragged item
+ * takes the section the core will give it: playing next when it is among the insertions (the core
+ * then makes it one), else among the context / autoplay items.
+ */
+private fun timelineRows(queue: QueueView, drag: QueueDrag?, labels: TimelineLabels): List<Line> = buildList {
+    if (queue.history.isNotEmpty()) {
+        add(Line.Header("h", labels.history, clear = Line.Clear.History))
+        queue.history.forEach { add(Line.Item(it, Line.Section.History)) }
+    }
+    queue.current?.let { add(Line.Header("c", labels.now)); add(Line.Item(it, Line.Section.Current)) }
+    var next = queue.playingNext
+    var rest = queue.upcoming
+    if (drag != null) {
+        val entries = (queue.playingNext + queue.upcoming).associateBy { it.item.key }
+        val ordered = drag.order.mapNotNull { entries[it] }
+        val otherInsertions = queue.playingNext.count { it.item.key != drag.key }
+        val at = drag.order.indexOf(drag.key)
+        val nextCount = otherInsertions + if (at in 0 until otherInsertions) 1 else 0
+        next = ordered.take(nextCount)
+        rest = ordered.drop(nextCount)
+    }
+    if (next.isNotEmpty()) {
+        add(Line.Header("n", labels.next, clear = Line.Clear.Next))
+        next.forEach { add(Line.Item(it, Line.Section.Next)) }
+    }
+    val (auto, ctx) = rest.partition { it.item.source is QueueSource.Autoplay }
+    if (ctx.isNotEmpty()) { add(Line.Header("u", labels.continuing, labels.from)); ctx.forEach { add(Line.Item(it, Line.Section.Upcoming)) } }
+    if (auto.isNotEmpty()) { add(Line.Header("a", labels.autoplay)); auto.forEach { add(Line.Item(it, Line.Section.Autoplay)) } }
+    if (isNotEmpty()) add(Line.Footer)
+}
+
+/**
  * The one scrollable list: history above (oldest first), the current item, then "Playing next"
  * (insertions) and "Continue playing · From <context>" (the permuted context), then autoplay with
  * its "why". It opens at "Now playing" so history is only revealed by scrolling up. Drag handles
- * reorder (haptics), swipe removes (undo toast from the core), tap jumps (history: play again).
+ * reorder (haptics; one move per drag), swipe removes (undo toast from the core), tap jumps
+ * (history: play again).
  */
 @Composable
 private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
@@ -198,47 +252,55 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val density = LocalDensity.current
     var sheetFor by remember { mutableStateOf<QueueEntry?>(null) }
     var ratingFor by remember { mutableStateOf<QueueEntry?>(null) }
-    val historyLabel = stringResource(R.string.queue_section_history)
-    val nowLabel = stringResource(R.string.queue_now)
-    val nextLabel = stringResource(R.string.queue_playing_next)
-    val continueLabel = stringResource(R.string.queue_section_continue)
-    val fromLabel = queue.contextLabel?.let { stringResource(R.string.queue_section_from, it) }
-    val autoplayLabel = stringResource(R.string.queue_autoplay_section)
+    val labels = TimelineLabels(
+        history = stringResource(R.string.queue_section_history),
+        now = stringResource(R.string.queue_now),
+        next = stringResource(R.string.queue_playing_next),
+        continuing = stringResource(R.string.queue_section_continue),
+        from = queue.contextLabel?.let { stringResource(R.string.queue_section_from, it) },
+        autoplay = stringResource(R.string.queue_autoplay_section),
+    )
     val removeLabel = stringResource(R.string.action_remove_from_queue)
     val moveUpLabel = stringResource(R.string.a11y_move_up)
     val moveDownLabel = stringResource(R.string.a11y_move_down)
-    val rows: List<Line> = remember(queue, historyLabel, nowLabel, nextLabel, continueLabel, fromLabel, autoplayLabel) {
-        buildList {
-            if (queue.history.isNotEmpty()) {
-                add(Line.Header("h", historyLabel, clear = Line.Clear.History))
-                queue.history.forEach { add(Line.Item(it, Line.Section.History)) }
-            }
-            queue.current?.let { add(Line.Header("c", nowLabel)); add(Line.Item(it, Line.Section.Current)) }
-            if (queue.playingNext.isNotEmpty()) {
-                add(Line.Header("n", nextLabel, clear = Line.Clear.Next))
-                queue.playingNext.forEach { add(Line.Item(it, Line.Section.Next)) }
-            }
-            val (auto, ctx) = queue.upcoming.partition { it.item.source is QueueSource.Autoplay }
-            if (ctx.isNotEmpty()) { add(Line.Header("u", continueLabel, fromLabel)); ctx.forEach { add(Line.Item(it, Line.Section.Upcoming)) } }
-            if (auto.isNotEmpty()) { add(Line.Header("a", autoplayLabel)); auto.forEach { add(Line.Item(it, Line.Section.Autoplay)) } }
-            if (isNotEmpty()) add(Line.Footer)
-        }
+    var drag by remember { mutableStateOf<QueueDrag?>(null) }
+    // A dropped drag gives way to the core's queue as soon as that changes, or after a while if
+    // nothing changes (the core refused the move).
+    LaunchedEffect(queue, drag?.dropped) {
+        val d = drag?.takeIf { it.dropped } ?: return@LaunchedEffect
+        if (queue != d.base) { drag = null; return@LaunchedEffect }
+        delay(DROP_SETTLE_MS)
+        if (drag === d) drag = null
     }
+    // While a drag is under way the list shows the queue as it was when the drag started.
+    val shown = drag?.base ?: queue
+    val rows: List<Line> = remember(shown, drag, labels) { timelineRows(shown, drag, labels) }
     if (queue.current == null && rows.isEmpty()) {
         EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body), modifier)
         return
     }
     val listState = rememberLazyListState()
     // Combined index into playing-next + upcoming, which is what MoveQueueItem takes.
-    val movable = remember(queue) { queue.playingNext.map { it.item.key } + queue.upcoming.map { it.item.key } }
+    val movable = remember(queue) { queue.movableKeys() }
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
-        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
-        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
-        val toIndex = movable.indexOf(toKey)
-        if (fromKey in movable && toIndex >= 0) {
-            client.dispatch(Commands.moveQueueItem(fromKey, toIndex))
-            haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-        }
+        val d = drag?.takeIf { !it.dropped } ?: return@rememberReorderableLazyListState
+        val fromIndex = d.order.indexOf(from.key)
+        val toIndex = d.order.indexOf(to.key)
+        if (fromIndex < 0 || toIndex < 0) return@rememberReorderableLazyListState
+        drag = d.copy(order = d.order.toMutableList().apply { add(toIndex, removeAt(fromIndex)) })
+        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+    }
+    fun startDrag(key: QueueKey) {
+        drag = QueueDrag(queue, key, queue.movableKeys())
+        haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+    }
+    fun drop() {
+        val d = drag?.takeIf { !it.dropped } ?: return
+        haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
+        val to = d.order.indexOf(d.key)
+        if (to < 0 || to == d.base.movableKeys().indexOf(d.key)) { drag = null; return }
+        drag = d.copy(dropped = true)
+        client.dispatch(Commands.moveQueueItem(d.key, to))
     }
     // Follow the current track, but never fight the user: no auto-scroll while a finger is on the
     // list or for a while after they last scrolled it (Metrolist/Navic leave a browsed queue alone).
@@ -308,8 +370,8 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                         ReorderableItem(reorderable, key = entry.item.key, enabled = draggable) { _ ->
                             SwipeToDismissBox(
                                 state = dismiss,
-                                enableDismissFromStartToEnd = removable,
-                                enableDismissFromEndToStart = removable,
+                                enableDismissFromStartToEnd = removable && drag == null,
+                                enableDismissFromEndToStart = removable && drag == null,
                                 backgroundContent = {
                                     // Only while a swipe is under way: the rows are transparent at rest,
                                     // so a resting background would show straight through them.
@@ -339,12 +401,12 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                     onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
                                     onMore = { sheetFor = entry },
                                     onRate = { ratingFor = entry },
-                                    modifier = Modifier.drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) },
+                                    modifier = Modifier.testTag("queue.row." + entry.item.key).drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) },
                                     handle = if (draggable) ({
                                         Box(
-                                            Modifier.size(48.dp).draggableHandle(
-                                                onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                                                onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) },
+                                            Modifier.size(48.dp).testTag("queue.handle." + entry.item.key).draggableHandle(
+                                                onDragStarted = { startDrag(entry.item.key) },
+                                                onDragStopped = { drop() },
                                             ),
                                             contentAlignment = Alignment.Center,
                                         ) { Icon(Icons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
