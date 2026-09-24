@@ -51,7 +51,9 @@ pub struct RealIo {
     transport: WsTransport,
     device_id: String,
     lan: bool,
-    http: reqwest::Client,
+    /// `None` only if the client could not be built; verification then fails
+    /// closed rather than falling back to a client that follows redirects.
+    http: Option<reqwest::Client>,
 }
 
 impl RealIo {
@@ -60,12 +62,90 @@ impl RealIo {
             transport: WsTransport,
             device_id: config.device_id.clone(),
             lan: config.coordinator_listen.is_none(),
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_default(),
+            http: verify_client().ok(),
         }
     }
+}
+
+/// Largest ping response body read (a Subsonic ping is a few hundred bytes).
+pub const VERIFY_BODY_CAP: usize = 64 * 1024;
+
+/// The client for credential pings: 10 s budget, never follows a redirect
+/// (that would carry the token and salt to wherever the server points).
+pub fn verify_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
+/// The `ping` endpoint for a Subsonic base URL a peer presented: plain
+/// `http(s)` with a host and no userinfo. The path is set structurally, so
+/// a `#` or `?` in the base cannot swallow it.
+pub fn ping_url(base: &str) -> Result<url::Url, String> {
+    let mut url = url::Url::parse(base.trim()).map_err(|e| e.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("server URL must be http or https".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("server URL must not carry credentials".into());
+    }
+    if url.host_str().map(str::is_empty).unwrap_or(true) {
+        return Err("server URL needs a host".into());
+    }
+    url.set_fragment(None);
+    url.set_query(None);
+    let path = format!("{}/rest/ping.view", url.path().trim_end_matches('/'));
+    url.set_path(&path);
+    Ok(url)
+}
+
+/// Proxy one Subsonic `ping` with `credential`; `true` when the server says
+/// `ok`. Nothing here ever logs the request URL (its query is the credential).
+pub async fn verify_ping(http: &reqwest::Client, credential: &Credential) -> bool {
+    let url = match ping_url(&credential.server_url) {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(error = %e, "peer named an unusable server");
+            return false;
+        }
+    };
+    let host = url.host_str().unwrap_or("?").to_string();
+    let params = credential.ping_params();
+    let mut resp = match http.get(url).query(&params).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(%host, error = %e.without_url(), "credential ping failed");
+            return false;
+        }
+    };
+    if !resp.status().is_success() {
+        tracing::debug!(%host, status = %resp.status(), "credential ping refused");
+        return false;
+    }
+    if resp.content_length().unwrap_or(0) > VERIFY_BODY_CAP as u64 {
+        return false;
+    }
+    let mut body = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(c)) => {
+                if body.len() + c.len() > VERIFY_BODY_CAP {
+                    tracing::debug!(%host, "credential ping response too large");
+                    return false;
+                }
+                body.extend_from_slice(&c);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::debug!(%host, error = %e.without_url(), "credential ping failed");
+                return false;
+            }
+        }
+    }
+    serde_json::from_slice::<serde_json::Value>(&body)
+        .map(|v| v["subsonic-response"]["status"].as_str() == Some("ok"))
+        .unwrap_or(false)
 }
 
 impl Listener for LanListener {
@@ -116,19 +196,9 @@ impl ConnectIo for RealIo {
     fn verify(&self, credential: Credential) -> BoxFuture<'static, bool> {
         let http = self.http.clone();
         Box::pin(async move {
-            let base = credential.server_url.trim_end_matches('/').to_string();
-            let url = format!("{base}/rest/ping.view");
-            let params = credential.ping_params();
-            match http.get(&url).query(&params).send().await {
-                Ok(resp) => match resp.json::<serde_json::Value>().await {
-                    Ok(v) => v["subsonic-response"]["status"].as_str() == Some("ok"),
-                    Err(_) => false,
-                },
-                Err(e) => {
-                    // `without_url`: the request URL carries token and salt.
-                    tracing::debug!(%url, error = %e.without_url(), "credential ping failed");
-                    false
-                }
+            match http {
+                Some(http) => verify_ping(&http, &credential).await,
+                None => false,
             }
         })
     }
@@ -381,5 +451,114 @@ pub mod memory {
             let ok = self.verify_ok;
             Box::pin(async move { ok })
         }
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn credential(server_url: &str) -> Credential {
+        Credential {
+            server_url: server_url.into(),
+            username: "u".into(),
+            token: Some("tok".into()),
+            salt: Some("salt".into()),
+            api_key: None,
+            client: "hocket".into(),
+            api_version: "1.16.1".into(),
+        }
+    }
+
+    /// A one-route HTTP server: every request whose path starts with
+    /// `/rest/ping.view` gets `ping`, anything else gets `other`.
+    async fn serve(ping: String, other: String) -> std::net::SocketAddr {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else {
+                    break;
+                };
+                let (ping, other) = (ping.clone(), other.clone());
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let resp = if req.starts_with("GET /rest/ping.view") {
+                        ping
+                    } else {
+                        other
+                    };
+                    let _ = s.write_all(resp.as_bytes()).await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        addr
+    }
+
+    fn ok_response(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    const OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+
+    #[test]
+    fn ping_url_accepts_only_plain_http_without_userinfo() {
+        for bad in [
+            "ftp://music.example/",
+            "file:///etc/passwd",
+            "http://user:pw@music.example/",
+            "https://user@music.example/",
+            "not a url",
+        ] {
+            assert!(ping_url(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            ping_url("http://10.0.0.2:4533/nav/#x?y=1")
+                .unwrap()
+                .as_str(),
+            "http://10.0.0.2:4533/nav/rest/ping.view"
+        );
+        assert_eq!(
+            ping_url("https://music.example#").unwrap().path(),
+            "/rest/ping.view"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_accepts_ok_and_follows_no_redirect() {
+        let http = verify_client().unwrap();
+        let good = serve(ok_response(OK), ok_response(OK)).await;
+        assert!(verify_ping(&http, &credential(&format!("http://{good}/"))).await);
+        // a redirect that would lead to an "ok" is not followed
+        let target = format!("http://{good}/rest/ping.view");
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nlocation: {target}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        let bouncer = serve(redirect.clone(), redirect).await;
+        assert!(!verify_ping(&http, &credential(&format!("http://{bouncer}/"))).await);
+    }
+
+    #[tokio::test]
+    async fn verify_caps_the_response_body() {
+        let http = verify_client().unwrap();
+        let padded = format!(
+            r#"{{"subsonic-response":{{"status":"ok","pad":"{}"}}}}"#,
+            "x".repeat(VERIFY_BODY_CAP)
+        );
+        let big = serve(ok_response(&padded), ok_response(&padded)).await;
+        assert!(!verify_ping(&http, &credential(&format!("http://{big}/"))).await);
+        // the same without a content-length (read until close)
+        let chunked = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{padded}"
+        );
+        let big = serve(chunked.clone(), chunked).await;
+        assert!(!verify_ping(&http, &credential(&format!("http://{big}/"))).await);
     }
 }
