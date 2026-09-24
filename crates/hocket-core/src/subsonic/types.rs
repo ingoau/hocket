@@ -554,7 +554,8 @@ pub struct LyricCue {
     pub end: Option<i64>,
     #[serde(default)]
     pub value: String,
-    /// Byte offsets into the parent cue line's `value`.
+    /// 0-based, inclusive byte offsets into the parent cue line's `value`
+    /// (Navidrome: `"I"` at the start of a line is `0..=0`).
     #[serde(default)]
     pub byte_start: Option<u32>,
     #[serde(default)]
