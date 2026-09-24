@@ -28,7 +28,7 @@
 
 .np-main { flex: 1 1 auto; min-height: 0; container-type: size; display: flex; }
 .np-art-slot { width: 100%; height: 100%; display: grid; place-items: center; }
-.np-art { width: min(100cqw, 100cqh); aspect-ratio: 1; border-radius: 28px; overflow: hidden; box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.3); background: rgba(255, 255, 255, 0.06); }
+.np-art { width: min(100cqw, 100cqh, 46vh); aspect-ratio: 1; border-radius: 28px; overflow: hidden; box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.3); background: rgba(255, 255, 255, 0.06); }
 .np-art-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .np-art-img.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-muted); background: rgba(255, 255, 255, 0.06); }
 .np-pane { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; animation: np-pane-in var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
@@ -36,7 +36,7 @@
 
 .np-controls { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 14px; flex: 0 0 auto; min-width: 0; }
 .np-info { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; min-width: 0; }
-.np-thumb { flex: 0 0 auto; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
+.np-thumb { flex: 0 0 auto; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
 .np-thumb:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 12px; }
 .np-text { flex: 1; min-width: 0; text-align: left; }
 .np-text .t1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -154,27 +154,31 @@
 .np .related-row .why { font-size: var(--fs-xs); color: var(--fg-muted); }
 
 /* ---- Wide windows: a desktop layout, not a stretched phone -----------------
-   The stage (artwork, or the pane that replaces it) fills the left; the
-   controls are a column on the right, vertically centred, with volume. The
-   artwork still flies between the stage and the thumbnail beside the title. */
+   Artwork mode: a modest cover beside the controls column, centred together.
+   Pane modes: the pane fills the left and the cover stacks, large, on top of
+   the controls on the right. The cover flies between the two (FLIP) and the
+   controls column glides to its new place. */
 @media (min-width: 1100px) and (min-height: 620px) {
-  .np-stage, .np[data-mode] .np-stage { width: min(calc(100% - 96px), 1520px); display: grid; grid-template-columns: minmax(0, 1fr) clamp(380px, 32vw, 480px); grid-template-rows: auto minmax(0, 1fr); column-gap: clamp(40px, 5vw, 96px); row-gap: 20px; padding: 28px 0 36px; }
+  .np-stage, .np[data-mode] .np-stage { width: min(calc(100% - 96px), 1520px); display: grid; grid-template-columns: minmax(0, 1fr) clamp(380px, 30vw, 460px); grid-template-rows: auto minmax(0, 1fr); column-gap: clamp(40px, 5vw, 96px); row-gap: 20px; padding: 28px 0 36px; }
+  .np[data-mode="art"] .np-stage { grid-template-columns: clamp(300px, min(50vh, 38vw), 560px) clamp(380px, 30vw, 460px); justify-content: center; }
   .np-head { grid-column: 1 / -1; }
   .np-main { grid-column: 1; grid-row: 2; }
-  .np-controls { grid-column: 2; grid-row: 2; align-self: center; gap: 20px; }
-  .np-art { border-radius: 36px; }
+  .np-controls { grid-column: 2; grid-row: 2; align-self: center; gap: 18px; }
+  .np-art { border-radius: 32px; }
   .np-art-slot { place-items: center; }
-  .np-info { flex-wrap: wrap; row-gap: 10px; }
-  .np-thumb { width: 80px; height: 80px; border-radius: 20px; }
-  .np-text { flex: 1 1 200px; }
+  .np-info { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thumb" "text" "actions"; row-gap: 10px; }
+  /* The stacked cover: as large as the column and the window height allow. */
+  .np-thumb { grid-area: thumb; width: clamp(140px, calc(100vh - 640px), 100%); height: auto; aspect-ratio: 1; border-radius: 28px; margin-bottom: 8px; box-shadow: 0 22px 56px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.3); }
+  .np-thumb:focus-visible { border-radius: 28px; }
+  .np-text { grid-area: text; }
   .np-text .t1 { font-size: clamp(28px, 2.4vw, 40px); line-height: 1.12; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .np-text .t2 { font-size: 18px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .np-actions { order: 3; flex-basis: 100%; margin-left: -10px; }
+  .np-actions { grid-area: actions; margin-left: -10px; }
   .np-transport { gap: 32px; }
-  .np-play { height: 92px; }
-  .np-play.paused { width: 124px; border-radius: 46px; }
-  .np-play.playing { width: 92px; border-radius: 30px; }
-  .np-skip { width: 72px; height: 72px; border-radius: 36px; }
+  .np-play { height: 88px; }
+  .np-play.paused { width: 120px; border-radius: 44px; }
+  .np-play.playing { width: 88px; border-radius: 28px; }
+  .np-skip { width: 68px; height: 68px; border-radius: 34px; }
   .np-volume { display: flex; }
   .np-options { justify-content: space-between; }
   .np-tonal { flex: 1 1 0; }

@@ -85,6 +85,9 @@ export function FullscreenPlayer() {
   const closeRef = useRef<HTMLButtonElement>(null);
   const bigArt = useRef<HTMLDivElement>(null);
   const thumbArt = useRef<HTMLButtonElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
+  /** Where the controls column last rested (the wide layout moves it between modes). */
+  const controlsAt = useRef<{ rect: DOMRect; mode: NowPlayingMode } | undefined>(undefined);
   /** Where the visible artwork last came to rest, and in which mode. */
   const flight = useRef<{ rect: DOMRect; radius: number; mode: NowPlayingMode } | undefined>(undefined);
   useReturnFocus(true);
@@ -124,6 +127,20 @@ export function FullscreenPlayer() {
     }
     const rect = from && !reducedMotion ? flyFrom(el, from.rect, from.radius, radius) : el.getBoundingClientRect();
     flight.current = { rect, radius, mode };
+  });
+  // The wide layout re-centres the controls column when the mode changes: glide it there too.
+  useLayoutEffect(() => {
+    const el = controls.current;
+    if (!el) return;
+    const prev = controlsAt.current;
+    if (el.getAnimations().length && prev?.mode === mode) return;
+    const to = el.getBoundingClientRect();
+    if (prev && prev.mode !== mode && !reducedMotion) {
+      const dx = prev.rect.left - to.left;
+      const dy = prev.rect.top - to.top;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: SPRING_SPATIAL.duration, easing: SPRING_SPATIAL.easing });
+    }
+    controlsAt.current = { rect: to, mode };
   });
 
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -169,7 +186,7 @@ export function FullscreenPlayer() {
           )}
         </div>
 
-        <div className="np-controls">
+        <div ref={controls} className="np-controls">
         <div className="np-info">
           {mode !== "art" ? (
             <button ref={thumbArt} type="button" className="np-thumb" aria-label={t("nowPlaying.showArtwork")} title={t("nowPlaying.showArtwork")} onClick={() => choose("art")} data-testid="np-thumb">{art}</button>
