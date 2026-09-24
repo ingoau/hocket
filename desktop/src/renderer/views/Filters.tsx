@@ -14,7 +14,7 @@ export function Filters() {
     if (f) bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   };
   return (
-    <div className="view" data-testid="view-filters">
+    <div className="view page-filters" data-testid="view-filters">
       <div className="view-header">
         <h1>{t("filters.title")}</h1>
         <div className="actions"><button type="button" className="btn primary" onClick={() => navigate({ view: "filter", id: "new" })} data-testid="new-filter"><Icon name="plus" size={14} /> {t("filters.new")}</button></div>
@@ -22,13 +22,13 @@ export function Filters() {
       <div className="view-body">
         {!filters.length ? <EmptyState message={t("filters.empty")} action={<button type="button" className="btn" onClick={() => navigate({ view: "filter", id: "new" })}>{t("filters.new")}</button>} /> : null}
         {filters.map((f) => (
-          <div key={f.id} className="pin-row" style={{ gridTemplateColumns: "auto 1fr auto auto" }} data-testid="filter-row">
-            <Icon name="filter" size={18} />
+          <div key={f.id} className="pin-row filter-row" style={{ gridTemplateColumns: "auto 1fr auto auto" }} data-testid="filter-row">
+            <span className="filter-avatar" aria-hidden="true"><Icon name="filter" size={20} /></span>
             <button type="button" className="link-button" onClick={() => navigate({ view: "filter", id: f.id })}>
               <span style={{ display: "block" }}>{filterName(f)}{isBuiltinFilter(f.id) ? <span className="badge" style={{ marginLeft: 8 }}>{t("filters.builtin")}</span> : null}</span>
               <span className="small muted" style={{ display: "block" }}>{t("sort.label", { sort: t(`sort.${f.sort}` as never) })}{f.limit ? ` · ${t("filters.limit")} ${f.limit}` : ""}</span>
             </button>
-            <button type="button" className="btn" aria-label={`${t("filters.play")}: ${filterName(f)}`} onClick={() => play(f.id)}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
+            <button type="button" className="btn tonal" aria-label={`${t("filters.play")}: ${filterName(f)}`} onClick={() => play(f.id)}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
             {/* Built-ins can't be deleted (the core would only drop a saved override). */}
             {isBuiltinFilter(f.id) ? <span /> : <button type="button" className="btn icon" aria-label={`${t("filters.delete")}: ${f.name}`} onClick={() => bridge().dispatch({ type: "deleteFilter", data: { id: f.id } })}><Icon name="trash" size={14} /></button>}
           </div>

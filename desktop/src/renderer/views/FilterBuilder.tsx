@@ -77,7 +77,7 @@ export function FilterBuilder({ id }: { id: string }) {
   };
   const localOnly = preview?.capability.localOnlyFields ?? [];
   return (
-    <div className="view" data-testid="view-filter-builder">
+    <div className="view page-filter-builder" data-testid="view-filter-builder">
       <div className="view-header">
         <h1>{existing ? filterName(existing) : t("filters.builder")}</h1>
         <div className="actions">
@@ -89,8 +89,8 @@ export function FilterBuilder({ id }: { id: string }) {
       <div className="view-body filter-builder">
         <div className="stack">
           <label className="stack" style={{ gap: 4 }}><span className="small muted">{t("filters.name")}</span><input className="input" value={filter.name} onChange={(e) => setFilter({ ...filter, name: e.target.value })} data-testid="filter-name" /></label>
-          <div className={`badge ${preview?.capability.serverExpressible ? "ok" : "warn"}`} style={{ alignSelf: "flex-start" }} data-testid="filter-capability">
-            {preview?.capability.serverExpressible ? t("filters.serverExpressible") : t("filters.localOnly", { fields: localOnly.join(", ") })}
+          <div className={`badge capability-chip ${preview?.capability.serverExpressible ? "ok" : "warn"}`} style={{ alignSelf: "flex-start" }} data-testid="filter-capability">
+            <Icon name={preview?.capability.serverExpressible ? "cloud" : "warn"} size={16} />{preview?.capability.serverExpressible ? t("filters.serverExpressible") : t("filters.localOnly", { fields: localOnly.join(", ") })}
           </div>
           <div className="rules"><GroupEditor node={filter.root} onChange={(root) => setFilter({ ...filter, root })} root /></div>
           <div className="row">
@@ -107,8 +107,8 @@ export function FilterBuilder({ id }: { id: string }) {
             {existing && !isBuiltinFilter(existing.id) ? <button type="button" className="btn danger" onClick={() => { bridge().dispatch({ type: "deleteFilter", data: { id: existing.id } }); navigate({ view: "filters" }); }}>{t("filters.delete")}</button> : null}
           </div>
         </div>
-        <div>
-          <div className="section-title">{t("filters.sample")}</div>
+        <div className="filter-sample">
+          <div className="section-title filter-sample-title">{t("filters.sample")}</div>
           {(preview?.sample ?? []).map((s) => (
             <div key={s.id} className="qrow" style={{ height: 36 }}><Artwork id={s.coverArt} size={64} className="art" /><div className="text"><div className="t1">{s.title}</div><div className="t2">{s.artist}</div></div></div>
           ))}

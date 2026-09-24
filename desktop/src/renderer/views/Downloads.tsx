@@ -24,12 +24,12 @@ export function Downloads({ tab }: { tab?: string }) {
   const st = useQuery(() => ({ type: "storage" }), "storage", [], { static: true });
   const sum = storage ?? st.data;
   return (
-    <div className="view" data-testid="view-downloads">
+    <div className="view page-downloads" data-testid="view-downloads">
       <div className="view-header">
         <h1>{t("downloads.title")}</h1>
         <div className="actions">
           {sum ? <span className="muted small">{t("downloads.usage", { downloads: fmtBytes(sum.downloadsBytes), cache: fmtBytes(sum.cacheBytes), images: fmtBytes(sum.imagesBytes) })}</span> : null}
-          <button type="button" className="btn" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
+          <button type="button" className="btn tonal" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
         </div>
       </div>
       <div className="view-tabs-row">

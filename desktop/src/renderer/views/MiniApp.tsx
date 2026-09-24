@@ -26,7 +26,7 @@ export function MiniApp() {
         <SeekBar durationMs={track?.durationMs} compact />
         <div className="controls">
           <button type="button" className="btn icon sm" aria-label={t("player.previous")} onClick={() => d({ type: "previous" })}><Icon name="previous" size={14} filled /></button>
-          <button type="button" className="btn icon sm" aria-label={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })}><Icon name={playing ? "pause" : "play"} size={16} filled /></button>
+          <button type="button" className={`btn icon sm mini-play ${playing ? "playing" : ""}`} aria-label={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })}><Icon name={playing ? "pause" : "play"} size={16} filled /></button>
           <button type="button" className="btn icon sm" aria-label={t("player.next")} onClick={() => d({ type: "next" })}><Icon name="next" size={14} filled /></button>
           {track ? <Heart on={track.loved} size={13} onToggle={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /> : null}
           <span className="spacer" />

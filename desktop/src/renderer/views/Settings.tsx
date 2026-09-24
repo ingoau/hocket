@@ -21,16 +21,17 @@ import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useL
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
 type Section = (typeof SECTIONS)[number];
+const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
   const navigate = useApp((s) => s.navigate);
   const current: Section = (SECTIONS as readonly string[]).includes(section ?? "") ? (section as Section) : "general";
   return (
-    <div className="view" data-testid="view-settings">
+    <div className="view page-settings" data-testid="view-settings">
       <div className="settings">
         <nav className="settings-nav" aria-label={t("settings.title")}>
           {SECTIONS.map((s) => (
-            <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} aria-current={current === s ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}>{t(`settings.section.${s}` as never)}</a>
+            <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} aria-current={current === s ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}><Icon name={SECTION_ICONS[s]} size={20} filled={current === s} /><span>{t(`settings.section.${s}` as never)}</span></a>
           ))}
         </nav>
         <div className="settings-body">
@@ -594,28 +595,34 @@ function Shortcuts() {
     bridge().dispatch({ type: "setShortcut", data: { action_id: id, shortcut: chordToString(chord) } });
     setRecording(undefined);
   };
-  let lastCat = "";
+  // Rows are already sorted by category: one grouped list per category.
+  const groups: { category: string; rows: typeof rows }[] = [];
+  for (const r of rows) {
+    const last = groups[groups.length - 1];
+    if (last && last.category === r.category) last.rows.push(r);
+    else groups.push({ category: r.category, rows: [r] });
+  }
   return (
     <>
-      <div className="row" style={{ marginBottom: 8 }}><span className="muted small grow">{t("settings.shortcutsHint")}</span><button type="button" className="btn sm" onClick={() => rows.forEach((r) => bridge().dispatch({ type: "setShortcut", data: { action_id: r.id, shortcut: r.def } }))}>{t("settings.shortcutResetAll")}</button></div>
-      {rows.map((r) => {
-        const cat = r.category !== lastCat ? <h2 className="section-title" key={`c-${r.category}`}>{r.category}</h2> : null;
-        lastCat = r.category;
-        const chord = r.current ? parseChord(r.current) : undefined;
-        const conf = conflicts.get(r.id);
-        return (
-          <div key={r.id}>
-            {cat}
-            <div className="shortcut-row" data-testid={`shortcut-${r.id}`}>
-              <div>{r.label}{conf?.length ? <div className="conflict">{t("settings.shortcutConflict", { action: conf.map((c) => labels.get(c) ?? c).join(", ") })}</div> : null}</div>
-              <button type="button" className={`btn rec ${recording === r.id ? "recording" : ""}`} onClick={() => setRecording(r.id)} onKeyDown={recording === r.id ? (e) => onKey(e, r.id) : undefined} onBlur={() => recording === r.id && setRecording(undefined)} aria-label={`${r.label}: ${chord ? formatChord(chord, platform) : "unbound"}`}>
-                {recording === r.id ? t("settings.shortcutRecording") : chord ? <span className="kbd">{formatChord(chord, platform)}</span> : <span className="faint">—</span>}
-              </button>
-              <button type="button" className="btn sm ghost" disabled={r.current === r.def} onClick={() => bridge().dispatch({ type: "setShortcut", data: { action_id: r.id, shortcut: r.def } })}>{t("settings.shortcutReset")}</button>
-            </div>
-          </div>
-        );
-      })}
+      <div className="row settings-lede"><span className="muted small grow">{t("settings.shortcutsHint")}</span><button type="button" className="btn sm" onClick={() => rows.forEach((r) => bridge().dispatch({ type: "setShortcut", data: { action_id: r.id, shortcut: r.def } }))}>{t("settings.shortcutResetAll")}</button></div>
+      {groups.map((g) => (
+        <section key={g.category} className="shortcut-group">
+          <h2 className="section-title">{g.category}</h2>
+          {g.rows.map((r) => {
+            const chord = r.current ? parseChord(r.current) : undefined;
+            const conf = conflicts.get(r.id);
+            return (
+              <div key={r.id} className="shortcut-row" data-testid={`shortcut-${r.id}`}>
+                <div>{r.label}{conf?.length ? <div className="conflict">{t("settings.shortcutConflict", { action: conf.map((c) => labels.get(c) ?? c).join(", ") })}</div> : null}</div>
+                <button type="button" className={`btn rec ${recording === r.id ? "recording" : ""}`} onClick={() => setRecording(r.id)} onKeyDown={recording === r.id ? (e) => onKey(e, r.id) : undefined} onBlur={() => recording === r.id && setRecording(undefined)} aria-label={`${r.label}: ${chord ? formatChord(chord, platform) : "unbound"}`}>
+                  {recording === r.id ? t("settings.shortcutRecording") : chord ? <span className="kbd">{formatChord(chord, platform)}</span> : <span className="faint">—</span>}
+                </button>
+                <button type="button" className="btn sm ghost" disabled={r.current === r.def} onClick={() => bridge().dispatch({ type: "setShortcut", data: { action_id: r.id, shortcut: r.def } })}>{t("settings.shortcutReset")}</button>
+              </div>
+            );
+          })}
+        </section>
+      ))}
     </>
   );
 }

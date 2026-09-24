@@ -31,6 +31,8 @@ const MAP = {
   selectAll: "select_all", grip: "drag_indicator", dragHandle: "drag_handle", more: "more_horiz", moreVert: "more_vert", minimize: "minimize", maximize: "crop_square", restoreWin: "filter_none",
   spinner: "progress_activity", offline: "wifi_off", warn: "warning", battery: "battery_saver", external: "open_in_new", folder: "folder",
   copy: "content_copy", resume: "play_circle", music: "music_note", cloud: "cloud", lan: "lan", plus: "add",
+  // Settings sections, setup and stats (m3-pages).
+  tune: "tune", equalizer: "graphic_eq", transcode: "swap_horiz", connectCast: "cast", palette: "palette", keyboard: "keyboard", backup: "backup", customise: "dashboard_customize", headphones: "headphones", schedule: "schedule", dns: "dns", key: "key",
 };
 
 function body(name) {
