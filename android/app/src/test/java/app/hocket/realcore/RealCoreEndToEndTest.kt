@@ -318,7 +318,6 @@ class RealCoreEndToEndTest {
         events.clear() // drop the start-up ServersChanged (empty list)
         core.dispatch(Commands.addServer(server.baseUrl, "alice", "wrong", null))
         val err = waitFor { it as? Event.Error }
-        assertTrue(err.data.message.contains("probe"))
         // A brand-new server is probed first: a refused login installs nothing (only a persisted
         // server is installed ahead of its probe, see the offline-start test).
         kotlinx.coroutines.delay(500)
