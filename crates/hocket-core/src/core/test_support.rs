@@ -17,8 +17,8 @@ use crate::subsonic::SubsonicApi;
 use crate::util::Clock;
 
 use super::io::memory::MemoryNet;
-use super::stream_reader::{StreamUpstream, UpstreamRequest, UpstreamResponse};
 use super::io::ConnectIo;
+use super::stream_reader::{StreamUpstream, UpstreamRequest, UpstreamResponse};
 use super::{BackendChoice, Core, CoreError, Deps, EventSink, LateSink, PollFn, PresetServer};
 
 pub use super::handlers::servers::server_id_for;

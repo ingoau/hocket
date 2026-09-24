@@ -128,6 +128,8 @@ pub(crate) struct Actor {
     /// `Command::SetBackendCapabilities`). Otherwise media sources carry
     /// the server URL directly.
     pub core_stream: bool,
+    /// Background prefetch of the next queue items (transport owner only).
+    pub prefetch: super::handlers::prefetch::PrefetchState,
     pub caches: Caches,
     pub scrobbler: Scrobbler,
     pub sleep: SleepTimerMachine,
@@ -359,6 +361,7 @@ impl Actor {
             downloads,
             stream_reader,
             core_stream,
+            prefetch: Default::default(),
             caches,
             scrobbler: Scrobbler::new(clock.clone()),
             sleep: SleepTimerMachine::new(clock),
@@ -571,6 +574,11 @@ impl Actor {
             }
             Internal::Toast { message } => self.toast(message, None),
             Internal::StreamCacheChanged { tracks } => self.on_stream_cache_changed(tracks),
+            Internal::PrefetchDone {
+                track_id,
+                generation,
+                outcome,
+            } => self.on_prefetch_done(track_id, generation, outcome),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
@@ -690,6 +698,7 @@ impl Actor {
             let _ = stop.send(());
         }
         let _ = self.backend.stop();
+        self.cancel_prefetch();
         if let Some(r) = &self.stream_reader {
             r.stop();
         }
@@ -810,6 +819,7 @@ impl Actor {
             self.last_engine_tick = now;
             self.engine_input(Input::Tick);
         }
+        self.prefetch_tick(now);
         // Sleep timer.
         let action = self.sleep.tick();
         self.apply_sleep_action(action);

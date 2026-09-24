@@ -94,9 +94,16 @@ impl Actor {
                     }
                 }
             }
-            keys::TRANSCODING_PROFILES => self.apply_transcoding_settings(),
+            keys::TRANSCODING_PROFILES => {
+                self.apply_transcoding_settings();
+                self.mark_prefetch_check();
+            }
+            keys::BATTERY_PAUSE_PREFETCH | keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+                self.mark_prefetch_check();
+            }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
                 self.apply_storage_settings();
+                self.mark_prefetch_check();
                 // A smaller budget applies now, not at the next cache write.
                 match self.downloads.evict_over_budget() {
                     Ok(evicted) if !evicted.is_empty() => self.on_stream_cache_changed(evicted),

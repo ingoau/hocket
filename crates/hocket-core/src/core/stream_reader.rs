@@ -124,8 +124,10 @@ pub struct UpstreamResponse {
 /// How the reader reaches the server: reqwest in production, an in-memory
 /// fake in tests. Errors must not carry the URL (it holds credentials).
 pub trait StreamUpstream: Send + Sync + 'static {
-    fn fetch(&self, request: UpstreamRequest)
-        -> BoxFuture<'static, Result<UpstreamResponse, String>>;
+    fn fetch(
+        &self,
+        request: UpstreamRequest,
+    ) -> BoxFuture<'static, Result<UpstreamResponse, String>>;
 }
 
 /// Production upstream: reqwest + rustls, no redirects (a redirect would
@@ -550,8 +552,10 @@ impl StreamReader {
             (None, Some(t)) => Some(t - offset),
             (None, None) => None,
         };
-        let whole_body = body_start == 0 && total.is_some_and(|t| up.content_length == Some(t))
-            || (up.status == 200 && body_start == 0);
+        // The body is the whole resource: a 200, or a 206 whose range
+        // covers everything.
+        let whole_body = body_start == 0
+            && (up.status == 200 || total.is_some_and(|t| up.content_length == Some(t)));
         let budget = sh.downloads.cache_budget();
         let cacheable = whole_read
             && whole_body
@@ -1029,6 +1033,133 @@ impl Drop for HandleCloser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reader() -> (
+        tempfile::TempDir,
+        Downloads,
+        StreamReader,
+        Arc<crate::core::test_support::FakeUpstream>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let server = crate::subsonic::fake::FakeServer::new("srv", "alice");
+        let c = crate::subsonic::fake::FakeServer::song("t0", "T0", "al0", "ar0", 100.0);
+        server.add_song(c.clone());
+        db.upsert_tracks(
+            &[crate::subsonic::convert::track_from_child("srv", &c)],
+            &[],
+            1,
+        )
+        .unwrap();
+        let dl = Downloads::new(
+            db,
+            Arc::new(crate::util::WallClock),
+            Arc::new(crate::downloads::UnknownStorage),
+            &dir.path().join("data"),
+            &dir.path().join("cache"),
+            crate::api::Platform::Linux,
+        );
+        let upstream = Arc::new(crate::core::test_support::FakeUpstream::new());
+        let r = StreamReader::new(
+            dl.clone(),
+            Arc::new(crate::util::WallClock),
+            upstream.clone(),
+            Arc::new(|_| {}),
+        );
+        r.set_api(Some(Arc::new(server)));
+        (dir, dl, r, upstream)
+    }
+
+    fn target() -> StreamTarget {
+        StreamTarget {
+            server_id: "srv".into(),
+            track_id: "t0".into(),
+            profile: None,
+            suffix: Some("flac".into()),
+            mime_type: Some("audio/flac".into()),
+        }
+    }
+
+    /// The native backend's fetcher reads `hocket-stream://` through the
+    /// reader (a whole read caches; an offset read starts there) and
+    /// passes anything else to its HTTP fallback.
+    #[cfg(feature = "native-audio")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_fetcher_reads_through_the_reader() {
+        use crate::audio::native::{MemoryFetcher, RangeFetcher};
+        let (_dir, dl, r, upstream) = reader();
+        let media: Vec<u8> = (0..200_000u32).map(|i| (i % 7) as u8).collect();
+        upstream.set_media("t0", media.clone(), "audio/flac");
+        let url = r.mint(target()).unwrap();
+        assert!(url.starts_with(STREAM_URL_PREFIX));
+        let fallback = Arc::new(MemoryFetcher::new(vec![1, 2, 3]));
+        let f = CoreStreamFetcher {
+            reader: r.clone(),
+            fallback: fallback.clone(),
+        };
+        let collect = |resp: crate::audio::native::http::FetchResponse| async move {
+            let mut out = vec![];
+            let mut body = resp.body;
+            while let Some(c) = body.next().await {
+                out.extend_from_slice(&c.unwrap());
+            }
+            out
+        };
+        let resp = f.fetch(url.clone(), HashMap::new(), 0).await.unwrap();
+        assert_eq!(resp.total_len, Some(200_000));
+        assert_eq!(collect(resp).await, media);
+        assert_eq!(r.open_handles(), 0, "the body's end closed the handle");
+        let e = dl.cache_lookup("srv", "t0", None, false).unwrap().unwrap();
+        assert_eq!(e.bytes, 200_000);
+        let resp = f.fetch(url.clone(), HashMap::new(), 150_000).await.unwrap();
+        assert_eq!(resp.range_start, 150_000);
+        assert_eq!(collect(resp).await, &media[150_000..]);
+        assert_eq!(upstream.stream_requests("t0"), 1, "second read from disk");
+        // Dropping a body mid-way closes the handle.
+        let resp = f.fetch(url, HashMap::new(), 0).await.unwrap();
+        assert_eq!(r.open_handles(), 1);
+        drop(resp);
+        assert_eq!(r.open_handles(), 0);
+        // Other URLs use the HTTP fetcher.
+        let resp = f
+            .fetch("https://example.test/a.flac".into(), HashMap::new(), 0)
+            .await
+            .unwrap();
+        assert_eq!(collect(resp).await, vec![1, 2, 3]);
+        assert_eq!(fallback.requests.lock().len(), 1);
+        let err = match f
+            .fetch(format!("{STREAM_URL_PREFIX}nope"), HashMap::new(), 0)
+            .await
+        {
+            Err(e) => e,
+            Ok(_) => panic!("unknown token opened"),
+        };
+        assert_eq!(err, crate::audio::native::http::FetchError::Status(404));
+    }
+
+    /// Open handles are bounded, and a stopped reader refuses everything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handles_are_bounded_and_stop_closes_them() {
+        let (_dir, _dl, r, _upstream) = reader();
+        let url = r.mint(target()).unwrap();
+        let mut open = vec![];
+        for _ in 0..MAX_HANDLES {
+            open.push(r.open(&url, 5, None).await.unwrap().handle);
+        }
+        assert_eq!(
+            r.open(&url, 5, None).await.unwrap_err(),
+            StreamError::TooManyHandles
+        );
+        r.close(open.pop().unwrap());
+        let h = r.open(&url, 5, None).await.unwrap().handle;
+        r.stop();
+        assert_eq!(r.read(h, 10).await.unwrap_err(), StreamError::UnknownHandle);
+        assert_eq!(
+            r.open(&url, 0, None).await.unwrap_err(),
+            StreamError::ShutDown
+        );
+        assert!(r.mint(target()).is_none());
+    }
 
     #[test]
     fn envelopes_and_ranges() {

@@ -11,7 +11,7 @@
 //! blocks. Everything time-based runs off an injected [`Clock`] and a tick.
 
 mod actor;
-mod handlers;
+pub(crate) mod handlers;
 pub mod io;
 mod queries;
 mod state;
@@ -174,6 +174,12 @@ pub enum Internal {
     /// changed.
     StreamCacheChanged {
         tracks: Vec<crate::downloads::TrackKey>,
+    },
+    /// A background prefetch ended.
+    PrefetchDone {
+        track_id: TrackId,
+        generation: u64,
+        outcome: handlers::prefetch::PrefetchOutcome,
     },
     /// A spawned short task finished (bookkeeping for `settle`).
     TaskDone,

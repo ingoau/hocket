@@ -1944,6 +1944,81 @@ mod tests {
         assert_eq!(f.dl.downloads_bytes().unwrap(), 0.0);
     }
 
+    /// Files a reader holds, or whose track the player has loaded, are
+    /// skipped by eviction and deferred by a clear; a replaced copy goes
+    /// once released; the startup sweep drops temp and orphan files.
+    #[test]
+    fn stream_cache_files_in_use_are_kept_until_released() {
+        let f = fixture();
+        let off = |id: &str| f.db.track(id).unwrap().unwrap().offline;
+        let put = |id: &str| {
+            let p = f.dl.cache_path_unique("srv", id, None, Some("flac"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, vec![0u8; 1000]).unwrap();
+            f.dl.cache_put("srv", id, None, &p, 1000.0, None).unwrap();
+            p
+        };
+        let p0 = put("t0");
+        let p1 = put("t1");
+        assert_ne!(p0, f.dl.cache_path_unique("srv", "t0", None, Some("flac")));
+        f.dl.acquire_reader(&p0);
+        assert!(f
+            .dl
+            .set_protected(vec![("srv".into(), "t1".into())])
+            .is_empty());
+        f.dl.set_cache_budget(500.0);
+        assert_eq!(f.dl.enforce_cache_budget().unwrap(), 0, "both in use");
+        assert_eq!(f.dl.clear_stream_cache().unwrap(), 0, "both deferred");
+        assert!(p0.exists() && p1.exists());
+        assert_eq!(off("t0"), OfflineState::Cached);
+        let changed = f.dl.release_reader(&p0);
+        assert!(
+            changed.contains(&("srv".into(), "t0".into())),
+            "{changed:?}"
+        );
+        assert!(!p0.exists());
+        assert_eq!(off("t0"), OfflineState::None);
+        assert!(p1.exists(), "still protected");
+        let changed = f.dl.set_protected(vec![]);
+        assert!(
+            changed.contains(&("srv".into(), "t1".into())),
+            "{changed:?}"
+        );
+        assert!(!p1.exists());
+        assert_eq!(off("t1"), OfflineState::None);
+        assert_eq!(f.dl.cache_bytes().unwrap(), 0.0);
+
+        // A new copy replaces an old one; the old file goes once released.
+        f.dl.set_cache_budget(1e9);
+        let a = put("t2");
+        f.dl.acquire_reader(&a);
+        let b = put("t2");
+        assert!(a.exists() && b.exists());
+        assert_eq!(f.dl.cache_get("srv", "t2", None).unwrap().unwrap().0, b);
+        f.dl.release_reader(&a);
+        assert!(!a.exists() && b.exists());
+        assert_eq!(off("t2"), OfflineState::Cached);
+        let c = put("t2");
+        assert!(!b.exists() && c.exists(), "not in use: removed at once");
+
+        // Startup: temp files and files no row references are dropped.
+        let dir = f.dl.stream_cache_dir("srv");
+        let part = dir.join("t3.flac.abc.part");
+        let orphan = dir.join("t4.flac");
+        std::fs::write(&part, b"x").unwrap();
+        std::fs::write(&orphan, b"x").unwrap();
+        let _again = Downloads::new(
+            f.db.clone(),
+            Arc::new(WallClock),
+            f.storage.clone(),
+            &f.dir.path().join("data"),
+            &f.dir.path().join("cache"),
+            Platform::Linux,
+        );
+        assert!(!part.exists() && !orphan.exists());
+        assert!(c.exists());
+    }
+
     #[tokio::test]
     async fn resolve_prefers_download_then_cache_then_stream() {
         let f = fixture();

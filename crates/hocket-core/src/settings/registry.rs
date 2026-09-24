@@ -395,9 +395,12 @@ pub static REGISTRY: &[SettingDef] = &[
         },
         || json!(2.0 * GIB),
     ),
-    def(STORAGE_PREFETCH_ON_MOBILE_DATA, Local, SettingKind::Bool, || {
-        json!(false)
-    }),
+    def(
+        STORAGE_PREFETCH_ON_MOBILE_DATA,
+        Local,
+        SettingKind::Bool,
+        || json!(false),
+    ),
     def(DOWNLOADS_TRANSCODE, Local, SettingKind::Bool, || {
         json!(false)
     }),

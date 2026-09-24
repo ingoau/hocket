@@ -219,6 +219,7 @@ impl Actor {
         if let Some(p) = &self.stream_reader {
             p.set_api(Some(api.clone()));
         }
+        self.mark_prefetch_check();
         state.client = client;
         state.credential = Some(credential.clone());
         state.lan_key = Some(lan_key);
@@ -291,6 +292,8 @@ impl Actor {
         if let Some(p) = &self.stream_reader {
             p.set_api(None);
         }
+        self.mark_prefetch_check();
+        self.prefetch_tick(self.now());
         if let Err(e) = self.db.delete_server(&server_id) {
             self.error(ErrorKind::Storage, "remove server", Some(e.to_string()));
         }
@@ -682,6 +685,7 @@ impl Actor {
             .is_some_and(|n| n.kind == NetworkKind::Offline);
         self.downloads.set_network(Some(state.clone()));
         self.network = Some(state.clone());
+        self.mark_prefetch_check();
         if state.kind != NetworkKind::Offline && (was_offline || self.network.is_some()) {
             self.last_outbox_retry = self.now();
             self.schedule_flush();

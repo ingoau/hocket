@@ -541,6 +541,7 @@ impl Actor {
     }
 
     pub(crate) fn emit_queue(&mut self) {
+        self.mark_prefetch_check();
         let queue = self.queue_view();
         self.emit(Event::NowPlayingChanged {
             entry: queue.current.clone(),

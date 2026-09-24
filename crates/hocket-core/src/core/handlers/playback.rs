@@ -101,7 +101,8 @@ impl Actor {
     }
 
     /// Keep the stream-cache files of the loaded and preloaded tracks (a
-    /// seek re-reads them) until they leave the player.
+    /// seek re-reads them) and of the prefetch targets until they leave the
+    /// player or the next-two window.
     pub(crate) fn protect_loaded_tracks(&mut self) {
         let mut keys = vec![];
         if self.playback.loaded {
@@ -112,6 +113,7 @@ impl Actor {
         if let Some(n) = &self.playback.next {
             keys.push((n.track.server_id.clone(), n.track.id.clone()));
         }
+        keys.extend(self.prefetch.targets.iter().cloned());
         let changed = self.downloads.set_protected(keys);
         if !changed.is_empty() {
             self.on_stream_cache_changed(changed);
@@ -128,7 +130,9 @@ impl Actor {
                 ids.push(tid);
             }
         }
+        let mut all: Vec<String> = vec![];
         for (server_id, ids) in by_server {
+            all.extend(ids.iter().cloned());
             self.emit(Event::LibraryChanged {
                 server_id,
                 tables: vec!["tracks".into()],
@@ -137,6 +141,21 @@ impl Actor {
         }
         let storage = self.storage_summary();
         self.emit(Event::StorageChanged { storage });
+        // Queue rows carry the offline state: refresh them when one of
+        // these tracks is in the queue (a prefetched item shows Cached).
+        let in_queue = self.doc().is_some_and(|d| {
+            d.current
+                .iter()
+                .chain(d.insertions.iter())
+                .any(|i| all.contains(&i.track_id))
+                || d.context
+                    .as_ref()
+                    .is_some_and(|c| c.tracks.iter().any(|t| all.contains(t)))
+        });
+        if in_queue {
+            let queue = self.queue_view();
+            self.emit(Event::QueueChanged { queue });
+        }
     }
 
     /// Load a document item into the backend. `carried` is the handoff
@@ -288,6 +307,11 @@ impl Actor {
     // -- transport ownership ------------------------------------------------------
 
     pub(crate) fn on_lease_changed(&mut self, owns: bool, detached: bool, lease: TransportLease) {
+        // Only the owner prefetches audio; a lost lease cancels at once.
+        self.mark_prefetch_check();
+        if !owns {
+            self.prefetch_tick(self.now());
+        }
         if owns {
             self.playback.consecutive_skips = 0;
             if !self.playback.loaded {
@@ -1112,6 +1136,7 @@ impl Actor {
     pub(crate) fn set_battery_saver(&mut self, enabled: bool) {
         if self.battery_saver != enabled {
             self.battery_saver = enabled;
+            self.mark_prefetch_check();
             self.media_art = None;
             self.emit_media_session();
         }
