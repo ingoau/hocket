@@ -141,6 +141,7 @@ fun HeroArtwork(coverArt: String?, title: String?, size: Dp, interactive: Boolea
             else Modifier)
             // The skip swipe and the colour-preview long-press as actions; in the collapsed sheet the
             // thumbnail is decorative (the mini player's item names the track).
+            .testTag("player.artwork")
             .then(if (describe) Modifier.semantics {
                 contentDescription = desc
                 if (interactive) customActions = listOf(
@@ -148,8 +149,7 @@ fun HeroArtwork(coverArt: String?, title: String?, size: Dp, interactive: Boolea
                     CustomAccessibilityAction(previousLabel) { client.dispatch(Command.Previous); true },
                     CustomAccessibilityAction(previewDesc) { togglePreview(); true },
                 )
-            } else Modifier.clearAndSetSemantics { })
-            .testTag("player.artwork"),
+            } else Modifier.clearAndSetSemantics { }),
     ) {
         Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RoundedCornerShape(androidx.compose.ui.unit.lerp(12.dp, 28.dp, ((size - 48.dp) / 300.dp).coerceIn(0f, 1f))))
     }
@@ -176,6 +176,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
     val density = LocalDensity.current
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
         val hero = with(density) { (constraints.maxWidth.toDp() - 48.dp).coerceAtMost(420.dp) }
+        val pageWidth = maxWidth
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player.page").padding(horizontal = 24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
             // Artwork slot (the sheet draws the artwork over this space).
             Spacer(Modifier.height(hero + 24.dp))
@@ -222,7 +223,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
             Spacer(Modifier.height(8.dp))
             // Narrow screens (display size "largest" leaves ~320 dp): smaller skip and play buttons so
             // the five controls never overlap or clip.
-            val narrow = maxWidth < 360.dp
+            val narrow = pageWidth < 360.dp
             val skipSize = if (narrow) 48.dp else 56.dp
             val playSize = if (narrow) 72.dp else 88.dp
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {

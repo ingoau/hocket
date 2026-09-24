@@ -20,8 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +62,8 @@ import app.hocket.core.api.ReplayGainMode
 import app.hocket.core.api.TranscodingProfile
 import app.hocket.core.fake.FakeCore
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.components.ChoiceRow
+import androidx.compose.ui.semantics.stateDescription
 import app.hocket.ui.nav.NavItem
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -79,28 +79,31 @@ fun AudioSettingsScreen(nav: NavHostController) {
     LaunchedEffect(Unit) { client.dispatch(Command.RefreshOutputDevices) }
     SubScreen(nav, stringResource(R.string.settings_section_audio)) {
         val rgOptions = listOf(ReplayGainMode.Off to stringResource(R.string.settings_rg_off), ReplayGainMode.Track to stringResource(R.string.settings_rg_track), ReplayGainMode.Album to stringResource(R.string.settings_rg_album), ReplayGainMode.Auto to stringResource(R.string.settings_rg_auto))
-        SettingRow(stringResource(R.string.settings_replay_gain)) {
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                rgOptions.forEach { (m, label) -> toggleableItem(checked = audio.replayGain == m, label = label, onCheckedChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGain = m))) }) }
-            }
-        }
-        SettingRow(stringResource(R.string.settings_preamp), stringResource(R.string.settings_db, audio.replayGainPreampDb))
-        Slider(value = audio.replayGainPreampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGainPreampDb = it.toDouble()))) }, valueRange = -15f..15f, modifier = Modifier.padding(horizontal = 16.dp))
+        SettingRow(stringResource(R.string.settings_replay_gain))
+        ChoiceRow(rgOptions, isSelected = { audio.replayGain == it }, onSelect = { m -> client.dispatch(Commands.setAudioSettings(audio.copy(replayGain = m))) }, modifier = Modifier.padding(horizontal = 16.dp))
+        val preampLabel = stringResource(R.string.settings_preamp)
+        val preampValue = stringResource(R.string.settings_db, audio.replayGainPreampDb)
+        SettingRow(preampLabel, preampValue)
+        // Spoken as "Preamp, +3.0 dB" rather than a bare percentage.
+        Slider(value = audio.replayGainPreampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGainPreampDb = it.toDouble()))) }, valueRange = -15f..15f,
+            modifier = Modifier.padding(horizontal = 16.dp).semantics { contentDescription = preampLabel; stateDescription = preampValue })
         SwitchRow(stringResource(R.string.settings_normalisation), audio.normalisation, { client.dispatch(Commands.setAudioSettings(audio.copy(normalisation = it))) })
         SwitchRow(stringResource(R.string.settings_gapless), audio.gapless, { client.dispatch(Commands.setAudioSettings(audio.copy(gapless = it))) })
         SettingsSection(stringResource(R.string.settings_eq))
         SwitchRow(stringResource(R.string.settings_eq_enabled), audio.eq.enabled, { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(enabled = it)))) })
-        SettingRow(stringResource(R.string.settings_eq_preamp), stringResource(R.string.settings_db, audio.eq.preampDb)) {
+        val eqPreampLabel = stringResource(R.string.settings_eq_preamp)
+        val eqPreampValue = stringResource(R.string.settings_db, audio.eq.preampDb)
+        SettingRow(eqPreampLabel, eqPreampValue) {
             TextButton(onClick = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(bands = audio.eq.bands.map { it.copy(gainDb = 0.0) }, preampDb = 0.0, preset = null)))) }) { Text(stringResource(R.string.settings_eq_reset)) }
         }
-        Slider(value = audio.eq.preampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(preampDb = it.toDouble())))) }, valueRange = -12f..12f, modifier = Modifier.padding(horizontal = 16.dp))
+        Slider(value = audio.eq.preampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(preampDb = it.toDouble())))) }, valueRange = -12f..12f,
+            modifier = Modifier.padding(horizontal = 16.dp).semantics { contentDescription = eqPreampLabel; stateDescription = eqPreampValue })
         val bands = audio.eq.bands.ifEmpty { FakeCore.defaultBands() }
         EqEditor(bands, enabled = audio.eq.enabled) { new -> client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(bands = new, preset = null)))) }
         if (outputs.isNotEmpty()) {
             SettingsSection(stringResource(R.string.settings_output_device))
-            ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                outputs.forEach { d -> toggleableItem(checked = (audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id) == d.id, label = d.name, onCheckedChange = { client.dispatch(Commands.setOutputDevice(d.id)) }) }
-            }
+            val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
+            ChoiceRow(outputs.map { it.id to it.name }, isSelected = { selectedOutput == it }, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 }
@@ -164,17 +167,11 @@ private fun ProfileEditor(title: String, networkId: String) {
     fun push(p: TranscodingProfile) = client.dispatch(Commands.setTranscodingProfile(networkId.takeIf { it != "default" }, p))
     SettingsSection(title)
     val originalLabel = stringResource(R.string.settings_format_original)
-    SettingRow(stringResource(R.string.settings_format)) {
-        ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            listOf(null, "opus", "mp3", "aac").forEach { f -> toggleableItem(checked = profile.format == f, label = f ?: originalLabel, onCheckedChange = { push(profile.copy(format = f)) }) }
-        }
-    }
+    SettingRow(stringResource(R.string.settings_format))
+    ChoiceRow(listOf(null, "opus", "mp3", "aac").map { it to (it ?: originalLabel) }, isSelected = { profile.format == it }, onSelect = { push(profile.copy(format = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
     val bitrates = listOf(null, 96, 128, 192, 320).map { b -> b to (b?.let { stringResource(R.string.settings_bitrate_kbps, it) } ?: stringResource(R.string.settings_bitrate_unlimited)) }
-    SettingRow(stringResource(R.string.settings_max_bitrate)) {
-        ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            bitrates.forEach { (b, label) -> toggleableItem(checked = profile.maxBitRate?.toInt() == b, label = label, onCheckedChange = { push(profile.copy(maxBitRate = b?.toUInt())) }) }
-        }
-    }
+    SettingRow(stringResource(R.string.settings_max_bitrate))
+    ChoiceRow(bitrates, isSelected = { profile.maxBitRate?.toInt() == it }, onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, modifier = Modifier.padding(horizontal = 16.dp))
     var cannot by remember(profile) { mutableStateOf(profile.cannotDecode.joinToString(", ")) }
     OutlinedTextField(value = cannot, onValueChange = { cannot = it }, label = { Text(stringResource(R.string.settings_cannot_decode)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         trailingIcon = { TextButton(onClick = { push(profile.copy(cannotDecode = cannot.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() })) }) { Text(stringResource(R.string.action_save)) } })

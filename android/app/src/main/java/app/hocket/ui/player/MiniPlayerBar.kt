@@ -134,6 +134,8 @@ fun MiniPlayerBar(onExpand: () -> Unit) {
                     .weight(1f)
                     .fillMaxHeight()
                     .clickable(onClickLabel = expandLabel, onClick = onExpand)
+                    // Semantics modifiers inside a clearAndSetSemantics on the same node are dropped: tag first.
+                    .testTag("miniPlayer.info")
                     .clearAndSetSemantics {
                         contentDescription = desc
                         liveRegion = LiveRegionMode.Polite
@@ -142,8 +144,7 @@ fun MiniPlayerBar(onExpand: () -> Unit) {
                             CustomAccessibilityAction(previousLabel) { client.dispatch(Command.Previous); true },
                         )
                         onClick(expandLabel) { onExpand(); true }
-                    }
-                    .testTag("miniPlayer.info"),
+                    },
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)

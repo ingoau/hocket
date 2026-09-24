@@ -106,6 +106,8 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.compose.ui.test.junit4)
+    // enableAccessibilityChecks(): the Accessibility Test Framework over the Compose tree.
+    testImplementation(libs.compose.ui.test.junit4.accessibility)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     // Plain JNA jar (with the linux-x86-64 dispatcher) so the real core .so can be loaded on the JVM.

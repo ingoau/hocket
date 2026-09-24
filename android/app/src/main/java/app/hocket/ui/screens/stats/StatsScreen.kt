@@ -14,8 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,9 +69,7 @@ fun StatsScreen(nav: NavHostController) {
             item {
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                     val periods = listOf(7 to stringResource(R.string.stats_period_7), 30 to stringResource(R.string.stats_period_30), 365 to stringResource(R.string.stats_period_365))
-                    ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                        periods.forEach { (days, label) -> toggleableItem(checked = period == days, label = label, onCheckedChange = { period = days }) }
-                    }
+                    app.hocket.ui.components.ChoiceRow(periods, isSelected = { period == it }, onSelect = { period = it })
                 }
             }
             if (s == null) return@LazyColumn

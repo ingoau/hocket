@@ -735,6 +735,74 @@ fn lan_leader_cut_off_just_before_judging_does_not_scrobble_twice() {
     w.assert_ok();
 }
 
+/// The shape of LAN seed 628: one play ends up held by two devices that
+/// are each completely alone. a plays t0 and hands it to b; b is then cut
+/// off from everyone for half an hour, and a takes its loaded play back.
+/// Both reach the scrobble point, each in a room of its own. Each used to
+/// judge the play locally after the ten-minute grace, and it was scrobbled
+/// twice. Both plays are now *shared* (b took the play over, a handed it
+/// away): neither judges it alone within the hour, and once they meet
+/// again their common room lets exactly one of them submit it.
+#[test]
+fn a_play_held_by_two_isolated_devices_scrobbles_once() {
+    let mut cfg = WorldConfig::new(7);
+    cfg.devices = 2;
+    cfg.topology = Topology::Lan;
+    cfg.keep_logs = true;
+    let mut w = World::new(cfg);
+    w.run_for(5_000.0);
+    let (a, b) = (0, 1);
+    // t0 is 20 s: its scrobble point is at 10 s
+    w.perform(Action::PlayTracks {
+        device: a,
+        tracks: vec!["t0".into(), "t1".into()],
+    });
+    w.perform(Action::ClaimTransport {
+        device: a,
+        takeover: false,
+    });
+    w.run_for(2_000.0);
+    w.perform(Action::OpenPicker { device: a });
+    w.run_for(1_000.0);
+    w.perform(Action::HandoffTo {
+        device: a,
+        target: b,
+    });
+    w.run_for(1_000.0);
+    assert!(w.devices[b].owns(), "b took the play over");
+    // b drops off the network entirely; a takes back the play it had loaded
+    w.perform(Action::Partition {
+        device: b,
+        duration_ms: 1_800_000.0,
+    });
+    w.run_for(500.0);
+    w.perform(Action::ClaimTransport {
+        device: a,
+        takeover: true,
+    });
+    w.run_for(20_000.0);
+    let started_at = w.devices[b].scrobbles_reached[0].1;
+    assert_eq!(
+        w.devices[a].scrobbles_reached,
+        w.devices[b].scrobbles_reached,
+        "both reached the same play, apart"
+    );
+    // well past the ordinary grace, still apart: nobody submits alone
+    w.run_for(20.0 * 60_000.0);
+    assert_eq!(w.server.count("t0", started_at), 0, "{:?}", w.server.scrobbles);
+    // the partition heals: the common room decides, once
+    w.run_for(15.0 * 60_000.0);
+    w.finish();
+    for d in &w.devices { for l in &d.log { eprintln!("TMPLOG {l}"); } } // TMPDBG
+    assert_eq!(
+        w.server.count("t0", started_at),
+        1,
+        "t0 scrobbled once: {:?}",
+        w.server.scrobbles
+    );
+    w.assert_ok();
+}
+
 /// LAN hostile seed 43 (see the test above for the interleaving it found).
 #[test]
 fn lan_hostile_seed_43_scrobbles_once_across_a_partition() {

@@ -119,7 +119,7 @@ fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (L
     val durationS = (durationMs / 1000).coerceAtLeast(0)
     val state = remember(positionS, durationS) { Spoken.position(resources, positionS * 1000, durationS * 1000) }
     Column(
-        modifier.fillMaxWidth().clearAndSetSemantics {
+        modifier.fillMaxWidth().testTag("player.seekBar").clearAndSetSemantics {
             contentDescription = label
             stateDescription = state
             progressBarRangeInfo = ProgressBarRangeInfo(positionS.toFloat().coerceAtMost(durationS.toFloat()), 0f..durationS.toFloat().coerceAtLeast(1f), steps = 0)
@@ -128,7 +128,7 @@ fun WavySeekBar(positionMs: Long, durationMs: Long, playing: Boolean, onSeek: (L
                 onSeek((value.coerceIn(0f, durationS.toFloat()) * 1000).toLong())
                 true
             }
-        }.testTag("player.seekBar"),
+        },
     ) {
         Box(Modifier.fillMaxWidth().height(28.dp)) {
             if (dragging) {

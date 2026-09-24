@@ -2484,6 +2484,7 @@ impl Engine {
                 }) = self.scrobble_queries.remove(&query_id)
                 {
                     let me = self.cfg.device.id.clone();
+                    eprintln!("TMPDBG {me} answer {track_id}@{started_at} dup={duplicate} loop={from_loopback}");
                     self.learn_scrobbled(&track_id, started_at, &me);
                     self.out.push(Output::Scrobble {
                         track_id,
@@ -3785,7 +3786,7 @@ impl Engine {
             let stale: Vec<String> = self
                 .scrobble_queries
                 .iter()
-                .filter(|(_, q)| now - q.since >= grace)
+                .filter(|(_, q)| now - q.since >= if q.shared { shared_grace } else { grace })
                 .map(|(id, _)| id.clone())
                 .collect();
             for id in stale {
@@ -3802,6 +3803,7 @@ impl Engine {
             }
         }
         for d in expired {
+            eprintln!("TMPDBG {} expired {}@{} shared={} since={} now={now}", self.cfg.device.id, d.track_id, d.started_at, d.shared, d.since);
             let me = self.cfg.device.id.clone();
             self.learn_scrobbled(&d.track_id, d.started_at, &me);
             self.unreported_scrobbles
@@ -5799,5 +5801,322 @@ mod tests {
         });
         assert!(!outs.iter().any(|o| matches!(o, Output::SettingsMerged(_))));
         assert_eq!(e.settings()[0].value, "2");
+    }
+
+    // -- shared plays: defer only resumed plays ---------------------------------
+
+    fn reach(e: &mut Engine, track: &str, started_at: EpochMs) -> Vec<bool> {
+        scrobble_verdicts(&e.handle(Input::ScrobbleReached {
+            track_id: track.into(),
+            started_at,
+        }))
+    }
+
+    fn takeover_msg(started_at: EpochMs) -> WireMessage {
+        WireMessage::new(Msg::HandoffTakeover {
+            from: "a".into(),
+            target: "b".into(),
+            key: "k".into(),
+            track_id: "t".into(),
+            position_ms: 50_000,
+            played_ms: 50_000,
+            started_at,
+            scrobbled: false,
+            epoch: 1,
+            lease: Some(TransportLease {
+                owner: Some("b".into()),
+                epoch: 2,
+                expires_at: 99_999.0,
+            }),
+        })
+    }
+
+    /// Leave the coordinator and play on alone (no LAN): our own room is the
+    /// only one left. A play that originated here is judged there at once
+    /// (today's rule); `shared` must wait.
+    fn alone_defers_shared_but_not_origin(e: &mut Engine, shared: EpochMs) {
+        e.handle(Input::DisconnectCoordinator);
+        assert!(!e.is_connected());
+        assert_eq!(reach(e, "t", shared), Vec::<bool>::new(), "shared: deferred");
+        assert_eq!(reach(e, "origin", 900_000.0), vec![true], "origin: judged alone");
+    }
+
+    #[test]
+    fn a_play_taken_over_by_handoff_is_shared() {
+        let (mut b, _) = engine("b");
+        attach(&mut b, None, vec![dev("a")]);
+        let outs = b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: takeover_msg(5_000.0),
+        });
+        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 5_000.0)));
+        alone_defers_shared_but_not_origin(&mut b, 5_000.0);
+    }
+
+    #[test]
+    fn a_play_resumed_here_is_shared() {
+        let (mut e, _) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.current = Some(crate::api::QueueItem {
+            key: "k".into(),
+            track_id: "t".into(),
+            source: crate::api::QueueSource::Inserted,
+            unavailable: false,
+        });
+        let mut rep = replica_with(room_doc);
+        rep.last_stamp = Some(crate::connect::wire::LastStamp {
+            device_id: "pixel".into(),
+            device_name: "Pixel".into(),
+            key: Some("k".into()),
+            position: PositionStamp {
+                position_ms: 30_000,
+                taken_at: 9_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 30_000,
+            started_at: 7_000.0,
+            scrobbled: false,
+        });
+        attach(&mut e, Some(rep), vec![]);
+        assert!(e.resume_offer().is_some());
+        e.handle(Input::ResumeHere);
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 4,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        assert!(outs.iter().any(|o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 7_000.0)));
+        alone_defers_shared_but_not_origin(&mut e, 7_000.0);
+    }
+
+    #[test]
+    fn a_play_this_device_handed_away_is_shared_when_it_comes_back() {
+        let (mut src, _) = engine("a");
+        attach(&mut src, None, vec![dev("b")]);
+        src.handle(Input::ClaimTransport { takeover: false });
+        src.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        src.handle(Input::LocalStamp {
+            key: Some("k".into()),
+            track_id: Some("t".into()),
+            position: PositionStamp {
+                position_ms: 1000,
+                taken_at: 10_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 1000,
+            started_at: 6_000.0,
+            scrobbled: false,
+        });
+        src.handle(Input::OpenPicker);
+        let outs = src.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffTakeover { .. })));
+        // Cut off later, it takes its loaded play back (a takeover after a
+        // partition): b may be holding the same play in a room of its own.
+        alone_defers_shared_but_not_origin(&mut src, 6_000.0);
+    }
+
+    #[test]
+    fn a_play_another_device_stamped_is_shared_when_claimed_here() {
+        // A lease claim on another device's play (the actor resumes what it
+        // has loaded, or what the other device was playing).
+        let (mut e, _) = engine("a");
+        attach(&mut e, None, vec![dev("b")]);
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::TransportStamp {
+                device_id: "b".into(),
+                key: Some("k".into()),
+                position: PositionStamp {
+                    position_ms: 1000,
+                    taken_at: 10_000.0,
+                    rate: 1.0,
+                    is_playing: true,
+                },
+                played_ms: 1000,
+                started_at: 8_000.0,
+                scrobbled: false,
+                epoch: 1,
+            }),
+        });
+        alone_defers_shared_but_not_origin(&mut e, 8_000.0);
+        e.handle(Input::ClaimTransport { takeover: true });
+        assert!(e.owns_transport());
+        assert!(reach(&mut e, "t", 8_000.0).is_empty());
+    }
+
+    #[test]
+    fn a_play_that_originated_here_is_never_shared() {
+        let (mut e, _) = engine("a");
+        // Our own stamps (relayed back, or just ours) prove nothing.
+        e.handle(Input::ClaimTransport { takeover: false });
+        e.handle(Input::LocalStamp {
+            key: Some("k".into()),
+            track_id: Some("t".into()),
+            position: PositionStamp {
+                position_ms: 0,
+                taken_at: 10_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 0,
+            started_at: 10_000.0,
+            scrobbled: false,
+        });
+        assert_eq!(reach(&mut e, "t", 10_000.0), vec![true]);
+    }
+
+    #[test]
+    fn a_shared_play_waits_alone_and_the_regained_room_finds_the_duplicate() {
+        let (mut b, clock) = engine("b");
+        attach(&mut b, None, vec![dev("a")]);
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: takeover_msg(5_000.0),
+        });
+        b.handle(Input::DisconnectCoordinator);
+        assert!(reach(&mut b, "t", 5_000.0).is_empty());
+        // Well past the ordinary grace: still waiting.
+        let mut verdicts = vec![];
+        for _ in 0..30 {
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&b.handle(Input::Tick)));
+        }
+        assert!(verdicts.is_empty(), "no local judgement within the hour");
+        // Contact again: asked as usual, with no extra delay.
+        b.handle(Input::ConnectCoordinator);
+        let outs = attach(&mut b, None, vec![dev("a")]);
+        let qid = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::ScrobbleDedupeQuery {
+                    query_id,
+                    started_at,
+                    ..
+                } if *started_at == 5_000.0 => Some(query_id.clone()),
+                _ => None,
+            })
+            .expect("the deferred shared play is asked for on the welcome");
+        // a scrobbled it while we were apart
+        let outs = b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
+                query_id: qid,
+                duplicate: true,
+            }),
+        });
+        assert_eq!(scrobble_verdicts(&outs), vec![false], "not sent");
+        for _ in 0..70 {
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+            assert!(scrobble_verdicts(&b.handle(Input::Tick)).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_shared_play_nobody_can_judge_is_sent_once_after_the_long_grace() {
+        let (mut b, clock) = engine("b");
+        attach(&mut b, None, vec![dev("a")]);
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: takeover_msg(5_000.0),
+        });
+        b.handle(Input::DisconnectCoordinator);
+        assert!(reach(&mut b, "t", 5_000.0).is_empty());
+        let mut verdicts = vec![];
+        for _ in 0..(DEFAULT_SHARED_SCROBBLE_GRACE_MS / 60_000.0) as usize - 1 {
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&b.handle(Input::Tick)));
+        }
+        assert!(verdicts.is_empty());
+        for _ in 0..5 {
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&b.handle(Input::Tick)));
+        }
+        assert_eq!(verdicts, vec![true], "judged locally once, nothing lost");
+        assert_eq!(reach(&mut b, "t", 5_000.0), vec![false], "and only once");
+    }
+
+    #[test]
+    fn a_deferred_shared_play_keeps_waiting_across_a_restart() {
+        let (mut b, clock) = engine("b");
+        attach(&mut b, None, vec![dev("a")]);
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: takeover_msg(5_000.0),
+        });
+        b.handle(Input::DisconnectCoordinator);
+        assert!(reach(&mut b, "t", 5_000.0).is_empty());
+        clock.0.fetch_add(1_800_000, Ordering::SeqCst);
+        b.handle(Input::Tick);
+        // What the actor persists (and a JSON round trip of it).
+        let state = PersistedConnectState {
+            sync_base: b.sync_base().cloned(),
+            known_scrobbled: b.known_scrobbled(),
+        };
+        let state: PersistedConnectState =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        let pending: Vec<&KnownScrobble> = state
+            .known_scrobbled
+            .iter()
+            .filter(|k| k.awaiting_since.is_some())
+            .collect();
+        assert_eq!(pending.len(), 1, "{:?}", state.known_scrobbled);
+        assert_eq!(pending[0].awaiting_since, Some(10_000.0));
+
+        // Restart, alone: the outbox asks again.
+        let mut cfg = b.config().clone();
+        cfg.coordinator_enabled = false;
+        let doc = b.document().clone();
+        let mut b2 = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, None);
+        b2.restore_known_scrobbled(state.known_scrobbled);
+        assert!(
+            reach(&mut b2, "t", 5_000.0).is_empty(),
+            "not judged at once"
+        );
+        // A pending entry is no scrobble: it is never announced.
+        let outs = attach(&mut b2, None, vec![]);
+        assert!(!wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::ScrobbleSubmitted { started_at, .. } if *started_at == 5_000.0
+        )));
+        b2.handle(Input::DisconnectCoordinator);
+        // The hour counts from the first wait, not from the restart.
+        let mut verdicts = vec![];
+        for _ in 0..35 {
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+            verdicts.extend(scrobble_verdicts(&b2.handle(Input::Tick)));
+        }
+        assert_eq!(verdicts, vec![true]);
+    }
+
+    #[test]
+    fn old_known_scrobble_rows_still_load() {
+        let k: KnownScrobble =
+            serde_json::from_str(r#"{"trackId":"t","startedAt":1.0,"deviceId":"d"}"#).unwrap();
+        assert_eq!(k.awaiting_since, None);
+        let json = serde_json::to_string(&k).unwrap();
+        assert!(!json.contains("awaitingSince"), "{json}");
     }
 }

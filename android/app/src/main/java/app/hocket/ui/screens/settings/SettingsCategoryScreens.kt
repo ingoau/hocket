@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
@@ -28,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.components.ActionRow
+import app.hocket.ui.components.ChoiceRow
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
@@ -83,20 +83,21 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
     val animated = setting(SettingKeys.DISPLAY_ANIMATED_BACKGROUND)
     SubScreen(nav, stringResource(R.string.settings_section_appearance)) {
         val themeOptions = listOf("system" to stringResource(R.string.settings_theme_system), "light" to stringResource(R.string.settings_theme_light), "dark" to stringResource(R.string.settings_theme_dark))
-        SettingRow(stringResource(R.string.settings_theme), scope = theme.scope, tag = "display.theme") {
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                themeOptions.forEach { (v, label) -> toggleableItem(checked = (theme.string ?: "system") == v, label = label, onCheckedChange = { theme.setString(v) }) }
-            }
-        }
+        SettingRow(stringResource(R.string.settings_theme), scope = theme.scope, tag = "display.theme")
+        ChoiceRow(themeOptions, isSelected = { (theme.string ?: "system") == it }, onSelect = { theme.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
         // display.accent: null = follow the wallpaper (dynamic) / the artwork; a #RRGGBB overrides it.
         val accentValue = accent.string
         val dynamicLabel = stringResource(R.string.settings_accent_dynamic)
-        SettingRow(stringResource(R.string.settings_accent), scope = accent.scope, tag = "display.accent") {
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                toggleableItem(checked = accentValue == null, label = dynamicLabel, onCheckedChange = { accent.setRaw("null") })
-                listOf("#6750A4", "#1B6B5E", "#B3261E").forEach { hex -> toggleableItem(checked = accentValue.equals(hex, true), label = "●", onCheckedChange = { accent.setString(hex) }) }
-            }
-        }
+        SettingRow(stringResource(R.string.settings_accent), scope = accent.scope, tag = "display.accent")
+        // The swatches' visible label is a dot: each is spoken by its colour name.
+        val accentNames = mapOf("#6750A4" to stringResource(R.string.settings_accent_purple), "#1B6B5E" to stringResource(R.string.settings_accent_teal), "#B3261E" to stringResource(R.string.settings_accent_red))
+        ChoiceRow(
+            listOf<Pair<String?, String>>(null to dynamicLabel) + accentNames.keys.map { it to "●" },
+            isSelected = { hex -> if (hex == null) accentValue == null else accentValue.equals(hex, true) },
+            onSelect = { hex -> if (hex == null) accent.setRaw("null") else accent.setString(hex) },
+            describe = { hex -> hex?.let { accentNames[it] } },
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
         SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope, tag = "display.artworkColour")
         SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope, tag = "display.animatedBackground")
     }
@@ -115,12 +116,8 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         val current = queue.mode
         val appleLabel = stringResource(R.string.queue_mode_apple)
         val youTubeLabel = stringResource(R.string.queue_mode_youtube)
-        SettingRow(stringResource(R.string.queue_mode), scope = mode.scope, tag = "queue.mode") {
-            ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                toggleableItem(checked = current == QueueMode.Apple, label = appleLabel, onCheckedChange = { client.dispatch(Commands.setQueueMode(QueueMode.Apple)) })
-                toggleableItem(checked = current == QueueMode.YouTube, label = youTubeLabel, onCheckedChange = { client.dispatch(Commands.setQueueMode(QueueMode.YouTube)) })
-            }
-        }
+        SettingRow(stringResource(R.string.queue_mode), scope = mode.scope, tag = "queue.mode")
+        ChoiceRow(listOf(QueueMode.Apple to appleLabel, QueueMode.YouTube to youTubeLabel), isSelected = { current == it }, onSelect = { client.dispatch(Commands.setQueueMode(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
         val cap = savedCap.int ?: 10
         var dragging by remember(cap) { mutableFloatStateOf(cap.toFloat()) }
         val shown = dragging.roundToInt()
@@ -132,9 +129,9 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
         val minutes = sleepMinutes.int ?: 30
         SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
-        ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            listOf(15, 30, 45, 60, 90).forEach { m -> toggleableItem(checked = minutes == m, label = m.toString(), onCheckedChange = { sleepMinutes.setInt(m) }) }
-        }
+        val minuteResources = androidx.compose.ui.platform.LocalContext.current.resources
+        ChoiceRow(listOf(15, 30, 45, 60, 90).map { it to it.toString() }, isSelected = { minutes == it }, onSelect = { sleepMinutes.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp),
+            describe = { m -> minuteResources.getQuantityString(R.plurals.a11y_minutes, m, m) })
         SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
     }
 }
@@ -152,9 +149,8 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         val warn = storage.warnThresholdBytes
         SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none), tag = "storage.warnThreshold")
         val noLimit = stringResource(R.string.downloads_threshold_none)
-        ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            listOf(null, 2.0, 4.0, 8.0, 16.0).forEach { gb -> toggleableItem(checked = (gb?.let { it * 1e9 }) == warn, label = gb?.let { "${it.toInt()} GB" } ?: noLimit, onCheckedChange = { client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }) }
-        }
+        ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { "${it.toInt()} GB" } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
+            onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }, modifier = Modifier.padding(horizontal = 16.dp))
     }
 }
 
@@ -172,11 +168,7 @@ fun LyricsSettingsScreen(nav: NavHostController) {
         val reset = stringResource(R.string.lyrics_offset_reset)
         val later = stringResource(R.string.lyrics_offset_later)
         SettingRow(stringResource(R.string.settings_lyrics_default_offset), stringResource(R.string.lyrics_offset_value, ms), offset.scope, tag = "lyrics.defaultOffsetMs")
-        ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            clickableItem(onClick = { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, label = earlier)
-            clickableItem(onClick = { offset.setInt(0) }, label = reset)
-            clickableItem(onClick = { offset.setInt((ms + 100).coerceAtMost(10_000)) }, label = later)
-        }
+        ActionRow(listOf(earlier to { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, reset to { offset.setInt(0) }, later to { offset.setInt((ms + 100).coerceAtMost(10_000)) }), modifier = Modifier.padding(horizontal = 16.dp))
         SwitchRow(stringResource(R.string.settings_lyrics_translations), translations.bool ?: true, { translations.setBool(it) }, scope = translations.scope, tag = "lyrics.showTranslations")
     }
 }
@@ -192,10 +184,10 @@ fun LibrarySettingsScreen(nav: NavHostController) {
         val threshold = loveThreshold.int ?: 4
         SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope, tag = "ratings.loveThreshold")
         val offLabel = stringResource(R.string.settings_love_threshold_off)
-        ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-            toggleableItem(checked = !bridgeOn, label = offLabel, onCheckedChange = { loveBridge.setBool(false) })
-            (1..5).forEach { n -> toggleableItem(checked = bridgeOn && threshold == n, label = "$n★", onCheckedChange = { loveThreshold.setInt(n); loveBridge.setBool(true) }) }
-        }
+        val resources = androidx.compose.ui.platform.LocalContext.current.resources
+        ChoiceRow(listOf<Pair<Int?, String>>(null to offLabel) + (1..5).map { it to "$it★" }, isSelected = { n -> if (n == null) !bridgeOn else bridgeOn && threshold == n },
+            onSelect = { n -> if (n == null) loveBridge.setBool(false) else { loveThreshold.setInt(n); loveBridge.setBool(true) } },
+            describe = { n -> n?.let { resources.getQuantityString(R.plurals.a11y_stars, it, it) } }, modifier = Modifier.padding(horizontal = 16.dp))
         SettingRow(stringResource(R.string.nav_filters), onClick = { nav.navigate(Route.Filters) }, tag = "open.filters") { Chevron() }
         SettingRow(stringResource(R.string.nav_stats), onClick = { nav.navigate(Route.Stats) }, tag = "open.stats") { Chevron() }
     }

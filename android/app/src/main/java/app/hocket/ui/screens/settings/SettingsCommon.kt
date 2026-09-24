@@ -27,6 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,23 +79,42 @@ fun SettingRow(title: String, subtitle: String? = null, scope: SettingScope? = n
     Row(Modifier.fillMaxWidth().let { if (tag != null) it.testTag(settingTag(tag)) else it }.let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
                 if (scope != null) { Spacer(Modifier.width(8.dp)); ScopeBadge(scope) }
             }
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        trailing?.invoke()
+        if (trailing != null) { Spacer(Modifier.width(12.dp)); trailing() }
+    }
+}
+
+/**
+ * A setting with a switch: the whole row is ONE toggle (role switch) that reads "title, subtitle,
+ * switch, on"; the switch itself is drawn only (no second focus stop, no second click target).
+ */
+@Composable
+fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subtitle: String? = null, scope: SettingScope? = null, tag: String? = null) {
+    Row(
+        Modifier.fillMaxWidth().let { if (tag != null) it.testTag(settingTag(tag)) else it }
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
+                if (scope != null) { Spacer(Modifier.width(8.dp)); ScopeBadge(scope) }
+            }
+            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
 @Composable
-fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subtitle: String? = null, scope: SettingScope? = null, tag: String? = null) {
-    SettingRow(title, subtitle, scope, onClick = { onChange(!checked) }, tag = tag) { Switch(checked = checked, onCheckedChange = onChange) }
-}
-
-@Composable
 fun SettingsSection(title: String) {
-    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp).semantics { heading() })
 }
 
 /** A settings sub-screen: large flexible top app bar that collapses as the page scrolls, back arrow, scrolling rows. */
@@ -103,7 +126,7 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.screen"),
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(title) },
+                title = { Text(title, modifier = Modifier.semantics { heading() }) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )

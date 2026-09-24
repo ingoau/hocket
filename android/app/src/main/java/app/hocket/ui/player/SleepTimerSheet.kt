@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ButtonGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
@@ -32,7 +35,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.SleepTimer
 import app.hocket.ui.LocalCoreClient
 
-/** Sleep timer: minutes as a connected button group, plus stop-at-end-of-track. */
+/** Sleep timer: minutes as wrapping toggle buttons, plus stop-at-end-of-track. */
 @Composable
 fun SleepTimerSheet(onDismiss: () -> Unit) {
     val client = LocalCoreClient.current
@@ -41,18 +44,16 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
     var endOfTrack by remember { mutableStateOf(current?.stopAtEndOfTrack ?: false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.navigationBarsPadding().padding(horizontal = 24.dp)) {
-            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             Spacer(Modifier.height(16.dp))
             val options = listOf(15, 30, 45, 60, 90).map { it to stringResource(R.string.sleep_minutes, it) }
-            ButtonGroup(overflowIndicator = {}) {
-                options.forEach { (m, label) ->
-                    toggleableItem(checked = minutes == m && !endOfTrack, label = label, onCheckedChange = { minutes = m; endOfTrack = false })
-                }
-            }
+            val resources = androidx.compose.ui.platform.LocalContext.current.resources
+            app.hocket.ui.components.ChoiceRow(options, isSelected = { minutes == it && !endOfTrack }, onSelect = { minutes = it; endOfTrack = false },
+                describe = { m -> resources.getQuantityString(R.plurals.a11y_minutes, m, m) })
             Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().toggleable(value = endOfTrack, role = Role.Switch, onValueChange = { endOfTrack = it }).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.sleep_end_of_track), modifier = Modifier.weight(1f))
-                Switch(checked = endOfTrack, onCheckedChange = { endOfTrack = it })
+                Switch(checked = endOfTrack, onCheckedChange = null)
             }
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End) {

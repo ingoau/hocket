@@ -49,6 +49,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -107,7 +113,7 @@ private fun DetailScaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(title, maxLines = 2) }, subtitle = subtitle?.let { { Text(it) } },
+                title = { Text(title, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() }) }, subtitle = subtitle?.let { { Text(it, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
                 navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = actions, scrollBehavior = scroll,
             )
@@ -116,10 +122,20 @@ private fun DetailScaffold(
         Box(Modifier.fillMaxSize()) {
             LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
                 item {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(140.dp), if (roundArtwork) CircleShape else RoundedCornerShape(20.dp))
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) { header() }
+                    // Narrow screens (display size "largest") and large fonts stack the artwork above
+                    // the header, so the rating, love and play buttons get the full width.
+                    BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header")) {
+                        val stacked = maxWidth < 380.dp || LocalDensity.current.fontScale >= 1.5f
+                        val art: @Composable () -> Unit = { Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(140.dp), if (roundArtwork) CircleShape else RoundedCornerShape(20.dp)) }
+                        if (stacked) {
+                            Column { art(); Spacer(Modifier.height(12.dp)); header() }
+                        } else {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                art()
+                                Spacer(Modifier.width(16.dp))
+                                Column(Modifier.weight(1f)) { header() }
+                            }
+                        }
                     }
                 }
                 content()
@@ -151,7 +167,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         Text(listOfNotNull(a.year?.toString(), a.genre).joinToString(stringResource(R.string.dot_separator)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong())), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(itemVerticalAlignment = Alignment.CenterVertically) {
             RatingStars(a.rating.toInt(), onRate = { client.dispatch(Commands.setRating(listOf(app.hocket.core.api.RatingTarget.Album(app.hocket.core.api.RatingTargetAlbumInner(a.id))), it)) }, starSize = 20.dp)
             IconToggleButton(checked = a.loved, onCheckedChange = { client.dispatch(Commands.loveAlbum(a.id, it)) }) {
                 Icon(if (a.loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, stringResource(if (a.loved) R.string.action_unlove else R.string.action_love), tint = if (a.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -172,7 +188,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
 
 @Composable
 fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = onPlay, shapes = ButtonDefaults.shapes()) { Icon(Icons.Filled.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_play)) }
         FilledTonalButton(onClick = onShuffle, shapes = ButtonDefaults.shapes()) { Icon(Icons.Filled.Shuffle, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_shuffle)) }
     }
