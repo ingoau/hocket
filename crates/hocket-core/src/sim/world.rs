@@ -884,6 +884,7 @@ impl World {
                     self.net.set_conditions(&id, &o, self.cfg.conditions);
                 }
             }
+            Action::CoordinatorReturns => unreachable!("handled above"),
         }
         self.pump_effects();
         if self.cfg.lan_on() {

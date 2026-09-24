@@ -47,10 +47,81 @@ class LyricsCursorTest {
     }
 
     @Test
-    fun offsetShiftsTiming() {
-        val shifted = syllableDoc.copy(offsetMs = -500)
-        assertEquals(LyricsCursor.EMPTY, LyricsCursor.at(shifted, 1200))
-        assertEquals(0, LyricsCursor.at(shifted, 1600).lineIndex)
+    fun offsetShiftsTimingTheCoreWay() {
+        // The core's rule (lyrics/cursor.rs): a positive offset makes the lyrics appear later, so the
+        // audio position is compared as if it were earlier. +500 at 1200 is still before the first line.
+        val later = syllableDoc.copy(offsetMs = 500)
+        assertEquals(LyricsCursor.EMPTY, LyricsCursor.at(later, 1200))
+        assertEquals(0, LyricsCursor.at(later, 1600).lineIndex)
+        assertEquals(1100L, LyricsCursor.at(later, 1600).effectiveMs)
+        // A negative offset shows them earlier.
+        val earlier = syllableDoc.copy(offsetMs = -500)
+        assertEquals(0, LyricsCursor.at(earlier, 600).lineIndex)
+    }
+
+    private fun bgLine(start: Long, end: Long, text: String, syllables: List<LyricSyllable>) =
+        LyricLine(start.toUInt(), end.toUInt(), text, syllables, "__nd_bg__|v1", true, null)
+
+    /** The "Tally" shape: a background line starting with its main line, and one starting mid-line. */
+    private val duetDoc = lyrics(LyricsTier.Syllable, listOf(
+        line(1000, 3000, "Sold it all", listOf(syl("Sold", 1000, 1500), syl("it", 1500, 2000), syl("all", 2000, 3000))),
+        bgLine(1000, 2500, "(Yeah, yeah)", listOf(syl("(Yeah,", 1000, 1750), syl("yeah)", 1750, 2500))),
+        line(4000, 6000, "Lost it all", listOf(syl("Lost", 4000, 5000), syl("it all", 5000, 6000))),
+        bgLine(5000, 7000, "(Yeah, yeah)", listOf(syl("(Yeah,", 5000, 6000), syl("yeah)", 6000, 7000))),
+        line(9000, 10_000, "Somehow", listOf(syl("Somehow", 9000, 10_000))),
+    ))
+
+    @Test
+    fun overlappingLinesAreAllActiveAndEachSweepsItsOwnSyllables() {
+        // Both lines start at 1000: the later one is primary (the core's tie rule), the main line stays active.
+        val c = LyricsCursor.at(duetDoc, 1750)
+        assertEquals(1, c.lineIndex)
+        assertEquals(listOf(0, 1), c.activeLines)
+        assertEquals(listOf(1f, 0.5f, 0f), LyricsCursor.sweep(duetDoc.lines[0], c.effectiveMs))
+        assertEquals(listOf(1f, 0f), LyricsCursor.sweep(duetDoc.lines[1], c.effectiveMs))
+        // The bg line ended, the main line is still running.
+        val c2 = LyricsCursor.at(duetDoc, 2750)
+        assertEquals(listOf(0), c2.activeLines)
+        assertEquals(listOf(1f, 1f, 0.75f), LyricsCursor.sweep(duetDoc.lines[0], c2.effectiveMs))
+        assertEquals("a finished line holds all its syllables", listOf(1f, 1f), LyricsCursor.sweep(duetDoc.lines[1], c2.effectiveMs))
+        // A bg line starting mid-line becomes primary while the main line keeps running.
+        val c3 = LyricsCursor.at(duetDoc, 5500)
+        assertEquals(3, c3.lineIndex)
+        assertEquals(listOf(2, 3), c3.activeLines)
+        assertEquals(listOf(1f, 0.5f), LyricsCursor.sweep(duetDoc.lines[2], c3.effectiveMs))
+        assertEquals(listOf(0.5f, 0f), LyricsCursor.sweep(duetDoc.lines[3], c3.effectiveMs))
+        // The main line ended at 6000 while the bg line runs on: only the bg line is active.
+        val c4 = LyricsCursor.at(duetDoc, 6500)
+        assertEquals(listOf(3), c4.activeLines)
+        assertEquals("a future line is all zeros", listOf(0f), LyricsCursor.sweep(duetDoc.lines[4], c4.effectiveMs))
+    }
+
+    @Test
+    fun aGapBeforeTheNextLineHoldsTheLastSyllableAndNeverSweeps() {
+        // Line "Lost it all" ends at 6000; bg line ends at 7000; the next line starts at 9000.
+        val c = LyricsCursor.at(duetDoc, 7500)
+        assertEquals(3, c.lineIndex)
+        assertTrue(c.activeLines.isEmpty())
+        assertFalse("a 2 s gap is not an instrumental", c.inGap)
+        assertEquals(1f, c.syllableProgress, 0f)
+        assertEquals(listOf(1f, 1f), LyricsCursor.sweep(duetDoc.lines[2], c.effectiveMs))
+        assertEquals(listOf(1f, 1f), LyricsCursor.sweep(duetDoc.lines[3], c.effectiveMs))
+        assertEquals(listOf(0f), LyricsCursor.sweep(duetDoc.lines[4], c.effectiveMs))
+    }
+
+    @Test
+    fun linesNeedNotBeSortedByStart() {
+        // A sub-voice line placed after its main line may start later than the next main line.
+        val doc = lyrics(LyricsTier.Syllable, listOf(
+            line(1000, 5000, "Main one", listOf(syl("Main", 1000, 2000), syl("one", 2000, 5000))),
+            bgLine(3500, 4500, "(bg)", listOf(syl("(bg)", 3500, 4500))),
+            line(3000, 6000, "Main two", listOf(syl("Main", 3000, 4000), syl("two", 4000, 6000))),
+        ))
+        val c = LyricsCursor.at(doc, 3600)
+        assertEquals("latest start wins regardless of position in the list", 1, c.lineIndex)
+        assertEquals(listOf(0, 1, 2), c.activeLines)
+        assertEquals(2, LyricsCursor.at(doc, 4800).lineIndex)
+        assertEquals(listOf(0, 2), LyricsCursor.at(doc, 4800).activeLines)
     }
 
     @Test

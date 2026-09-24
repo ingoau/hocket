@@ -63,7 +63,7 @@ import app.hocket.ui.components.EmptyState
 
 /**
  * Native lyrics renderer. Syllable tier: continuous per-syllable gradient sweep from each line's own
- * cue timings, driven by the extrapolated position (`PositionStamp` + clock, [CoreClient.positionNow])
+ * cue timings, driven by the extrapolated position (`PositionStamp` + clock, `CoreClient.positionNow`)
  * at frame rate, never by event arrival; line tier: per-line highlight (syllables are never
  * fabricated); unsynced: scrollable text. Lines that overlap (a background vocal or duet voice over
  * the main line) are lit and swept together; the focus (scale, scroll) stays on the main voice.

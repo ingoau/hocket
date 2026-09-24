@@ -43,3 +43,28 @@ describe("lyrics mapping", () => {
     expect(mapLyrics(l).lines).toHaveLength(1);
   });
 });
+
+describe("lyrics mapping of an enhanced (syllable + background agent) document", () => {
+  it("becomes AMLL words per syllable and isBG sub-lines after their main line", async () => {
+    const { adaptEnhanced } = await import("../../main/fake-core/enhanced-lyrics");
+    const { showcaseLyrics } = await import("../../main/fake-core/showcase-lyrics");
+    const m = mapLyrics(adaptEnhanced("tr-1", showcaseLyrics()));
+    expect(m.tier).toBe("syllable");
+    expect(m.synced).toBe(true);
+    // "title" sweeps as two words that read as one: "ti" (no trailing space) then "tle".
+    expect(m.lines[0]!.words.map((w) => w.word)).toEqual(["I ", "lost ", "my ", "rank ", "and ", "ti", "tle"]);
+    expect(m.lines[0]!.words[5]!.endTime).toBe(m.lines[0]!.words[6]!.startTime);
+    // Background lines are AMLL sub-lines of the line before them.
+    const bg = m.lines.map((l, i) => (l.isBG ? i : -1)).filter((i) => i >= 0);
+    expect(bg.length).toBeGreaterThan(0);
+    for (const i of bg) expect(m.lines[i - 1]!.isBG).toBe(false);
+    expect(m.lines.filter((l) => l.isBG).every((l) => !l.isDuet)).toBe(true);
+    // A cue-less line is one word with the line's timing.
+    const plain = m.lines.find((l) => l.words[0]!.word.startsWith("We've"))!;
+    expect(plain.words).toEqual([{ word: "We've seen it several times", startTime: 21_000, endTime: 23_500 }]);
+    // Gap: the line ends before the next starts; nothing is stretched.
+    const gap = m.lines.find((l) => l.words[0]!.word === "I " && l.startTime === 8800)!;
+    expect(gap.endTime).toBe(10_500);
+    expect(activeLineIndex(m.lines, 11_000)).toBe(m.lines.indexOf(gap));
+  });
+});

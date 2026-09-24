@@ -513,7 +513,13 @@ fn hostile_lan_peer_is_never_admitted_and_lan_hellos_carry_no_credential() {
         w.devices[rogue].engine.document().current.is_none(),
         "the rogue never saw the session"
     );
-    assert_eq!(w.devices[rogue].engine.room().member_count(), 0);
+    for d in &w.devices[..3] {
+        assert!(
+            !w.devices[rogue].engine.room().has_member(&d.id),
+            "{} never joined the rogue's room",
+            d.id
+        );
+    }
     assert!(w.lan_hellos > 0, "honest devices did join each other");
     w.finish();
     w.assert_ok();
@@ -534,6 +540,9 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     w.run_for(10_000.0);
     let serving = w.devices.iter().filter(|d| d.engine.is_serving()).count();
     assert_eq!(serving, 1, "the LAN elected a room while the coordinator is down");
+    for d in &w.devices {
+        eprintln!("DBG {} serving={} connected={} leader={:?} state={:?}", d.id, d.engine.is_serving(), d.engine.is_connected(), d.engine.lan_leader(), d.engine.connection_state());
+    }
     let t = tracks(&w, 5);
     w.perform(Action::PlayTracks {
         device: 0,

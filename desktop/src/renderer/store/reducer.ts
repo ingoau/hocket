@@ -126,6 +126,7 @@ export function reduce(state: CoreState, e: Event): CoreState {
   if (snapshot) return applySnapshot(state, snapshot);
   switch (e.type) {
     case "started":
+    case "snapshot":
       // Handled above (snapshotOf); kept so the exhaustiveness check below stays.
       return applySnapshot(state, e.data.snapshot);
     case "serversChanged":

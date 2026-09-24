@@ -234,15 +234,19 @@ class RealCoreEndToEndTest {
         withTimeout(20_000) { while (!CoreHost.credentialsReplayed.value) kotlinx.coroutines.delay(25) }
         assertTrue("the shell gate sees the login", CoreHost.hasLogin(probed.data.servers[0], CoreHost.logins.value))
 
-        // RequestSnapshot (every UI attach, every service reconnect) re-emits Started: no second replay, no second probe.
+        // RequestSnapshot (every UI attach, every service reconnect) re-emits the state as `Snapshot`,
+        // never as a second `Started`: no second replay, no second probe.
         val pings = server.calls.count { it == "ping" }
-        val startedBefore = events.count { it is Event.Started }
+        assertEquals(1, events.count { it is Event.Started })
+        events.clear()
         second.dispatch(Command.RequestSnapshot)
-        withTimeout(20_000) { while (events.count { it is Event.Started } <= startedBefore) kotlinx.coroutines.delay(25) }
+        val snapshot = waitFor { it as? Event.Snapshot }
+        assertEquals("alice", snapshot.data.snapshot.servers[0].username)
         kotlinx.coroutines.delay(750)
-        assertEquals("a second Started must not replay AddServer", pings, server.calls.count { it == "ping" })
+        assertTrue("RequestSnapshot never emits Started", events.none { it is Event.Started })
+        assertEquals("a snapshot must not replay AddServer", pings, server.calls.count { it == "ping" })
 
-        // Sign-out through the shared helper: the login is gone before RemoveServer, and the Started the
+        // Sign-out through the shared helper: the login is gone before RemoveServer, and the Snapshot the
         // core emits while clearing (before ServersChanged{[]}) must not resurrect the server.
         CoreHost.credentials = store
         events.clear()
@@ -250,6 +254,7 @@ class RealCoreEndToEndTest {
         assertTrue("credential removed synchronously", store.all().isEmpty())
         waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isEmpty() } }
         kotlinx.coroutines.delay(750)
+        assertTrue("RemoveServer re-emits as Snapshot, never Started", events.none { it is Event.Started })
         assertEquals("nothing re-added the server", pings, server.calls.count { it == "ping" })
         assertTrue(events.none { it is Event.ServersChanged && it.data.servers.isNotEmpty() })
         assertTrue(store.all().isEmpty())

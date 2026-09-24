@@ -7,6 +7,7 @@ import app.hocket.core.api.ErrorKind
 import app.hocket.core.api.Event
 import app.hocket.core.api.EventErrorInner
 import app.hocket.core.api.EventServersChangedInner
+import app.hocket.core.api.EventSnapshotInner
 import app.hocket.core.api.EventStartedInner
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
@@ -35,8 +36,9 @@ import org.junit.Test
 
 /**
  * [CoreHost.replayCredentials] against a scripted core: the event sequences the real core produces
- * (`Started` on Start, again on RequestSnapshot, and `Started` then `ServersChanged` on RemoveServer)
- * must replay a stored login exactly once, and sign-out must never resurrect the server.
+ * (`Started` once on Start, `Snapshot` on every RequestSnapshot, and `Snapshot` then
+ * `ServersChanged` on RemoveServer) must replay a stored login exactly once, and sign-out must never
+ * resurrect the server. A core that repeated `Started` would not trigger a second replay either.
  */
 class CoreHostReplayTest {
     private class ScriptedCore : CoreHandle {
@@ -62,6 +64,7 @@ class CoreHostReplayTest {
     private var replay: Job? = null
 
     private fun started(servers: List<ServerInfo>) = Event.Started(EventStartedInner(snapshot.copy(servers = servers)))
+    private fun snapshotOf(servers: List<ServerInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(servers = servers)))
     private fun serversChanged(servers: List<ServerInfo>) = Event.ServersChanged(EventServersChangedInner(servers))
     private fun authError() = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null))
 
@@ -91,15 +94,30 @@ class CoreHostReplayTest {
     }
 
     @Test
-    fun storedLoginIsReplayedOnceEvenWhenStartedRepeats() = runBlocking {
+    fun storedLoginIsReplayedOnceAndSnapshotsNeverReplay() = runBlocking {
         store.save(credential)
         startReplay()
         core.emit(started(emptyList()))
         assertEquals(1, core.addServers.size)
         assertTrue(CoreHost.credentialsReplayed.value)
         assertTrue("login state is published after the replay", CoreHost.hasLogin(server(), CoreHost.logins.value))
-        // RequestSnapshot re-emits Started (emit_everything): no second AddServer, no second probe.
-        core.emit(started(listOf(server(reachable = true))))
+        // RequestSnapshot (every UI attach, every service reconnect) emits Snapshot: no second AddServer, no second probe.
+        core.emit(snapshotOf(listOf(server(reachable = true))))
+        core.emit(snapshotOf(listOf(server(reachable = true))))
+        assertEquals(1, core.addServers.size)
+    }
+
+    @Test
+    fun aSnapshotBeforeStartedDoesNotReplayAndARepeatedStartedDoesNotEither() = runBlocking {
+        store.save(credential)
+        startReplay()
+        // A snapshot alone is not the start of a core: nothing to replay yet, the gate stays closed.
+        core.emit(snapshotOf(listOf(server(reachable = false))))
+        assertEquals(0, core.addServers.size)
+        assertFalse(CoreHost.credentialsReplayed.value)
+        core.emit(started(listOf(server(reachable = false))))
+        assertEquals(1, core.addServers.size)
+        // Defensive: a core that repeated Started still replays exactly once per instance.
         core.emit(started(listOf(server(reachable = true))))
         assertEquals(1, core.addServers.size)
     }
@@ -125,10 +143,10 @@ class CoreHostReplayTest {
         CoreHost.removeServer(core::dispatch, server())
         assertEquals("the credential is gone before RemoveServer reaches the core", true, storeEmptyAtRemove)
         assertFalse(CoreHost.hasLogin(server(), CoreHost.logins.value))
-        // The core clears the server and re-emits everything: Started{servers: []} then ServersChanged{[]}.
-        core.emit(started(emptyList()))
+        // The core clears the server and re-emits everything: Snapshot{servers: []} then ServersChanged{[]}.
+        core.emit(snapshotOf(emptyList()))
         core.emit(serversChanged(emptyList()))
-        assertEquals("nothing was replayed by the post-removal Started", 1, core.addServers.size)
+        assertEquals("nothing was replayed by the post-removal Snapshot", 1, core.addServers.size)
         assertTrue(store.all().isEmpty())
     }
 

@@ -109,12 +109,13 @@ export function generateLibrary(serverId: string, seed = 7, trackTarget = 3200):
     for (let i = 0; i < songCount; i++) {
       trackNo += 1;
       const id = `tr-${trackNo}`;
-      const durationMs = rng.int(95, 420) * 1000 + rng.int(0, 999);
+      const showcase = id === SHOWCASE_TRACK_ID;
+      const durationMs = showcase ? SHOWCASE_DURATION_MS : rng.int(95, 420) * 1000 + rng.int(0, 999);
       const plays = rng.chance(0.55) ? rng.int(0, 60) : 0;
       const track: Track = {
         id,
         serverId,
-        title: titleFor(rng),
+        title: showcase ? SHOWCASE_TITLE : titleFor(rng),
         albumId,
         album: album.name,
         artistId: artist.id,

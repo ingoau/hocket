@@ -188,13 +188,8 @@ async fn two_engines_hand_off_through_the_coordinator() {
     std::env::set_var("no_proxy", "127.0.0.1,localhost");
     let subsonic = fake_subsonic().await;
     let dir = tempfile::tempdir().unwrap();
-    let args = Args {
-        listen: "127.0.0.1:0".parse().unwrap(),
-        data_dir: Some(dir.path().to_path_buf()),
-        verify_url: None,
-        no_verify: false,
-        max_members: 8,
-    };
+    let mut args = Args::for_tests();
+    args.data_dir = Some(dir.path().to_path_buf());
     let app = App::new(args).unwrap();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (addr, server) = serve(app.clone(), "127.0.0.1:0".parse().unwrap(), async {

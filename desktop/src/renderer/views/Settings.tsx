@@ -17,6 +17,7 @@ import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
+import { LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
 type Section = (typeof SECTIONS)[number];

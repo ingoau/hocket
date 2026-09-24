@@ -5,6 +5,7 @@ import app.hocket.core.Queries
 import app.hocket.core.api.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterIsInstance
@@ -40,6 +41,21 @@ class FakeCoreTest {
         assertEquals(1, snap.queue.playingNext.size)
         assertNotNull(snap.resumeOffer)
         assertTrue(snap.transport.position.isPlaying)
+    }
+
+    @Test
+    fun startedIsEmittedOncePerCoreAndRequestSnapshotEmitsSnapshot() = runTest {
+        val core = core()
+        val seen = ArrayList<Event>()
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.collect { seen += it } }
+        core.dispatchAndWait(Command.Start)
+        core.dispatchAndWait(Command.RequestSnapshot)
+        core.dispatchAndWait(Command.Start)
+        core.dispatchAndWait(Command.RequestSnapshot)
+        assertEquals("Started exactly once", 1, seen.count { it is Event.Started })
+        assertEquals("every later re-emit is a Snapshot", 3, seen.count { it is Event.Snapshot })
+        assertEquals(seen.indexOfFirst { it is Event.Started }, seen.indexOfFirst { it is Event.Started || it is Event.Snapshot })
+        job.cancel()
     }
 
     @Test

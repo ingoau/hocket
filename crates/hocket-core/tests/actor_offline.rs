@@ -138,10 +138,8 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     // Second run, offline, the way a platform starts: the persisted row is
     // there but no API until the keystore replays `AddServer`.
     online.store(false, Ordering::SeqCst);
-    let t = TestCore::start_in_with(
-        "second", server, None, 1, clock, dir, false, &url, "secret",
-    )
-    .await;
+    let t =
+        TestCore::start_in_with("second", server, None, 1, clock, dir, false, &url, "secret").await;
     t.run(network(NetworkKind::Offline)).await;
     t.events.clear();
     t.run(Command::AddServer {
