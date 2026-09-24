@@ -93,6 +93,9 @@ pub enum DownloadError {
     OutOfSpace { needed: f64, free: f64 },
     #[error("unknown track {0}")]
     UnknownTrack(String),
+    /// No pin wants the track any more (unpinned while the job ran).
+    #[error("track {0} is no longer pinned")]
+    NotPinned(String),
 }
 
 impl From<DownloadError> for JobError {
@@ -214,6 +217,18 @@ impl Downloads {
         cache_dir: &Path,
         platform: Platform,
     ) -> Self {
+        // A previous process may have died mid-fetch: those rows would
+        // otherwise never be re-planned, and a fetch waiting on the
+        // (now nonexistent) writer would wait forever.
+        if let Err(e) = db.with_conn(|c| {
+            c.execute(
+                "UPDATE pin_tracks SET state = 'wanted' WHERE state = 'downloading'",
+                [],
+            )?;
+            Ok(())
+        }) {
+            tracing::warn!(error = %e, "resetting interrupted downloads");
+        }
         Downloads {
             inner: Arc::new(Inner {
                 db,
@@ -309,6 +324,9 @@ impl Downloads {
         let id = target_id(target);
         let orphans: Vec<(String, Option<String>)> = self.inner.db.with_tx(|tx| {
             tx.execute("DELETE FROM pins WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3", params![server_id, kind, id])?;
+            // Another pin that merely *wants* one of these tracks inherits the
+            // finished file instead of re-downloading it later (L3).
+            satisfy_wanted_from_done(tx, server_id, None)?;
             let mut st = tx.prepare_cached(
                 "SELECT track_id, path FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND track_id NOT IN (SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND NOT (target_kind = ?2 AND target_id = ?3))",
             )?;
@@ -318,14 +336,22 @@ impl Downloads {
             Ok(orphans)
         })?;
         let mut removed = 0;
+        let mut errors = 0;
         for (track_id, path) in orphans {
             if let Some(p) = path {
-                if Path::new(&p).exists() {
-                    std::fs::remove_file(&p)?;
-                    removed += 1;
+                match remove_if_exists(&p) {
+                    Ok(true) => removed += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        errors += 1;
+                        tracing::warn!(error = %e, path = %p, "removing unpinned file");
+                    }
                 }
             }
             self.refresh_offline(server_id, &track_id)?;
+        }
+        if errors > 0 {
+            tracing::warn!(errors, "unpin left files behind");
         }
         Ok(removed)
     }
@@ -418,14 +444,7 @@ impl Downloads {
                 st.execute(params![server_id, kind, id, m])?;
             }
             // A file another pin already fetched satisfies this one too.
-            tx.execute(
-                "UPDATE pin_tracks SET state = 'done', path = (SELECT o.path FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' AND o.path IS NOT NULL LIMIT 1),
-                        bytes = (SELECT o.bytes FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1),
-                        gain_db = (SELECT o.gain_db FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1)
-                 WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state = 'wanted'
-                   AND EXISTS (SELECT 1 FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done')",
-                params![server_id, kind, id],
-            )?;
+            satisfy_wanted_from_done(tx, server_id, Some((kind, id)))?;
             Ok(())
         })?;
         Ok(())
@@ -511,8 +530,8 @@ impl Downloads {
                     .find(|(t, _)| t == track_id)
                     .and_then(|(_, p)| p.clone())
                 {
-                    if Path::new(&p).exists() {
-                        std::fs::remove_file(&p)?;
+                    if let Err(e) = remove_if_exists(&p) {
+                        tracing::warn!(error = %e, path = %p, "removing dropped playlist track");
                     }
                 }
             }
@@ -583,11 +602,13 @@ impl Downloads {
         Ok(())
     }
 
-    /// Where a download for this track goes.
+    /// Where a download for this track goes. Both halves of the file name
+    /// are sanitised: the id through [`safe_name`], the server-supplied
+    /// suffix through [`safe_ext`] (a hostile suffix cannot leave the
+    /// downloads directory).
     pub fn download_path(&self, server_id: &str, track_id: &str, suffix: Option<&str>) -> PathBuf {
-        let ext = suffix.filter(|s| !s.is_empty()).unwrap_or("bin");
         self.downloads_dir(server_id)
-            .join(format!("{}.{}", safe_name(track_id), ext))
+            .join(format!("{}.{}", safe_name(track_id), safe_ext(suffix)))
     }
 
     fn profile_for_downloads(&self) -> Option<TranscodingProfile> {
@@ -596,6 +617,12 @@ impl Downloads {
 
     /// Fetch one track for a pin. Checks free space first; records the
     /// result on every pin row for the track.
+    ///
+    /// Exactly one fetch runs per `(server, track)` at a time: the caller
+    /// claims the track by flipping its rows `wanted`/`failed` →
+    /// `downloading` (compare-and-set). When another job holds the claim
+    /// this call waits for it and returns its outcome, so two pins sharing
+    /// a track never write the same file concurrently.
     pub async fn fetch_track(
         &self,
         api: &dyn SubsonicApi,
@@ -637,7 +664,24 @@ impl Downloads {
             None => (api.download_url(track_id), track.suffix.clone()),
         };
         let dest = self.download_path(server_id, track_id, suffix.as_deref());
-        self.mark_state(server_id, track_id, "downloading", None, 0.0, None)?;
+        debug_assert!(dest.starts_with(self.downloads_dir(server_id)));
+        loop {
+            if self.claim(server_id, track_id)? {
+                break;
+            }
+            match self.track_state(server_id, track_id)? {
+                None => return Err(DownloadError::NotPinned(track_id.into())),
+                Some((state, bytes)) if state == "done" => return Ok(bytes.max(0.0) as u64),
+                Some((state, _)) if state == "downloading" => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Some(_) => {} // wanted/failed again: retry the claim
+            }
+        }
+        // From here on this call owns the fetch. The transport only ever
+        // creates `dest` through a completed rename, so on failure there is
+        // nothing of ours to remove (a file already there belongs to an
+        // earlier complete download and is left alone).
         let result = api.download_to_file(url, &dest).await;
         match result {
             Ok(out) => {
@@ -663,7 +707,6 @@ impl Downloads {
                 Ok(out.bytes)
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&dest);
                 self.mark_state(
                     server_id,
                     track_id,
@@ -676,6 +719,32 @@ impl Downloads {
                 Err(e.into())
             }
         }
+    }
+
+    /// Compare-and-set claim of every `wanted`/`failed` row for the track.
+    /// `false` when nothing was claimable (another fetch holds it, it is
+    /// done, or it is no longer pinned).
+    fn claim(&self, server_id: &str, track_id: &str) -> DbResult<bool> {
+        self.inner.db.with_conn(|c| {
+            Ok(c.execute(
+                "UPDATE pin_tracks SET state = 'downloading', error = NULL WHERE server_id = ?1 AND track_id = ?2 AND state IN ('wanted','failed')",
+                params![server_id, track_id],
+            )? > 0)
+        })
+    }
+
+    /// The track's effective state across its pin rows (`downloading` wins
+    /// over `done` over the rest) with the stored byte count.
+    fn track_state(&self, server_id: &str, track_id: &str) -> DbResult<Option<(String, f64)>> {
+        self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT state, bytes FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2
+                 ORDER BY CASE state WHEN 'downloading' THEN 0 WHEN 'done' THEN 1 ELSE 2 END LIMIT 1",
+                params![server_id, track_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })
     }
 
     fn mark_state(
@@ -706,7 +775,7 @@ impl Downloads {
         profile: Option<&TranscodingProfile>,
         suffix: Option<&str>,
     ) -> PathBuf {
-        let ext = suffix.filter(|s| !s.is_empty()).unwrap_or("bin");
+        let ext = safe_ext(suffix);
         let key = profile_key(profile);
         let name = if key.is_empty() {
             format!("{}.{}", safe_name(track_id), ext)
@@ -1016,6 +1085,48 @@ fn profile_key(p: Option<&TranscodingProfile>) -> String {
             )
         }
         _ => String::new(),
+    }
+}
+
+/// Copy the finished file of one pin onto the `wanted` rows of others for
+/// the same track (all of the server's targets, or just one).
+fn satisfy_wanted_from_done(
+    tx: &rusqlite::Connection,
+    server_id: &str,
+    target: Option<(&str, &str)>,
+) -> DbResult<()> {
+    let (kind, id) = target.unwrap_or(("", ""));
+    tx.execute(
+        "UPDATE pin_tracks SET state = 'done', path = (SELECT o.path FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' AND o.path IS NOT NULL LIMIT 1),
+                bytes = (SELECT o.bytes FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1),
+                gain_db = (SELECT o.gain_db FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1)
+         WHERE server_id = ?1 AND (?4 = 0 OR (target_kind = ?2 AND target_id = ?3)) AND state = 'wanted'
+           AND EXISTS (SELECT 1 FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done')",
+        params![server_id, kind, id, target.is_some() as i64],
+    )?;
+    Ok(())
+}
+
+/// `remove_file` that treats "already gone" as success. `Ok(true)` when a
+/// file was removed.
+fn remove_if_exists(path: &str) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// A server-supplied suffix as a file extension: `[A-Za-z0-9]{1,8}`, else
+/// `bin`. Anything else (`..`, separators, dots) is not an extension.
+pub fn safe_ext(suffix: Option<&str>) -> &str {
+    match suffix {
+        Some(s)
+            if !s.is_empty() && s.len() <= 8 && s.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            s
+        }
+        _ => "bin",
     }
 }
 
@@ -1584,6 +1695,300 @@ mod tests {
         assert!(s.url.contains("/downloads/srv/"), "{}", s.url);
         assert_eq!(s.gain_db, -6.0);
         assert_eq!(track.offline, OfflineState::Downloaded);
+    }
+
+    /// H1: a server-supplied suffix is never a path; the file lands under
+    /// the downloads directory with a sanitised extension.
+    #[tokio::test]
+    async fn hostile_suffix_cannot_escape_downloads_dir() {
+        assert_eq!(safe_ext(Some("flac")), "flac");
+        assert_eq!(safe_ext(Some("MP3")), "MP3");
+        assert_eq!(safe_ext(Some("m4a")), "m4a");
+        assert_eq!(safe_ext(None), "bin");
+        assert_eq!(safe_ext(Some("")), "bin");
+        assert_eq!(safe_ext(Some("../../evil")), "bin");
+        assert_eq!(safe_ext(Some("a.b")), "bin");
+        assert_eq!(safe_ext(Some("fl ac")), "bin");
+        assert_eq!(safe_ext(Some("toolongext")), "bin");
+        assert_eq!(safe_ext(Some("flac/../x")), "bin");
+
+        let f = fixture();
+        let mut c = FakeServer::song("evil", "Evil", "al0", "ar", 100.0);
+        c.suffix = Some("../../../../escaped".into());
+        f.server.add_song(c.clone());
+        f.server.set_media("evil", b"payload".to_vec());
+        f.db.upsert_tracks(
+            &[crate::subsonic::convert::track_from_child("srv", &c)],
+            &[],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            f.db.track("evil").unwrap().unwrap().suffix.as_deref(),
+            Some("../../../../escaped")
+        );
+        let target = PinTarget::Track { id: "evil".into() };
+        let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
+        let job = run_job(&f, spec).await;
+        assert_eq!(job.state, api::JobState::Done);
+        let p = f.dl.downloaded_path("srv", "evil").unwrap().unwrap();
+        let dir = f.dir.path().join("data").join("downloads").join("srv");
+        assert!(p.starts_with(&dir), "{p:?}");
+        assert_eq!(p.file_name().unwrap(), "evil.bin");
+        assert!(!p
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir)));
+        assert_eq!(std::fs::read(&p).unwrap(), b"payload");
+        // nothing was written anywhere above the downloads directory
+        for up in [f.dir.path().to_path_buf(), f.dir.path().join("data")] {
+            let names: Vec<_> = std::fs::read_dir(&up)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert!(!names.iter().any(|n| n.contains("escaped")), "{names:?}");
+        }
+        let escaped = std::path::Path::new("/").join("escaped");
+        assert!(!escaped.exists());
+    }
+
+    /// A transport whose downloads take a while and which counts concurrent
+    /// writers per destination (a second writer would corrupt the file).
+    struct SlowTransport {
+        inflight: parking_lot::Mutex<HashMap<PathBuf, usize>>,
+        max_per_dest: std::sync::atomic::AtomicUsize,
+        downloads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::subsonic::HttpTransport for SlowTransport {
+        fn execute(
+            &self,
+            _r: crate::subsonic::transport::HttpRequest,
+        ) -> BoxFuture<
+            '_,
+            Result<
+                crate::subsonic::transport::HttpResponse,
+                crate::subsonic::transport::TransportError,
+            >,
+        > {
+            Box::pin(async move {
+                Ok(crate::subsonic::transport::HttpResponse {
+                    status: 404,
+                    content_type: None,
+                    body: bytes::Bytes::new(),
+                })
+            })
+        }
+
+        fn download(
+            &self,
+            _url: url::Url,
+            dest: &Path,
+            _progress: Option<crate::subsonic::transport::ProgressFn>,
+        ) -> BoxFuture<
+            '_,
+            Result<
+                crate::subsonic::transport::DownloadOutcome,
+                crate::subsonic::transport::TransportError,
+            >,
+        > {
+            use std::sync::atomic::Ordering;
+            let dest = dest.to_path_buf();
+            Box::pin(async move {
+                self.downloads.fetch_add(1, Ordering::SeqCst);
+                let n = {
+                    let mut m = self.inflight.lock();
+                    let e = m.entry(dest.clone()).or_insert(0);
+                    *e += 1;
+                    *e
+                };
+                self.max_per_dest.fetch_max(n, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                if let Some(parent) = dest.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                let tmp = crate::subsonic::transport::part_path(&dest);
+                tokio::fs::write(&tmp, b"0123456789").await?;
+                tokio::fs::rename(&tmp, &dest).await?;
+                *self.inflight.lock().get_mut(&dest).unwrap() -= 1;
+                Ok(crate::subsonic::transport::DownloadOutcome {
+                    status: 200,
+                    content_type: Some("audio/flac".into()),
+                    bytes: 10,
+                })
+            })
+        }
+    }
+
+    /// H3: an album pin and a playlist pin sharing `t0`, run concurrently,
+    /// fetch it once; the second waits for the first instead of writing the
+    /// same file, and both pins end up complete.
+    #[tokio::test]
+    async fn concurrent_pins_of_the_same_track_download_it_once() {
+        use std::sync::atomic::Ordering;
+        let f = fixture();
+        let transport = Arc::new(SlowTransport {
+            inflight: parking_lot::Mutex::new(HashMap::new()),
+            max_per_dest: std::sync::atomic::AtomicUsize::new(0),
+            downloads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut cfg = crate::subsonic::ClientConfig::new(
+            "srv",
+            url::Url::parse("https://music.example.org/").unwrap(),
+            crate::subsonic::AuthMode::ApiKey {
+                api_key: crate::subsonic::Credential::new("k"),
+            },
+        );
+        cfg.max_concurrent = 4;
+        let api: Arc<dyn SubsonicApi> =
+            Arc::new(crate::subsonic::Client::new(cfg, transport.clone()));
+        let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
+        q.register(
+            api::JobKind::Download,
+            2,
+            Arc::new(DownloadRunner::new(f.dl.clone(), api)),
+        );
+        let album = PinTarget::Album { id: "al0".into() };
+        let playlist = PinTarget::Playlist { id: "pl".into() };
+        let a = f.dl.pin("srv", &album, false).unwrap().unwrap();
+        let b = f.dl.pin("srv", &playlist, false).unwrap().unwrap();
+        assert!(a.items.contains(&"t0".to_string()) && b.items.contains(&"t0".to_string()));
+        let ida = q.submit(a).unwrap();
+        let idb = q.submit(b).unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&ida).unwrap().unwrap().state, api::JobState::Done);
+        assert_eq!(q.job(&idb).unwrap().unwrap().state, api::JobState::Done);
+        assert_eq!(
+            transport.max_per_dest.load(Ordering::SeqCst),
+            1,
+            "never two writers on one file"
+        );
+        assert_eq!(
+            transport.downloads.load(Ordering::SeqCst),
+            4,
+            "t0 fetched once, t1 t2 t4 once each"
+        );
+        let pins = f.dl.pins("srv").unwrap();
+        assert_eq!(pins.len(), 2);
+        for p in &pins {
+            assert_eq!(p.track_count, p.downloaded_count, "{:?}", p.target);
+        }
+        let p = f.dl.downloaded_path("srv", "t0").unwrap().unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"0123456789");
+        // no temp files left behind
+        let dir = f.dir.path().join("data/downloads/srv");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.ends_with(".part")), "{names:?}");
+        assert_eq!(names.len(), 4);
+        // the shared track's rows all point at the one file
+        let paths: Vec<Option<String>> =
+            f.db.with_conn(|c| {
+                let mut st = c.prepare("SELECT path FROM pin_tracks WHERE track_id = 't0'")?;
+                let rows = st.query_map([], |r| r.get(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .unwrap();
+        assert_eq!(paths.len(), 2);
+        assert!(paths
+            .iter()
+            .all(|p| p.as_deref() == Some(p.as_deref().unwrap())));
+        assert_eq!(f.dl.downloads_bytes().unwrap(), 40.0);
+    }
+
+    /// M8: a failed fetch leaves an earlier complete download alone and
+    /// leaves no temp file; a retry re-claims the `failed` row.
+    #[tokio::test]
+    async fn failed_fetch_keeps_existing_file_and_is_reclaimable() {
+        let f = fixture();
+        let target = PinTarget::Track { id: "t1".into() };
+        let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
+        assert_eq!(run_job(&f, spec).await.state, api::JobState::Done);
+        let p = f.dl.downloaded_path("srv", "t1").unwrap().unwrap();
+        // force the row back to failed (as a re-plan of a failed row would) and fail the fetch
+        f.db.with_conn(|c| {
+            c.execute(
+                "UPDATE pin_tracks SET state = 'failed' WHERE track_id = 't1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        f.server.fail_next(
+            SubsonicError::Server {
+                code: 0,
+                message: "boom".into(),
+            },
+            1,
+        );
+        let e =
+            f.dl.fetch_track(&f.server, "srv", "t1", false)
+                .await
+                .unwrap_err();
+        assert!(matches!(e, DownloadError::Server(_)), "{e}");
+        assert!(p.exists(), "the earlier complete download is not removed");
+        assert_eq!(
+            f.dl.fetch_track(&f.server, "srv", "t1", false)
+                .await
+                .unwrap(),
+            1000
+        );
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::Downloaded
+        );
+        // an unpinned track is reported as such rather than fetched
+        f.dl.unpin("srv", &target).unwrap();
+        assert!(matches!(
+            f.dl.fetch_track(&f.server, "srv", "t1", false)
+                .await
+                .unwrap_err(),
+            DownloadError::NotPinned(_)
+        ));
+    }
+
+    /// L3: unpinning A while B merely wants the same track hands B the file.
+    #[tokio::test]
+    async fn unpin_hands_the_file_to_a_pin_that_still_wants_it() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        let spec = f.dl.pin("srv", &album, false).unwrap().unwrap();
+        assert_eq!(run_job(&f, spec).await.state, api::JobState::Done);
+        let p = f.dl.downloaded_path("srv", "t0").unwrap().unwrap();
+        // B wants t0 (materialised as done via A) — make it a plain 'wanted'
+        // row as if B were pinned before A finished.
+        let playlist = PinTarget::Playlist { id: "pl".into() };
+        let _ = f.dl.pin("srv", &playlist, false).unwrap();
+        f.db.with_conn(|c| {
+            c.execute(
+                "UPDATE pin_tracks SET state = 'wanted', path = NULL, bytes = 0 WHERE target_kind = 'playlist' AND track_id = 't0'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let removed = f.dl.unpin("srv", &album).unwrap();
+        assert_eq!(removed, 2, "t1 and t2 were orphans; t0 was handed over");
+        assert!(p.exists());
+        assert_eq!(f.dl.downloaded_path("srv", "t0").unwrap().unwrap(), p);
+        assert!(
+            f.dl.plan("srv", &playlist, false)
+                .unwrap()
+                .map(|s| s.items)
+                .unwrap_or_default()
+                == vec!["t4".to_string()],
+            "t0 is not re-downloaded"
+        );
+        // L2: a file that vanished under us does not abort the loop
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(f.dl.unpin("srv", &playlist).unwrap(), 0);
+        assert_eq!(
+            f.db.track("t0").unwrap().unwrap().offline,
+            OfflineState::None
+        );
     }
 
     #[test]
