@@ -122,17 +122,19 @@ import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.ui.text.style.LineHeightStyle
+import app.hocket.ui.components.RatingStars
+import androidx.compose.foundation.layout.offset
 
 /**
  * The full player (the owner's mockup, made Material 3 Expressive). Top to bottom:
  *
- * - "Playing from" and the queue's source (album, playlist, search...), with the collapse chevron;
+ * - "Playing from" and the queue's source (album, playlist, search...), with Connect and the collapse chevron;
  * - the mode area: the big artwork in [PlayerMode.Artwork], or Lyrics / Queue / About in its place;
  * - notices (resume offer, a problem, autoplay's reason, remote playback, the sleep timer);
  * - the title row: a small thumbnail slot (non-artwork modes), title, "artist • album" links, and
- *   favourite, add to playlist and the More sheet;
- * - the wavy seek bar with elapsed / total, the transport, and the mode pills flanked by the sleep
- *   timer and Connect.
+ *   add to playlist and the More sheet (which holds the sleep timer); the rating in artwork mode;
+ * - the wavy seek bar with elapsed / total, the transport, and the Lyrics / Queue / About pills.
  *
  * There is ONE artwork ([PlayerArtwork]), drawn over the page and moved in a graphics layer between
  * the big slot and the thumbnail slot as [modeFraction] goes 0 (artwork) to 1 (another mode); both
@@ -174,7 +176,7 @@ internal fun FullPlayer(
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player.page")) {
             PlayerLayout(
                 minHeight = viewport,
-                header = { PlayerHeader(onCollapse) },
+                header = { PlayerHeader(onCollapse, onConnect = { handoff = true }) },
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 controls = {
                     PlayerControls(
@@ -187,8 +189,6 @@ internal fun FullPlayer(
                         pageWidth = pageWidth,
                         onMore = { more = true },
                         onAddTo = { addTo = true },
-                        onSleep = { sleepSheet = true },
-                        onConnect = { handoff = true },
                     )
                 },
             )
@@ -208,7 +208,8 @@ internal fun FullPlayer(
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (more && track != null) ActionSheet(Commands.tracks(listOf(track.id)), track.title, track.artist, onDismiss = { more = false },
-        onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } })
+        onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } },
+        extraTop = { SleepTimerMenuRow(onClick = { more = false; sleepSheet = true }) })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
@@ -242,8 +243,9 @@ private fun PlayerLayout(minHeight: Dp, header: @Composable () -> Unit, area: @C
 
 /** "Playing from" and the queue's source, and the collapse chevron. */
 @Composable
-private fun PlayerHeader(onCollapse: () -> Unit) {
+private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit) {
     val client = LocalCoreClient.current
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
     val queue by client.queue.collectAsStateWithLifecycle()
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val source = when {
@@ -255,6 +257,10 @@ private fun PlayerHeader(onCollapse: () -> Unit) {
         Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = sourceDesc }.testTag("player.source")) {
             Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Text(source, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        // Connect: highlighted while another device plays.
+        IconToggleButton(checked = !owns, onCheckedChange = { onConnect() }, modifier = Modifier.testTag("player.connect")) {
+            Icon(Icons.Filled.Cast, stringResource(R.string.player_connect), tint = if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconButton(onClick = onCollapse, modifier = Modifier.testTag("player.collapse")) {
             Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse), Modifier.size(28.dp))
@@ -283,7 +289,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
             val content = Modifier.fillMaxSize().fadingEdges()
             when (m) {
                 PlayerMode.Artwork -> Spacer(Modifier.fillMaxSize())
-                PlayerMode.Queue -> QueueList(content)
+                PlayerMode.Queue -> QueueList(Modifier.fillMaxSize(), listModifier = Modifier.fadingEdges()) // header stays crisp; only the list fades
                 PlayerMode.Lyrics -> LyricsPage(visible = lyricsVisible, modifier = content, embedded = true)
                 PlayerMode.About -> PlayerAbout(content)
             }
@@ -313,8 +319,6 @@ private fun PlayerControls(
     pageWidth: Dp,
     onMore: () -> Unit,
     onAddTo: () -> Unit,
-    onSleep: () -> Unit,
-    onConnect: () -> Unit,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -367,7 +371,7 @@ private fun PlayerControls(
             )
             Spacer(Modifier.height(12.dp))
         }
-        ModeBar(mode, onMode, sleepActive = sleep != null, onSleep = onSleep, remote = !owns, onConnect = onConnect, pageWidth = pageWidth)
+        ModeBar(mode, onMode, pageWidth = pageWidth)
     }
 }
 
@@ -379,7 +383,8 @@ private fun PlayerControls(
 @Composable
 private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, hero: HeroGeometry, onMore: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
-    Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         // The thumbnail slot: laid out at its full size, reporting a width that opens with the mode.
         Box(
             Modifier
@@ -395,12 +400,22 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
             // The page's heading, and a polite live region: it changes once per track, so a track
             // change is announced once (never the position).
             val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
-            Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.Bold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis,
+            // Line boxes trimmed where title and artist meet, so the two read as one block.
+            Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.LastLineBottom)), fontWeight = FontWeight.Bold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }.testTag("player.title"))
             val goArtist = stringResource(R.string.action_go_to_artist)
             val goAlbum = stringResource(R.string.action_go_to_album)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val sub = MaterialTheme.typography.bodyLarge
+            // The links keep their 48 dp touch height, but the row tucks up under the title so the
+            // text sits close to it (the target overlaps the title's line box, not its text).
+            Row(
+                Modifier.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    val pull = 12.dp.roundToPx().coerceAtMost(placeable.height / 4)
+                    layout(placeable.width, placeable.height - pull) { placeable.place(0, -pull) }
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val sub = MaterialTheme.typography.bodyLarge.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.FirstLineTop))
                 val subColor = MaterialTheme.colorScheme.onSurfaceVariant
                 Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).then(track.artistId?.let { id -> Modifier.textLink(goArtist) { onOpenArtist(id) } } ?: Modifier).testTag("player.artist"))
@@ -412,58 +427,54 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
                 }
             }
         }
-        IconToggleButton(checked = track.loved, onCheckedChange = { client.dispatch(Commands.loveTrack(track.id, it)) }, modifier = Modifier.testTag("player.love")) {
-            // A springy pop when the star fills (not when a loved track first shows).
-            val scale = remember { Animatable(1f) }
-            val was = remember { mutableStateOf(track.loved) }
-            androidx.compose.runtime.LaunchedEffect(track.loved) {
-                if (track.loved && !was.value) { scale.snapTo(0.6f); scale.animateTo(1f, Motion.pressRelease) }
-                was.value = track.loved
-            }
-            Icon(
-                if (track.loved) Icons.Filled.Star else Icons.Filled.StarBorder,
-                stringResource(if (track.loved) R.string.player_loved else R.string.player_not_loved),
-                tint = if (track.loved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value },
-            )
-        }
         IconButton(onClick = onAddTo, modifier = Modifier.testTag("player.addToPlaylist")) { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist)) }
         IconButton(onClick = onMore, modifier = Modifier.testTag("player.more")) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
+    }
+    // The rating, in artwork mode (the other modes keep it in About, one place at a time).
+    if (!compact) {
+        RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 22.dp, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.offset(x = (-4).dp))
+    }
     }
 }
 
 /**
  * Lyrics / Queue / About as three pills (the selected one a filled tonal pill; tapping it again goes
- * back to the artwork), flanked by the sleep timer and Connect. Where the three labels do not fit
+ * back to the artwork). Where the three labels do not fit
  * (narrow screens, large fonts) only the selected pill keeps its label; the others show their icon
  * and say their name to a screen reader. The pills are tabs with a selected state.
  */
 @Composable
-private fun ModeBar(mode: PlayerMode, onMode: (PlayerMode) -> Unit, sleepActive: Boolean, onSleep: () -> Unit, remote: Boolean, onConnect: () -> Unit, pageWidth: Dp) {
-    val on = MaterialTheme.colorScheme.primary
-    val off = MaterialTheme.colorScheme.onSurfaceVariant
+private fun ModeBar(mode: PlayerMode, onMode: (PlayerMode) -> Unit, pageWidth: Dp) {
     val labels = listOf(PlayerMode.Lyrics to stringResource(R.string.player_mode_lyrics), PlayerMode.Queue to stringResource(R.string.player_mode_queue), PlayerMode.About to stringResource(R.string.player_mode_about))
     val measurer = rememberTextMeasurer()
     val style = MaterialTheme.typography.labelLarge
     val density = LocalDensity.current
-    // Room for the pills: the page less its 12 dp sides and the two 48 dp buttons.
-    val room = pageWidth - 24.dp - 96.dp
+    // Room for the pills: the page less its 12 dp sides.
+    val room = pageWidth - 24.dp
     val needed = with(density) { labels.sumOf { measurer.measure(it.second, style).size.width }.toDp() } + (PILL_PADDING * 2 + PILL_ICON + PILL_GAP) * 3 + 8.dp
     val compact = needed > room
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconToggleButton(checked = sleepActive, onCheckedChange = { onSleep() }, modifier = Modifier.testTag("player.sleep")) {
-            Icon(Icons.Filled.Bedtime, stringResource(R.string.player_sleep_timer), tint = if (sleepActive) on else off)
-        }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             labels.forEach { (m, label) ->
                 val icon = when (m) { PlayerMode.Lyrics -> Icons.Filled.Lyrics; PlayerMode.Queue -> Icons.AutoMirrored.Filled.QueueMusic; else -> Icons.Outlined.Info }
                 ModePill(label, icon, selected = mode == m, showLabel = !compact || mode == m, tag = "player.mode." + m.name.lowercase(), onClick = { onMode(if (mode == m) PlayerMode.Artwork else m) })
             }
         }
-        IconToggleButton(checked = remote, onCheckedChange = { onConnect() }, modifier = Modifier.testTag("player.connect")) {
-            Icon(Icons.Filled.Cast, stringResource(R.string.player_connect), tint = if (remote) on else off)
-        }
     }
+}
+
+/** The More sheet's sleep-timer entry: the remaining time when one is set. */
+@Composable
+private fun SleepTimerMenuRow(onClick: () -> Unit) {
+    val client = LocalCoreClient.current
+    val sleep by client.sleepTimer.collectAsStateWithLifecycle()
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(stringResource(R.string.player_sleep_timer)) },
+        supportingContent = sleep?.let { t -> { Text(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)) } },
+        leadingContent = { Icon(Icons.Filled.Bedtime, null, tint = if (sleep != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) },
+        colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick).testTag("player.sleep"),
+    )
 }
 
 private val PILL_PADDING = 12.dp

@@ -119,14 +119,14 @@ fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
  * [contentPadding] pads the list only (e.g. room for controls drawn over its bottom edge).
  */
 @Composable
-fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues()) {
+fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier) {
     val dir = LocalLayoutDirection.current
     Column(modifier) {
         QueueModeHeader(
             Modifier.fillMaxWidth()
                 .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = 4.dp, bottom = 8.dp),
         )
-        QueueTimeline(Modifier.fillMaxWidth().weight(1f), contentPadding)
+        QueueTimeline(Modifier.fillMaxWidth().weight(1f).then(listModifier), contentPadding)
     }
 }
 

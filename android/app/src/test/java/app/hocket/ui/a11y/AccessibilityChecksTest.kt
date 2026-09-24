@@ -196,12 +196,15 @@ class AccessibilityChecksTest {
     fun theRowMenuAndThePlayerSheetsPassTheChecks() {
         start()
         expanded()
-        // The track's menu (ActionSheet), then the sleep timer and the Connect picker.
+        // The track's menu (ActionSheet), the sleep timer (from that menu) and the Connect picker.
         compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         check("track menu")
         back()
         expanded()
+        // The sleep timer is an entry in the track menu.
+        compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
         compose.onNodeWithTag("player.sleep").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         check("sleep timer")

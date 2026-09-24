@@ -423,7 +423,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // The scrim the bar and the mini player float on (Navic): the surface colour eased in
             // from transparent, so content scrolling under them fades out instead of clashing.
             if (!wide || playerVisible) {
-                val scrimHeight = bottomInset + (if (playerVisible) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 40.dp
+                // Fully faded by about half-way up the floating mini player (it has its own card and
+                // shadow); without one, a short fade above the bar.
+                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
                 val surface = MaterialTheme.colorScheme.surface
                 val scrim = remember(surface) { easedScrim(surface) }
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
