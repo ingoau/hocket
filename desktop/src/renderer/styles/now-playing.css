@@ -197,9 +197,9 @@
 
   /* Pane modes: the controls condense (title and actions on one line, a
      smaller transport) so the cover above them can span the column. */
-  .np:not([data-mode="art"]) .np-controls { gap: 12px; }
-  .np:not([data-mode="art"]) .np-info { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "thumb thumb" "text actions"; column-gap: 8px; row-gap: 14px; align-items: center; }
-  .np:not([data-mode="art"]) .np-thumb { width: clamp(160px, calc(100vh - 480px), 100%); margin: 0; justify-self: center; }
+  .np:not([data-mode="art"]) .np-controls { gap: 14px; }
+  .np:not([data-mode="art"]) .np-info { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "thumb thumb" "text actions"; column-gap: 8px; row-gap: 28px; align-items: center; }
+  .np:not([data-mode="art"]) .np-thumb { width: clamp(160px, calc(100vh - 504px), 100%); margin: 0; justify-self: center; }
   .np:not([data-mode="art"]) .np-text .t1 { font-size: 26px; -webkit-line-clamp: 1; }
   .np:not([data-mode="art"]) .np-text .t2 { font-size: 16px; -webkit-line-clamp: 1; }
   .np:not([data-mode="art"]) .np-actions { margin: 0 -8px 0 0; gap: 0; }
