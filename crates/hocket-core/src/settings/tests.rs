@@ -414,15 +414,15 @@ fn config_document_builds_and_round_trips() {
     assert_eq!(applied.len(), REGISTRY.len());
     assert!(skipped.is_empty());
     assert_eq!(fresh.get_i64(keys::QUEUE_SAVED_CAP), 7);
+    // A changed key is restamped to the import time, not the document's 10.0.
     assert_eq!(
         fresh.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at,
-        10.0
-    );
-    // Unset keys in the export carry updatedAt 0 and get the import time.
-    assert_eq!(
-        fresh.setting(keys::SCROBBLE_ENABLED).unwrap().updated_at,
         999.0
     );
+    // A key already at the imported value is not restamped.
+    assert!(fresh
+        .setting(keys::SCROBBLE_ENABLED)
+        .is_none_or(|s| s.updated_at < 999.0));
     let (applied, skipped) = fresh.apply_settings(
         &[
             setting("bogus", "1", SettingScope::DeviceLocal, 1.0),
@@ -513,7 +513,41 @@ fn config_errors() {
 /// M6: an imported document can't plant timestamps in the future, device-
 /// local keys are opt-in, and the synced keys that changed are reported.
 #[test]
-fn import_clamps_timestamps_and_scopes_device_local_keys() {
+fn import_of_an_older_backup_is_not_reverted_by_the_next_merge() {
+    let mut s = Settings::new();
+    // a peer set savedCap=40 at t=5_000 and we merged it
+    s.merge_remote(&[setting(
+        keys::QUEUE_SAVED_CAP,
+        "40",
+        SettingScope::AccountSynced,
+        5_000.0,
+    )]);
+    // the user restores a backup written at t=100 that says 30
+    let doc = vec![setting(
+        keys::QUEUE_SAVED_CAP,
+        "30",
+        SettingScope::AccountSynced,
+        100.0,
+    )];
+    let out = s.import_settings(&doc, 6_000.0, false);
+    assert_eq!(out.changed_synced, vec![keys::QUEUE_SAVED_CAP]);
+    assert_eq!(
+        s.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at,
+        6_000.0
+    );
+    // the peer's old value arriving again must not revert the restore
+    let changed = s.merge_remote(&[setting(
+        keys::QUEUE_SAVED_CAP,
+        "40",
+        SettingScope::AccountSynced,
+        5_000.0,
+    )]);
+    assert!(changed.is_empty());
+    assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 30);
+}
+
+#[test]
+fn import_restamps_changed_keys_and_scopes_device_local_keys() {
     let mut s = Settings::new();
     s.set_json(keys::QUEUE_SAVED_CAP, "20", 100.0).unwrap();
     let doc = vec![
@@ -557,9 +591,13 @@ fn import_clamps_timestamps_and_scopes_device_local_keys() {
     assert_eq!(
         s.setting(keys::QUEUE_SAVED_CAP).unwrap().updated_at,
         1_000.0,
-        "clamped to the import time"
+        "a changed key is restamped to the import time, never the document's"
     );
-    assert_eq!(s.setting(keys::SCROBBLE_ENABLED).unwrap().updated_at, 50.0);
+    assert!(
+        s.setting(keys::SCROBBLE_ENABLED)
+            .is_none_or(|x| x.updated_at < 1_000.0),
+        "an unchanged value is not restamped"
+    );
     assert!(s.sync_enabled(), "device-local key untouched");
     // a peer's honest later write still wins after the import
     let changed = s.merge_remote(&[setting(
@@ -571,7 +609,7 @@ fn import_clamps_timestamps_and_scopes_device_local_keys() {
     assert_eq!(changed, vec![keys::QUEUE_SAVED_CAP]);
     assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 25);
 
-    // same-device restore includes device-local keys, still clamped
+    // same-device restore includes device-local keys, restamped to now
     let out = s.import_settings(&doc, 3_000.0, true);
     assert!(out.skipped_device_local.is_empty());
     assert!(!s.sync_enabled());

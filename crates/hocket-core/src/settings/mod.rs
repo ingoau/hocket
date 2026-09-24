@@ -10,7 +10,7 @@
 //! | `Command::SetSetting` / `ResetSetting` | [`Settings::set_json`] / [`Settings::reset`] → the `api::Setting` to emit |
 //! | `Query::Settings` / snapshot | [`Settings::to_api`] |
 //! | Sync: what to send, what to accept | [`Settings::synced_settings`], [`Settings::merge_remote`]; pure [`merge`] |
-//! | Config backup | [`build_document`], [`to_json`], [`parse_document`] (migrates), [`Settings::import_settings`] (→ [`ImportOutcome`]; timestamps clamped to now, device-local keys opt-in, changed synced keys to broadcast) |
+//! | Config backup | [`build_document`], [`to_json`], [`parse_document`] (migrates), [`Settings::import_settings`] (→ [`ImportOutcome`]; changed keys restamped to now, device-local keys opt-in, changed synced keys to broadcast) |
 //! | Key constants | [`keys`] |
 //! | Labels/descriptions | [`strings`] |
 //!
@@ -342,7 +342,7 @@ impl Settings {
     /// Applies settings from a config document (import), device-local keys
     /// included (a same-device restore). Returns `(applied keys, skipped
     /// keys)`. See [`Settings::import_settings`] for the scoped variant the
-    /// actor should prefer; timestamps are clamped the same way.
+    /// actor should prefer; timestamps are restamped the same way.
     pub fn apply_settings(
         &mut self,
         settings: &[Setting],
@@ -354,10 +354,13 @@ impl Settings {
 
     /// Applies settings from a config document (import).
     ///
-    /// - Every valid entry is set with its document timestamp clamped to
-    ///   `now_ms` (a hand-edited `updatedAt` far in the future would
-    ///   otherwise win every future LWW merge on every device); entries
-    ///   without a timestamp get `now_ms`.
+    /// - An import is a deliberate edit made now, so every valid entry whose
+    ///   value differs from the current one is stamped `now_ms`, whatever
+    ///   the document says. Keeping the document's timestamp would let an
+    ///   older backup lose to any newer peer value and be reverted on the
+    ///   next merge, and a hand-edited far-future `updatedAt` would win
+    ///   every merge forever. Entries equal to the current value are left
+    ///   untouched (counted as applied, not restamped, not broadcast).
     /// - Invalid or unknown entries are skipped and reported.
     /// - Device-local keys (see [`registry::REGISTRY`], scope
     ///   `DeviceLocal`: audio/output device, transcoding profiles, storage
@@ -386,12 +389,11 @@ impl Settings {
                 continue;
             };
             let before = self.get(&s.key);
-            let at = if s.updated_at > 0.0 {
-                s.updated_at.min(now_ms)
-            } else {
-                now_ms
-            };
-            match self.set_value(&s.key, value, at) {
+            if before == value {
+                out.applied.push(s.key.clone());
+                continue;
+            }
+            match self.set_value(&s.key, value, now_ms) {
                 Ok(_) => {
                     if scope == Some(SettingScope::AccountSynced) && self.get(&s.key) != before {
                         out.changed_synced.push(s.key.clone());
