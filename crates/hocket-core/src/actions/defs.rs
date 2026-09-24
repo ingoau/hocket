@@ -1125,6 +1125,19 @@ static ALL: &[ActionDef] = &[
         none,
         ui_handled = true
     ),
+    // The phone's Library place (albums, artists, songs… in one screen). Not
+    // in the default sidebar; a platform without such a place shows its
+    // nearest one.
+    action!(
+        "navigateLibrary",
+        "Library",
+        "library_music",
+        Navigation,
+        GLOBAL,
+        ui_nav,
+        none,
+        ui_handled = true
+    ),
     action!(
         "navigateTracks",
         "Songs",

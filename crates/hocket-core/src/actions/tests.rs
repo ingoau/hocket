@@ -775,3 +775,29 @@ fn media_session_buttons_follow_customisation() {
     );
     assert_eq!(r.media_session_actions(&StateView::default()), vec![]);
 }
+
+/// The phone's Library place has its own action (it used to borrow
+/// `navigateAlbums`), usable in a synced sidebar order without joining the
+/// default one.
+#[test]
+fn navigate_library_is_a_navigation_action() {
+    let mut r = ActionRegistry::new(Platform::Android);
+    let d = r.get("navigateLibrary").expect("navigateLibrary");
+    assert_eq!((d.label, d.icon), ("Library", "library_music"));
+    assert!(d.ui_handled);
+    assert_eq!(d.category, defs::Category::Navigation);
+    assert!(!r
+        .default_order(Surface::Sidebar)
+        .contains(&"navigateLibrary".to_string()));
+    let palette = r.actions_for(Surface::Palette, &ActionTarget::None, &state());
+    assert!(palette
+        .iter()
+        .any(|a| a.id == "navigateLibrary" && a.enabled));
+
+    let bar = ["navigateHome", "findInList", "navigateLibrary"].map(String::from);
+    r.set_order(Surface::Sidebar, bar.to_vec());
+    assert_eq!(r.order(Surface::Sidebar), bar);
+    let sidebar = r.actions_for(Surface::Sidebar, &ActionTarget::None, &state());
+    let ids: Vec<&str> = sidebar.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, ["navigateHome", "findInList", "navigateLibrary"]);
+}
