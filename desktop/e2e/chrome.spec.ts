@@ -91,6 +91,16 @@ test.describe("window chrome", () => {
     await page.getByTestId("nav-albums").click();
     const tiles = page.getByTestId("grid-tile");
     await expect(tiles.first().locator("img")).toBeVisible();
+    // The grid's keyboard cursor is drawn only while the grid has focus.
+    const shadow = (i: number) => tiles.nth(i).evaluate((el) => getComputedStyle(el).boxShadow);
+    await page.getByTestId("search-input").focus();
+    expect(await shadow(0)).toBe("none");
+    await tiles.first().click();
+    await page.keyboard.press("ArrowRight");
+    expect(await shadow(1)).not.toBe("none");
+    expect(await shadow(0)).toBe("none");
+    await page.getByTestId("search-input").focus();
+    expect(await shadow(1)).toBe("none");
     // Narrow the window so the tiles are smaller than the 300 px artwork.
     await page.setViewportSize({ width: 1000, height: 760 });
     await page.waitForTimeout(300);

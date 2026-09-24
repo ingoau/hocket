@@ -126,7 +126,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
               return (
                 <div
                   key={it.id}
-                  className={`tile ${selected ? "selected" : ""}`}
+                  className={`tile ${selected ? "selected" : ""} ${focusIdx === i ? "focused" : ""}`}
                   role="gridcell"
                   aria-selected={selected}
                   aria-label={it.title}
@@ -134,7 +134,6 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
                   onClick={(e) => click(e, i, it)}
                   onDoubleClick={() => onOpen(it)}
                   onContextMenu={(e) => { if (!isSelected(selection, it.id)) publish(selectOnly(it.id)); void openContextMenu(e, targetFor(it)); }}
-                  style={focusIdx === i ? { boxShadow: "inset 0 0 0 1px var(--accent-ring)" } : undefined}
                   data-testid="grid-tile"
                   data-id={it.id}
                 >
