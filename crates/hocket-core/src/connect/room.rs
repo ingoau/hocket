@@ -14,10 +14,10 @@
 
 use std::sync::Arc;
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TransportLease};
+use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::lease::{LeaseError, LeaseEvent, LeaseMachine};
-use crate::connect::replica::{new_replica, ReplicaExt, ScrobbleClaim};
+use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim};
 use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
     WireMessage,
@@ -157,6 +157,27 @@ struct Unknown {
     proven: Option<DeviceId>,
 }
 
+/// A scrobble the room's own device (the loopback, so this is a LAN
+/// leader's room) claimed while it had members. Its verdict waits until a
+/// member echoes the claim back: until then only the leader knows the play
+/// is taken, and a leader cut off a moment before it judged would have the
+/// other side take the play over and scrobble it again. A claim nobody
+/// echoes is withdrawn by the engine once it stops trusting its own room
+/// ([`Room::withdraw_unconfirmed_scrobbles`]) and judged again later, or
+/// on local judgement after the grace ([`Room::confirm_scrobble`]).
+#[derive(Debug, Clone)]
+struct UnconfirmedScrobble {
+    track_id: TrackId,
+    started_at: EpochMs,
+    device_id: DeviceId,
+    /// Loopback queries waiting for the verdict.
+    queries: Vec<String>,
+    /// Member queries for the same pair: answered once the claim settles,
+    /// so nobody is told "duplicate" on the strength of a claim that may
+    /// still be withdrawn.
+    held: Vec<(PeerId, String)>,
+}
+
 /// The coordinator role for one scope.
 pub struct Room {
     cfg: RoomConfig,
@@ -172,6 +193,7 @@ pub struct Room {
     touched: bool,
     /// Some peer was admitted since this room was opened (or restored).
     admitted_any: bool,
+    unconfirmed: Vec<UnconfirmedScrobble>,
     last_sweep: EpochMs,
     out: Vec<RoomOutput>,
 }
@@ -216,6 +238,7 @@ impl Room {
             dirty: false,
             touched: false,
             admitted_any: false,
+            unconfirmed: vec![],
             last_sweep: now,
             out: vec![],
         }
@@ -286,6 +309,153 @@ impl Room {
             self.replica
                 .claim_scrobble(track_id, *started_at, device_id, now);
         }
+    }
+
+    /// Whether our own device's claim on this pair still waits for a member
+    /// to acknowledge it (see [`UnconfirmedScrobble`]).
+    pub fn is_unconfirmed_scrobble(&self, track_id: &str, started_at: EpochMs) -> bool {
+        self.unconfirmed_index(track_id, started_at).is_some()
+    }
+
+    pub fn has_unconfirmed_scrobbles(&self) -> bool {
+        !self.unconfirmed.is_empty()
+    }
+
+    /// The host stopped trusting this room's verdicts (its members went
+    /// quiet, or it left for another room): every claim no member
+    /// acknowledged is taken out of the log, unanswered, so that whatever
+    /// the rest of the session did with the play meanwhile decides when the
+    /// host asks again. Member queries held behind a claim are judged now.
+    pub fn withdraw_unconfirmed_scrobbles(&mut self) -> Vec<RoomOutput> {
+        let now = self.now();
+        for c in std::mem::take(&mut self.unconfirmed) {
+            self.replica
+                .forget_scrobble(&c.track_id, c.started_at, now);
+            self.dirty = true;
+            self.judge_held(&c, now);
+        }
+        self.flush()
+    }
+
+    /// The host judged a pair on its own after the grace: the claim stands
+    /// without an acknowledgement. Loopback queries are not answered (the
+    /// host already has its verdict); held member queries are.
+    pub fn confirm_scrobble(&mut self, track_id: &str, started_at: EpochMs) -> Vec<RoomOutput> {
+        let now = self.now();
+        if let Some(i) = self.unconfirmed_index(track_id, started_at) {
+            let c = self.unconfirmed.remove(i);
+            self.judge_held(&c, now);
+        }
+        self.flush()
+    }
+
+    fn unconfirmed_index(&self, track_id: &str, started_at: EpochMs) -> Option<usize> {
+        self.unconfirmed
+            .iter()
+            .position(|c| c.track_id == track_id && same_start(c.started_at, started_at))
+    }
+
+    /// Members other than the loopback.
+    fn has_remote_members(&self) -> bool {
+        self.members.iter().any(|m| m.peer != LOOPBACK)
+    }
+
+    /// Tell the members about an unconfirmed claim; they echo it back.
+    fn announce_unconfirmed(&mut self, i: usize) {
+        let c = &self.unconfirmed[i];
+        let msg = Msg::ScrobbleSubmitted {
+            track_id: c.track_id.clone(),
+            started_at: c.started_at,
+            device_id: c.device_id.clone(),
+        };
+        self.broadcast(msg, Some(LOOPBACK));
+    }
+
+    /// Settle a claim: answer the loopback and the held member queries.
+    fn settle_unconfirmed(&mut self, i: usize, duplicate: bool, now: EpochMs) {
+        let c = self.unconfirmed.remove(i);
+        for query_id in &c.queries {
+            self.send(
+                LOOPBACK,
+                Msg::ScrobbleDedupeAnswer {
+                    query_id: query_id.clone(),
+                    duplicate,
+                },
+            );
+        }
+        self.judge_held(&c, now);
+    }
+
+    fn judge_held(&mut self, c: &UnconfirmedScrobble, now: EpochMs) {
+        for (peer, query_id) in &c.held {
+            let Some(device_id) = self.member_by_peer(peer).map(|m| m.device.id.clone()) else {
+                continue; // gone: it asks again wherever it went
+            };
+            self.on_scrobble_query(
+                peer,
+                &device_id,
+                query_id.clone(),
+                c.track_id.clone(),
+                c.started_at,
+                now,
+            );
+        }
+    }
+
+    fn on_scrobble_query(
+        &mut self,
+        peer: &str,
+        device_id: &str,
+        query_id: String,
+        track_id: TrackId,
+        started_at: EpochMs,
+        now: EpochMs,
+    ) {
+        if let Some(i) = self.unconfirmed_index(&track_id, started_at) {
+            let c = &mut self.unconfirmed[i];
+            if peer == LOOPBACK {
+                if !c.queries.contains(&query_id) {
+                    c.queries.push(query_id);
+                }
+                // A retry: a lossy link may have eaten the claim.
+                self.announce_unconfirmed(i);
+            } else if !c.held.iter().any(|(p, q)| p == peer && *q == query_id) {
+                c.held.push((peer.to_string(), query_id));
+            }
+            return;
+        }
+        let claim = self
+            .replica
+            .claim_scrobble(&track_id, started_at, device_id, now);
+        self.dirty = true;
+        if peer == LOOPBACK && claim == ScrobbleClaim::New && self.has_remote_members() {
+            self.unconfirmed.push(UnconfirmedScrobble {
+                track_id,
+                started_at,
+                device_id: device_id.to_string(),
+                queries: vec![query_id],
+                held: vec![],
+            });
+            self.announce_unconfirmed(self.unconfirmed.len() - 1);
+            return;
+        }
+        self.send(
+            peer,
+            Msg::ScrobbleDedupeAnswer {
+                query_id,
+                duplicate: claim == ScrobbleClaim::Duplicate,
+            },
+        );
+    }
+
+    /// Outputs of a direct call (as [`Room::handle`] returns them).
+    fn flush(&mut self) -> Vec<RoomOutput> {
+        if self.dirty {
+            self.dirty = false;
+            self.touched = false;
+            self.out.push(RoomOutput::ReplicaChanged);
+        }
+        std::mem::take(&mut self.out)
     }
 
     /// When a member other than the loopback was last heard from.
@@ -697,6 +867,9 @@ impl Room {
             return;
         };
         let m = self.members.remove(idx);
+        for c in &mut self.unconfirmed {
+            c.held.retain(|(p, _)| p != peer);
+        }
         tracing::info!(scope = %self.cfg.scope, peer, device = %m.device.id, "member left");
         if m.picker_open {
             self.broadcast(
@@ -1081,6 +1254,23 @@ impl Room {
                 started_at,
                 device_id: d,
             } => {
+                if peer != LOOPBACK {
+                    if let Some(i) = self.unconfirmed_index(&track_id, started_at) {
+                        // A member echoing our own device's claim: it knows the
+                        // play is taken, so the claim survives a partition
+                        // on either side. Anyone else named means the play
+                        // was scrobbled elsewhere first (the other side of a
+                        // partition that took it over): the claim loses.
+                        let echo = self.unconfirmed[i].device_id == d;
+                        if !echo {
+                            self.replica.forget_scrobble(&track_id, started_at, now);
+                            self.replica.claim_scrobble(&track_id, started_at, &d, now);
+                        }
+                        self.dirty = true;
+                        self.settle_unconfirmed(i, !echo, now);
+                        return;
+                    }
+                }
                 // Knowledge, not a claim: members relay what they know other
                 // devices scrobbled (a LAN leader carrying its room's log to
                 // the coordinator), so the announced device stands. A lie
@@ -1094,17 +1284,7 @@ impl Room {
                 started_at,
                 ..
             } => {
-                let claim = self
-                    .replica
-                    .claim_scrobble(&track_id, started_at, &device_id, now);
-                self.dirty = true;
-                self.send(
-                    peer,
-                    Msg::ScrobbleDedupeAnswer {
-                        query_id,
-                        duplicate: claim == ScrobbleClaim::Duplicate,
-                    },
-                );
+                self.on_scrobble_query(peer, &device_id, query_id, track_id, started_at, now);
             }
             Msg::ScrobbleDedupeAnswer { .. } => {}
 

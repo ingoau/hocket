@@ -201,6 +201,39 @@ struct Inner {
     warn_threshold: RwLock<Option<f64>>,
     policy: RwLock<TranscodingPolicy>,
     network: RwLock<Option<api::NetworkState>>,
+    cache_use: parking_lot::Mutex<CacheUse>,
+}
+
+/// `(server_id, track_id)`: a track whose offline state may have changed.
+pub type TrackKey = (String, String);
+
+/// Which stream-cache files are in use right now, and which removals wait
+/// for them. A file is in use while a reader (the loopback proxy serving
+/// it) holds it open, or while its track is loaded or preloaded in the
+/// player ("protected"): eviction skips it and `ClearStreamCache` defers it.
+#[derive(Default)]
+struct CacheUse {
+    readers: HashMap<PathBuf, usize>,
+    protected: std::collections::HashSet<TrackKey>,
+    /// Removals deferred until the file is no longer in use. The row is
+    /// removed with the file only while it still points at `path`.
+    doomed: Vec<Doomed>,
+}
+
+struct Doomed {
+    server_id: String,
+    track_id: String,
+    profile: String,
+    path: PathBuf,
+}
+
+impl CacheUse {
+    fn in_use(&self, server_id: &str, track_id: &str, path: &Path) -> bool {
+        self.readers.get(path).is_some_and(|n| *n > 0)
+            || self
+                .protected
+                .contains(&(server_id.to_string(), track_id.to_string()))
+    }
 }
 
 #[derive(Clone)]
@@ -241,8 +274,48 @@ impl Downloads {
                 warn_threshold: RwLock::new(None),
                 policy: RwLock::new(TranscodingPolicy::default()),
                 network: RwLock::new(None),
+                cache_use: parking_lot::Mutex::new(CacheUse::default()),
             }),
         }
+        .sweep_stream_cache()
+    }
+
+    /// Startup: drop temp files a previous process left mid-write, and
+    /// files no cache row references (the rebuildable `cache_entries` table
+    /// may have been dropped by a migration).
+    fn sweep_stream_cache(self) -> Self {
+        let root = self.inner.cache_dir.join("stream");
+        // Unknown index (a database error): only temp files go.
+        let known: Option<std::collections::HashSet<String>> = self
+            .inner
+            .db
+            .with_conn(|c| {
+                let mut st = c.prepare_cached("SELECT path FROM cache_entries")?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .ok();
+        let Ok(servers) = std::fs::read_dir(&root) else {
+            return self;
+        };
+        for dir in servers.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(files) = std::fs::read_dir(dir.path()) else {
+                continue;
+            };
+            for f in files.flatten() {
+                let p = f.path();
+                let part = p.extension().is_some_and(|e| e == "part");
+                let orphan = known
+                    .as_ref()
+                    .is_some_and(|k| !k.contains(p.to_string_lossy().as_ref()));
+                if p.is_file() && (part || orphan) {
+                    if let Err(e) = std::fs::remove_file(&p) {
+                        tracing::warn!(error = %e, "removing stale stream-cache file");
+                    }
+                }
+            }
+        }
+        self
     }
 
     pub fn db(&self) -> &Db {
@@ -259,6 +332,10 @@ impl Downloads {
 
     pub fn set_cache_budget(&self, bytes: f64) {
         *self.inner.cache_budget.write() = bytes.max(0.0);
+    }
+
+    pub fn cache_budget(&self) -> f64 {
+        *self.inner.cache_budget.read()
     }
 
     pub fn set_warn_threshold(&self, bytes: Option<f64>) {
@@ -785,7 +862,47 @@ impl Downloads {
         self.stream_cache_dir(server_id).join(name)
     }
 
-    /// Register a fully written cache file and enforce the budget.
+    /// A fresh, never-reused path for a new cache file of (track, profile):
+    /// [`cache_path`](Self::cache_path) with a random component, so a new
+    /// copy never replaces a file a reader still has open (and a deferred
+    /// removal of the old copy can never hit the new one).
+    pub fn cache_path_unique(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        profile: Option<&TranscodingProfile>,
+        suffix: Option<&str>,
+    ) -> PathBuf {
+        let base = self.cache_path(server_id, track_id, profile, suffix);
+        let ext = safe_ext(suffix);
+        let stem = base
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let stem = stem.strip_suffix(&format!(".{ext}")).unwrap_or(&stem);
+        let id = crate::util::new_id();
+        base.with_file_name(format!("{stem}.{}.{ext}", &id[..12]))
+    }
+
+    /// Whether the cache volume has room for `bytes` more (plus the
+    /// out-of-space margin). Unknown free space counts as room.
+    pub fn cache_has_room(&self, server_id: &str, bytes: f64) -> bool {
+        let dir = self.stream_cache_dir(server_id);
+        let probe = if dir.exists() {
+            dir
+        } else {
+            self.inner.cache_dir.clone()
+        };
+        match self.inner.storage.free_bytes(&probe) {
+            Some(free) => free - bytes >= MIN_FREE_BYTES,
+            None => true,
+        }
+    }
+
+    /// Register a fully written cache file and enforce the budget. A copy
+    /// it replaces is removed (or, while in use, once it is released).
+    /// Returns the tracks whose offline state changed (the new entry and
+    /// anything evicted to make room).
     pub fn cache_put(
         &self,
         server_id: &str,
@@ -794,19 +911,47 @@ impl Downloads {
         path: &Path,
         bytes: f64,
         content_type: Option<&str>,
-    ) -> DbResult<()> {
+    ) -> DbResult<Vec<TrackKey>> {
         let now = self.now();
-        self.inner.db.with_conn(|c| {
-            c.execute(
+        let key = profile_key(profile);
+        let new_path = path.to_string_lossy().into_owned();
+        let old: Option<String> = self.inner.db.with_tx(|tx| {
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT path FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3",
+                    params![server_id, track_id, key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            tx.execute(
                 "INSERT INTO cache_entries(server_id, track_id, path, bytes, content_type, profile, created_at, last_used_at, complete) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1)
                  ON CONFLICT(server_id, track_id, profile) DO UPDATE SET path = excluded.path, bytes = excluded.bytes, content_type = excluded.content_type, last_used_at = excluded.last_used_at, complete = 1",
-                params![server_id, track_id, path.to_string_lossy().as_ref(), bytes, content_type, profile_key(profile), now],
+                params![server_id, track_id, new_path, bytes, content_type, key, now],
             )?;
-            Ok(())
+            Ok(old)
         })?;
+        {
+            // A deferred removal only deletes the row while it still points
+            // at the doomed file, so the new copy survives one of the old.
+            let mut u = self.inner.cache_use.lock();
+            if let Some(old) = old.filter(|o| *o != new_path) {
+                let old = PathBuf::from(old);
+                if u.in_use(server_id, track_id, &old) {
+                    u.doomed.push(Doomed {
+                        server_id: server_id.into(),
+                        track_id: track_id.into(),
+                        profile: key.clone(),
+                        path: old,
+                    });
+                } else if let Err(e) = remove_if_exists(&old.to_string_lossy()) {
+                    tracing::warn!(error = %e, "removing replaced cache file");
+                }
+            }
+        }
         self.refresh_offline(server_id, track_id)?;
-        self.enforce_cache_budget()?;
-        Ok(())
+        let mut changed = vec![(server_id.to_string(), track_id.to_string())];
+        changed.extend(self.evict_over_budget()?);
+        Ok(changed)
     }
 
     /// Cached file for the track (any profile, preferring the requested one);
@@ -817,17 +962,31 @@ impl Downloads {
         track_id: &str,
         profile: Option<&TranscodingProfile>,
     ) -> DbResult<Option<(PathBuf, Option<String>)>> {
+        Ok(self
+            .cache_lookup(server_id, track_id, profile, true)?
+            .map(|e| (e.path, e.content_type)))
+    }
+
+    /// Like [`cache_get`](Self::cache_get) with the entry's size, for
+    /// serving it. `touch` stamps it as used.
+    pub fn cache_lookup(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        profile: Option<&TranscodingProfile>,
+        touch: bool,
+    ) -> DbResult<Option<CacheEntry>> {
         let key = profile_key(profile);
         let now = self.now();
-        let found: Option<(String, Option<String>, String)> = self.inner.db.with_conn(|c| {
+        let found: Option<(String, Option<String>, String, f64)> = self.inner.db.with_conn(|c| {
             Ok(c.query_row(
-                "SELECT path, content_type, profile FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 ORDER BY (profile = ?3) DESC, (profile = '') DESC, last_used_at DESC LIMIT 1",
+                "SELECT path, content_type, profile, bytes FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 ORDER BY (profile = ?3) DESC, (profile = '') DESC, last_used_at DESC LIMIT 1",
                 params![server_id, track_id, key],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?)
         })?;
-        let Some((path, ct, prof)) = found else {
+        let Some((path, ct, prof, bytes)) = found else {
             return Ok(None);
         };
         let p = PathBuf::from(&path);
@@ -839,11 +998,17 @@ impl Downloads {
             self.refresh_offline(server_id, track_id)?;
             return Ok(None);
         }
-        self.inner.db.with_conn(|c| {
-            c.execute("UPDATE cache_entries SET last_used_at = ?4 WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3", params![server_id, track_id, prof, now])?;
-            Ok(())
-        })?;
-        Ok(Some((p, ct)))
+        if touch {
+            self.inner.db.with_conn(|c| {
+                c.execute("UPDATE cache_entries SET last_used_at = ?4 WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3", params![server_id, track_id, prof, now])?;
+                Ok(())
+            })?;
+        }
+        Ok(Some(CacheEntry {
+            path: p,
+            content_type: ct,
+            bytes: bytes.max(0.0) as u64,
+        }))
     }
 
     pub fn cache_bytes(&self) -> DbResult<f64> {
@@ -857,29 +1022,37 @@ impl Downloads {
     }
 
     /// Evict least-recently-used cache entries until under budget. Never
-    /// touches downloads. Returns the number of files removed.
+    /// touches downloads, and skips files in use. Returns the number of
+    /// files removed.
     pub fn enforce_cache_budget(&self) -> DbResult<usize> {
+        Ok(self.evict_over_budget()?.len())
+    }
+
+    /// [`enforce_cache_budget`](Self::enforce_cache_budget), returning the
+    /// tracks evicted.
+    pub fn evict_over_budget(&self) -> DbResult<Vec<TrackKey>> {
         let budget = *self.inner.cache_budget.read();
         let mut total = self.cache_bytes()?;
         if total <= budget {
-            return Ok(0);
+            return Ok(vec![]);
         }
         let victims: Vec<(String, String, String, String, f64)> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached("SELECT server_id, track_id, profile, path, bytes FROM cache_entries ORDER BY last_used_at ASC, rowid ASC")?;
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
-        let mut removed = 0;
+        let mut removed = vec![];
         for (sid, tid, prof, path, bytes) in victims {
             if total <= budget {
                 break;
             }
             let p = Path::new(&path);
-            if p.exists() {
-                if let Err(e) = std::fs::remove_file(p) {
-                    tracing::warn!(error = %e, path, "evicting cache file");
-                    continue;
-                }
+            if self.inner.cache_use.lock().in_use(&sid, &tid, p) {
+                continue;
+            }
+            if let Err(e) = remove_if_exists(&path) {
+                tracing::warn!(error = %e, path, "evicting cache file");
+                continue;
             }
             self.inner.db.with_conn(|c| {
                 c.execute("DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3", params![sid, tid, prof])?;
@@ -887,33 +1060,135 @@ impl Downloads {
             })?;
             self.refresh_offline(&sid, &tid)?;
             total -= bytes;
-            removed += 1;
+            removed.push((sid, tid));
         }
         Ok(removed)
     }
 
-    /// `Command::ClearStreamCache`.
+    /// `Command::ClearStreamCache`. Files in use are removed once released
+    /// (see [`release_reader`](Self::release_reader) and
+    /// [`set_protected`](Self::set_protected)). Returns the number of files
+    /// removed now.
     pub fn clear_stream_cache(&self) -> DbResult<usize> {
-        let entries: Vec<(String, String, String)> = self.inner.db.with_conn(|c| {
-            let mut st = c.prepare_cached("SELECT server_id, track_id, path FROM cache_entries")?;
-            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let entries: Vec<(String, String, String, String)> = self.inner.db.with_conn(|c| {
+            let mut st =
+                c.prepare_cached("SELECT server_id, track_id, profile, path FROM cache_entries")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
         let mut n = 0;
-        for (sid, tid, path) in &entries {
-            if Path::new(path).exists() && std::fs::remove_file(path).is_ok() {
-                n += 1;
+        for (sid, tid, prof, path) in entries {
+            let p = PathBuf::from(&path);
+            {
+                let mut u = self.inner.cache_use.lock();
+                if u.in_use(&sid, &tid, &p) {
+                    let already = u.doomed.iter().any(|d| d.path == p);
+                    if !already {
+                        u.doomed.push(Doomed {
+                            server_id: sid,
+                            track_id: tid,
+                            profile: prof,
+                            path: p,
+                        });
+                    }
+                    continue;
+                }
+            }
+            match remove_if_exists(&path) {
+                Ok(true) => n += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, path, "clearing cache file");
+                    continue;
+                }
             }
             self.inner.db.with_conn(|c| {
                 c.execute(
-                    "DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2",
-                    params![sid, tid],
+                    "DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3",
+                    params![sid, tid, prof],
                 )?;
                 Ok(())
             })?;
-            self.refresh_offline(sid, tid)?;
+            self.refresh_offline(&sid, &tid)?;
         }
         Ok(n)
+    }
+
+    /// A reader (the loopback proxy) opened a cache file: it is not evicted
+    /// or removed until [`release_reader`](Self::release_reader).
+    pub fn acquire_reader(&self, path: &Path) {
+        *self
+            .inner
+            .cache_use
+            .lock()
+            .readers
+            .entry(path.to_path_buf())
+            .or_insert(0) += 1;
+    }
+
+    /// The reader of `path` is done. Runs deferred removals and the budget;
+    /// returns the tracks whose offline state changed.
+    pub fn release_reader(&self, path: &Path) -> Vec<TrackKey> {
+        {
+            let mut u = self.inner.cache_use.lock();
+            if let Some(n) = u.readers.get_mut(path) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    u.readers.remove(path);
+                }
+            }
+        }
+        self.reap()
+    }
+
+    /// The tracks the player has loaded or preloaded: their cache files are
+    /// kept (a seek re-reads them) until they leave this set. Returns the
+    /// tracks whose offline state changed from deferred removals.
+    pub fn set_protected(&self, tracks: Vec<TrackKey>) -> Vec<TrackKey> {
+        {
+            let mut u = self.inner.cache_use.lock();
+            let next: std::collections::HashSet<TrackKey> = tracks.into_iter().collect();
+            if next == u.protected {
+                return vec![];
+            }
+            u.protected = next;
+        }
+        self.reap()
+    }
+
+    /// Carry out deferred removals whose files are no longer in use, then
+    /// the budget (entries skipped while in use may now go).
+    fn reap(&self) -> Vec<TrackKey> {
+        let ready: Vec<Doomed> = {
+            let mut u = self.inner.cache_use.lock();
+            let (ready, keep): (Vec<Doomed>, Vec<Doomed>) = std::mem::take(&mut u.doomed)
+                .into_iter()
+                .partition(|d| !u.in_use(&d.server_id, &d.track_id, &d.path));
+            u.doomed = keep;
+            ready
+        };
+        let mut changed = vec![];
+        for d in ready {
+            if let Err(e) = remove_if_exists(&d.path.to_string_lossy()) {
+                tracing::warn!(error = %e, "removing released cache file");
+            }
+            let r = self.inner.db.with_conn(|c| {
+                c.execute(
+                    "DELETE FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4",
+                    params![d.server_id, d.track_id, d.profile, d.path.to_string_lossy().as_ref()],
+                )?;
+                Ok(())
+            });
+            if let Err(e) = r.and_then(|()| self.refresh_offline(&d.server_id, &d.track_id)) {
+                tracing::warn!(error = %e, "deferred cache removal");
+            }
+            changed.push((d.server_id, d.track_id));
+        }
+        match self.evict_over_budget() {
+            Ok(evicted) => changed.extend(evicted),
+            Err(e) => tracing::warn!(error = %e, "cache budget"),
+        }
+        changed
     }
 
     // -- resolution ---------------------------------------------------------
@@ -957,12 +1232,29 @@ impl Downloads {
         Some(profile)
     }
 
-    /// Resolve how to play a track: downloaded file → cached file → stream URL.
+    /// Resolve how to play a track without the loopback proxy: downloaded
+    /// file → cached file → stream URL (credentials in its query). The core
+    /// uses [`resolve_with`](Self::resolve_with) and a proxy.
     pub fn resolve(
         &self,
         api: &dyn SubsonicApi,
         key: &str,
         track: &api::Track,
+    ) -> DbResult<MediaSource> {
+        self.resolve_with(api, key, track, None)
+    }
+
+    /// Resolve how to play a track: a completed download is a `file://`
+    /// URL; anything else goes through `proxy` (which serves a complete
+    /// stream-cache copy from disk or fetches from the server, caching a
+    /// complete read). Without a proxy (or when it declines) this falls back
+    /// to a cached `file://` or the server's stream URL.
+    pub fn resolve_with(
+        &self,
+        api: &dyn SubsonicApi,
+        key: &str,
+        track: &api::Track,
+        proxy: Option<&dyn StreamMinter>,
     ) -> DbResult<MediaSource> {
         let sid = &track.server_id;
         let summary = crate::subsonic::convert::summary_of(track);
@@ -982,26 +1274,6 @@ impl Downloads {
             });
         }
         let profile = self.effective_profile(track.suffix.as_deref());
-        if let Some((p, ct)) = self.cache_get(sid, &track.id, profile.as_ref())? {
-            return Ok(MediaSource {
-                key: key.into(),
-                track: summary,
-                url: file_url(&p),
-                headers: HashMap::new(),
-                mime_type: ct.or(track.content_type.clone()),
-                gain_db,
-                transcoded: profile.is_some(),
-            });
-        }
-        let opts = match &profile {
-            Some(p) => StreamOptions {
-                format: p.format.clone(),
-                max_bit_rate: p.max_bit_rate,
-                estimate_content_length: true,
-                ..Default::default()
-            },
-            None => StreamOptions::default(),
-        };
         let transcoded = profile
             .as_ref()
             .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
@@ -1013,6 +1285,46 @@ impl Downloads {
         } else {
             track.content_type.clone()
         };
+        if let Some(proxy) = proxy {
+            let cached_type = self
+                .cache_lookup(sid, &track.id, profile.as_ref(), false)?
+                .and_then(|e| e.content_type);
+            let suffix = if transcoded {
+                profile.as_ref().and_then(|p| p.format.clone())
+            } else {
+                track.suffix.clone()
+            };
+            let mime_type = cached_type.or(mime.clone());
+            if let Some(url) = proxy.mint(StreamTarget {
+                server_id: sid.clone(),
+                track_id: track.id.clone(),
+                profile: profile.clone(),
+                suffix,
+                mime_type: mime_type.clone(),
+            }) {
+                return Ok(MediaSource {
+                    key: key.into(),
+                    track: summary,
+                    url,
+                    headers: HashMap::new(),
+                    mime_type,
+                    gain_db,
+                    transcoded,
+                });
+            }
+        }
+        if let Some((p, ct)) = self.cache_get(sid, &track.id, profile.as_ref())? {
+            return Ok(MediaSource {
+                key: key.into(),
+                track: summary,
+                url: file_url(&p),
+                headers: HashMap::new(),
+                mime_type: ct.or(track.content_type.clone()),
+                gain_db,
+                transcoded: profile.is_some(),
+            });
+        }
+        let opts = stream_options(profile.as_ref());
         Ok(MediaSource {
             key: key.into(),
             track: summary,
@@ -1054,6 +1366,45 @@ impl Downloads {
         };
         Ok(self.downloads_bytes()? > t)
     }
+}
+
+/// `stream` options for an effective profile (`None` = original).
+pub fn stream_options(profile: Option<&TranscodingProfile>) -> StreamOptions {
+    match profile {
+        Some(p) => StreamOptions {
+            format: p.format.clone(),
+            max_bit_rate: p.max_bit_rate,
+            estimate_content_length: true,
+            ..Default::default()
+        },
+        None => StreamOptions::default(),
+    }
+}
+
+/// What a stream URL stands for, handed to a [`StreamMinter`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamTarget {
+    pub server_id: String,
+    pub track_id: String,
+    /// Effective transcoding profile (`None` = original).
+    pub profile: Option<TranscodingProfile>,
+    /// File extension of what will be served (URL hint, cache file name).
+    pub suffix: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+/// Turns a [`StreamTarget`] into a URL a platform player can open (the
+/// core's loopback proxy). `None` declines (resolution falls back).
+pub trait StreamMinter {
+    fn mint(&self, target: StreamTarget) -> Option<String>;
+}
+
+/// A complete stream-cache entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CacheEntry {
+    pub path: PathBuf,
+    pub content_type: Option<String>,
+    pub bytes: u64,
 }
 
 fn default_transcode_format(platform: Platform) -> &'static str {

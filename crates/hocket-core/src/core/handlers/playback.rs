@@ -17,11 +17,19 @@ use crate::session::reducer::derive;
 impl Actor {
     // -- loading ----------------------------------------------------------------
 
-    /// Resolve a queue item to a media source: downloaded file, cached file
-    /// or stream URL, with ReplayGain folded into `gain_db`.
+    /// Resolve a queue item to a media source: a downloaded file, or a
+    /// loopback proxy URL (stream cache or server; no credentials), with
+    /// ReplayGain folded into `gain_db`.
     pub(crate) fn media_source_for(&self, key: &str, track: &Track) -> Option<MediaSource> {
         let api = self.api()?;
-        let mut source = match self.downloads.resolve(api.as_ref(), key, track) {
+        let proxy = self
+            .stream_proxy
+            .as_ref()
+            .map(|p| p as &dyn crate::downloads::StreamMinter);
+        let mut source = match self
+            .downloads
+            .resolve_with(api.as_ref(), key, track, proxy)
+        {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(target: "hocket_core", error = %e, "resolve media source");
@@ -86,6 +94,46 @@ impl Actor {
         if let Err(e) = self.backend.set_next(source) {
             self.log("debug", format!("set_next: {e}"));
         }
+        self.protect_loaded_tracks();
+    }
+
+    /// Keep the stream-cache files of the loaded and preloaded tracks (a
+    /// seek re-reads them) until they leave the player.
+    pub(crate) fn protect_loaded_tracks(&mut self) {
+        let mut keys = vec![];
+        if self.playback.loaded {
+            if let Some(t) = &self.playback.track {
+                keys.push((t.server_id.clone(), t.id.clone()));
+            }
+        }
+        if let Some(n) = &self.playback.next {
+            keys.push((n.track.server_id.clone(), n.track.id.clone()));
+        }
+        let changed = self.downloads.set_protected(keys);
+        if !changed.is_empty() {
+            self.on_stream_cache_changed(changed);
+        }
+    }
+
+    /// Stream-cache entries appeared or went: tell the UIs which tracks'
+    /// offline state changed, and the new storage totals.
+    pub(crate) fn on_stream_cache_changed(&mut self, tracks: Vec<crate::downloads::TrackKey>) {
+        let mut by_server: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for (sid, tid) in tracks {
+            let ids = by_server.entry(sid).or_default();
+            if !ids.contains(&tid) {
+                ids.push(tid);
+            }
+        }
+        for (server_id, ids) in by_server {
+            self.emit(Event::LibraryChanged {
+                server_id,
+                tables: vec!["tracks".into()],
+                ids,
+            });
+        }
+        let storage = self.storage_summary();
+        self.emit(Event::StorageChanged { storage });
     }
 
     /// Load a document item into the backend. `carried` is the handoff

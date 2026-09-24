@@ -216,6 +216,9 @@ impl Actor {
         state.info = info;
         state.info.reachable = reachable;
         state.api = Some(api.clone());
+        if let Some(p) = &self.stream_proxy {
+            p.set_api(Some(api.clone()));
+        }
         state.client = client;
         state.credential = Some(credential.clone());
         state.lan_key = Some(lan_key);
@@ -285,6 +288,9 @@ impl Actor {
         self.scope = None;
         self.last_doc = None;
         self.server = None;
+        if let Some(p) = &self.stream_proxy {
+            p.set_api(None);
+        }
         if let Err(e) = self.db.delete_server(&server_id) {
             self.error(ErrorKind::Storage, "remove server", Some(e.to_string()));
         }

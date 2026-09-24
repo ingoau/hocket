@@ -120,6 +120,10 @@ pub(crate) struct Actor {
     pub jobs: JobQueue,
     pub outbox: Outbox,
     pub downloads: Downloads,
+    /// Loopback proxy platform players stream through (`None` on the
+    /// coordinator, or when binding failed: resolution then hands out the
+    /// server URL directly).
+    pub stream_proxy: Option<super::stream_proxy::StreamProxy>,
     pub caches: Caches,
     pub scrobbler: Scrobbler,
     pub sleep: SleepTimerMachine,
@@ -249,6 +253,40 @@ impl Actor {
             &cache_dir,
             cfg.platform,
         );
+        let stream_proxy = if cfg.platform == Platform::Coordinator {
+            None
+        } else {
+            let upstream: Option<Arc<dyn super::stream_proxy::StreamUpstream>> =
+                match deps.stream_upstream.clone() {
+                    Some(u) => Some(u),
+                    None => match super::stream_proxy::ReqwestUpstream::new() {
+                        Ok(u) => Some(Arc::new(u)),
+                        Err(e) => {
+                            tracing::error!(error = %e, "stream proxy http client");
+                            None
+                        }
+                    },
+                };
+            let notify_tx = tx.clone();
+            let notify: super::stream_proxy::CacheNotify = Arc::new(move |tracks| {
+                let _ = notify_tx.send(ActorMsg::Internal(Internal::StreamCacheChanged { tracks }));
+            });
+            upstream.and_then(|u| {
+                match super::stream_proxy::StreamProxy::start(
+                    &rt,
+                    downloads.clone(),
+                    clock.clone(),
+                    u,
+                    notify,
+                ) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::error!(error = %e, "stream proxy bind; streaming direct from the server");
+                        None
+                    }
+                }
+            })
+        };
         let caches = Caches::new(db.clone(), clock.clone(), &cache_dir);
         let seed = deps.seed.unwrap_or_else(|| db.random_seed().unsigned_abs());
         let entropy: Arc<dyn Entropy> = match deps.seed {
@@ -322,6 +360,7 @@ impl Actor {
             jobs,
             outbox,
             downloads,
+            stream_proxy,
             caches,
             scrobbler: Scrobbler::new(clock.clone()),
             sleep: SleepTimerMachine::new(clock),
@@ -533,6 +572,7 @@ impl Actor {
                 });
             }
             Internal::Toast { message } => self.toast(message, None),
+            Internal::StreamCacheChanged { tracks } => self.on_stream_cache_changed(tracks),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
@@ -652,6 +692,9 @@ impl Actor {
             let _ = stop.send(());
         }
         let _ = self.backend.stop();
+        if let Some(p) = &self.stream_proxy {
+            p.stop();
+        }
         tracing::info!("core stopped");
     }
 

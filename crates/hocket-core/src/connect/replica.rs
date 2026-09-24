@@ -85,6 +85,9 @@ pub trait ReplicaExt {
         device_id: &str,
         now: EpochMs,
     ) -> ScrobbleClaim;
+    /// Drop the record of a pair (a claim withdrawn before it was
+    /// confirmed). Returns whether there was one.
+    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool;
     fn set_document(&mut self, document: SessionDocument, now: EpochMs);
     fn set_stamp(&mut self, stamp: LastStamp, now: EpochMs);
     fn set_lease(&mut self, lease: TransportLease, now: EpochMs);
@@ -166,6 +169,17 @@ impl ReplicaExt for ReplicaState {
         ScrobbleClaim::New
     }
 
+    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool {
+        let before = self.scrobbles.len();
+        self.scrobbles
+            .retain(|r| !(r.track_id == track_id && same_start(r.started_at, started_at)));
+        let changed = self.scrobbles.len() != before;
+        if changed {
+            self.updated_at = now;
+        }
+        changed
+    }
+
     fn set_document(&mut self, mut document: SessionDocument, now: EpochMs) {
         if document.history.len() > HISTORY_CAP {
             let drop = document.history.len() - HISTORY_CAP;
@@ -208,7 +222,7 @@ impl ReplicaExt for ReplicaState {
 
 /// Scrobble identity tolerance: `startedAt` travels as a float through JSON
 /// and a handoff; a second of slack keeps the pair recognisable.
-fn same_start(a: EpochMs, b: EpochMs) -> bool {
+pub(crate) fn same_start(a: EpochMs, b: EpochMs) -> bool {
     (a - b).abs() < 1000.0
 }
 
@@ -457,6 +471,10 @@ mod tests {
         );
         assert_eq!(r.claim_scrobble("t", 5000.0, "b", 4.0), ScrobbleClaim::New);
         assert_eq!(r.scrobbles.len(), 2);
+        // a withdrawn claim frees the pair for whoever asks next
+        assert!(r.forget_scrobble("t", 1000.3, 5.0));
+        assert!(!r.forget_scrobble("t", 1000.3, 6.0));
+        assert_eq!(r.claim_scrobble("t", 1000.0, "b", 7.0), ScrobbleClaim::New);
     }
 
     #[test]

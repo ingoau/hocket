@@ -491,6 +491,18 @@ struct DeferredScrobble {
     since: EpochMs,
 }
 
+/// An outstanding dedupe query.
+#[derive(Debug, Clone)]
+struct ScrobbleQuery {
+    track_id: TrackId,
+    started_at: EpochMs,
+    /// When it was last sent (retries after [`SCROBBLE_QUERY_RETRY_MS`]).
+    sent_at: EpochMs,
+    /// When this device started waiting for a verdict on the pair: the
+    /// grace for a claim our own room keeps unconfirmed counts from here.
+    since: EpochMs,
+}
+
 /// The Connect engine. One per core.
 pub struct Engine {
     cfg: EngineConfig,
@@ -553,9 +565,9 @@ pub struct Engine {
     resume: Option<ResumeOfferDraft>,
 
     deferred_scrobbles: Vec<DeferredScrobble>,
-    /// Outstanding dedupe queries: id → (track, startedAt, sent at). Re-sent
-    /// after [`SCROBBLE_QUERY_RETRY_MS`] without an answer.
-    scrobble_queries: BTreeMap<String, (TrackId, EpochMs, EpochMs)>,
+    /// Outstanding dedupe queries by id. Re-sent after
+    /// [`SCROBBLE_QUERY_RETRY_MS`] without an answer.
+    scrobble_queries: BTreeMap<String, ScrobbleQuery>,
     /// Scrobbles decided locally while cut off; told to the room on rejoin.
     unreported_scrobbles: Vec<(TrackId, EpochMs)>,
     /// Every `(track, startedAt)` this device knows was scrobbled by someone:
@@ -737,6 +749,9 @@ impl Engine {
             .replica()
             .scrobbles
             .iter()
+            // A claim no member acknowledged yet may still be withdrawn:
+            // persisting it would suppress our own outbox after a restart.
+            .filter(|r| !self.room.is_unconfirmed_scrobble(&r.track_id, r.started_at))
             .map(|r| (&r.track_id, r.started_at, &r.device_id));
         let known = self.known_scrobbled.iter().map(|(t, s, d)| (t, *s, d));
         for (track_id, started_at, device_id) in known.chain(own_room) {
@@ -1330,7 +1345,10 @@ impl Engine {
             .deferred_scrobbles
             .iter()
             .any(|d| same(&d.track_id, d.started_at))
-            || self.scrobble_queries.values().any(|(t, s, _)| same(t, *s));
+            || self
+                .scrobble_queries
+                .values()
+                .any(|q| same(&q.track_id, q.started_at));
         if !own_pending {
             self.learn_scrobbled(track_id, started_at, device_id);
         }
@@ -1578,7 +1596,7 @@ impl Engine {
         if self.upstream_authoritative() && self.flush_deferred_at.is_none() {
             let deferred = std::mem::take(&mut self.deferred_scrobbles);
             for d in deferred {
-                self.query_scrobble(d.track_id, d.started_at);
+                self.query_scrobble(d.track_id, d.started_at, d.since);
             }
         }
     }
@@ -1627,10 +1645,10 @@ impl Engine {
         }
         // Queries the vanished room never answered are asked again on rejoin.
         let now = self.now_local_ms();
-        for (_, (track_id, started_at, _)) in std::mem::take(&mut self.scrobble_queries) {
+        for (_, q) in std::mem::take(&mut self.scrobble_queries) {
             self.deferred_scrobbles.push(DeferredScrobble {
-                track_id,
-                started_at,
+                track_id: q.track_id,
+                started_at: q.started_at,
                 since: now,
             });
         }
@@ -2301,7 +2319,12 @@ impl Engine {
                 query_id,
                 duplicate,
             } => {
-                if let Some((track_id, started_at, _)) = self.scrobble_queries.remove(&query_id) {
+                if let Some(ScrobbleQuery {
+                    track_id,
+                    started_at,
+                    ..
+                }) = self.scrobble_queries.remove(&query_id)
+                {
                     let me = self.cfg.device.id.clone();
                     self.learn_scrobbled(&track_id, started_at, &me);
                     self.out.push(Output::Scrobble {
@@ -2348,10 +2371,47 @@ impl Engine {
             | Msg::LeaseRelease { .. }
             | Msg::ClockPing { .. }
             | Msg::HandoffRelease { .. }
-            | Msg::ScrobbleSubmitted { .. }
             | Msg::ScrobbleDedupeQuery { .. }
             | Msg::Unknown => {}
+            Msg::ScrobbleSubmitted { .. } if from_loopback => {}
+            Msg::ScrobbleSubmitted {
+                track_id,
+                started_at,
+                device_id,
+            } => self.on_leader_claimed_scrobble(track_id, started_at, device_id),
         }
+    }
+
+    /// A LAN leader claimed a scrobble of its own play and waits for a
+    /// member to know about it before it submits (see the room's
+    /// `UnconfirmedScrobble`). Remember it and echo it back. When we reached
+    /// the same play ourselves and wait for our own verdict, stay quiet:
+    /// the room settles both claims, and echoing would vouch for knowledge
+    /// we would drop again if our verdict went elsewhere.
+    fn on_leader_claimed_scrobble(
+        &mut self,
+        track_id: TrackId,
+        started_at: EpochMs,
+        device_id: DeviceId,
+    ) {
+        let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
+        let own_pending = self
+            .deferred_scrobbles
+            .iter()
+            .any(|d| same(&d.track_id, d.started_at))
+            || self
+                .scrobble_queries
+                .values()
+                .any(|q| same(&q.track_id, q.started_at));
+        if own_pending {
+            return;
+        }
+        self.learn_scrobbled(&track_id, started_at, &device_id);
+        self.upstream_send(Msg::ScrobbleSubmitted {
+            track_id,
+            started_at,
+            device_id,
+        });
     }
 
     fn on_welcome(
@@ -2581,7 +2641,7 @@ impl Engine {
             self.announce_known_scrobbles();
             let deferred = std::mem::take(&mut self.deferred_scrobbles);
             for d in deferred {
-                self.query_scrobble(d.track_id, d.started_at);
+                self.query_scrobble(d.track_id, d.started_at, d.since);
             }
         }
         self.emit_devices();
@@ -3289,10 +3349,10 @@ impl Engine {
             });
             return;
         }
+        let now = self.now_local_ms();
         if self.upstream_authoritative() {
-            self.query_scrobble(track_id, started_at);
+            self.query_scrobble(track_id, started_at, now);
         } else {
-            let now = self.now_local_ms();
             self.deferred_scrobbles.push(DeferredScrobble {
                 track_id,
                 started_at,
@@ -3301,11 +3361,18 @@ impl Engine {
         }
     }
 
-    fn query_scrobble(&mut self, track_id: TrackId, started_at: EpochMs) {
+    fn query_scrobble(&mut self, track_id: TrackId, started_at: EpochMs, since: EpochMs) {
         let query_id = self.next_op_id();
         let now = self.now_local_ms();
-        self.scrobble_queries
-            .insert(query_id.clone(), (track_id.clone(), started_at, now));
+        self.scrobble_queries.insert(
+            query_id.clone(),
+            ScrobbleQuery {
+                track_id: track_id.clone(),
+                started_at,
+                sent_at: now,
+                since,
+            },
+        );
         let device_id = self.cfg.device.id.clone();
         self.upstream_send(Msg::ScrobbleDedupeQuery {
             query_id,
@@ -3321,12 +3388,12 @@ impl Engine {
         let due: Vec<(String, TrackId, EpochMs)> = self
             .scrobble_queries
             .iter()
-            .filter(|(_, (_, _, sent))| now - sent >= SCROBBLE_QUERY_RETRY_MS)
-            .map(|(id, (t, s, _))| (id.clone(), t.clone(), *s))
+            .filter(|(_, q)| now - q.sent_at >= SCROBBLE_QUERY_RETRY_MS)
+            .map(|(id, q)| (id.clone(), q.track_id.clone(), q.started_at))
             .collect();
         for (query_id, track_id, started_at) in due {
-            if let Some(e) = self.scrobble_queries.get_mut(&query_id) {
-                e.2 = now;
+            if let Some(q) = self.scrobble_queries.get_mut(&query_id) {
+                q.sent_at = now;
             }
             let device_id = self.cfg.device.id.clone();
             self.upstream_send(Msg::ScrobbleDedupeQuery {
@@ -3335,6 +3402,30 @@ impl Engine {
                 started_at,
                 device_id,
             });
+        }
+    }
+
+    /// Our own room's verdicts stopped counting (its members went quiet, or
+    /// we left for another room): claims on our own plays that no member
+    /// acknowledged are withdrawn from its log, and while our own room is
+    /// still the upstream the queries behind them wait as deferred
+    /// scrobbles (the grace still counting from the first wait), to be
+    /// judged against whatever the rest of the session did meanwhile.
+    fn withdraw_own_room_claims(&mut self, now: EpochMs) {
+        let _ = now;
+        if self.room.has_unconfirmed_scrobbles() {
+            let outs = self.room.withdraw_unconfirmed_scrobbles();
+            self.process_room_outputs(outs);
+            self.drain_loops();
+        }
+        if self.remote.is_none() {
+            for (_, q) in std::mem::take(&mut self.scrobble_queries) {
+                self.deferred_scrobbles.push(DeferredScrobble {
+                    track_id: q.track_id,
+                    started_at: q.started_at,
+                    since: q.since,
+                });
+            }
         }
     }
 
@@ -3456,7 +3547,11 @@ impl Engine {
             }
         }
 
-        if self.upstream_authoritative() {
+        let authoritative = self.upstream_authoritative();
+        if self.remote.is_some() || !authoritative {
+            self.withdraw_own_room_claims(now);
+        }
+        if authoritative {
             self.retry_scrobble_queries(now);
             // Deferred verdicts go to our own room a beat after it became
             // authoritative again, so returning members' announcements land first.
@@ -3467,7 +3562,7 @@ impl Engine {
                 self.flush_deferred_at = None;
                 let deferred = std::mem::take(&mut self.deferred_scrobbles);
                 for d in deferred {
-                    self.query_scrobble(d.track_id, d.started_at);
+                    self.query_scrobble(d.track_id, d.started_at, d.since);
                 }
             }
         } else {
@@ -3476,11 +3571,32 @@ impl Engine {
 
         // Deferred scrobbles past the grace period: local judgement.
         let grace = self.cfg.scrobble_grace_ms;
-        let (expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) = self
+        let (mut expired, keep): (Vec<DeferredScrobble>, Vec<DeferredScrobble>) = self
             .deferred_scrobbles
             .drain(..)
             .partition(|d| now - d.since >= grace);
         self.deferred_scrobbles = keep;
+        // So are claims our own room kept unconfirmed that long (members
+        // that never echo, say): the claim stands without them.
+        if self.remote.is_none() {
+            let stale: Vec<String> = self
+                .scrobble_queries
+                .iter()
+                .filter(|(_, q)| now - q.since >= grace)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in stale {
+                if let Some(q) = self.scrobble_queries.remove(&id) {
+                    let outs = self.room.confirm_scrobble(&q.track_id, q.started_at);
+                    self.process_room_outputs(outs);
+                    expired.push(DeferredScrobble {
+                        track_id: q.track_id,
+                        started_at: q.started_at,
+                        since: q.since,
+                    });
+                }
+            }
+        }
         for d in expired {
             let me = self.cfg.device.id.clone();
             self.learn_scrobbled(&d.track_id, d.started_at, &me);

@@ -944,6 +944,7 @@ impl Actor {
     }
 
     pub(crate) fn emit_transport(&mut self) {
+        self.protect_loaded_tracks();
         let transport = self.transport_state();
         self.emit(Event::TransportChanged { transport });
         self.emit_media_session();

@@ -97,8 +97,19 @@ impl Actor {
             keys::TRANSCODING_PROFILES => self.apply_transcoding_settings(),
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
                 self.apply_storage_settings();
-                let storage = self.storage_summary();
-                self.emit(Event::StorageChanged { storage });
+                // A smaller budget applies now, not at the next cache write.
+                match self.downloads.evict_over_budget() {
+                    Ok(evicted) if !evicted.is_empty() => self.on_stream_cache_changed(evicted),
+                    Ok(_) => {
+                        let storage = self.storage_summary();
+                        self.emit(Event::StorageChanged { storage });
+                    }
+                    Err(e) => {
+                        self.error(ErrorKind::Storage, "stream cache", Some(e.to_string()));
+                        let storage = self.storage_summary();
+                        self.emit(Event::StorageChanged { storage });
+                    }
+                }
             }
             keys::CONNECT_COORDINATOR_URL => {
                 let url = self.settings.get_string(key);

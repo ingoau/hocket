@@ -810,12 +810,21 @@ impl Actor {
         });
     }
 
+    /// Files the player is reading (or has loaded) are removed once
+    /// released; everything else goes now.
     pub(crate) fn clear_stream_cache(&mut self) {
         if let Err(e) = self.downloads.clear_stream_cache() {
             self.toast(format!("Couldn't clear the cache: {e}"), None);
         }
         let storage = self.storage_summary();
         self.emit(Event::StorageChanged { storage });
+        if let Some(server_id) = self.server_id() {
+            self.emit(Event::LibraryChanged {
+                server_id,
+                tables: vec!["tracks".into()],
+                ids: vec![],
+            });
+        }
     }
 
     // -- filters --------------------------------------------------------------------------

@@ -15,6 +15,7 @@ mod handlers;
 pub mod io;
 mod queries;
 mod state;
+pub mod stream_proxy;
 #[cfg(any(feature = "sim", test))]
 pub mod test_support;
 
@@ -168,6 +169,12 @@ pub enum Internal {
     Toast {
         message: String,
     },
+    /// The stream proxy cached a track, or cache entries were evicted or
+    /// removed after their reader let go: these tracks' offline state
+    /// changed.
+    StreamCacheChanged {
+        tracks: Vec<crate::downloads::TrackKey>,
+    },
     /// A spawned short task finished (bookkeeping for `settle`).
     TaskDone,
     /// Test barrier: answered once every message before it was handled, with
@@ -270,6 +277,8 @@ pub(crate) struct Deps {
     pub seed: Option<u64>,
     /// Drive time from the tick only (no wall-clock ticker task).
     pub manual_tick: bool,
+    /// How the loopback stream proxy reaches the server (`None` = reqwest).
+    pub stream_upstream: Option<Arc<dyn stream_proxy::StreamUpstream>>,
 }
 
 impl Deps {
@@ -283,6 +292,7 @@ impl Deps {
             server: None,
             seed: None,
             manual_tick: false,
+            stream_upstream: None,
         }
     }
 }

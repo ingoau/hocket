@@ -1,0 +1,80 @@
+[package]
+name = "hocket-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "cargo-fuzz targets for hocket-core's parsers. Not part of the main workspace."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+hocket-core = { path = "../crates/hocket-core", default-features = false }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Its own workspace, so the root workspace never builds it and it never
+# builds as part of the root workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "wire_decode"
+path = "fuzz_targets/wire_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "subsonic_envelope"
+path = "fuzz_targets/subsonic_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lyrics_lrc"
+path = "fuzz_targets/lyrics_lrc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lyrics_structured"
+path = "fuzz_targets/lyrics_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lyrics_cursor"
+path = "fuzz_targets/lyrics_cursor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_import"
+path = "fuzz_targets/config_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nsp_import"
+path = "fuzz_targets/nsp_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "api_json"
+path = "fuzz_targets/api_json.rs"
+test = false
+doc = false
+bench = false
