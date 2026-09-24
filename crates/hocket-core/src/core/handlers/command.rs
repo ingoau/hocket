@@ -219,7 +219,10 @@ impl Actor {
                 let document = self.config_document(include_secrets);
                 self.emit(Event::ConfigExported { document });
             }
-            Command::ImportConfig { document } => self.import_config(&document),
+            Command::ImportConfig {
+                document,
+                include_device_local,
+            } => self.import_config(&document, include_device_local),
 
             // -- audio --
             Command::SetAudioSettings { settings } => self.set_audio_settings(settings),

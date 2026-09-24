@@ -682,7 +682,11 @@ async fn settings_persist_export_and_import() {
         QueryResult::SettingDetail(Some(s)) => assert_eq!(s.value, "10"),
         other => panic!("{other:?}"),
     }
-    t.run(Command::ImportConfig { document: doc }).await;
+    t.run(Command::ImportConfig {
+        document: doc,
+        include_device_local: false,
+    })
+    .await;
     match t
         .query(Query::Setting {
             key: "queue.savedCap".into(),
@@ -933,4 +937,94 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
         e,
         Event::Toast { toast } if toast.message == "Undid Add to playlist (1): undid 0 of 1, 1 changed elsewhere"
     )), "{:?}", t.events.all().iter().filter(|e| matches!(e, Event::Toast{..})).collect::<Vec<_>>());
+}
+
+/// `ImportConfig`: account-synced keys the document changes are fed to the
+/// Connect engine (a peer sees them, instead of reverting the import on its
+/// next merge); device-local keys stay untouched unless
+/// `include_device_local` is set, and even then never travel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_asked() {
+    use hocket_core::core::io::memory::MemoryNet;
+    let server = seeded_server(2, 180.0);
+    let net = MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    assert_eq!(a.snapshot().await.devices.len(), 2, "a and b paired");
+    let setting = |t: &TestCore, key: &str| {
+        let key = key.to_string();
+        let t = t.clone_handle();
+        async move {
+            match t.query(Query::Setting { key }).await {
+                QueryResult::SettingDetail(Some(s)) => s.value,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+
+    // The document comes from a third device (later timestamps than
+    // anything a and b hold): a synced key and a device-local key.
+    let c = TestCore::start_on("c", server, None, 3, clock.clone()).await;
+    c.run(Command::SetSetting {
+        key: "queue.savedCap".into(),
+        value: "5".into(),
+    })
+    .await;
+    c.run(Command::SetSetting {
+        key: "display.theme".into(),
+        value: "\"dark\"".into(),
+    })
+    .await;
+    c.run(Command::ExportConfig {
+        include_secrets: false,
+    })
+    .await;
+    let doc = c
+        .events
+        .all()
+        .into_iter()
+        .find_map(|e| match e {
+            Event::ConfigExported { document } => Some(document),
+            _ => None,
+        })
+        .unwrap();
+
+    a.run(Command::ImportConfig {
+        document: doc.clone(),
+        include_device_local: false,
+    })
+    .await;
+    assert_eq!(setting(&a, "queue.savedCap").await, "5");
+    assert_eq!(
+        setting(&a, "display.theme").await,
+        "\"system\"",
+        "device-local keys are left alone by default"
+    );
+    assert!(
+        a.events.all().iter().any(|e| matches!(
+            e,
+            Event::Toast { toast } if toast.message.contains("device setting")
+        )),
+        "the import says what it left alone: {:?}",
+        a.events.all()
+    );
+    // The synced key reached the engine: b learns it.
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(setting(&b, "queue.savedCap").await, "5", "b got the import");
+
+    a.run(Command::ImportConfig {
+        document: doc,
+        include_device_local: true,
+    })
+    .await;
+    assert_eq!(setting(&a, "display.theme").await, "\"dark\"");
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(
+        setting(&b, "display.theme").await,
+        "\"system\"",
+        "device-local keys never travel"
+    );
+    assert_eq!(setting(&b, "queue.savedCap").await, "5");
 }

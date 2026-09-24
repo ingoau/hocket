@@ -1604,7 +1604,7 @@ impl Engine {
         if !r.candidates.contains(&url) || !matches!(r.state, RemoteState::Connecting { .. }) {
             // A socket from an attempt the election has since superseded (or a
             // duplicate): it leads to the wrong room. Never adopt it.
-            self.log("debug", format!("dropping a stale connection to {url}"));
+            self.log("debug", format!("dropping a stale connection to {url} ({peer}); remote {:?}", self.remote));
             self.out.push(Output::Disconnect { peer });
             return;
         }
@@ -1818,6 +1818,8 @@ impl Engine {
         let is_upstream = matches!(&self.remote, Some(Remote { state: RemoteState::Attached { peer: p } | RemoteState::Handshaking { peer: p, .. }, .. }) if p == &peer);
         if is_upstream {
             self.on_upstream_lost(Some("connection closed".into()));
+        } else {
+            self.log("debug", format!("TMP closed {peer} ignored; remote {:?}", self.remote));
         }
     }
 
@@ -1862,6 +1864,7 @@ impl Engine {
         }
         let is_upstream = matches!(&self.remote, Some(Remote { state: RemoteState::Attached { peer: p } | RemoteState::Handshaking { peer: p, .. }, .. }) if p == &peer);
         if !is_upstream {
+            self.log("debug", format!("TMP frame {} from {peer} ignored; remote {:?}", msg.msg.name(), self.remote));
             return;
         }
         self.last_upstream_msg_at = self.now_local_ms();

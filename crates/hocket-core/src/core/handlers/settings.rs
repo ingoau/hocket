@@ -277,7 +277,11 @@ impl Actor {
         crate::settings::to_json(&doc).unwrap_or_default()
     }
 
-    pub(crate) fn import_config(&mut self, document: &str) {
+    /// Import a config document. Synced keys the document changes are
+    /// broadcast like a local edit (otherwise the next merge from a peer
+    /// would revert the import); device-local keys, including the `audio`
+    /// block, are only taken with `include_device_local`.
+    pub(crate) fn import_config(&mut self, document: &str, include_device_local: bool) {
         let doc = match crate::settings::parse_document(document) {
             Ok(d) => d,
             Err(e) => {
@@ -286,7 +290,9 @@ impl Actor {
             }
         };
         let now = self.now();
-        let (applied, skipped) = self.settings.apply_settings(&doc.settings, now);
+        let mut out = self
+            .settings
+            .import_settings(&doc.settings, now, include_device_local);
         for f in &doc.filters {
             self.save_filter(f.clone());
         }
@@ -296,30 +302,65 @@ impl Actor {
                 .set_shortcut(&s.action_id, s.shortcut.as_deref());
         }
         self.persist_registry();
-        if let Ok(v) = serde_json::to_value(&doc.audio) {
-            let _ = self.settings.set_value(keys::AUDIO_SETTINGS, v, now);
+        if include_device_local {
+            if let Ok(v) = serde_json::to_value(&doc.audio) {
+                if self.settings.set_value(keys::AUDIO_SETTINGS, v, now).is_ok() {
+                    out.applied.push(keys::AUDIO_SETTINGS.into());
+                }
+            }
+        } else {
+            out.skipped_device_local.push(keys::AUDIO_SETTINGS.into());
         }
         if let Ok(v) = serde_json::to_value(&doc.autoplay) {
-            let _ = self.settings.set_value(keys::AUTOPLAY_SETTINGS, v, now);
+            let before = self.settings.get(keys::AUTOPLAY_SETTINGS);
+            if self
+                .settings
+                .set_value(keys::AUTOPLAY_SETTINGS, v, now)
+                .is_ok()
+            {
+                out.applied.push(keys::AUTOPLAY_SETTINGS.into());
+                if self.settings.get(keys::AUTOPLAY_SETTINGS) != before {
+                    out.changed_synced.push(keys::AUTOPLAY_SETTINGS.into());
+                }
+            }
         }
         self.save_settings();
-        for s in self.settings.to_api() {
-            self.emit(Event::SettingChanged { setting: s });
+        let changed_synced: std::collections::HashSet<&str> =
+            out.changed_synced.iter().map(String::as_str).collect();
+        // Everything is announced to the UI; changed synced keys go through
+        // the local-edit path below, which also feeds the engine.
+        let all = self.settings.to_api();
+        for s in &all {
+            if !changed_synced.contains(s.key.as_str()) {
+                self.emit(Event::SettingChanged { setting: s.clone() });
+            }
         }
-        for key in applied {
-            self.apply_setting_side_effects(&key, true);
+        for key in &out.applied {
+            if !changed_synced.contains(key.as_str()) {
+                self.apply_setting_side_effects(key, true);
+            }
         }
-        self.apply_setting_side_effects(keys::AUDIO_SETTINGS, true);
-        self.apply_setting_side_effects(keys::AUTOPLAY_SETTINGS, true);
+        for s in all {
+            if changed_synced.contains(s.key.as_str()) {
+                self.after_setting_changed(s, true);
+            }
+        }
         let shortcuts = self.registry.shortcuts();
         self.emit(Event::ShortcutsChanged { shortcuts });
-        if !skipped.is_empty() {
-            self.toast(
-                format!("Imported; {} setting(s) were skipped", skipped.len()),
-                None,
-            );
-        } else {
+        let mut notes = Vec::new();
+        if !out.skipped.is_empty() {
+            notes.push(format!("{} setting(s) were skipped", out.skipped.len()));
+        }
+        if !include_device_local && !out.skipped_device_local.is_empty() {
+            notes.push(format!(
+                "{} device setting(s) left alone",
+                out.skipped_device_local.len()
+            ));
+        }
+        if notes.is_empty() {
             self.toast("Configuration imported", None);
+        } else {
+            self.toast(format!("Imported; {}", notes.join(", ")), None);
         }
     }
 

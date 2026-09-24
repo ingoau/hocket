@@ -1708,8 +1708,16 @@ pub enum Command {
     ExportConfig {
         include_secrets: bool,
     },
+    /// Import a config document (`ExportConfig` output). Account-synced
+    /// settings it changes are broadcast to the other devices like a local
+    /// edit. Device-local settings (audio output, transcoding, storage,
+    /// `connect.*`, display theme/accent, battery, …) describe the device the
+    /// document came from and are left alone unless `include_device_local`
+    /// is set (default false; older callers may omit it).
     ImportConfig {
         document: String,
+        #[serde(default)]
+        include_device_local: bool,
     },
 
     // -- audio ------------------------------------------------------------
