@@ -88,7 +88,6 @@ class LargeFontLayoutTest {
         compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
         compose.waitUntil(5_000) { exists("player.playPause") }
         holds("now playing")
-        compose.onNodeWithTag("player.page").performScrollTo()
         compose.onNodeWithTag("player.playPause").performScrollTo()
         holds("now playing, transport in view")
         click("player.mode.queue")

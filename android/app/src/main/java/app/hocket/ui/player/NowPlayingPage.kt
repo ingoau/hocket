@@ -547,23 +547,19 @@ internal fun PlayerArtwork(
     val currentThumbMode = androidx.compose.runtime.rememberUpdatedState(thumbMode)
     Box(
         Modifier
-            .layout { measurable, _ ->
-                val side = hero.bigSlot().width.roundToInt().coerceAtLeast(1)
+            // Laid out at its current size and place (so its bounds are what shows; it relays out
+            // only while the mode or the paused size animates, never during a sheet drag).
+            .layout { measurable, constraints ->
+                val r = hero.playerArt(modeFraction(), scale())
+                val side = r.width.roundToInt().coerceAtLeast(1)
                 val placeable = measurable.measure(Constraints.fixed(side, side))
-                layout(side, side) { placeable.place(0, 0) }
+                layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(r.left.roundToInt(), r.top.roundToInt()) }
             }
             .graphicsLayer {
                 val f = modeFraction()
-                val r = hero.playerArt(f, scale())
-                val base = hero.bigSlot().width
-                if (hidden() || r.width <= 0f || base <= 0f) { alpha = 0f; return@graphicsLayer }
-                val k = r.width / base
-                transformOrigin = TransformOrigin(0f, 0f)
-                translationX = r.left + swipe.value * (1f - f)
-                translationY = r.top
-                scaleX = k
-                scaleY = k
-                shape = RoundedCornerShape(hero.cornerFor(f, r.width) / k.coerceAtLeast(0.01f))
+                if (hidden() || hero.bigSlot().width <= 0f) { alpha = 0f; return@graphicsLayer }
+                translationX = swipe.value * (1f - f)
+                shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
                 shadowElevation = lerpF(HeroGeometry.HERO_ELEVATION.toPx(), 2.dp.toPx(), f)
             }

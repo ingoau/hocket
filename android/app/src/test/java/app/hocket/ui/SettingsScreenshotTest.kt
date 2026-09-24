@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
@@ -165,7 +166,7 @@ class SettingsScreenshotTest {
         scrollToTop()
 
         for (category in SettingsCategory.entries) {
-            compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().performClick()
+            compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             awaitTag("settings.screen")
             capturePages(File(dir, "$prefix-${category.id}"))
             compose.onNodeWithTag("settings.back").performClick()
@@ -174,9 +175,9 @@ class SettingsScreenshotTest {
         }
 
         // Sign-out confirmation, over the Account screen.
-        compose.onNodeWithTag("settings.category.account").performScrollTo().performClick()
+        compose.onNodeWithTag("settings.category.account").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         awaitTag("setting.server.remove")
-        compose.onNodeWithTag("setting.server.remove").performScrollTo().performClick()
+        compose.onNodeWithTag("setting.server.remove").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.waitForIdle()
         awaitTag("confirm.ok")
         captureDialog(File(dir, "$prefix-signout-dialog"))
