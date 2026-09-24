@@ -74,7 +74,7 @@ class ExoBackend(
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build())
-        .setMediaSourceFactory(DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams)))
+        .setMediaSourceFactory(mediaSourceFactory())
         .build()
 
     private var preBufferPlayer: ExoPlayer? = null
@@ -263,6 +263,10 @@ class ExoBackend(
         player.volume = (linear * masterVolume).coerceIn(0.0, 1.0).toFloat()
     }
 
+    private fun mediaSourceFactory(headers: Map<String, String> = emptyMap()): DefaultMediaSourceFactory =
+        DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams, headers))
+            .setLoadErrorHandlingPolicy(CoreStreamLoadErrorPolicy())
+
     private fun mediaSource(source: CoreMediaSource): MediaSource {
         val extras = android.os.Bundle().apply { putDouble("gainDb", source.gainDb) }
         val item = MediaItem.Builder()
@@ -271,6 +275,6 @@ class ExoBackend(
             .setMimeType(source.mimeType)
             .setRequestMetadata(MediaItem.RequestMetadata.Builder().setExtras(extras).build())
             .build()
-        return DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams, source.headers)).createMediaSource(item)
+        return mediaSourceFactory(source.headers).createMediaSource(item)
     }
 }

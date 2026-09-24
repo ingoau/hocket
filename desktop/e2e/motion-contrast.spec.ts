@@ -91,6 +91,25 @@ test.describe("motion, contrast and zoom", () => {
     await expect(announcer).toHaveText(/^Now playing: /);
   });
 
+  test("the in-app switch gives the plain, full-contrast lyrics list without any system preference", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playShowcase(page);
+    await expect(page.getByTestId("lyrics-view")).toHaveAttribute("data-mode", "animated");
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("settings-nav-appearance").click();
+    const toggle = page.getByTestId("setting-lyrics-animated");
+    await expect(toggle).toBeChecked();
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(toggle).not.toBeChecked();
+    await expect(page.getByTestId("lyrics-view")).toHaveAttribute("data-mode", "plain");
+    await expect(page.getByTestId("lyrics-plain").locator('li[aria-current="true"]')).toHaveCount(1, { timeout: 10_000 });
+    // Remembered on this device.
+    await page.reload();
+    await expect(page.getByTestId("lyrics-view")).toHaveAttribute("data-mode", "plain");
+  });
+
   test("fullscreen text reaches 4.5:1 over the fluid background, measured from the pixels, in both themes and on several covers", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

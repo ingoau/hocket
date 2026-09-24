@@ -21,14 +21,16 @@ import kotlin.concurrent.thread
  * (paged: only offset 0 has content), getAlbum, getSong, search3 (paged the same way), getPlaylists,
  * getPlaylist, getGenres, getScanStatus, getCoverArt (a PNG), stream (a short WAV),
  * getLyricsBySongId, setRating/star/unstar/scrobble (accepted, recorded), getSimilarSongs2/getTopSongs
- * (empty), and a 404 on /auth/login (no native API). Every request is recorded in [calls]; a wrong
- * password gets the Subsonic error 40.
+ * (empty), and a 404 on /auth/login (no native API). Every request is recorded in [calls] (stream ids
+ * in [streamIds]); a wrong password gets the Subsonic error 40.
  */
 class FakeNavidrome(private val expectedUser: String = "alice", private val expectedPassword: String = "secret", port: Int = 0) {
     val calls = CopyOnWriteArrayList<String>()
     val ratings = HashMap<String, Int>()
     val starred = HashSet<String>()
     val scrobbles = CopyOnWriteArrayList<Pair<String, Boolean>>()
+    /** The `id` of every `stream`/`download` request, in order. */
+    val streamIds = CopyOnWriteArrayList<String>()
     // A minimal HTTP/1.1 server on ServerSocket: unit tests compile against android.jar, which has no
     // com.sun.net.httpserver.
     // `port` lets a test bring the "same" server back after stopping it (offline start, then online).
@@ -130,7 +132,7 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
                 "getTopSongs" -> Triple(200, wrap("""topSongs":{"song":[]}"""), "application/json")
                 "getRandomSongs" -> Triple(200, wrap("""randomSongs":{"song":[]}"""), "application/json")
                 "getCoverArt" -> Triple(200, png(), "image/png")
-                "stream", "download" -> Triple(200, wav(), "audio/wav")
+                "stream", "download" -> { streamIds += q["id"] ?: "?"; Triple(200, wav(), "audio/wav") }
                 "setRating" -> { q["id"]?.let { ratings[it] = q["rating"]?.toIntOrNull() ?: 0 }; Triple(200, ok.toByteArray(), "application/json") }
                 "star" -> { q["id"]?.let { starred += it }; Triple(200, ok.toByteArray(), "application/json") }
                 "unstar" -> { q["id"]?.let { starred -= it }; Triple(200, ok.toByteArray(), "application/json") }
@@ -172,8 +174,8 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
         0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte(),
     )
 
-    /** 0.2 s of silence, 8 kHz mono 16-bit. */
-    private fun wav(): ByteArray {
+    /** 0.2 s of silence, 8 kHz mono 16-bit: the body of every stream. */
+    fun wav(): ByteArray {
         val samples = 1600
         val data = ByteArray(samples * 2)
         val out = ByteArrayOutputStream()

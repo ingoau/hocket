@@ -1,6 +1,7 @@
 // User media preferences as React state: reduced motion, more contrast,
 // forced colours (Windows high contrast), and viewport breakpoints.
 import { useSyncExternalStore } from "react";
+import { useLyricsAnimated } from "./lyrics-size";
 
 function query(q: string): MediaQueryList | undefined {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(q) : undefined;
@@ -28,10 +29,15 @@ export function usePrefersReducedMotion(): boolean {
   return useMediaQuery(REDUCED_MOTION);
 }
 
-/** Lyrics render as a plain, statically highlighted list (no sweep, blur or springs). */
+/**
+ * Lyrics render as a plain, statically highlighted list (no sweep, blur or
+ * springs): with reduced motion, more contrast or forced colours, or when the
+ * user turned the animation off in Settings → Appearance.
+ */
 export function usePlainLyrics(): boolean {
   const reduced = useMediaQuery(REDUCED_MOTION);
   const contrast = useMediaQuery(MORE_CONTRAST);
   const forced = useMediaQuery(FORCED_COLORS);
-  return reduced || contrast || forced;
+  const animated = useLyricsAnimated();
+  return reduced || contrast || forced || !animated;
 }

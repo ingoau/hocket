@@ -11,6 +11,8 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import app.hocket.core.CoreStreamException
 import app.hocket.core.CoreStreams
 import java.io.IOException
@@ -25,8 +27,9 @@ import java.io.IOException
  * - [read]: one blocking FFI call per chunk of [MIN_CHUNK_BYTES] to [CHUNK_BYTES] (the core's 256 KiB
  *   cap); leftover bytes wait in a small buffer for the next [read]; an empty chunk is end of input.
  * - [close]: `streamClose`; idempotent.
- * - An unknown or expired token is a file-not-found [DataSourceException]: ExoPlayer does not retry
- *   it, the backend reports a fatal error and the core resolves the item again (fresh token).
+ * - An unknown or expired token is a file-not-found [DataSourceException]; [CoreStreamLoadErrorPolicy]
+ *   does not retry it, the backend reports a fatal error and the core resolves the item again (fresh
+ *   token).
  *
  * Runs on ExoPlayer's loader threads (the calls block). [streams] is read once per [open], so a
  * handle is always closed on the core that opened it. Never wrap this in a `CacheDataSource`: the
@@ -191,5 +194,36 @@ class CoreStreamDataSourceFactory(
             .setReadTimeoutMs(30_000)
         if (headers.isNotEmpty()) http.setDefaultRequestProperties(headers)
         return CoreStreamRoutingDataSource(HocketStreamDataSource(streams), DefaultDataSource.Factory(context, http).createDataSource())
+    }
+}
+
+/**
+ * `DefaultLoadErrorHandlingPolicy`, except that core stream failures a retry cannot fix fail at once:
+ * an unknown/expired token (the core must resolve a fresh one), an offset past the end, and a core
+ * that has shut down or closed the handle. Media3's default retries everything but
+ * `FileNotFoundException`-typed errors, which would re-open an expired token three times.
+ */
+class CoreStreamLoadErrorPolicy : DefaultLoadErrorHandlingPolicy() {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        if (coreStreamFailure(loadErrorInfo.exception)?.kind in NOT_RETRYABLE) return C.TIME_UNSET
+        return super.getRetryDelayMsFor(loadErrorInfo)
+    }
+
+    companion object {
+        private val NOT_RETRYABLE = setOf(
+            CoreStreamException.Kind.UnknownToken,
+            CoreStreamException.Kind.RangeNotSatisfiable,
+            CoreStreamException.Kind.ShutDown,
+            CoreStreamException.Kind.Closed,
+        )
+
+        fun coreStreamFailure(e: Throwable?): CoreStreamException? {
+            var t = e
+            while (t != null) {
+                if (t is CoreStreamException) return t
+                t = t.cause
+            }
+            return null
+        }
     }
 }

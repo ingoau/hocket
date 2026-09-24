@@ -1568,6 +1568,10 @@ impl Engine {
             // since our coordinator sync point is now ours to carry, and
             // only a whole-document push can reproduce it.
             self.lan_deferred = false;
+            if std::env::var("HOCKET_SIM_WIRE").is_ok() {
+                // DEBUGQD
+                eprintln!("LOCAL [{:.0}] {} lan_deferred cleared base={:?} confirmed=({},{})", self.now_local_ms(), self.cfg.device.id, self.sync_base, self.confirmed.session_id, self.confirmed.revision);
+            }
             let moved = self
                 .sync_base
                 .as_ref()
@@ -2514,6 +2518,10 @@ impl Engine {
             .unwrap_or(true);
         let room_rev = room_doc.as_ref().map(|d| d.revision).unwrap_or(0);
         self.pending.clear();
+        if room_trivial && std::env::var("HOCKET_SIM_WIRE").is_ok() {
+            // DEBUGQD
+            eprintln!("RECON [{:.0}] {} remote={remote} TRIVIAL room sid={:?} ours=({},{},trivial={})", now, self.cfg.device.id, room_doc.as_ref().map(|d| d.session_id.clone()), self.doc.session_id, self.doc.revision, doc_is_trivial(&self.doc));
+        }
         if room_trivial {
             if !doc_is_trivial(&self.doc) {
                 let doc = self.doc.clone();
@@ -2538,6 +2546,10 @@ impl Engine {
                 && !self.unsynced_overflow
                 && rd.session_id == self.doc.session_id
                 && self.doc.revision <= rd.revision;
+            // DEBUGQD
+            if std::env::var("HOCKET_SIM_WIRE").is_ok() {
+                eprintln!("RECON [{:.0}] {} remote={remote} via_coord={via_coordinator} deferred={deferred} ff={fast_forward} behind={behind} base={:?} doc=({},{},{:?}) room=({},{},{:?}) unsynced={} overflow={}", now, self.cfg.device.id, self.sync_base, self.doc.session_id, self.doc.revision, self.doc.current.as_ref().map(|c| c.key.clone()), rd.session_id, rd.revision, rd.current.as_ref().map(|c| c.key.clone()), self.unsynced.len(), self.unsynced_overflow);
+            }
             if !remote {
                 // Our own room mirrors us; nothing to reconcile.
                 self.confirmed = self.doc.clone();

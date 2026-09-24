@@ -33,3 +33,24 @@ function subscribe(l: () => void): () => void {
 export function useLyricsSize(): LyricsSize {
   return useSyncExternalStore(subscribe, getLyricsSize, getLyricsSize);
 }
+
+// Device-local switch for the word-by-word lyric animation. Off, synced lyrics
+// render as the plain list with the current line highlighted (full contrast,
+// no motion) — the same view reduced motion, more contrast and forced colours
+// get automatically.
+const animListeners = new Set<() => void>();
+let animated: boolean = loadLocal<boolean>("lyricsAnimated", true) !== false;
+
+export function getLyricsAnimated(): boolean {
+  return animated;
+}
+
+export function setLyricsAnimated(v: boolean): void {
+  animated = v;
+  saveLocal("lyricsAnimated", v);
+  for (const l of animListeners) l();
+}
+
+export function useLyricsAnimated(): boolean {
+  return useSyncExternalStore((l) => { animListeners.add(l); return () => animListeners.delete(l); }, getLyricsAnimated, getLyricsAnimated);
+}

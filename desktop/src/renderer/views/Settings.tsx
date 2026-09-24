@@ -17,7 +17,7 @@ import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
-import { LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
+import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -411,7 +411,23 @@ function Appearance() {
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
       <Toggle settingKey={SK.displayAnimatedBackground} title={t("settings.animatedBackground")} />
       <LyricsSizeRow />
+      <LyricsAnimatedRow />
     </>
+  );
+}
+
+function LyricsAnimatedRow() {
+  const on = useLyricsAnimated();
+  return (
+    <div className="setting-row">
+      <div className="label">
+        <div className="title">{t("settings.lyricsAnimated")}<span className="badge">{t("settings.scope.local")}</span></div>
+        <div className="desc" id="lyrics-animated-desc">{t("settings.lyricsAnimatedDesc")}</div>
+      </div>
+      <div className="control">
+        <input type="checkbox" checked={on} onChange={(e) => setLyricsAnimated(e.target.checked)} aria-label={t("settings.lyricsAnimated")} aria-describedby="lyrics-animated-desc" data-testid="setting-lyrics-animated" />
+      </div>
+    </div>
   );
 }
 

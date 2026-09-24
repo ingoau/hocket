@@ -160,6 +160,8 @@ const STRINGS = {
   "lyrics.size.large": "Large",
   "settings.lyricsSize": "Lyrics size in the side panel",
   "settings.lyricsSizeDesc": "Fullscreen lyrics always use the large layout.",
+  "settings.lyricsAnimated": "Animate lyrics word by word",
+  "settings.lyricsAnimatedDesc": "Off shows synced lyrics as a plain list with the current line highlighted, at full contrast and without motion. The system's reduced-motion and more-contrast settings do the same.",
   "lyrics.tier.syllable": "Word-synced",
   "lyrics.tier.line": "Line-synced",
   "lyrics.tier.unsynced": "Unsynced",

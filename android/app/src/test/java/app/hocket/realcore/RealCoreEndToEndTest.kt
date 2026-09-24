@@ -17,6 +17,10 @@ import app.hocket.core.api.Page
 import app.hocket.core.api.Platform
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SortOrder
+import app.hocket.playback.HocketStreamDataSource
+import androidx.media3.common.C
+import androidx.media3.datasource.DataSpec
+import android.net.Uri
 import app.hocket.core.client.CoreClient
 import app.hocket.playback.CoreHost
 import app.hocket.playback.InMemoryCredentialStore
@@ -202,6 +206,88 @@ class RealCoreEndToEndTest {
         }
         val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
         assertEquals(0u, track!!.rating)
+    }
+
+    private fun readAll(source: HocketStreamDataSource): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(1024)
+        while (true) {
+            val n = source.read(buf, 0, buf.size)
+            if (n == C.RESULT_END_OF_INPUT) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * The app's playback path with the core stream capability (what `CoreHost.start` sends): the
+     * core hands the player a `hocket-stream://` source with no server URL or credentials in it, and
+     * ExoPlayer's [HocketStreamDataSource] reads it through the core. A whole read fills the core's
+     * stream cache; a seek (a new open at an offset) and a second play of the track are then served
+     * from it, with no further stream request to the server.
+     */
+    @Test
+    fun aTrackPlaysThroughTheCoreStreamDataSourceAndTheSecondPlayNeverHitsTheServer() = runBlocking {
+        val core = startCore()
+        CoreHost.start(core) // SetBackendCapabilities{core_stream:true}, then Start
+        waitFor { it as? Event.Started }
+        // Metered: background prefetch stays off, so every stream request below is one of ours.
+        core.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Wifi, true, "test")))
+        core.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
+        val info = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }.data.servers.first()
+        waitFor(40_000) { e -> (e as? Event.SyncProgress)?.takeIf { it.data.progress.finished } }
+
+        events.clear()
+        core.dispatch(Commands.playContext(Commands.albumContext(info.id, "al1", "Music Has the Right")))
+        val load = (waitFor { e -> (e as? Event.Backend)?.takeIf { it.data.command is BackendCommand.Load } }.data.command as BackendCommand.Load).data.source
+        val trackId = load.track.id
+        assertTrue("a core stream, not the server: ${load.url.take(16)}", load.url.startsWith("hocket-stream://"))
+        assertFalse("no credentials in the player's url", load.url.contains("t=") || load.url.contains("rest/") || load.url.contains(server.baseUrl))
+        assertTrue("no auth headers for the player", load.headers.isEmpty())
+
+        // Play: open at 0, read to the end in small reads, close.
+        val expected = server.wav()
+        val source = HocketStreamDataSource { core }
+        val uri = Uri.parse(load.url)
+        val length = source.open(DataSpec(uri))
+        assertEquals(expected.size.toLong(), length)
+        assertEquals(uri, source.uri)
+        val played = readAll(source)
+        source.close()
+        assertTrue("the bytes the server sent", played.contentEquals(expected))
+        assertEquals(listOf(trackId), server.streamIds.toList())
+
+        // The whole read is now in the stream cache (reported as Cached).
+        withTimeout(20_000) {
+            while ((core.query(Queries.track(trackId)) as QueryResult.TrackDetail).data?.offline != app.hocket.core.api.OfflineState.Cached) kotlinx.coroutines.delay(50)
+        }
+
+        // Seek: ExoPlayer closes and opens again at the new position (here with a bounded length).
+        val seekTo = 44L
+        assertEquals(1000L, source.open(DataSpec.Builder().setUri(uri).setPosition(seekTo).setLength(1000).build()))
+        val tail = readAll(source)
+        source.close()
+        assertTrue(tail.contentEquals(expected.copyOfRange(seekTo.toInt(), seekTo.toInt() + 1000)))
+
+        // Second play of the same track (a fresh Load from the core): served from the cache.
+        events.clear()
+        core.dispatch(Commands.playContext(Commands.albumContext(info.id, "al1", "Music Has the Right")))
+        val again = (waitFor { e -> (e as? Event.Backend)?.takeIf { (it.data.command as? BackendCommand.Load)?.data?.source?.track?.id == trackId } }.data.command as BackendCommand.Load).data.source
+        assertTrue(again.url.startsWith("hocket-stream://"))
+        assertEquals(expected.size.toLong(), source.open(DataSpec(Uri.parse(again.url))))
+        assertTrue(readAll(source).contentEquals(expected))
+        source.close()
+        assertEquals("the second play and the seek made zero stream requests", listOf(trackId), server.streamIds.toList())
+
+        // An expired or foreign token is file-not-found, which makes the backend report a fatal
+        // error and the core resolve a fresh one.
+        try {
+            source.open(DataSpec(Uri.parse("hocket-stream://not-a-token")))
+            throw AssertionError("an unknown token must fail the open")
+        } catch (e: androidx.media3.datasource.DataSourceException) {
+            assertEquals(androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, e.reason)
+        }
+        source.close()
     }
 
     @Test

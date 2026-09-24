@@ -37,7 +37,7 @@ class ExoBackendTest {
 
     @Before
     fun setUp() {
-        backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope) { dispatched += it }
+        backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it })
     }
 
     @After

@@ -131,7 +131,7 @@ object CoreHost {
      * a core that serves streams ([CoreStreams]) hands ExoPlayer `hocket-stream://` sources, read
      * through [HocketStreamDataSource] and cached by the core; any other core keeps server URLs.
      */
-    internal fun start(core: CoreHandle) {
+    fun start(core: CoreHandle) {
         core.dispatch(Commands.setBackendCapabilities(coreStream = core is CoreStreams))
         core.dispatch(Command.Start)
     }
