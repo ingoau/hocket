@@ -52,6 +52,7 @@ import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
+import app.hocket.core.client.LibraryPatches
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
@@ -96,6 +97,15 @@ fun SearchScreen(nav: NavHostController) {
     }
     LaunchedEffect(Unit) {
         client.searchResults.collect { r -> if (r.fromServer && r.query == query.trim()) { remote = r; pendingRemote = false } }
+    }
+    // Results are a one-off answer, not a refetching list: a rating or love set anywhere (a menu here,
+    // another signed-in device) is patched into them so the rows show it at once.
+    LaunchedEffect(Unit) {
+        client.libraryItemsChanged.collect { c ->
+            local = local?.let { LibraryPatches.search(it, c.items) }
+            remote = remote?.let { LibraryPatches.search(it, c.items) }
+            sheetFor = sheetFor?.let { LibraryPatches.track(it, c.items) }
+        }
     }
     // The keyboard comes up on the first visit only; coming back to the tab keeps the results in view.
     var focusedOnce by rememberSaveable { mutableStateOf(false) }

@@ -263,6 +263,9 @@ pub struct FlushReport {
     pub conflicts: Vec<Conflict>,
     /// Newly created playlists: (entry id, server playlist id).
     pub created_playlists: Vec<(String, String)>,
+    /// Playlists whose mirror row or order was rewritten from the server's
+    /// answer (or removed because the server no longer has them), in order.
+    pub playlists: Vec<String>,
 }
 
 /// Compare-and-swap target for inverses of sent mutations.
@@ -574,6 +577,13 @@ impl Outbox {
                         )?;
                         Ok(())
                     });
+                    match &post {
+                        PostCall::Playlist { playlist, .. } => {
+                            report.playlists.push(playlist.id.clone())
+                        }
+                        PostCall::PlaylistGone(id) => report.playlists.push(id.clone()),
+                        PostCall::None | PostCall::Scrobbled(_) => {}
+                    }
                     if let Err(e) = finished {
                         // Best effort: leave it replayable rather than stuck inflight.
                         let _ = self.db.with_conn(|c| {

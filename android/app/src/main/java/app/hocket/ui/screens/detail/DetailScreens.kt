@@ -225,7 +225,7 @@ fun PrimeAlbumOnDwell(albumId: String) {
 fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     PrimeAlbumOnDwell(id)
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var album by remember { mutableStateOf<Album?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(id, libraryGen) {
@@ -282,7 +282,7 @@ fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
 @Composable
 fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     var artist by remember { mutableStateOf<Artist?>(null) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
@@ -344,7 +344,7 @@ internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
 @Composable
 fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var playlist by remember { mutableStateOf<Playlist?>(null) }
     var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
     var dragKey by remember { mutableStateOf<String?>(null) }
@@ -465,7 +465,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var albums by remember { mutableStateOf<List<Album>?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(name, libraryGen) {
