@@ -58,6 +58,14 @@ object ArtworkColors {
         val primary = Contrast.ensure(s.primary, surfaces + s.onPrimary, darken = fgDarken)
         val secondary = Contrast.ensure(s.secondary, surfaces + s.onSecondary, darken = fgDarken)
         val tertiary = Contrast.ensure(s.tertiary, surfaces + s.onTertiary, darken = fgDarken)
+        // A container can be too bright (dark theme, yellow hues) for even white text: then the
+        // container itself moves (darker in dark theme, lighter in light theme).
+        fun pair(on: Color, container: Color): Pair<Color, Color> {
+            val fg = Contrast.ensure(on, listOf(container), darken = fgDarken)
+            if (Contrast.ratio(fg, container) >= Contrast.TEXT) return fg to container
+            return fg to Contrast.ensure(container, listOf(fg), darken = !fgDarken)
+        }
+        val containers = listOf(pair(s.onPrimaryContainer, s.primaryContainer), pair(s.onSecondaryContainer, s.secondaryContainer), pair(s.onTertiaryContainer, s.tertiaryContainer))
         return s.copy(
             primary = primary,
             onPrimary = Contrast.ensure(s.onPrimary, listOf(primary), darken = !fgDarken),
@@ -65,9 +73,9 @@ object ArtworkColors {
             onSecondary = Contrast.ensure(s.onSecondary, listOf(secondary), darken = !fgDarken),
             tertiary = tertiary,
             onTertiary = Contrast.ensure(s.onTertiary, listOf(tertiary), darken = !fgDarken),
-            onPrimaryContainer = Contrast.ensure(s.onPrimaryContainer, listOf(s.primaryContainer), darken = fgDarken),
-            onSecondaryContainer = Contrast.ensure(s.onSecondaryContainer, listOf(s.secondaryContainer), darken = fgDarken),
-            onTertiaryContainer = Contrast.ensure(s.onTertiaryContainer, listOf(s.tertiaryContainer), darken = fgDarken),
+            primaryContainer = containers[0].second, onPrimaryContainer = containers[0].first,
+            secondaryContainer = containers[1].second, onSecondaryContainer = containers[1].first,
+            tertiaryContainer = containers[2].second, onTertiaryContainer = containers[2].first,
             onBackground = Contrast.ensure(s.onBackground, surfaces, darken = fgDarken),
             onSurface = Contrast.ensure(s.onSurface, surfaces, darken = fgDarken),
             onSurfaceVariant = Contrast.ensure(s.onSurfaceVariant, surfaces, darken = fgDarken),

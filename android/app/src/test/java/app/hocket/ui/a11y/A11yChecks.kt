@@ -125,8 +125,18 @@ object A11yChecks {
         return out
     }
 
-    /** Clipped or overlapping controls and clipped text (text shortened with an ellipsis is fine). */
-    fun layoutIssues(rule: ComposeTestRule): List<Issue> {
+    private fun under(n: SemanticsNode, tags: Set<String>): String? {
+        var p: SemanticsNode? = n
+        while (p != null) { p.config.getOrNull(SemanticsProperties.TestTag)?.takeIf { it in tags }?.let { return it }; p = p.parent }
+        return null
+    }
+
+    /**
+     * Clipped or overlapping controls and clipped text (text shortened with an ellipsis is fine).
+     * Content scrolled under a floating [overlays] surface (the mini player sheet, the navigation
+     * bar: the bottom inset lets it scroll clear) is not an overlap; controls within one are.
+     */
+    fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar")): List<Issue> {
         val root = rule.onRoot().fetchSemanticsNode()
         val rootBounds = root.boundsInRoot
         val everything = all(root).filter { visible(it, rootBounds) }
@@ -138,6 +148,7 @@ object A11yChecks {
         for (i in controls.indices) for (j in i + 1 until controls.size) {
             val a = controls[i]; val b = controls[j]
             if (isAncestor(a, b) || isAncestor(b, a)) continue
+            if (under(a, overlays) != under(b, overlays)) continue
             val x = a.boundsInRoot.intersect(b.boundsInRoot)
             if (x.width > 1f && x.height > 1f) out += Issue(describe(a) + " / " + describe(b), "controls overlap")
         }
@@ -162,4 +173,12 @@ object A11yChecks {
         val found = layoutIssues(rule)
         if (found.isNotEmpty()) throw AssertionError("$what: ${found.size} layout issue(s) at this font/display size:\n" + found.joinToString("\n"))
     }
+}
+
+/** Runs the custom accessibility action labelled [label] on this node, as TalkBack's actions menu would. */
+fun androidx.compose.ui.test.SemanticsNodeInteraction.performCustomAction(rule: ComposeTestRule, label: String) {
+    val node = fetchSemanticsNode()
+    val action = node.config[SemanticsActions.CustomActions].firstOrNull { it.label == label }
+        ?: throw AssertionError("no custom action '$label' on ${A11yChecks.describe(node)}: ${node.config[SemanticsActions.CustomActions].map { it.label }}")
+    rule.runOnIdle { action.action() }
 }
