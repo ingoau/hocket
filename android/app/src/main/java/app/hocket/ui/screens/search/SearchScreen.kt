@@ -104,7 +104,6 @@ fun SearchScreen(nav: NavHostController) {
         client.libraryItemsChanged.collect { c ->
             local = local?.let { LibraryPatches.search(it, c.items) }
             remote = remote?.let { LibraryPatches.search(it, c.items) }
-            sheetFor = sheetFor?.let { LibraryPatches.track(it, c.items) }
         }
     }
     // The keyboard comes up on the first visit only; coming back to the tab keeps the results in view.
