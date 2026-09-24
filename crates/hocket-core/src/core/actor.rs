@@ -358,20 +358,42 @@ impl Actor {
     // -- loop -----------------------------------------------------------------
 
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<ActorMsg>) {
+        // Shutdown acknowledgements, signalled after the flush.
+        let mut acks: Vec<tokio::sync::oneshot::Sender<()>> = Vec::new();
         while let Some(msg) = rx.recv().await {
-            let stop = self.handle_msg(msg);
+            let stop = self.handle_msg(msg, &mut acks);
             self.processed.fetch_add(1, Ordering::SeqCst);
             if stop {
                 break;
             }
         }
         self.shutdown();
+        // Anything queued behind the shutdown is dropped; further shutdown
+        // requests are acknowledged too, since the flush has happened.
+        rx.close();
+        while let Ok(msg) = rx.try_recv() {
+            if let ActorMsg::Shutdown(ack) = msg {
+                acks.push(ack);
+            }
+        }
+        for ack in acks {
+            let _ = ack.send(());
+        }
     }
 
-    fn handle_msg(&mut self, msg: ActorMsg) -> bool {
+    fn handle_msg(
+        &mut self,
+        msg: ActorMsg,
+        acks: &mut Vec<tokio::sync::oneshot::Sender<()>>,
+    ) -> bool {
         match msg {
             ActorMsg::Command(Command::Shutdown) => {
                 self.shutting_down = true;
+                return true;
+            }
+            ActorMsg::Shutdown(ack) => {
+                self.shutting_down = true;
+                acks.push(ack);
                 return true;
             }
             ActorMsg::Command(cmd) => self.handle_command(cmd),

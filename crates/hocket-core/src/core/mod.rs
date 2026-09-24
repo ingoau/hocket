@@ -181,6 +181,8 @@ pub(crate) enum ActorMsg {
     Command(Command),
     Query(Query, oneshot::Sender<QueryResult>),
     Internal(Internal),
+    /// Flush everything and stop; the sender is signalled after the flush.
+    Shutdown(oneshot::Sender<()>),
 }
 
 /// How the actor obtains its playback backend.
@@ -398,6 +400,38 @@ impl Core {
             .tx
             .send(ActorMsg::Command(command))
             .map_err(|_| CoreError::ShutDown)
+    }
+
+    /// Flush everything and stop the actor; resolves once the session
+    /// document, position, settings, autoplay exclusion set and sync base
+    /// are written and the backend is stopped. Idempotent: a second call
+    /// (or a call after `Command::Shutdown`) resolves as soon as the actor
+    /// is gone. Platforms await this before dropping the core or exiting.
+    pub async fn shutdown(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self.inner.tx.send(ActorMsg::Shutdown(tx)).is_err() {
+            // The actor already stopped (its flush ran before the receiver
+            // was dropped).
+            return;
+        }
+        // `Err` means the actor dropped the sender: it stopped, and every
+        // sender is dropped only after the flush.
+        let _ = rx.await;
+    }
+
+    /// [`Core::shutdown`] for FFI callers on a plain thread: runs the
+    /// shutdown on the core's own runtime and blocks the calling thread for
+    /// at most `timeout`. Returns `true` when the flush completed in time.
+    /// Never call this from inside an async context; use [`Core::shutdown`]
+    /// there.
+    pub fn shutdown_blocking(&self, timeout: std::time::Duration) -> bool {
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let core = self.clone();
+        self.inner.runtime.spawn(async move {
+            core.shutdown().await;
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(timeout).is_ok()
     }
 
     pub fn dispatch_json(&self, json: &str) -> Result<(), CoreError> {

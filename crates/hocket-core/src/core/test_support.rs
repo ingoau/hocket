@@ -232,6 +232,19 @@ impl TestCore {
         clock: Arc<SimTime>,
     ) -> TestCore {
         let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_in(name, server, net, seed, clock, dir).await
+    }
+
+    /// A core on an existing data directory (restart scenarios): the
+    /// database, persisted session and position are reused.
+    pub async fn start_in(
+        name: &str,
+        server: FakeServer,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+        dir: tempfile::TempDir,
+    ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
             cache_dir: dir.path().join("cache").to_string_lossy().into_owned(),
@@ -276,6 +289,16 @@ impl TestCore {
 
     pub fn dispatch(&self, cmd: Command) {
         self.core.dispatch(cmd).expect("dispatch");
+    }
+
+    /// Shut the core down (awaiting the flush) and start a fresh one on the
+    /// same data directory, clock and fake server.
+    pub async fn restart(self, name: &str) -> TestCore {
+        self.core.shutdown().await;
+        let TestCore {
+            clock, server, dir, ..
+        } = self;
+        Self::start_in(name, server, None, 1, clock, dir).await
     }
 
     /// Dispatch and wait for the actor to go quiet.
