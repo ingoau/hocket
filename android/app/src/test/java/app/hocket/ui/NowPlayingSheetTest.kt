@@ -5,6 +5,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
@@ -98,23 +102,142 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
+    /** A one-track queue with autoplay off, so skipping past it leaves nothing current. */
+    private fun playOnlyOneTrack(core: TestCore): String {
+        val track = core.client.nowPlaying.value!!.track.id
+        core.client.dispatch(Commands.setAutoplay(false))
+        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
+        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
+        return track
+    }
+
     @Test
-    fun swipingTheMiniPlayerToSkipPastTheEndOfTheQueueDoesNotCrash() {
+    fun swipingTheMiniPlayerBackThenPastTheEndOfTheQueueDismissesItWithoutCrashing() {
         val core = TestCore()
         start(core)
-        val track = core.client.nowPlaying.value!!.track.id
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() }
-        // Skip forward on the last track, then back on the first: both swipes cross the threshold.
-        compose.onNodeWithTag("miniPlayer").performTouchInput { swipe(start = center, end = center - Offset(300f, 0f), durationMillis = 150) }
-        compose.waitForIdle()
-        compose.onNodeWithTag("miniPlayer").assertIsDisplayed()
+        val track = playOnlyOneTrack(core)
+        // Back on the first track: restarts it, the bar stays.
         compose.onNodeWithTag("miniPlayer").performTouchInput { swipe(start = center, end = center + Offset(300f, 0f), durationMillis = 150) }
         compose.waitForIdle()
         compose.onNodeWithTag("miniPlayer").assertIsDisplayed()
         assertEquals(track, core.client.nowPlaying.value!!.track.id)
+        // Forward on the last track: nothing is current any more and the player goes away mid-gesture.
+        compose.onNodeWithTag("miniPlayer").performTouchInput { swipe(start = center, end = center - Offset(300f, 0f), durationMillis = 150) }
+        compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
+        compose.waitForIdle()
+        assertFalse(displayed("miniPlayer"))
+        // And it comes back for the next thing played.
+        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "Again"))
+        compose.waitUntil(5_000) { displayed("miniPlayer") }
         expand()
         collapseByDrag()
+    }
+
+    private fun openTab(index: Int) {
+        compose.onNodeWithTag("player.tab.$index").performSemanticsAction(SemanticsActions.OnClick)
+        advanceUntil("tab $index") { compose.onNodeWithTag("player.tab.$index").fetchSemanticsNode().config.getOrElse(SemanticsProperties.Selected) { false } }
+    }
+
+    /**
+     * Frame by frame, for pages that animate forever while shown (the lyrics' frame loop): with the
+     * clock under manual control nothing waits for an idle that never comes.
+     */
+    private fun advanceUntil(what: String, condition: () -> Boolean) {
+        repeat(600) { if (condition()) return; compose.mainClock.advanceTimeByFrame() }
+        throw AssertionError("timed out waiting for $what")
+    }
+
+    private fun sheetTop(): Float = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot.top
+    private fun sheetOpen(): Boolean = sheetTop() <= 1f
+    private fun sheetCollapsed(): Boolean = displayed("miniPlayer") && sheetTop() > compose.onRoot().fetchSemanticsNode().size.height / 2f
+
+    /** A vertical drag starting near the top of [tag], [by] px down over [millis]. */
+    private fun dragDown(tag: String, by: Float, millis: Long) {
+        compose.onNodeWithTag(tag).performTouchInput { swipe(start = Offset(centerX, top + 40f), end = Offset(centerX, top + 40f + by), durationMillis = millis) }
+    }
+
+    /**
+     * The swipe-away paths from a scrolling page at its top (the page cannot scroll up, so the
+     * sheet takes the drag and the release's fling through the nested-scroll connection): a short
+     * slow drag springs back open, a slow drag past the threshold and a fast fling both dismiss.
+     * The release used to call the deprecated `AnchoredDraggableState.settle(velocity)`, which
+     * throws for this state: the swipe-away crash.
+     */
+    private fun swipeAwayFrom(tab: Int, tag: String) {
+        compose.mainClock.autoAdvance = false
+        try {
+            val height = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().size.height.toFloat()
+            fun open() {
+                if (!sheetOpen()) compose.onNodeWithTag("miniPlayer").performSemanticsAction(SemanticsActions.OnClick)
+                advanceUntil("the sheet to open") { sheetOpen() }
+                openTab(tab)
+                advanceUntil("$tag to show") { displayed(tag) }
+            }
+            open()
+            // Short and slow: under both thresholds, back to open.
+            dragDown(tag, height * 0.12f, 3_000)
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            // Slow but past the positional threshold: dismissed.
+            dragDown(tag, height * 0.5f, 4_000)
+            advanceUntil("the sheet to settle collapsed") { sheetCollapsed() }
+            // Open again and fling it away.
+            open()
+            dragDown(tag, height * 0.2f, 60)
+            advanceUntil("the fling to dismiss the sheet") { sheetCollapsed() }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    private fun swipeAwayFromEveryPage(core: TestCore) {
+        swipeAwayFrom(1, "queue.list")
+        swipeAwayFrom(2, "lyrics.list")
+        swipeAwayFrom(0, "player.page")
+        assertTrue(core.client.nowPlaying.value != null)
+    }
+
+    @Test
+    fun swipingThePlayerAwayFromAnyPageWhilePlaying() {
+        val core = TestCore()
+        start(core)
+        assertTrue(core.client.isPlaying.value)
+        swipeAwayFromEveryPage(core)
+    }
+
+    @Test
+    fun swipingThePlayerAwayFromAnyPageWhileIdle() {
+        val core = TestCore()
+        start(core)
+        core.client.dispatch(Command.Pause)
+        compose.waitUntil(5_000) { !core.client.isPlaying.value }
+        swipeAwayFromEveryPage(core)
+        assertFalse(core.client.isPlaying.value)
+    }
+
+    @Test
+    fun releaseTargetsFollowTheThresholds() {
+        val state = app.hocket.ui.player.NowPlayingSheetState(app.hocket.ui.player.SheetValue.Expanded)
+        state.velocityThreshold = 100f
+        // Anchors are not laid out: progress reads from the current value (1 = open).
+        assertEquals(app.hocket.ui.player.SheetValue.Collapsed, state.targetFor(500f))
+        assertEquals(app.hocket.ui.player.SheetValue.Expanded, state.targetFor(-500f))
+        assertEquals(app.hocket.ui.player.SheetValue.Expanded, state.targetFor(20f))
+    }
+
+    @Test
+    fun swipingThePlayerAwayAfterTheQueueRanOutWhileItWasOpen() {
+        val core = TestCore()
+        start(core)
+        playOnlyOneTrack(core)
+        expand()
+        // Skip past the only track from the full player: nothing is current, the sheet stays open.
+        compose.onNodeWithTag("player.next").performClick()
+        compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
+        compose.waitForIdle()
+        // Swiping it away with no current item removes the whole sheet.
+        compose.onNodeWithTag("nowPlaying.sheet").performTouchInput { swipe(start = Offset(centerX, top + 300f), end = Offset(centerX, top + 1600f), durationMillis = 120) }
+        compose.waitUntil(5_000) { !displayed("nowPlaying.sheet") }
+        assertFalse(displayed("miniPlayer"))
     }
 
     @Test

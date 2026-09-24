@@ -96,11 +96,46 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed) {
             return (1f - offset / collapsedOffset).coerceIn(0f, 1f)
         }
     val isExpanded: Boolean get() = draggable.currentValue == SheetValue.Expanded || draggable.targetValue == SheetValue.Expanded
+
+    /** Fling speed (px/s) past which a release settles in the fling's direction; set from the density. */
+    internal var velocityThreshold by mutableStateOf(Float.POSITIVE_INFINITY)
+
     suspend fun expand() = draggable.animateTo(SheetValue.Expanded, Motion.sheet)
     suspend fun collapse() = draggable.animateTo(SheetValue.Collapsed, Motion.sheet)
 
+    /**
+     * Where a release with [velocity] (px/s, positive = downwards) settles: a fling past
+     * [velocityThreshold] goes its way; a slow release switches only once the sheet has travelled
+     * [POSITIONAL_THRESHOLD] of the way from the anchor it last rested on (the drag's own fling
+     * behaviour uses the same rules).
+     */
+    internal fun targetFor(velocity: Float): SheetValue {
+        val p = progress
+        return when {
+            velocity >= velocityThreshold -> SheetValue.Collapsed
+            velocity <= -velocityThreshold -> SheetValue.Expanded
+            draggable.settledValue == SheetValue.Expanded -> if (1f - p > POSITIONAL_THRESHOLD) SheetValue.Collapsed else SheetValue.Expanded
+            else -> if (p > POSITIONAL_THRESHOLD) SheetValue.Expanded else SheetValue.Collapsed
+        }
+    }
+
+    /**
+     * Settles the sheet on an anchor after a fling that a scrolling page inside it did not consume
+     * (the nested-scroll path). Deliberately not `AnchoredDraggableState.settle(velocity)`: that
+     * overload is deprecated and throws for a state built without thresholds (this one), which
+     * crashed the app whenever the player was swiped away from its queue, lyrics or scrolled page.
+     */
+    suspend fun settle(velocity: Float) {
+        if (collapsedOffset <= 0f || draggable.offset.isNaN()) return
+        draggable.animateTo(targetFor(velocity), Motion.sheet)
+    }
+
     companion object {
         val MINI_HEIGHT: Dp = 64.dp
+        /** A release moves the sheet to the other anchor once it has travelled this share of the distance. */
+        const val POSITIONAL_THRESHOLD = 0.3f
+        /** Release speed that settles in the fling's direction regardless of position (Material's default). */
+        val VELOCITY_THRESHOLD: Dp = 125.dp
     }
 }
 
@@ -126,12 +161,13 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val maxHeightPx = constraints.maxHeight.toFloat()
         val maxWidthPx = constraints.maxWidth
         val collapsedOffset = maxHeightPx - with(density) { NowPlayingSheetState.MINI_HEIGHT.toPx() } - navPx
-        LaunchedEffect(collapsedOffset) {
+        LaunchedEffect(collapsedOffset, density) {
             state.collapsedOffset = collapsedOffset
+            state.velocityThreshold = with(density) { NowPlayingSheetState.VELOCITY_THRESHOLD.toPx() }
             state.draggable.updateAnchors(DraggableAnchors { SheetValue.Collapsed at collapsedOffset; SheetValue.Expanded at 0f }, state.draggable.targetValue)
         }
         val progress = state.progress
-        val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * 0.3f }, animationSpec = Motion.sheet)
+        val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * NowPlayingSheetState.POSITIONAL_THRESHOLD }, animationSpec = Motion.sheet)
 
         // Predictive back drives the sheet down with the gesture, then settles either way.
         PredictiveBackHandler(enabled = state.isExpanded) { events ->
@@ -162,10 +198,10 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
                     if (source == NestedScrollSource.UserInput) Offset(0f, state.draggable.dispatchRawDelta(available.y)) else Offset.Zero
                 override suspend fun onPreFling(available: Velocity): Velocity {
-                    return if (available.y < 0 && state.progress < 1f) { state.draggable.settle(available.y); available } else Velocity.Zero
+                    return if (available.y < 0 && state.progress < 1f) { state.settle(available.y); available } else Velocity.Zero
                 }
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                    state.draggable.settle(available.y)
+                    state.settle(available.y)
                     return available
                 }
             }
@@ -200,7 +236,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 IconButton(onClick = { scope.launch { state.collapse() } }) { Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse)) }
                                 PrimaryTabRow(selectedTabIndex = pager.currentPage, modifier = Modifier.weight(1f), containerColor = Color.Transparent) {
                                     listOf(R.string.player_tab_now_playing, R.string.player_tab_queue, R.string.player_tab_lyrics).forEachIndexed { i, res ->
-                                        Tab(selected = pager.currentPage == i, onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
+                                        Tab(selected = pager.currentPage == i, modifier = Modifier.testTag("player.tab.$i"), onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
                                     }
                                 }
                                 Box(Modifier.size(48.dp))

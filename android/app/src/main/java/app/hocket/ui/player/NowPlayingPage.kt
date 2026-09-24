@@ -151,7 +151,7 @@ fun NowPlayingPage(sheetProgress: Float, onOpenAlbum: (String) -> Unit, onOpenAr
     val density = LocalDensity.current
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
         val hero = with(density) { (constraints.maxWidth.toDp() - 48.dp).coerceAtMost(420.dp) }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player.page").padding(horizontal = 24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
             // Artwork slot (the sheet draws the artwork over this space).
             Spacer(Modifier.height(hero + 24.dp))
             if (track == null) {
