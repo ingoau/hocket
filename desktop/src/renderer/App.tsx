@@ -1,6 +1,6 @@
 // Main window shell: server setup as the entire first screen, otherwise the
 // sidebar / content / right panel / player bar layout.
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
@@ -30,6 +30,7 @@ export function App() {
   const fullscreen = useApp((s) => s.fullscreen);
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
+  const panels = useApp((s) => s.panels);
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
@@ -43,7 +44,7 @@ export function App() {
         {network?.kind === "offline" ? <div className="offline-banner">{t("misc.offline")}</div> : null}
         <TopBar />
       </div>
-      <div className="app-body">
+      <div className="app-body" style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" data-testid="content">
           <Router />

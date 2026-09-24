@@ -52,8 +52,7 @@ pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 3;
 pub(crate) const MEDIA_SESSION_ART: u32 = 640;
 pub(crate) const MEDIA_SESSION_ART_SMALL: u32 = 160;
 /// Finished outbox entries are kept this long (housekeeping).
-pub(crate) const OUTBOX_RETENTION: std::time::Duration =
-    std::time::Duration::from_secs(7 * 86_400);
+pub(crate) const OUTBOX_RETENTION: std::time::Duration = std::time::Duration::from_secs(7 * 86_400);
 /// Diagnostics ring buffer.
 const LOG_RING: usize = 200;
 

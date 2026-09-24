@@ -345,6 +345,8 @@ const STRINGS = {
   "settings.queueMode": "Queue insertion mode",
   "settings.ratingBridge": "Mark as loved when rated at least",
   "settings.ratingBridgeOff": "Never",
+  "settings.ratingBridgeStars": "{n} stars and up",
+  "settings.outputDeviceDefault": "{name} (default)",
   "settings.settingsSync": "Sync settings between devices",
   "settings.servers": "Servers",
   "settings.serverRemove": "Remove server",

@@ -117,7 +117,7 @@ function General() {
       <Row title={t("settings.ratingBridge")} settingKey={SK.ratingsLoveBridgeThreshold}>
         <select className="select" value={bridgeOn ? threshold : 0} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
           <option value={0}>{t("settings.ratingBridgeOff")}</option>
-          {[3, 4, 5].map((n) => <option key={n} value={n}>{"★".repeat(n)}</option>)}
+          {[3, 4, 5].map((n) => <option key={n} value={n}>{t("settings.ratingBridgeStars", { n })}</option>)}
         </select>
       </Row>
       <QueueModeRow />
@@ -162,7 +162,7 @@ function Audio() {
       <Row title={t("settings.outputDevice")} settingKey="audio.outputDevice">
         <select className="select" value={audio.outputDevice ?? ""} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
           <option value="">{t("settings.outputDefault")}</option>
-          {list.map((d) => <option key={d.id} value={d.id}>{d.name}{d.isDefault ? " ★" : ""}</option>)}
+          {list.map((d) => <option key={d.id} value={d.id}>{d.isDefault ? t("settings.outputDeviceDefault", { name: d.name }) : d.name}</option>)}
         </select>
         <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "refreshOutputDevices" })}>{t("settings.refreshDevices")}</button>
       </Row>

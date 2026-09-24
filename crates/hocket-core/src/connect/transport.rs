@@ -129,13 +129,16 @@ pub struct WsTransport;
 impl Transport for WsTransport {
     fn connect(&self, peer: PeerId, url: String) -> ConnectFuture {
         Box::pin(async move {
-            let (ws, _resp) =
-                tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_config()), false)
-                    .await
-                    .map_err(|e| TransportError::Connect {
-                        url: url.clone(),
-                        error: e.to_string(),
-                    })?;
+            let (ws, _resp) = tokio_tungstenite::connect_async_with_config(
+                url.as_str(),
+                Some(ws_config()),
+                false,
+            )
+            .await
+            .map_err(|e| TransportError::Connect {
+                url: url.clone(),
+                error: e.to_string(),
+            })?;
             Ok(pump(peer, url, ws))
         })
     }
@@ -364,7 +367,9 @@ mod tests {
         let mut listener = LanListener::bind(0, ids.clone()).await.unwrap();
         let url = format!("ws://127.0.0.1:{}/", listener.port());
         // a raw client that ignores our caps
-        let (mut raw, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let (mut raw, _) = tokio_tungstenite::connect_async(url.as_str())
+            .await
+            .unwrap();
         let mut server_side = listener.accept().await.unwrap();
         let big = format!(
             r#"{{"protocolVersion":2,"msg":{{"type":"bye","data":{{"reason":"{}"}}}}}}"#,

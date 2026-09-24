@@ -256,6 +256,7 @@ impl TestCore {
             dir,
             true,
             "https://music.example/",
+            "secret",
         )
         .await
     }
@@ -263,7 +264,8 @@ impl TestCore {
     /// Like [`TestCore::start_in`]; `attach_api == false` starts the core the
     /// way a platform does, with the persisted server row but no API until
     /// `Command::AddServer` supplies credentials. `server_url` is what the
-    /// preset server (and `AddServer`) are keyed on.
+    /// preset server (and `AddServer`) are keyed on; `password` is the
+    /// account password the LAN key is derived from.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_in_with(
         name: &str,
@@ -274,6 +276,7 @@ impl TestCore {
         dir: tempfile::TempDir,
         attach_api: bool,
         server_url: &str,
+        password: &str,
     ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
@@ -294,7 +297,7 @@ impl TestCore {
                 backend,
                 api: attach_api.then(|| Arc::new(server.clone()) as Arc<dyn SubsonicApi>),
                 server_url: server_url.into(),
-                password: "secret".into(),
+                password: password.into(),
                 net,
                 lyrics_http: None,
                 seed,

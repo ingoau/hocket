@@ -366,12 +366,18 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
     t.run_for(110_000.0).await;
     t.run(Command::Next).await;
     t.run_for(500.0).await;
-    assert!(t.server.scrobbles().is_empty(), "nothing sent to the server");
+    assert!(
+        t.server.scrobbles().is_empty(),
+        "nothing sent to the server"
+    );
     match t.query(Query::RecentlyPlayed { limit: 10 }).await {
         QueryResult::History(h) => {
             assert_eq!(h.len(), 1);
             assert_eq!(h[0].track.id, "t0");
-            assert!(!h[0].scrobbled, "history is honest about what was scrobbled");
+            assert!(
+                !h[0].scrobbled,
+                "history is honest about what was scrobbled"
+            );
         }
         other => panic!("{other:?}"),
     }

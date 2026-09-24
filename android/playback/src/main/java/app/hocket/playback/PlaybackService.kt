@@ -93,14 +93,18 @@ class PlaybackService : MediaSessionService() {
                 if (event.data.state.isPlaying) idleJob?.cancel() else scheduleIdleStop()
             }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
-            is Event.Started -> {
-                clockOffsetMs = event.data.snapshot.connection.clockOffsetMs
-                bridge.apply(event.data.snapshot.mediaSession, clockOffsetMs)
-                battery.automatic = event.data.snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
-            }
+            is Event.Started -> applySnapshot(event.data.snapshot)
+            is Event.Snapshot -> applySnapshot(event.data.snapshot)
             is Event.SettingChanged -> if (event.data.setting.key == SettingKeys.BATTERY_AUTO_ENGAGE) battery.automatic = event.data.setting.value.trim() != "false"
             else -> Unit
         }
+    }
+
+    /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
+    private fun applySnapshot(snapshot: app.hocket.core.api.Snapshot) {
+        clockOffsetMs = snapshot.connection.clockOffsetMs
+        bridge.apply(snapshot.mediaSession, clockOffsetMs)
+        battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
     }
 
     private fun scheduleIdleStop() {

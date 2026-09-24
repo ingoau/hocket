@@ -10,7 +10,7 @@ export function Playlists() {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const { data } = useQuery(() => ({ type: "playlists", data: { server_id: serverId } }), "playlists", [serverId]);
-  const items: GridItem[] = (data ?? []).map((p) => ({ id: p.id, title: p.name, subtitle: `${t("misc.tracks", { count: p.songCount })}${p.isSmart ? ` · ${t("playlists.smart")}` : ""}${!p.isMine && p.owner ? ` · ${t("playlists.owner", { owner: p.owner })}` : ""}`, coverArt: p.coverArt, badge: p.offline === "downloaded" ? "↓" : undefined }));
+  const items: GridItem[] = (data ?? []).map((p) => ({ id: p.id, title: p.name, subtitle: `${t("misc.tracks", { count: p.songCount })}${p.isSmart ? ` · ${t("playlists.smart")}` : ""}${!p.isMine && p.owner ? ` · ${t("playlists.owner", { owner: p.owner })}` : ""}`, coverArt: p.coverArt, badge: p.offline === "downloaded" ? "download" : undefined }));
   const play = (it: GridItem) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id: it.id } }, label: it.title, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-playlists">

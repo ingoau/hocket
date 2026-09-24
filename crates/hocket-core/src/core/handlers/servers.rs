@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::api::*;
+use crate::connect::auth::{derive_lan_key, LanKey};
 use crate::connect::engine::Input;
 use crate::connect::wire::{scope_key, Credential as WireCredential};
 use crate::core::actor::Actor;
@@ -82,6 +83,9 @@ impl Actor {
         );
         let client = Arc::new(Client::new(cfg, transport));
         let credential = wire_credential(&url, &username, password.expose());
+        // Mutual LAN auth: peers of this scope prove knowledge of a key
+        // stretched from the same password (see `connect::auth`).
+        let lan_key = derive_lan_key(&scope_key(&url, &username), password.expose());
         // A server this device already authenticated with (persisted row,
         // capabilities known): install it now so downloads play offline, and
         // verify in the background. A failed probe keeps it installed.
@@ -102,6 +106,7 @@ impl Actor {
                 client.clone() as Arc<dyn SubsonicApi>,
                 Some(client),
                 credential,
+                lan_key,
                 false,
             );
             self.probe_server(&id);
@@ -124,6 +129,7 @@ impl Actor {
                 info,
                 client: client.clone(),
                 credential,
+                lan_key,
             },
         );
         self.spawn_probe(id, client);
@@ -154,7 +160,8 @@ impl Actor {
             reachable: true,
         };
         let credential = wire_credential(&preset.url, &username, &preset.password);
-        self.install_server(info, preset.api, None, credential, true);
+        let lan_key = derive_lan_key(&scope_key(&preset.url, &username), &preset.password);
+        self.install_server(info, preset.api, None, credential, lan_key, true);
     }
 
     fn install_server(
@@ -163,12 +170,26 @@ impl Actor {
         api: Arc<dyn SubsonicApi>,
         client: Option<Arc<Client>>,
         credential: WireCredential,
+        lan_key: LanKey,
         reachable: bool,
     ) {
         let replaced = self.server.as_ref().is_some_and(|s| s.info.id != info.id);
+        // The LAN key is fixed at engine construction: a new password for the
+        // same server rebuilds the engine (after flushing the document).
+        let rekeyed = !replaced
+            && self.engine.is_some()
+            && self
+                .server
+                .as_ref()
+                .is_some_and(|s| s.lan_key.as_ref() != Some(&lan_key));
         if replaced {
             // One server for now: switching identity closes the old session.
             self.unload();
+            self.engine = None;
+            self.scope = None;
+            self.last_doc = None;
+        } else if rekeyed {
+            self.flush_persistence(true);
             self.engine = None;
             self.scope = None;
             self.last_doc = None;
@@ -185,6 +206,7 @@ impl Actor {
         state.api = Some(api.clone());
         state.client = client;
         state.credential = Some(credential.clone());
+        state.lan_key = Some(lan_key);
         let tx = self.tx.clone();
         let sync = LibrarySync::new(
             self.db.clone(),
@@ -302,6 +324,7 @@ impl Actor {
                         client.clone() as Arc<dyn SubsonicApi>,
                         Some(client),
                         pending.credential,
+                        pending.lan_key,
                         true,
                     );
                 }

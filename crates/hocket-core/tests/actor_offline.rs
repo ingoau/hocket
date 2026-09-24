@@ -76,11 +76,15 @@ async fn wait_for_probe_result(t: &TestCore, want_reachable: bool) {
             other => panic!("{other:?}"),
         };
         let reached = servers.first().is_some_and(|s| s.reachable);
-        let failed = t
-            .events
-            .all()
-            .iter()
-            .any(|e| matches!(e, Event::Error { kind: ErrorKind::Network, .. }));
+        let failed = t.events.all().iter().any(|e| {
+            matches!(
+                e,
+                Event::Error {
+                    kind: ErrorKind::Network,
+                    ..
+                }
+            )
+        });
         if (want_reachable && reached) || (!want_reachable && failed) {
             return;
         }
@@ -98,7 +102,18 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     server.set_media("t0", vec![0u8; 4096]);
     let clock = SimTime::new(1_700_000_000_000.0);
     let dir = tempfile::tempdir().unwrap();
-    let t = TestCore::start_in_with("first", server.clone(), None, 1, clock.clone(), dir, true, &url).await;
+    let t = TestCore::start_in_with(
+        "first",
+        server.clone(),
+        None,
+        1,
+        clock.clone(),
+        dir,
+        true,
+        &url,
+        "secret",
+    )
+    .await;
     t.wait_until(30_000.0, |t| {
         t.events
             .all()
@@ -123,7 +138,10 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     // Second run, offline, the way a platform starts: the persisted row is
     // there but no API until the keystore replays `AddServer`.
     online.store(false, Ordering::SeqCst);
-    let t = TestCore::start_in_with("second", server, None, 1, clock, dir, false, &url).await;
+    let t = TestCore::start_in_with(
+        "second", server, None, 1, clock, dir, false, &url, "secret",
+    )
+    .await;
     t.run(network(NetworkKind::Offline)).await;
     t.events.clear();
     t.run(Command::AddServer {

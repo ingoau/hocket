@@ -15,7 +15,7 @@ export function Stars({ value, onChange, size = 14 }: { value: number; onChange?
           aria-checked={onChange ? n === value : undefined}
           onMouseEnter={onChange ? () => setHover(n) : undefined}
           onClick={onChange ? (e) => { e.stopPropagation(); onChange(n === value ? 0 : n); } : undefined}
-          style={{ display: "inline-flex", cursor: onChange ? "pointer" : "default" }}
+          style={{ display: "inline-flex" }}
         >
           <Icon name="star" size={size} style={{ fill: n <= shown ? "currentColor" : "none" }} />
         </span>

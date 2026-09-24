@@ -91,6 +91,7 @@ class FakeCore(
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
     private var batterySaver = false
+    private var started = false
     private var syncProgress: SyncProgress? = null
     private var connection = ConnectionState(ConnectionTier.Lan, true, null, 0.0, 12.0, 2u, null)
     private val devices = ArrayList<DeviceInfo>()
@@ -505,7 +506,15 @@ class FakeCore(
     private fun handle(c: Command) {
         when (c) {
             Command.Start, Command.RequestSnapshot -> {
-                emit(Event.Started(EventStartedInner(snapshot())))
+                // Like the real core: `Started` exactly once per instance, `Snapshot` for every later
+                // re-emit (RequestSnapshot, or a repeated Start), so one-time work keyed on `Started`
+                // (the credential replay) never runs twice.
+                if (c == Command.Start && !started) {
+                    started = true
+                    emit(Event.Started(EventStartedInner(snapshot())))
+                } else {
+                    emit(Event.Snapshot(EventSnapshotInner(snapshot())))
+                }
                 emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(savedQueues.toList())))
                 emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
                 emit(Event.StorageChanged(EventStorageChangedInner(storage)))
@@ -516,7 +525,7 @@ class FakeCore(
             Command.Shutdown -> advanceJob?.cancel()
             is Command.SetNetworkState -> { network = c.data.state }
             is Command.SetVisibility -> Unit
-            is Command.SetBatterySaver -> { batterySaver = c.data.enabled; emit(Event.Started(EventStartedInner(snapshot()))) }
+            is Command.SetBatterySaver -> { batterySaver = c.data.enabled; emit(Event.Snapshot(EventSnapshotInner(snapshot()))) }
 
             is Command.AddServer -> addServer(c.data)
             is Command.RemoveServer -> { servers.clear(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }

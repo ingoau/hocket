@@ -47,7 +47,7 @@ export function RightPanel() {
   const queueFlex = qc ? "0 0 32px" : lc ? "1 1 auto" : `${panels.splitRatio} 1 0`;
   const lyricsFlex = lc ? "0 0 32px" : qc ? "1 1 auto" : `${1 - panels.splitRatio} 1 0`;
   return (
-    <aside ref={ref} className="right-panel" style={{ width: panels.rightWidth }} data-testid="right-panel">
+    <aside ref={ref} className="right-panel" data-testid="right-panel">
       <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => setWidthDrag({ x: e.clientX, w: panels.rightWidth })} role="separator" aria-orientation="vertical" aria-label="Resize side panel" />
       <section className={`pane ${qc ? "collapsed" : ""}`} style={{ flex: queueFlex }} aria-label={t("queue.title")} data-testid="queue-pane">
         <div className="pane-head">

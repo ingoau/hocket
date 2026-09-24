@@ -1612,9 +1612,9 @@ pub enum Command {
         to_index: u32,
     },
     /// Marks a played track on the server (`scrobble submission=true`) — used only by the
-    /// core's own scrobbler; exposed for tests (feature `sim` only: it bypasses the
-    /// threshold, session dedupe and the scrobble setting).
-    #[cfg(feature = "sim")]
+    /// core's own scrobbler. The variant stays on the wire for API stability, but it is
+    /// only acted on with the `sim` feature (it bypasses the threshold, session dedupe
+    /// and the scrobble setting); a release core ignores it.
     Scrobble {
         track_id: TrackId,
         played_at: EpochMs,
@@ -2301,7 +2301,10 @@ mod redaction_tests {
         };
         let dbg = format!("{source:?}");
         assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");
-        assert!(!dbg.contains("abc123") && !dbg.contains("salt") && !dbg.contains("xyz"), "{dbg}");
+        assert!(
+            !dbg.contains("abc123") && !dbg.contains("salt") && !dbg.contains("xyz"),
+            "{dbg}"
+        );
         let cmd = BackendCommand::Load {
             source,
             next: None,

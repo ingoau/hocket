@@ -294,9 +294,65 @@ async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
         .into_iter()
         .rev()
         .find_map(|c| match c {
-            hocket_core::audio::scripted::ScriptedCall::Load { position_ms, .. } => Some(position_ms),
+            hocket_core::audio::scripted::ScriptedCall::Load { position_ms, .. } => {
+                Some(position_ms)
+            }
             _ => None,
         })
         .unwrap();
     assert_eq!(last_load, 0);
+}
+
+/// Mutual LAN auth: the engine's LAN key is derived from the account
+/// password (`connect/mod.rs` rule 7), so a device on the same network with
+/// a different password for the same account never joins the room.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lan_peer_with_a_different_password_never_pairs() {
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let start = |name: &'static str, seed: u64, password: &'static str| {
+        let server = server.clone();
+        let net = net.clone();
+        let clock = clock.clone();
+        async move {
+            let dir = tempfile::tempdir().unwrap();
+            TestCore::start_in_with(
+                name,
+                server,
+                Some(net),
+                seed,
+                clock,
+                dir,
+                true,
+                "https://music.example/",
+                password,
+            )
+            .await
+        }
+    };
+    let a = start("a", 1, "secret").await;
+    let b = start("b", 2, "wrong").await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    for c in [&a, &b] {
+        let snap = c.snapshot().await;
+        assert_eq!(
+            snap.devices.len(),
+            1,
+            "{} sees only itself: {:?}",
+            c.device_id,
+            snap.devices
+        );
+        assert!(
+            !(snap.connection.connected && snap.connection.tier == ConnectionTier::Lan),
+            "{} joined a LAN room: {:?}",
+            c.device_id,
+            snap.connection
+        );
+    }
+    // The same password on both sides is what `pair()` relies on.
+    let c = start("c", 3, "secret").await;
+    TestCore::run_all_for(&[&a, &b, &c], 8_000.0).await;
+    assert_eq!(a.snapshot().await.devices.len(), 2, "a and c pair");
+    assert_eq!(b.snapshot().await.devices.len(), 1, "b still alone");
 }

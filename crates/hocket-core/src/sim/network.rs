@@ -337,6 +337,11 @@ impl Network {
         );
     }
 
+    /// The node at the other end of `node`'s socket `peer`, while the link exists.
+    pub fn peer_target(&self, node: &str, peer: &str) -> Option<NodeId> {
+        self.link_for(node, peer).map(|(_, target, _)| target)
+    }
+
     fn link_for(&self, node: &str, peer: &str) -> Option<(usize, NodeId, PeerId)> {
         self.links.iter().enumerate().find_map(|(i, l)| {
             if l.a == node && l.a_peer == peer {

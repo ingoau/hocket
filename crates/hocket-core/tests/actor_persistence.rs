@@ -48,7 +48,8 @@ async fn corrupt_settings_are_backed_up_reported_and_not_broadcast() {
     // A partial write: the stored document no longer parses.
     let db = t.open_db();
     let junk = r#"{"version":1,"entries":{"scrobble.enabled":"#;
-    db.saved_state_set_raw("settings", junk, &WallClock).unwrap();
+    db.saved_state_set_raw("settings", junk, &WallClock)
+        .unwrap();
     drop(db);
     let TestCore {
         clock, server, dir, ..
@@ -224,7 +225,11 @@ async fn housekeeping_prunes_finished_outbox_entries_and_old_jobs() {
     t.clock.advance(8.0 * 86_400_000.0);
     t.core.tick().unwrap();
     t.core.settle().await;
-    assert_eq!(done(&db), 0, "finished outbox entries older than a week are gone");
+    assert_eq!(
+        done(&db),
+        0,
+        "finished outbox entries older than a week are gone"
+    );
     let remaining = db
         .with_conn(|c| {
             Ok(c.query_row(
@@ -234,7 +239,10 @@ async fn housekeeping_prunes_finished_outbox_entries_and_old_jobs() {
             )?)
         })
         .unwrap();
-    assert_eq!(remaining, 0, "terminal jobs older than the retention are gone");
+    assert_eq!(
+        remaining, 0,
+        "terminal jobs older than the retention are gone"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

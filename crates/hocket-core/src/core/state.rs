@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::api::*;
+use crate::connect::auth::LanKey;
 use crate::connect::wire::Credential as WireCredential;
 use crate::db::sync::LibrarySync;
 use crate::subsonic::{Client, SubsonicApi};
@@ -15,6 +16,9 @@ pub(crate) struct ServerState {
     /// The concrete client, for the capability probe.
     pub client: Option<Arc<Client>>,
     pub credential: Option<WireCredential>,
+    /// The scope's shared LAN key (mutual LAN auth), derived from the
+    /// password the user entered; the engine is rebuilt when it changes.
+    pub lan_key: Option<LanKey>,
     pub sync: Option<Arc<LibrarySync>>,
     pub probing: bool,
     pub sync_job: Option<JobId>,
@@ -29,6 +33,7 @@ impl ServerState {
             api: None,
             client: None,
             credential: None,
+            lan_key: None,
             sync: None,
             probing: false,
             sync_job: None,

@@ -1359,7 +1359,7 @@ export class FakeCore implements CoreHandle {
     if (bridgeOn && threshold > 0 && rating >= threshold) for (const t of tracks) t.loved = true;
     const n = tracks.length + albums.length;
     if (n > 20) this.runBulkJob("bulkRating", `Rate ${n} items`, n);
-    this.pushUndo(n === 1 ? `Rate ${rating ? "★".repeat(rating) : "cleared"}` : `Rate ${n} items`, () => {
+    this.pushUndo(n === 1 ? `Rate ${rating ? `${rating} star${rating === 1 ? "" : "s"}` : "cleared"}` : `Rate ${n} items`, () => {
       let changed = 0;
       for (const t of tracks) if (t.rating !== rating) changed += 1;
       apply((id) => prev.get(id) ?? 0);

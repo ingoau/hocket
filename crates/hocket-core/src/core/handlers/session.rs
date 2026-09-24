@@ -62,6 +62,7 @@ impl Actor {
         let Some(server) = &self.server else { return };
         let scope = scope_key(&server.info.url, &server.info.username);
         let credential = server.credential.clone();
+        let lan_key = server.lan_key.clone();
         let doc = match self.db.saved_state_get_raw(&format!("session:{scope}")) {
             Ok(Some(json)) => match crate::session::load(&json) {
                 Ok(d) if crate::session::validate(&d).is_ok() && d.scope == scope => d,
@@ -94,6 +95,12 @@ impl Actor {
         };
         let mut cfg = EngineConfig::new(device, scope.clone());
         cfg.credential = credential;
+        // Mutual LAN auth (connect/mod.rs rule 7): without the scope's key
+        // this device neither serves nor follows LAN peers.
+        cfg.lan_key = lan_key;
+        cfg.allow_insecure_coordinator = self
+            .settings
+            .get_bool(crate::settings::keys::CONNECT_ALLOW_INSECURE_COORDINATOR);
         cfg.coordinator_url = self
             .settings
             .get_string(crate::settings::keys::CONNECT_COORDINATOR_URL);

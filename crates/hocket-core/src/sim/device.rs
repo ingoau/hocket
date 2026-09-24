@@ -150,6 +150,12 @@ pub fn device_info(id: &str) -> DeviceInfo {
     }
 }
 
+/// The LAN key every honest simulated device holds (the app derives it with
+/// `auth::derive_lan_key`; here a fixed digest).
+pub fn sim_lan_key() -> crate::connect::auth::LanKey {
+    crate::connect::auth::test_key(b"hocket-sim-lan-key")
+}
+
 impl SimDevice {
     pub fn new(
         id: &str,
@@ -163,6 +169,9 @@ impl SimDevice {
         let mut cfg = EngineConfig::new(device_info(id), scope);
         cfg.coordinator_url = coordinator_url;
         cfg.lan_enabled = lan;
+        // Every honest device of the scope derives the same LAN key from the
+        // account password; the simulation uses a fixed digest instead.
+        cfg.lan_key = Some(sim_lan_key());
         cfg.credential = Some(Credential {
             server_url: "https://music.example".into(),
             username: "user".into(),

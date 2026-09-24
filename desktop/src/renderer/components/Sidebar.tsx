@@ -40,7 +40,7 @@ export function Sidebar() {
   const isActive = (v: ViewName | undefined) => !!v && (route.view === v || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
 
   return (
-    <nav className="sidebar" aria-label={t("nav.library")} style={{ width: panels.sidebarWidth }} data-testid="sidebar">
+    <nav className="sidebar" aria-label={t("nav.library")} data-testid="sidebar">
       <div className="sidebar-scroll">
         <div className="section-title">{t("nav.library")}</div>
         {items.map((it) => (

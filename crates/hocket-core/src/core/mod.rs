@@ -248,6 +248,7 @@ pub(crate) struct PendingServer {
     pub info: ServerInfo,
     pub client: Arc<crate::subsonic::Client>,
     pub credential: crate::connect::wire::Credential,
+    pub lan_key: crate::connect::auth::LanKey,
 }
 
 pub(crate) struct PresetServer {

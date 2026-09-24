@@ -6,6 +6,7 @@ import { bridge } from "../core/bridge";
 import { AlbumGrid, type GridItem } from "../components/AlbumGrid";
 import { usePagedGrid } from "./paged";
 import { loadLocal, saveLocal } from "../lib/local-settings";
+import { Icon } from "../components/Icon";
 
 const SORTS: SortOrder[] = ["title", "artist", "year", "dateAdded", "rating", "playCount", "random"];
 
@@ -20,7 +21,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
     return { items: r.data.items, total: r.data.total };
   }, [serverId, artistId, genre, sort, desc]);
   const { rows, total, onNeedRange } = usePagedGrid<Album>(fetchPage, [serverId, artistId, genre, sort, desc], 120);
-  const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: [a.artist, a.year].filter(Boolean).join(" · "), coverArt: a.coverArt, badge: a.offline === "downloaded" ? "↓" : undefined } : undefined));
+  const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: [a.artist, a.year].filter(Boolean).join(" · "), coverArt: a.coverArt, badge: a.offline === "downloaded" ? "download" : undefined } : undefined));
   const play = (it: GridItem) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: it.id } }, label: it.title, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-albums">
@@ -31,7 +32,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
           <select className="select" value={sort} aria-label={t("sort.label", { sort: "" })} onChange={(e) => { setSort(e.target.value as SortOrder); saveLocal("albums.sort", e.target.value); }} data-testid="albums-sort">
             {SORTS.map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}
           </select>
-          <button type="button" className="btn icon" aria-label={t("filters.descending")} aria-pressed={desc} onClick={() => { setDesc(!desc); saveLocal("albums.desc", !desc); }}>{desc ? "↓" : "↑"}</button>
+          <button type="button" className="btn icon" aria-label={t("filters.descending")} aria-pressed={desc} onClick={() => { setDesc(!desc); saveLocal("albums.desc", !desc); }}><Icon name={desc ? "arrowDown" : "arrowUp"} size={14} /></button>
         </div>
       </div>
       <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={play} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} testId="albums-grid" />

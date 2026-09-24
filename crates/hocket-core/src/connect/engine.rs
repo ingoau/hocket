@@ -1323,7 +1323,8 @@ impl Engine {
         let coordinator = self.coordinator_target();
         if coordinator.is_none() && self.cfg.coordinator_enabled {
             if let Some(url) = &self.cfg.coordinator_url {
-                if let Err(e) = auth::coordinator_url_check(url, self.cfg.allow_insecure_coordinator)
+                if let Err(e) =
+                    auth::coordinator_url_check(url, self.cfg.allow_insecure_coordinator)
                 {
                     let msg = format!("coordinator URL not used: {e}");
                     if self.last_error.as_deref() != Some(msg.as_str()) {
@@ -1425,7 +1426,10 @@ impl Engine {
             let moved = self
                 .sync_base
                 .as_ref()
-                .map(|b| b.session_id != self.confirmed.session_id || b.revision != self.confirmed.revision)
+                .map(|b| {
+                    b.session_id != self.confirmed.session_id
+                        || b.revision != self.confirmed.revision
+                })
                 .unwrap_or(false);
             if moved {
                 self.unsynced_overflow = true;
@@ -1589,16 +1593,14 @@ impl Engine {
                 // The credential goes to the coordinator only, and only when
                 // the URL passed `coordinator_url_check` (TLS, loopback, or
                 // the explicit insecure override on a private host).
-                let credential = if auth::coordinator_url_check(
-                    &url,
-                    self.cfg.allow_insecure_coordinator,
-                )
-                .is_ok()
-                {
-                    self.cfg.credential.clone()
-                } else {
-                    None
-                };
+                let credential =
+                    if auth::coordinator_url_check(&url, self.cfg.allow_insecure_coordinator)
+                        .is_ok()
+                    {
+                        self.cfg.credential.clone()
+                    } else {
+                        None
+                    };
                 let hello = self.hello_msg(credential);
                 self.out.push(Output::WireOut {
                     peer,
@@ -4225,9 +4227,9 @@ mod tests {
             .any(|(p, m)| p == "in1" && matches!(m, Msg::Welcome { .. })));
         assert!(e.is_serving());
         assert_eq!(e.connection_state().tier, ConnectionTier::Lan);
-        assert!(outs
-            .iter()
-            .any(|o| matches!(o, Output::Advertise(Some(a)) if a.serving && a.port == 7)));
+        // the record went out as soon as the socket made us a server
+        assert!(matches!(e.advert(), Some(a) if a.serving && a.port == 7));
+        assert_eq!(e.last_advert.as_ref().map(|a| a.serving), Some(true));
         // a peer that skips the proof is refused
         e.handle(Input::PeerConnected { peer: "in2".into() });
         let outs = e.handle(Input::WireIn {
@@ -4338,7 +4340,9 @@ mod tests {
         assert!(!e.is_connected());
         // the election moved on to the honest peer
         assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
-        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")));
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")
+        ));
         // a rogue with the wrong key is rejected at the proof, likewise
         e.handle(Input::PeerLost {
             device_id: "rogue".into(),
@@ -4453,7 +4457,9 @@ mod tests {
             error: "down".into(),
         });
         let outs = e.handle(Input::PeerDiscovered(advert("a", 2)));
-        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")));
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")
+        ));
         lan_leader_proves(&mut e, "lan", "a", &key());
         e.handle(Input::WireIn {
             peer: "lan".into(),
@@ -4497,7 +4503,9 @@ mod tests {
         // the leader brings the LAN state
         clock.0.store(200_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
-        assert!(outs.iter().any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
         e.handle(Input::Connected {
             peer: "up2".into(),
             url: "wss://c/".into(),
@@ -4529,7 +4537,21 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 2;
         attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
+        // the coordinator goes away for good (two failed attempts); a peer
+        // behind us appears, so the election makes us the LAN room
         e.handle(Input::Disconnected { peer: "up".into() });
+        clock.0.store(20_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::ConnectFailed {
+            error: "down".into(),
+        });
+        clock.0.store(40_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::ConnectFailed {
+            error: "down".into(),
+        });
+        e.handle(Input::PeerDiscovered(advert("q", 0)));
+        assert!(e.remote.is_none(), "we lead the LAN");
         // we serve the LAN: a member's op lands in our room
         e.handle(Input::ListenerStarted { port: 7 });
         e.handle(Input::PeerConnected { peer: "in1".into() });

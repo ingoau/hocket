@@ -124,12 +124,22 @@ impl Actor {
                 from_index,
                 to_index,
             } => self.playlist_move(playlist_id, from_index, to_index),
+            // Only the core's own scrobbler decides what is submitted: an
+            // arbitrary caller must not bypass the threshold, dedupe and the
+            // scrobble setting. The variant is honoured under `sim` for tests.
             #[cfg(feature = "sim")]
             Command::Scrobble {
                 track_id,
                 played_at,
                 submission,
             } => self.scrobble_command(track_id, played_at, submission),
+            #[cfg(not(feature = "sim"))]
+            Command::Scrobble { .. } => {
+                self.log(
+                    "warn",
+                    "Scrobble command ignored: not available outside tests",
+                );
+            }
 
             // -- downloads --
             Command::Pin { target, transcode } => self.pin(target, transcode),

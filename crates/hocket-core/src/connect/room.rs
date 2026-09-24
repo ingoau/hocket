@@ -468,7 +468,11 @@ impl Room {
     fn on_challenge(&mut self, peer: &str, nonce: String) {
         let LanAuth::Key { key, device_id } = self.cfg.lan_auth.clone() else {
             if self.cfg.lan_auth == LanAuth::Closed {
-                self.refuse(peer, RefuseReason::Unauthorised, "no LAN key on this device");
+                self.refuse(
+                    peer,
+                    RefuseReason::Unauthorised,
+                    "no LAN key on this device",
+                );
             }
             return;
         };
@@ -497,7 +501,11 @@ impl Room {
         } = self.cfg.lan_auth.clone()
         else {
             if self.cfg.lan_auth == LanAuth::Closed {
-                self.refuse(peer, RefuseReason::Unauthorised, "no LAN key on this device");
+                self.refuse(
+                    peer,
+                    RefuseReason::Unauthorised,
+                    "no LAN key on this device",
+                );
             }
             return;
         };
@@ -558,7 +566,11 @@ impl Room {
             match &self.cfg.lan_auth {
                 LanAuth::Open => {}
                 LanAuth::Closed => {
-                    self.refuse(peer, RefuseReason::Unauthorised, "no LAN key on this device");
+                    self.refuse(
+                        peer,
+                        RefuseReason::Unauthorised,
+                        "no LAN key on this device",
+                    );
                     return;
                 }
                 LanAuth::Key { .. } => {

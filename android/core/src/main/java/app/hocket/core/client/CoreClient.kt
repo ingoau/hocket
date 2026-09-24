@@ -270,7 +270,9 @@ class CoreClient(
 
     fun onEvent(event: Event) {
         when (event) {
+            // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
             is Event.Started -> applySnapshot(event.data.snapshot)
+            is Event.Snapshot -> applySnapshot(event.data.snapshot)
             is Event.ServersChanged -> _servers.value = event.data.servers
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {

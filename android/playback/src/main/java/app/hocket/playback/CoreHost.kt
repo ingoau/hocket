@@ -152,8 +152,9 @@ object CoreHost {
     /**
      * The core never persists passwords. Once per core instance, when the first `Started` arrives,
      * replay `AddServer` for each stored login that matches a persisted server (or, when the core has
-     * no server yet, every stored login). Later `Started`s (`RequestSnapshot` and `RemoveServer` both
-     * re-emit everything) never replay again. `ServersChanged` prunes logins for servers that were
+     * no server yet, every stored login). The core emits `Started` once per instance (`RequestSnapshot`
+     * and `RemoveServer` re-emit everything as `Snapshot`); should a second `Started` ever arrive it
+     * is not replayed either. `ServersChanged` prunes logins for servers that were
      * removed and confirms a pending setup login (saved only once the server is reachable with it);
      * `Error{auth}` drops a pending login, or removes the stored one the server now refuses.
      */
@@ -176,6 +177,9 @@ object CoreHost {
                         _credentialsReplayed.value = true
                     }
                 }
+                // RequestSnapshot (every UI attach, every service reconnect) and RemoveServer re-emit
+                // the state as `Snapshot`, never as a second `Started`: nothing to replay here.
+                is Event.Snapshot -> lastServers = event.data.snapshot.servers
                 is Event.ServersChanged -> {
                     val servers = event.data.servers
                     lastServers = servers
