@@ -326,10 +326,10 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
 
 /** One playlist row: its track and a key that stays with it while the list is reordered. */
 @androidx.compose.runtime.Immutable
-private data class PlaylistEntry(val key: String, val track: Track)
+internal data class PlaylistEntry(val key: String, val track: Track)
 
 /** Keys by id plus occurrence ("id#0", "id#1" for a track listed twice), never by position. */
-private fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
+internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
     val seen = HashMap<String, Int>()
     return tracks.map { t -> val n = seen.merge(t.id, 1, Int::plus)!! - 1; PlaylistEntry("${t.id}#$n", t) }
 }
