@@ -32,15 +32,15 @@
 /* Sort: a connected button group — a pill select joined to the direction
    toggle, each end fully round, the inner corners tight (M3 Expressive). */
 .sort-group { display: inline-flex; align-items: center; gap: 2px; }
-.sort-group .select {
-  height: 40px; padding: 0 30px 0 16px; border-radius: var(--shape-full) var(--shape-xs) var(--shape-xs) var(--shape-full);
+.sort-group :is(.select, .m3-select) {
+  height: var(--btn-h-lg); padding: 0 14px 0 18px; border-radius: var(--shape-full) var(--shape-xs) var(--shape-xs) var(--shape-full);
   background: var(--accent-soft); box-shadow: none; border-color: transparent; font-weight: 600; color: var(--fg);
 }
-.sort-group .select:hover { background: var(--selection); box-shadow: none; }
-.sort-group .select:focus { border-color: transparent; }
-.sort-group .select:active { border-radius: var(--shape-sm); }
+.sort-group :is(.select, .m3-select):hover { background: var(--selection); box-shadow: none; }
+.sort-group :is(.select, .m3-select):focus { border-color: transparent; }
+.sort-group :is(.select, .m3-select):active { border-radius: var(--shape-sm); }
 .sort-group .btn.icon:where(:not(.player *, .fullscreen *)) {
-  width: 44px; height: 40px; border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs);
+  width: 44px; height: var(--btn-h-lg); border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs);
   background: var(--accent-soft); color: var(--fg);
 }
 .sort-group .btn.icon:where(:not(.player *, .fullscreen *)):hover { background: var(--selection); }
@@ -247,7 +247,7 @@
     forced-color-adjust: none; background: Highlight; color: HighlightText;
   }
   .tr.playing:not(.selected) { outline: 1px solid CanvasText; outline-offset: -1px; }
-  .detail-head, .genre-tile, .table-head, .view-header .count-chip, .sort-group .select { border: 1px solid CanvasText; }
+  .detail-head, .genre-tile, .table-head, .view-header .count-chip, .sort-group :is(.select, .m3-select) { border: 1px solid CanvasText; }
   .genre-tile::after, .section-icon, .empty-icon { forced-color-adjust: none; background: GrayText; color: Canvas; }
   .tr, .tile, .genre-tile, .tile .art { transition: none; }
 }
