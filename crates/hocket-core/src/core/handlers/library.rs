@@ -955,9 +955,15 @@ impl Actor {
             return;
         }
         let Some(sid) = self.server_id() else { return };
-        let cached = self.caches.lyrics_get_any(&sid, &track_id).ok().flatten().is_some()
+        let cached = self
+            .caches
+            .lyrics_get_any(&sid, &track_id)
+            .ok()
+            .flatten()
+            .is_some()
             || matches!(
-                self.caches.lyrics_get(&sid, &track_id, LyricsSource::Server),
+                self.caches
+                    .lyrics_get(&sid, &track_id, LyricsSource::Server),
                 Ok(Some(None))
             );
         if !cached {

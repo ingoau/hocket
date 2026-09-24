@@ -95,10 +95,7 @@ impl Actor {
     fn spawn_probe(&mut self, server_id: ServerId, client: Arc<Client>) {
         let tx = self.tx.clone();
         self.spawn(async move {
-            let result = client
-                .probe()
-                .await
-                .map_err(|e| (e.kind(), e.to_string()));
+            let result = client.probe().await.map_err(|e| (e.kind(), e.to_string()));
             let _ = tx.send(ActorMsg::Internal(Internal::Probed { server_id, result }));
         });
     }

@@ -560,6 +560,61 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
     assert_eq!(l3.source, LyricsSource::External);
     assert_eq!(l3.tier, LyricsTier::Line);
 
+    // Now-playing drives lyrics without a query: t2 is announced when it
+    // starts, and the next item (t3, now external-enabled) is prefetched
+    // silently into the cache.
+    t.events.clear();
+    let calls_before = t.server.calls_to("getLyricsBySongId");
+    t.run(Command::PlayTracks {
+        server_id: "srv".into(),
+        track_ids: vec!["t2".into(), "t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    let announced: Vec<(String, bool)> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::LyricsChanged { track_id, lyrics } => Some((track_id, lyrics.is_some())),
+            _ => None,
+        })
+        .collect();
+    assert!(announced.contains(&("t2".into(), true)), "{announced:?}");
+    assert!(
+        !announced.iter().any(|(id, _)| id == "t0"),
+        "prefetch is silent: {announced:?}"
+    );
+    assert_eq!(
+        t.server.calls_to("getLyricsBySongId"),
+        calls_before,
+        "both were cached already"
+    );
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    assert!(t
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::LyricsChanged { track_id, lyrics: Some(l) } if track_id == "t0" && l.tier == LyricsTier::Syllable)));
+    // Battery saver with prefetch paused: nothing is fetched ahead.
+    t.run(Command::SetBatterySaver { enabled: true }).await;
+    let calls = t.server.calls_to("getLyricsBySongId");
+    t.run(Command::PlayTracks {
+        server_id: "srv".into(),
+        track_ids: vec!["t1".into(), "t3".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls);
+    t.run(Command::SetBatterySaver { enabled: false }).await;
+
     // A per-track offset rides on top.
     t.run(Command::SetLyricsOffset {
         track_id: "t0".into(),
@@ -708,6 +763,34 @@ async fn pins_download_through_the_job_queue() {
         QueryResult::Storage(s) => assert!(s.downloads_bytes >= 3.0 * 4096.0),
         other => panic!("{other:?}"),
     }
+    // Artwork resolves to a plain local path (no scheme), the same
+    // convention as the media session's artwork_path.
+    let art = match t
+        .query(Query::Artwork {
+            id: "al-al0".into(),
+            size: 640,
+        })
+        .await
+    {
+        QueryResult::Path(Some(p)) => p,
+        other => panic!("{other:?}"),
+    };
+    assert!(!art.starts_with("file://"), "{art}");
+    assert!(std::path::Path::new(&art).is_file(), "{art}");
+    t.run(Command::PlayTracks {
+        server_id: t.server_id.clone(),
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "One".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    let ms = t.snapshot().await.media_session;
+    assert_eq!(
+        ms.metadata.unwrap().artwork_path.as_deref(),
+        Some(art.as_str())
+    );
     t.run(Command::Unpin {
         target: PinTarget::Album { id: "al0".into() },
     })

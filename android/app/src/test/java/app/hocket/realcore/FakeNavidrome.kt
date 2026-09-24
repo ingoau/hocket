@@ -110,31 +110,31 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
             val (status, body, type) = when (endpoint) {
                 "ping" -> Triple(200, fixture("ping"), "application/json")
                 "getOpenSubsonicExtensions" -> Triple(200, fixture("extensions"), "application/json")
-                "getMusicFolders" -> Triple(200, wrap("""\"musicFolders\":{\"musicFolder\":[{\"id\":1,\"name\":\"Music\"}]}"""), "application/json")
+                "getMusicFolders" -> Triple(200, wrap(""""musicFolders":{"musicFolder":[{"id":1,"name":"Music"}]}"""), "application/json")
                 "getArtists" -> Triple(200, fixture("artists"), "application/json")
-                "getArtist" -> Triple(200, wrap("""\"artist\":{\"id\":\"ar1\",\"name\":\"Boards of Canada\",\"albumCount\":2,\"album\":${albumsJson()}}"""), "application/json")
-                "getAlbumList2" -> Triple(200, if ((q["offset"]?.toIntOrNull() ?: 0) == 0) fixture("album_list2") else wrap("\"albumList2\":{\"album\":[]}"), "application/json")
-                "getAlbum" -> Triple(200, wrap("""\"album\":${albumWithSongs(q["id"] ?: "al1")}"""), "application/json")
-                "getSong" -> Triple(200, wrap("""\"song\":${songJson(q["id"] ?: "s1")}"""), "application/json")
+                "getArtist" -> Triple(200, wrap(""""artist":{"id":"ar1","name":"Boards of Canada","albumCount":2,"album":${albumsJson()}}"""), "application/json")
+                "getAlbumList2" -> Triple(200, if ((q["offset"]?.toIntOrNull() ?: 0) == 0) fixture("album_list2") else wrap(""albumList2":{"album":[]}"), "application/json")
+                "getAlbum" -> Triple(200, wrap(""""album":${albumWithSongs(q["id"] ?: "al1")}"""), "application/json")
+                "getSong" -> Triple(200, wrap(""""song":${songJson(q["id"] ?: "s1")}"""), "application/json")
                 "search3" -> Triple(200, if ((q["songOffset"]?.toIntOrNull() ?: 0) == 0 && (q["albumOffset"]?.toIntOrNull() ?: 0) == 0 && (q["artistOffset"]?.toIntOrNull() ?: 0) == 0) fixture("search3") else fixture("search3_empty"), "application/json")
                 "getPlaylists" -> Triple(200, fixture("playlists"), "application/json")
                 "getPlaylist" -> Triple(200, fixture("playlist"), "application/json")
                 "getGenres" -> Triple(200, fixture("genres"), "application/json")
                 "getScanStatus" -> Triple(200, fixture("scan_status"), "application/json")
-                "getStarred2" -> Triple(200, wrap("\"starred2\":{\"artist\":[],\"album\":[],\"song\":[]}"), "application/json")
+                "getStarred2" -> Triple(200, wrap(""starred2":{"artist":[],"album":[],"song":[]}"), "application/json")
                 "getLyricsBySongId" -> Triple(200, fixture("lyrics_v2"), "application/json")
-                "getSimilarSongs2" -> Triple(200, wrap("\"similarSongs2\":{\"song\":[]}"), "application/json")
-                "getTopSongs" -> Triple(200, wrap("\"topSongs\":{\"song\":[]}"), "application/json")
-                "getRandomSongs" -> Triple(200, wrap("\"randomSongs\":{\"song\":[]}"), "application/json")
+                "getSimilarSongs2" -> Triple(200, wrap(""similarSongs2":{"song":[]}"), "application/json")
+                "getTopSongs" -> Triple(200, wrap(""topSongs":{"song":[]}"), "application/json")
+                "getRandomSongs" -> Triple(200, wrap(""randomSongs":{"song":[]}"), "application/json")
                 "getCoverArt" -> Triple(200, png(), "image/png")
                 "stream", "download" -> Triple(200, wav(), "audio/wav")
                 "setRating" -> { q["id"]?.let { ratings[it] = q["rating"]?.toIntOrNull() ?: 0 }; Triple(200, ok.toByteArray(), "application/json") }
                 "star" -> { q["id"]?.let { starred += it }; Triple(200, ok.toByteArray(), "application/json") }
                 "unstar" -> { q["id"]?.let { starred -= it }; Triple(200, ok.toByteArray(), "application/json") }
                 "scrobble" -> { q["id"]?.let { scrobbles += it to (q["submission"] != "false") }; Triple(200, ok.toByteArray(), "application/json") }
-                "getNowPlaying" -> Triple(200, wrap("\"nowPlaying\":{\"entry\":[]}"), "application/json")
+                "getNowPlaying" -> Triple(200, wrap(""nowPlaying":{"entry":[]}"), "application/json")
                 "savePlayQueue", "createPlaylist", "updatePlaylist", "deletePlaylist" -> Triple(200, ok.toByteArray(), "application/json")
-                else -> Triple(200, wrap("\"error\":{\"code\":70,\"message\":\"unknown endpoint $endpoint\"}").let { it }, "application/json")
+                else -> Triple(200, wrap(""error":{"code":70,"message":"unknown endpoint $endpoint"}").let { it }, "application/json")
             }
             respond(ex, status, body, type)
         } catch (e: Exception) {
@@ -146,9 +146,12 @@ class FakeNavidrome(private val expectedUser: String = "alice", private val expe
 
     private fun wrap(inner: String) = """{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","serverVersion":"0.63.1 (abcd1234)","openSubsonic":true,$inner}}""".toByteArray()
 
+    /** The server's current view of a song: rating and star state reflect what clients wrote. */
     private fun songJson(id: String): String {
         val n = id.removePrefix("s").toIntOrNull() ?: 1
-        return """{"id":"$id","parent":"al1","isDir":false,"title":"Song $n","album":"Music Has the Right","artist":"Boards of Canada","albumId":"al1","artistId":"ar1","track":$n,"year":1998,"genre":"Electronic","coverArt":"al1","duration":4,"bitRate":320,"suffix":"wav","contentType":"audio/wav","size":80000,"path":"boc/$id.wav","created":"2024-01-01T00:00:00Z","type":"music","mediaType":"song"}"""
+        val rating = ratings[id]?.takeIf { it > 0 }?.let { ""","userRating":$it""" } ?: ""
+        val star = if (id in starred) ""","starred":"2024-01-01T00:00:00Z"""" else ""
+        return """{"id":"$id","parent":"al1","isDir":false,"title":"Song $n","album":"Music Has the Right","artist":"Boards of Canada","albumId":"al1","artistId":"ar1","track":$n,"year":1998,"genre":"Electronic","coverArt":"al1","duration":4,"bitRate":320,"suffix":"wav","contentType":"audio/wav","size":80000,"path":"boc/$id.wav","created":"2024-01-01T00:00:00Z","type":"music","mediaType":"song"$rating$star}"""
     }
 
     private fun albumsJson() = """[{"id":"al1","name":"Music Has the Right","artist":"Boards of Canada","artistId":"ar1","coverArt":"al1","songCount":2,"duration":8,"created":"2024-01-01T00:00:00Z","year":1998,"genre":"Electronic"},{"id":"al2","name":"Geogaddi","artist":"Boards of Canada","artistId":"ar1","coverArt":"al2","songCount":0,"duration":0,"created":"2024-01-01T00:00:00Z","year":2002,"genre":"Electronic"}]"""

@@ -197,7 +197,7 @@ class RealCoreEndToEndTest {
             val jobs = (core.query(app.hocket.core.api.Query.Jobs) as? QueryResult.Jobs)?.data
             val undoNow = (core.query(app.hocket.core.api.Query.UndoState) as? QueryResult.Undo)?.data
             val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
-            throw AssertionError("undo of the rating never reached the server: server rating=${server.ratings["s1"]} local rating=${track?.rating} setRating calls=${server.calls.count { it == "setRating" }} undo=${undoNow?.undoLabel}/${undoNow?.redoLabel}/${undoNow?.history?.map { it.label + ":" + it.note }} problems=${problems?.map { it.summary + ": " + it.detail }} jobs=${jobs?.map { it.label + "/" + it.state + "/" + it.failed }} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }} errors=${events.filterIsInstance<Event.Error>().map { it.data.message + ": " + it.data.detail }}")
+            throw AssertionError("undo of the rating never reached the server: server rating=${server.ratings["s1"]} local rating=${track?.rating} setRating calls=${server.calls.count { it == "setRating" }} getSong calls=${server.calls.count { it == "getSong" }} recent calls=${server.calls.takeLast(12)} undo=${undoNow?.undoLabel}/${undoNow?.redoLabel}/${undoNow?.history?.map { it.label + ":" + it.note }} problems=${problems?.map { it.summary + ": " + it.detail }} jobs=${jobs?.map { it.label + "/" + it.state + "/" + it.failed }} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }} errors=${events.filterIsInstance<Event.Error>().map { it.data.message + ": " + it.data.detail }}")
         }
         val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
         assertEquals(0u, track!!.rating)
@@ -243,7 +243,8 @@ class RealCoreEndToEndTest {
         core.dispatch(Commands.addServer(server.baseUrl, "alice", "wrong", null))
         val err = waitFor { it as? Event.Error }
         assertTrue(err.data.message.contains("probe"))
-        val servers = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() } }
+        // The install-time ServersChanged reports reachable=true optimistically; the probe result flips it.
+        val servers = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() && !it.data.servers.first().reachable } }
         assertFalse(servers.data.servers.first().reachable)
         // Core bug (recorded in the wave-3 report): a Subsonic error 40 ("Wrong username or password") is
         // classified as Network, not Auth, because on_probed matches the substring "authentication". Until
