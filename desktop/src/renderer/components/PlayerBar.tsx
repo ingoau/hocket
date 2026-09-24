@@ -16,6 +16,7 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { isOfflineNotice, noticeText } from "../lib/notice";
 import { Heart, Stars } from "./Stars";
+import { Slider } from "./controls";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
@@ -185,7 +186,7 @@ function Volume() {
   return (
     <div className="volume">
       <button type="button" className="btn icon sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="mute"><Icon name={volume === 0 ? "mute" : "volume"} size={14} /></button>
-      <input type="range" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
+      <Slider size="sm" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(v) => { setMuted(undefined); set(v); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
     </div>
   );
 }

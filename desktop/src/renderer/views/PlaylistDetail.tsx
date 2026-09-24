@@ -24,7 +24,7 @@ export function PlaylistDetail({ id }: { id: string }) {
   // Resting on a play button primes that track's start (the album primer, per track).
   const primer = usePlayIntent(`playlist:${id}`);
   const editable = !!p && !p.isSmart && p.isMine;
-  const play = (start = 0, shuffle = false) => p && bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id: p.id } }, label: p.name, sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-playlist">
       <div className="detail-head" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })}>

@@ -1,6 +1,6 @@
 // Launches the built app (out/main/index.cjs) with the fake core and a fresh
 // user-data dir per test, and drives it through Playwright's Electron API.
-import { _electron as electron, test as base, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, test as base, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -66,4 +66,12 @@ export async function playFirstAlbum(page: Page): Promise<void> {
   await expect(page.getByTestId("view-album")).toBeVisible();
   await page.getByTestId("album-play").click();
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
+}
+
+/** Pick `value` in one of the app's Select comboboxes (components/controls.tsx) by pointer, like a user. */
+export async function chooseOption(select: Locator, value: string): Promise<void> {
+  await select.click();
+  await select.page().locator(`[role="listbox"] [role="option"][data-value="${value}"]`).click();
+  await expect(select).toHaveAttribute("aria-expanded", "false");
+  await expect(select).toHaveAttribute("data-value", value);
 }

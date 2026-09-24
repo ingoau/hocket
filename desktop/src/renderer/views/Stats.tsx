@@ -5,6 +5,7 @@ import { useQuery } from "../store/queries";
 import { Artwork } from "../components/Artwork";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
+import { Select } from "../components/controls";
 
 export function Stats() {
   const [days, setDays] = useState(30);
@@ -17,7 +18,7 @@ export function Stats() {
       <div className="view-header">
         <h1>{t("stats.title")}</h1>
         <div className="actions">
-          <select className="select" value={days} aria-label={t("stats.title")} onChange={(e) => setDays(Number(e.target.value))}>{[7, 30, 90, 365].map((d) => <option key={d} value={d}>{t("stats.period", { days: d })}</option>)}</select>
+          <Select value={days} aria-label={t("stats.title")} onChange={(e) => setDays(Number(e.target.value))}>{[7, 30, 90, 365].map((d) => <option key={d} value={d}>{t("stats.period", { days: d })}</option>)}</Select>
         </div>
       </div>
       <div className="view-body">

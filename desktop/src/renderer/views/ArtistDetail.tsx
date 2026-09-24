@@ -17,7 +17,7 @@ export function ArtistDetail({ id }: { id: string }) {
   const albums = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 500 } } }), "albums", [id, serverId]);
   const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: 10 } }), "trackList", [id]);
   const a = artist.data;
-  const play = (shuffle: boolean) => a && bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
   const topList = top.data ?? [];
   return (
     <div className="view" data-testid="view-artist">

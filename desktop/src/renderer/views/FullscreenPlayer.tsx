@@ -26,6 +26,7 @@ import { WavySeek } from "../components/WavySeek";
 import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/RightPanel";
 import { Stars } from "../components/Stars";
+import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
@@ -357,7 +358,7 @@ function NpVolume() {
   return (
     <div className="np-volume">
       <button type="button" className="np-icon-btn sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="fs-mute"><Icon name={volume === 0 ? "mute" : "volume"} size={18} /></button>
-      <input type="range" className="np-range" min={0} max={1} step={0.01} value={volume} style={{ "--v": `${volume * 100}%` } as CSSProperties} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, Math.round((volume - Math.sign(e.deltaY) * 0.05) * 100) / 100)))} data-testid="fs-volume" />
+      <Slider min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(v) => { setMuted(undefined); set(v); }} onWheel={(e) => set(Math.max(0, Math.min(1, Math.round((volume - Math.sign(e.deltaY) * 0.05) * 100) / 100)))} data-testid="fs-volume" />
     </div>
   );
 }
