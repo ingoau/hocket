@@ -78,12 +78,6 @@
 
 /* Volume (wide layout): a thick rounded track with a gap either side of a bar thumb. */
 .np-volume { display: none; align-items: center; gap: 10px; flex: 0 0 auto; }
-.np-range { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 28px; background: transparent; margin: 0; --v: 50%; }
-.np-range::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; background: linear-gradient(to right, #fff 0 max(0px, calc(var(--v) - 7px)), transparent max(0px, calc(var(--v) - 7px)) calc(var(--v) + 7px), rgba(255, 255, 255, 0.28) calc(var(--v) + 7px)); }
-.np-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 5px; height: 26px; margin-top: -6px; border-radius: 3px; background: #fff; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); }
-.np-range:hover::-webkit-slider-thumb { transform: scaleY(1.12); }
-.np-range:active::-webkit-slider-thumb { transform: scale(0.7, 1.2); }
-.np-range:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 10px; }
 
 /* Transport: the play button morphs between a pill (paused) and a rounded square (playing). */
 .np-transport { display: flex; align-items: center; justify-content: center; gap: 22px; flex: 0 0 auto; }
@@ -230,8 +224,6 @@
   .np-seek-bar .rest { stroke: GrayText; }
   .np-seek-bar .thumb, .np-seek-bar .stop { fill: CanvasText; }
   .np-seek-bar .value-bubble { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
-  .np-range::-webkit-slider-runnable-track { forced-color-adjust: none; background: GrayText; }
-  .np-range::-webkit-slider-thumb { forced-color-adjust: none; background: CanvasText; }
   .np .queue-section { background: Canvas; }
   .np-card { border: 1px solid CanvasText; }
 }

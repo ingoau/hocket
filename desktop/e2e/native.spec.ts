@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { FakeNavidrome } from "./fake-navidrome";
+import { chooseOption } from "./fixtures";
 
 const root = resolve(__dirname, "..");
 const addonBuilt = existsSync(join(root, "native", "index.js"));
@@ -106,7 +107,7 @@ test.describe("real core against a fake Navidrome", () => {
       // Change a registry setting: theme → dark.
       await page.getByTestId("nav-settings").click();
       await page.getByTestId("settings-nav-appearance").click();
-      await page.getByTestId("setting-theme").selectOption("dark");
+      await chooseOption(page.getByTestId("setting-theme"), "dark");
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
       // No settling delay: quitting waits for the core's flush (before-quit → Core::shutdown).
     } finally {

@@ -23,7 +23,7 @@ export function AlbumDetail({ id }: { id: string }) {
   // play button primes that track. Once per visit (a remount is a new visit).
   useAlbumDwellPrime(a?.id);
   const primer = usePlayIntent(`album:${id}`);
-  const play = (start = 0, shuffle = false) => a && bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-album">
       <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })}>

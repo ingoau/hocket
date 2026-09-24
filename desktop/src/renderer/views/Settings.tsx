@@ -18,6 +18,7 @@ import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
+import { Select, Slider, Switch } from "../components/controls";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -77,7 +78,7 @@ function Toggle({ settingKey, title, desc }: { settingKey: string; title: string
   const set = useApp((s) => s.setSetting);
   return (
     <Row title={title} desc={desc} settingKey={settingKey}>
-      <input type="checkbox" checked={!!value} onChange={(e) => set(settingKey, e.target.checked)} aria-label={title} data-testid={`setting-${settingKey}`} />
+      <Switch checked={!!value} onChange={(checked) => set(settingKey, checked)} aria-label={title} data-testid={`setting-${settingKey}`} />
     </Row>
   );
 }
@@ -109,18 +110,18 @@ function General() {
         </div>
       ))}
       <Row title={t("settings.closeToTray")} desc={t("settings.scope.local")}>
-        <input type="checkbox" checked={prefs.closeToTray} onChange={(e) => setPrefs({ closeToTray: e.target.checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
+        <Switch checked={prefs.closeToTray} onChange={(checked) => setPrefs({ closeToTray: checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
       </Row>
       <Toggle settingKey={SK.syncEnabled} title={t("settings.settingsSync")} />
       <Row title={t("settings.savedQueueCap", { n: cap })} settingKey={SK.queueSavedCap}>
-        <input type="range" min={0} max={50} value={cap} onChange={(e) => bridge().dispatch({ type: "setSavedQueueCap", data: { cap: Number(e.target.value) } })} aria-label={t("settings.savedQueueCap", { n: cap })} />
+        <Slider min={0} max={50} value={cap} bubble={cap} onChange={(v) => bridge().dispatch({ type: "setSavedQueueCap", data: { cap: v } })} aria-label={t("settings.savedQueueCap", { n: cap })} />
         <span className="mono small" style={{ width: 24 }}>{cap}</span>
       </Row>
       <Row title={t("settings.ratingBridge")} settingKey={SK.ratingsLoveBridgeThreshold}>
-        <select className="select" value={bridgeOn ? threshold : 0} aria-label={t("settings.ratingBridge")} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
+        <Select value={bridgeOn ? threshold : 0} aria-label={t("settings.ratingBridge")} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
           <option value={0}>{t("settings.ratingBridgeOff")}</option>
           {[3, 4, 5].map((n) => <option key={n} value={n}>{t("settings.ratingBridgeStars", { n })}</option>)}
-        </select>
+        </Select>
       </Row>
       <QueueModeRow />
     </>
@@ -131,10 +132,10 @@ function QueueModeRow() {
   const mode = useApp((s) => s.queue.mode);
   return (
     <Row title={t("settings.queueMode")} settingKey={SK.queueMode}>
-      <select className="select" value={mode} aria-label={t("settings.queueMode")} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
+      <Select value={mode} aria-label={t("settings.queueMode")} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
         <option value="apple">{t("queue.mode.apple")}</option>
         <option value="youTube">{t("queue.mode.youtube")}</option>
-      </select>
+      </Select>
     </Row>
   );
 }
@@ -151,35 +152,35 @@ function Audio() {
   return (
     <>
       <Row title={t("settings.replayGain")} settingKey="audio.replayGain">
-        <select className="select" value={audio.replayGain} aria-label={t("settings.replayGain")} onChange={(e) => update({ replayGain: e.target.value as ReplayGainMode })} data-testid="setting-replaygain">
+        <Select value={audio.replayGain} aria-label={t("settings.replayGain")} onChange={(e) => update({ replayGain: e.target.value as ReplayGainMode })} data-testid="setting-replaygain">
           {(["off", "track", "album", "auto"] as ReplayGainMode[]).map((m) => <option key={m} value={m}>{t(`settings.replayGain.${m}` as never)}</option>)}
-        </select>
+        </Select>
       </Row>
       <Row title={t("settings.replayGainPreamp")} settingKey="audio.replayGain">
-        <input type="range" min={-15} max={15} step={0.5} value={audio.replayGainPreampDb} onChange={(e) => update({ replayGainPreampDb: Number(e.target.value) })} aria-label={t("settings.replayGainPreamp")} />
+        <Slider min={-15} max={15} step={0.5} value={audio.replayGainPreampDb} bubble={`${audio.replayGainPreampDb.toFixed(1)} dB`} onChange={(v) => update({ replayGainPreampDb: v })} aria-label={t("settings.replayGainPreamp")} />
         <span className="mono small" style={{ width: 52 }}>{audio.replayGainPreampDb.toFixed(1)} dB</span>
       </Row>
-      <Row title={t("settings.normalisation")} settingKey="audio.replayGain"><input type="checkbox" checked={audio.normalisation} onChange={(e) => update({ normalisation: e.target.checked })} aria-label={t("settings.normalisation")} /></Row>
-      <Row title={t("settings.gapless")} settingKey="audio.gapless"><input type="checkbox" checked={audio.gapless} onChange={(e) => update({ gapless: e.target.checked })} aria-label={t("settings.gapless")} /></Row>
+      <Row title={t("settings.normalisation")} settingKey="audio.replayGain"><Switch checked={audio.normalisation} onChange={(checked) => update({ normalisation: checked })} aria-label={t("settings.normalisation")} /></Row>
+      <Row title={t("settings.gapless")} settingKey="audio.gapless"><Switch checked={audio.gapless} onChange={(checked) => update({ gapless: checked })} aria-label={t("settings.gapless")} /></Row>
       <Row title={t("settings.outputDevice")} settingKey="audio.outputDevice">
-        <select className="select" value={audio.outputDevice ?? ""} aria-label={t("settings.outputDevice")} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
+        <Select value={audio.outputDevice ?? ""} aria-label={t("settings.outputDevice")} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
           <option value="">{t("settings.outputDefault")}</option>
           {list.map((d) => <option key={d.id} value={d.id}>{d.isDefault ? t("settings.outputDeviceDefault", { name: d.name }) : d.name}</option>)}
-        </select>
+        </Select>
         <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "refreshOutputDevices" })}>{t("settings.refreshDevices")}</button>
       </Row>
-      <Row title={t("settings.exclusive")} settingKey="audio.exclusive"><input type="checkbox" checked={audio.exclusive} onChange={(e) => update({ exclusive: e.target.checked })} aria-label={t("settings.exclusive")} /></Row>
+      <Row title={t("settings.exclusive")} settingKey="audio.exclusive"><Switch checked={audio.exclusive} onChange={(checked) => update({ exclusive: checked })} aria-label={t("settings.exclusive")} /></Row>
       <Row title={t("settings.eq")} settingKey="audio.eq" stacked>
         <div className="eq" style={{ width: "100%" }}>
           <div className="row">
-            <label className="switch"><input type="checkbox" checked={audio.eq.enabled} onChange={(e) => update({ eq: { ...audio.eq, enabled: e.target.checked, bands } })} /> {t("settings.eq")}</label>
+            <label className="switch"><Switch checked={audio.eq.enabled} onChange={(checked) => update({ eq: { ...audio.eq, enabled: checked, bands } })} /> {t("settings.eq")}</label>
             <label className="row"><span className="small muted">{t("settings.eqPreset")}</span>
-              <select className="select" value={audio.eq.preset ?? "custom"} onChange={(e) => { const p = PRESETS[e.target.value]; if (p) setBands(bands.map((b, i) => ({ ...b, gainDb: p[i] ?? 0 })), e.target.value); }}>
+              <Select value={audio.eq.preset ?? "custom"} onChange={(e) => { const p = PRESETS[e.target.value]; if (p) setBands(bands.map((b, i) => ({ ...b, gainDb: p[i] ?? 0 })), e.target.value); }}>
                 <option value="custom">Custom</option>
                 {Object.keys(PRESETS).map((p) => <option key={p} value={p}>{p === "flat" ? t("settings.eqFlat") : p}</option>)}
-              </select>
+              </Select>
             </label>
-            <label className="row"><span className="small muted">{t("settings.eqPreamp")}</span><input type="range" min={-12} max={12} step={0.5} value={audio.eq.preampDb} onChange={(e) => update({ eq: { ...audio.eq, preampDb: Number(e.target.value), bands } })} /><span className="mono small">{audio.eq.preampDb.toFixed(1)} dB</span></label>
+            <label className="row"><span className="small muted">{t("settings.eqPreamp")}</span><Slider min={-12} max={12} step={0.5} value={audio.eq.preampDb} bubble={`${audio.eq.preampDb.toFixed(1)} dB`} onChange={(v) => update({ eq: { ...audio.eq, preampDb: v, bands } })} /><span className="mono small">{audio.eq.preampDb.toFixed(1)} dB</span></label>
             <button type="button" className="btn sm" onClick={() => setBands(bands.map((b) => ({ ...b, gainDb: 0 })), "flat")}>{t("settings.eqReset")}</button>
           </div>
           <EqCanvas bands={bands} onChange={(b) => setBands(b)} disabled={!audio.eq.enabled} />
@@ -187,9 +188,9 @@ function Audio() {
           <div className="bands">{bands.map((b, i) => (
             <label key={b.frequencyHz} className="band">
               <span aria-hidden="true">{b.frequencyHz >= 1000 ? `${b.frequencyHz / 1000}k` : b.frequencyHz}</span>
-              <input type="range" min={-15} max={15} step={0.5} value={b.gainDb} disabled={!audio.eq.enabled}
+              <Slider orientation="vertical" className="eq-slider" min={-15} max={15} step={0.5} value={b.gainDb} disabled={!audio.eq.enabled} bubble={`${b.gainDb > 0 ? "+" : ""}${b.gainDb.toFixed(1)}`}
                 aria-label={t("a11y.eqBand", { freq: b.frequencyHz })} aria-valuetext={t("a11y.eqBandValue", { gain: `${b.gainDb > 0 ? "+" : ""}${b.gainDb.toFixed(1)}` })}
-                onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, gainDb: Number(e.target.value) } : x)))} data-testid={`eq-band-${i}`} />
+                onChange={(v) => setBands(bands.map((x, j) => (j === i ? { ...x, gainDb: v } : x)))} data-testid={`eq-band-${i}`} />
               <span className="mono" aria-hidden="true">{b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}</span>
             </label>
           ))}</div>
@@ -322,10 +323,10 @@ function Transcoding() {
     <>
       <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.transcodingNetwork")}: {network?.networkId ?? network?.kind ?? "–"}</div>
       <Row title={t("settings.transcodingFormat")} settingKey="transcoding">
-        <select className="select" value={format} aria-label={t("settings.transcodingFormat")} onChange={(e) => setFormat(e.target.value)}><option value="">{t("settings.transcodingOriginal")}</option>{["opus", "mp3", "aac", "flac"].map((f) => <option key={f} value={f}>{f}</option>)}</select>
+        <Select value={format} aria-label={t("settings.transcodingFormat")} onChange={(e) => setFormat(e.target.value)}><option value="">{t("settings.transcodingOriginal")}</option>{["opus", "mp3", "aac", "flac"].map((f) => <option key={f} value={f}>{f}</option>)}</Select>
       </Row>
       <Row title={t("settings.transcodingBitrate")} settingKey="transcoding">
-        <select className="select" value={bitrate} aria-label={t("settings.transcodingBitrate")} onChange={(e) => setBitrate(Number(e.target.value))}><option value={0}>{t("settings.transcodingUnlimited")}</option>{[96, 128, 192, 256, 320].map((b) => <option key={b} value={b}>{b} kbps</option>)}</select>
+        <Select value={bitrate} aria-label={t("settings.transcodingBitrate")} onChange={(e) => setBitrate(Number(e.target.value))}><option value={0}>{t("settings.transcodingUnlimited")}</option>{[96, 128, 192, 256, 320].map((b) => <option key={b} value={b}>{b} kbps</option>)}</Select>
       </Row>
       <Row title={t("settings.transcodingCannotDecode")} settingKey="transcoding"><input className="input" value={cannot} aria-label={t("settings.transcodingCannotDecode")} onChange={(e) => setCannot(e.target.value)} style={{ width: 240 }} /></Row>
       <div className="row" style={{ marginTop: 10 }}><button type="button" className="btn primary" onClick={apply}>{t("dialog.ok")}</button></div>
@@ -384,10 +385,10 @@ function Storage() {
       </Row>
       <Toggle settingKey={SK.storagePrefetchOnMobileData} title={t("settings.prefetchMobile")} desc={t("settings.prefetchMobileDesc")} />
       <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
-        <select className="select" value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
+        <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
           {[2, 4, 5, 10, 20, 50, 100].map((g) => <option key={g} value={g}>{g} GB</option>)}
-        </select>
+        </Select>
       </Row>
       <Row title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })} data-testid="clear-cache">{t("downloads.clearCache")}</button></Row>
       <Toggle settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} desc={t("settings.batterySaverNow")} />
@@ -430,10 +431,10 @@ function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
   };
   return (
     <Row title={t("settings.cacheBudget")} desc={t("settings.cacheBudgetDesc")} settingKey={SK.storageCacheMaxBytes}>
-      <select className="select" value={custom ? "custom" : "auto"} aria-label={t("settings.cacheBudget")} onChange={(e) => choose(e.target.value)} data-testid="cache-budget-mode">
+      <Select value={custom ? "custom" : "auto"} aria-label={t("settings.cacheBudget")} onChange={(e) => choose(e.target.value)} data-testid="cache-budget-mode">
         <option value="auto">{t("settings.cacheBudgetAuto", { size: auto && budget ? fmtBytes(budget) : "–" })}</option>
         <option value="custom">{t("settings.cacheBudgetCustom")}</option>
-      </select>
+      </Select>
       {custom ? (
         <>
           <input className="input" type="number" min={0.25} step={0.25} style={{ width: 80 }} value={draft} aria-label={t("settings.cacheBudgetCustomValue")} onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(Number(draft))} onKeyDown={(e) => { if (e.key === "Enter") commit(Number(draft)); }} data-testid="cache-budget-gb" />
@@ -446,7 +447,7 @@ function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
 
 function BatterySaverRow() {
   const on = useApp((s) => s.batterySaver);
-  return <Row title={t("settings.batterySaver")} settingKey="power.batterySaver"><input type="checkbox" checked={on} onChange={(e) => bridge().dispatch({ type: "setBatterySaver", data: { enabled: e.target.checked } })} aria-label={t("settings.batterySaver")} data-testid="setting-battery-saver" /></Row>;
+  return <Row title={t("settings.batterySaver")} settingKey="power.batterySaver"><Switch checked={on} onChange={(checked) => bridge().dispatch({ type: "setBatterySaver", data: { enabled: checked } })} aria-label={t("settings.batterySaver")} data-testid="setting-battery-saver" /></Row>;
 }
 
 function LyricsSettings() {
@@ -457,13 +458,13 @@ function LyricsSettings() {
   return (
     <>
       <Row title={t("settings.externalLyrics")} desc={t("settings.externalLyricsPrivacy")} settingKey={SK.lyricsExternalEnabled}>
-        <input type="checkbox" checked={external} onChange={(e) => bridge().dispatch({ type: "setExternalLyricsEnabled", data: { enabled: e.target.checked } })} aria-label={t("settings.externalLyrics")} data-testid="setting-external-lyrics" />
+        <Switch checked={external} onChange={(checked) => bridge().dispatch({ type: "setExternalLyricsEnabled", data: { enabled: checked } })} aria-label={t("settings.externalLyrics")} data-testid="setting-external-lyrics" />
       </Row>
       <Row title="Lyrics frame rate cap" settingKey={SK.displayLyricsFps}>
-        <select className="select" value={fps} aria-label="Lyrics frame rate cap" onChange={(e) => set(SK.displayLyricsFps, Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+        <Select value={fps} aria-label="Lyrics frame rate cap" onChange={(e) => set(SK.displayLyricsFps, Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</Select>
       </Row>
       <Row title="Lyrics frame rate in battery saver" settingKey={SK.batteryLyricsFps}>
-        <select className="select" value={batteryFps} aria-label="Lyrics frame rate in battery saver" onChange={(e) => set(SK.batteryLyricsFps, Number(e.target.value))}>{[15, 24, 30].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+        <Select value={batteryFps} aria-label="Lyrics frame rate in battery saver" onChange={(e) => set(SK.batteryLyricsFps, Number(e.target.value))}>{[15, 24, 30].map((f) => <option key={f} value={f}>{f} fps</option>)}</Select>
       </Row>
     </>
   );
@@ -476,7 +477,7 @@ function Appearance() {
   return (
     <>
       <Row title={t("settings.theme")} settingKey={SK.displayTheme}>
-        <select className="select" value={theme} aria-label={t("settings.theme")} onChange={(e) => set(SK.displayTheme, e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</select>
+        <Select value={theme} aria-label={t("settings.theme")} onChange={(e) => set(SK.displayTheme, e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</Select>
       </Row>
       <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
@@ -496,7 +497,7 @@ function LyricsAnimatedRow() {
         <div className="desc" id="lyrics-animated-desc">{t("settings.lyricsAnimatedDesc")}</div>
       </div>
       <div className="control">
-        <input type="checkbox" checked={on} onChange={(e) => setLyricsAnimated(e.target.checked)} aria-label={t("settings.lyricsAnimated")} aria-describedby="lyrics-animated-desc" data-testid="setting-lyrics-animated" />
+        <Switch checked={on} onChange={(checked) => setLyricsAnimated(checked)} aria-label={t("settings.lyricsAnimated")} aria-describedby="lyrics-animated-desc" data-testid="setting-lyrics-animated" />
       </div>
     </div>
   );
@@ -511,9 +512,9 @@ function LyricsSizeRow() {
         <div className="desc">{t("settings.lyricsSizeDesc")}</div>
       </div>
       <div className="control">
-        <select className="select" value={size} onChange={(e) => setLyricsSize(e.target.value as LyricsSize)} aria-label={t("settings.lyricsSize")} data-testid="setting-lyrics-size">
+        <Select value={size} onChange={(e) => setLyricsSize(e.target.value as LyricsSize)} aria-label={t("settings.lyricsSize")} data-testid="setting-lyrics-size">
           {LYRICS_SIZES.map((v) => <option key={v} value={v}>{t(`lyrics.size.${v}` as never)}</option>)}
-        </select>
+        </Select>
       </div>
     </div>
   );
@@ -554,7 +555,7 @@ function OrderList({ surface, title }: { surface: string; title: string }) {
         {items.map((it, i) => (
           <li key={it.a.id} className="order-item" draggable onDragStart={() => setDragIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== undefined && dragIdx !== i) move(dragIdx, i); setDragIdx(undefined); }}>
             <span className="grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
-            <input type="checkbox" checked={it.on} onChange={(e) => commit(items.map((x, j) => (j === i ? { ...x, on: e.target.checked } : x)))} aria-label={it.a.label} />
+            <Switch checked={it.on} onChange={(checked) => commit(items.map((x, j) => (j === i ? { ...x, on: checked } : x)))} aria-label={it.a.label} />
             <Icon name={it.a.icon} size={14} />
             <span className="grow">{it.a.label}</span>
             <button type="button" className="btn icon sm" aria-label={t("a11y.moveUp", { label: it.a.label })} disabled={i === 0} onClick={() => move(i, i - 1)}><Icon name="chevronUp" size={12} /></button>
@@ -647,7 +648,7 @@ function Backup() {
   return (
     <>
       <Row title={t("settings.exportConfig")} settingKey="backup">
-        <label className="switch small"><input type="checkbox" checked={secrets} onChange={(e) => setSecrets(e.target.checked)} data-testid="export-secrets" /> {t("settings.exportConfigSecrets")}</label>
+        <label className="switch small"><Switch checked={secrets} onChange={(checked) => setSecrets(checked)} data-testid="export-secrets" /> {t("settings.exportConfigSecrets")}</label>
         <button type="button" className="btn" onClick={() => { setPending(String(Date.now())); bridge().dispatch({ type: "exportConfig", data: { include_secrets: secrets } }); }} data-testid="export-config">{t("settings.exportConfig")}</button>
       </Row>
       <Row title={t("settings.importConfig")} settingKey="backup"><button type="button" className="btn" onClick={() => void doImport()} data-testid="import-config">{t("settings.importConfig")}</button></Row>

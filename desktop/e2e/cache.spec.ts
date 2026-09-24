@@ -4,7 +4,7 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, test, chooseOption } from "./fixtures";
 import { expectNoViolations, serverId, setTheme } from "./a11y-helpers";
 
 interface Prime { kind: string; id: string; trackId: string; outcome: string }
@@ -267,10 +267,10 @@ test.describe("settings: storage", () => {
     const usage = page.getByTestId("cache-usage");
     await expect(usage).toContainText(/of 2\.0 GB: .* complete songs, .* partial/);
     const mode = page.getByTestId("cache-budget-mode");
-    await expect(mode).toHaveValue("auto");
-    await expect(mode.locator("option[value=auto]")).toHaveText("Automatic (currently 2.0 GB)");
+    await expect(mode).toHaveAttribute("data-value", "auto");
+    await expect(mode).toHaveText("Automatic (currently 2.0 GB)");
     await expect(page.getByTestId("data-saved")).toHaveText(/\d/);
-    const prefetch = page.getByRole("checkbox", { name: "Prefetch upcoming songs on mobile data" });
+    const prefetch = page.getByRole("switch", { name: "Prefetch upcoming songs on mobile data" });
     await expect(prefetch).not.toBeChecked();
     await prefetch.check();
     await expect(prefetch).toBeChecked();
@@ -288,7 +288,7 @@ test.describe("settings: storage", () => {
     });
     expect(await budget()).toEqual({ auto: true, value: "null" });
     // Custom starts at the current size: 2 GB is a size of its own (null is automatic).
-    await mode.selectOption("custom");
+    await chooseOption(mode, "custom");
     const gb = page.getByTestId("cache-budget-gb");
     await expect(gb).toHaveValue("2");
     await expect.poll(budget).toEqual({ auto: false, value: String(2 * 1024 ** 3) });
@@ -302,9 +302,9 @@ test.describe("settings: storage", () => {
     await gb.press("Enter");
     await expect(usage).toContainText("of 256.0 MB");
     await expect(usage).not.toHaveText(before ?? "");
-    await expect(mode).toHaveValue("custom");
+    await expect(mode).toHaveAttribute("data-value", "custom");
     // Back to automatic.
-    await mode.selectOption("auto");
+    await chooseOption(mode, "auto");
     await expect(usage).toContainText("of 2.0 GB");
     await expect(gb).toHaveCount(0);
     await expect.poll(budget).toEqual({ auto: true, value: "null" });

@@ -9,6 +9,7 @@ import { bridge } from "../core/bridge";
 import { Icon } from "../components/Icon";
 import { filterName, isBuiltinFilter } from "../lib/filters";
 import { Artwork } from "../components/Artwork";
+import { Select, Switch } from "../components/controls";
 
 const TEXT_FIELDS: FilterField[] = ["title", "album", "artist", "albumArtist", "genre", "filePath", "fileType", "comment", "lyrics", "key", "mood"];
 const NUM_FIELDS: FilterField[] = ["year", "playCount", "rating", "duration", "bitRate", "discNumber", "trackNumber", "bpm", "energy", "localPlayCount"];
@@ -95,9 +96,9 @@ export function FilterBuilder({ id }: { id: string }) {
           <div className="rules"><GroupEditor node={filter.root} onChange={(root) => setFilter({ ...filter, root })} root /></div>
           <div className="row">
             <label className="row"><span className="small muted">{t("filters.sort")}</span>
-              <select className="select" value={filter.sort} onChange={(e) => setFilter({ ...filter, sort: e.target.value as SortOrder })}>{SortOrderValues.map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}</select>
+              <Select value={filter.sort} onChange={(e) => setFilter({ ...filter, sort: e.target.value as SortOrder })}>{SortOrderValues.map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}</Select>
             </label>
-            <label className="switch"><input type="checkbox" checked={filter.descending} onChange={(e) => setFilter({ ...filter, descending: e.target.checked })} /> {t("filters.descending")}</label>
+            <label className="switch"><Switch checked={filter.descending} onChange={(checked) => setFilter({ ...filter, descending: checked })} /> {t("filters.descending")}</label>
             <label className="row"><span className="small muted">{t("filters.limit")}</span><input className="input" type="number" min={0} style={{ width: 80 }} value={filter.limit ?? ""} onChange={(e) => setFilter({ ...filter, limit: e.target.value ? Number(e.target.value) : undefined })} /></label>
           </div>
           <div className="row" style={{ flexWrap: "wrap" }}>
@@ -126,10 +127,10 @@ function GroupEditor({ node, onChange, root = false }: { node: FilterNode; onCha
   return (
     <div className="rule-group" data-testid="rule-group">
       <div className="group-head">
-        <select className="select" value={node.type} onChange={(e) => onChange({ type: e.target.value as "all" | "any", data: children })} aria-label="Match">
+        <Select value={node.type} onChange={(e) => onChange({ type: e.target.value as "all" | "any", data: children })} aria-label="Match">
           <option value="all">{t("filters.matchAll")}</option>
           <option value="any">{t("filters.matchAny")}</option>
-        </select>
+        </Select>
         <span className="grow" />
         <button type="button" className="btn sm" onClick={() => onChange({ ...node, data: [...children, { type: "rule", data: defaultRule() }] })} data-testid="add-rule"><Icon name="plus" size={12} /> {t("filters.addRule")}</button>
         <button type="button" className="btn sm" onClick={() => onChange({ ...node, data: [...children, { type: "all", data: [{ type: "rule", data: defaultRule() }] }] })}><Icon name="plus" size={12} /> {t("filters.addGroup")}</button>
@@ -158,8 +159,8 @@ function RuleEditor({ rule, onChange, onRemove }: { rule: FilterRule; onChange: 
   const fields = useMemo(() => [...FilterFieldValues], []);
   return (
     <div className="rule" data-testid="rule">
-      <select className="select" value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{f}{["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</select>
-      <select className="select" value={rule.op} onChange={(e) => setOp(e.target.value as FilterOp)} aria-label="Operator">{ops.map((o) => <option key={o} value={o}>{OP_LABEL[o]}</option>)}</select>
+      <Select value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{f}{["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</Select>
+      <Select value={rule.op} onChange={(e) => setOp(e.target.value as FilterOp)} aria-label="Operator">{ops.map((o) => <option key={o} value={o}>{OP_LABEL[o]}</option>)}</Select>
       {v.type === "text" ? <input className="input" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "text", data: e.target.value } })} aria-label="Value" data-testid="rule-value" /> : null}
       {v.type === "number" ? <input className="input" type="number" step="any" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "number", data: Number(e.target.value) } })} aria-label="Value" style={{ width: 100 }} /> : null}
       {v.type === "days" ? <input className="input" type="number" min={1} value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "days", data: Number(e.target.value) } })} aria-label="Days" style={{ width: 80 }} /> : null}

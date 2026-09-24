@@ -2,7 +2,7 @@
 // background-vocal agent) document for one track; the AMLL renderer must sweep
 // word by word, show the background line as a sub-line, and size itself from
 // the device-local preference.
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, test, chooseOption } from "./fixtures";
 
 async function playShowcase(page: import("@playwright/test").Page): Promise<void> {
   const servers = await page.evaluate(async () => (await window.hocket.query({ type: "servers" })) as { type: string; data: { id: string }[] });
@@ -81,8 +81,8 @@ test.describe("lyrics", () => {
     // The Appearance page shows the same device-local preference.
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-appearance").click();
-    await expect(page.getByTestId("setting-lyrics-size")).toHaveValue("small");
-    await page.getByTestId("setting-lyrics-size").selectOption("large");
+    await expect(page.getByTestId("setting-lyrics-size")).toHaveAttribute("data-value", "small");
+    await chooseOption(page.getByTestId("setting-lyrics-size"), "large");
     await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "large");
     expect(await fontPx()).toBeGreaterThan(medium);
     // Persisted on this device.
