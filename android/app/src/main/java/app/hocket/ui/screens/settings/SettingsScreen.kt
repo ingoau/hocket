@@ -1,194 +1,227 @@
 package app.hocket.ui.screens.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Lyrics
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.SettingsBackupRestore
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
-import app.hocket.ui.nav.BottomContentInset
-import app.hocket.core.Commands
-import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
-import app.hocket.core.api.Command
-import app.hocket.core.api.Event
-import app.hocket.core.api.QueryResult
-import app.hocket.core.api.SettingScope
-import app.hocket.playback.CoreHost
+import app.hocket.core.api.ConnectionTier
+import app.hocket.core.api.ReplayGainMode
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.components.formatAgo
 import app.hocket.ui.components.formatBytes
+import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
-import kotlinx.coroutines.launch
 
-/** Every scoped setting with its synced/local badge, grouped; subpages for the denser ones. */
+/** The settings categories, in the order they are listed. [id] is the stable test id. */
+enum class SettingsCategory(val id: String, val route: Route) {
+    Account("account", Route.SettingsAccount),
+    Appearance("appearance", Route.SettingsAppearance),
+    Playback("playback", Route.SettingsPlayback),
+    Audio("audio", Route.AudioSettings),
+    Streaming("streaming", Route.TranscodingSettings),
+    Downloads("downloads", Route.SettingsDownloads),
+    Lyrics("lyrics", Route.SettingsLyrics),
+    Library("library", Route.SettingsLibrary),
+    Battery("battery", Route.SettingsBattery),
+    Connect("connect", Route.ConnectSettings),
+    Customise("customise", Route.CustomiseSettings),
+    Backup("backup", Route.SettingsBackup),
+    About("about", Route.About);
+
+    companion object {
+        /** How the list is grouped (Android system-settings style: related categories share a card). */
+        val GROUPS: List<List<SettingsCategory>> = listOf(
+            listOf(Account),
+            listOf(Appearance, Playback, Audio, Streaming),
+            listOf(Downloads, Lyrics, Library, Battery),
+            listOf(Connect, Customise),
+            listOf(Backup, About),
+        )
+    }
+}
+
+/**
+ * Top-level settings: one row per category (leading icon, title, a one-line summary of the current
+ * values, chevron), grouped in cards; each opens its own sub-screen. Every setting lives in exactly
+ * one category.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(nav: NavHostController) {
-    val client = LocalCoreClient.current
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val server by client.server.collectAsStateWithLifecycle()
-    val storage by client.storage.collectAsStateWithLifecycle()
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
-    val queue by client.queue.collectAsStateWithLifecycle()
-    val sync = setting(SettingKeys.SYNC_ENABLED)
-    val theme = setting(SettingKeys.DISPLAY_THEME)
-    val accent = setting(SettingKeys.DISPLAY_ACCENT)
-    val dynamicColour = setting(SettingKeys.DISPLAY_DYNAMIC_COLOUR)
-    val animated = setting(SettingKeys.DISPLAY_ANIMATED_BACKGROUND)
-    val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
-    val externalLyrics = setting(SettingKeys.LYRICS_EXTERNAL_ENABLED)
-    val loveBridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED)
-    val loveThreshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD)
-    val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
-    var signOut by remember { mutableStateOf(false) }
-    var importConfirm by remember { mutableStateOf<String?>(null) }
-    var includeSecrets by remember { mutableStateOf(false) }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            val doc = (client.query(Queries.configDocument(includeSecrets)) as? QueryResult.Text)?.data ?: return@launch
-            context.contentResolver.openOutputStream(uri)?.use { it.write(doc.toByteArray()) }
-        }
-    }
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        val text = context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } ?: return@rememberLauncherForActivityResult
-        importConfirm = text
-    }
-    LaunchedEffect(Unit) { client.exports.collect { e -> if (e is Event.ConfigExported) { /* handled through the document launcher */ } } }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    Scaffold(modifier = Modifier.nestedScroll(scroll.nestedScrollConnection), topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.settings_title)) }, scrollBehavior = scroll) }) { padding ->
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
-            SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body))
-
-            SettingsSection(stringResource(R.string.settings_server))
-            server?.let { s ->
-                SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced))
-                SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) })
-                SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) })
-                SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true })
-            }
-
-            SettingsSection(stringResource(R.string.settings_section_appearance))
-            val themeOptions = listOf("system" to stringResource(R.string.settings_theme_system), "light" to stringResource(R.string.settings_theme_light), "dark" to stringResource(R.string.settings_theme_dark))
-            SettingRow(stringResource(R.string.settings_theme), scope = theme.scope) {
-                ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                    themeOptions.forEach { (v, label) -> toggleableItem(checked = (theme.string ?: "system") == v, label = label, onCheckedChange = { theme.setString(v) }) }
+    Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
+        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.settings_title)) }, scrollBehavior = scroll) },
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SettingsCategory.GROUPS.forEach { group ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    group.forEachIndexed { i, category ->
+                        CategoryRow(category, first = i == 0, last = i == group.lastIndex, onClick = { nav.navigate(category.route) })
+                    }
                 }
             }
-            // display.accent: null = follow the wallpaper (dynamic) / the artwork; a #RRGGBB overrides it.
-            val accentValue = accent.string
-            val dynamicLabel = stringResource(R.string.settings_accent_dynamic)
-            SettingRow(stringResource(R.string.settings_accent), scope = accent.scope) {
-                ButtonGroup(overflowIndicator = {}, horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                    toggleableItem(checked = accentValue == null, label = dynamicLabel, onCheckedChange = { accent.setRaw("null") })
-                    listOf("#6750A4", "#1B6B5E", "#B3261E").forEach { hex -> toggleableItem(checked = accentValue.equals(hex, true), label = "●", onCheckedChange = { accent.setString(hex) }) }
-                }
-            }
-            SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope)
-            SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope)
-
-            SettingsSection(stringResource(R.string.settings_section_audio))
-            SettingRow(stringResource(R.string.settings_section_audio), stringResource(R.string.settings_replay_gain) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_eq) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_gapless), onClick = { nav.navigate(Route.AudioSettings) }) { Icon(Icons.Filled.ChevronRight, null) }
-            SettingRow(stringResource(R.string.settings_section_transcoding), stringResource(R.string.settings_transcoding_body), onClick = { nav.navigate(Route.TranscodingSettings) }) { Icon(Icons.Filled.ChevronRight, null) }
-
-            SettingsSection(stringResource(R.string.settings_section_connect))
-            SettingRow(stringResource(R.string.settings_section_connect), stringResource(R.string.settings_coordinator_url) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_lan_discovery), onClick = { nav.navigate(Route.ConnectSettings) }) { Icon(Icons.Filled.ChevronRight, null) }
-
-            SettingsSection(stringResource(R.string.settings_section_queue))
-            val cap = savedCap.int ?: 10
-            SettingRow(stringResource(R.string.settings_saved_cap), if (cap == 0) stringResource(R.string.settings_saved_cap_zero) else stringResource(R.string.saved_cap, cap), savedCap.scope)
-            Slider(value = cap.toFloat(), onValueChange = { }, onValueChangeFinished = null, valueRange = 0f..50f, steps = 49, modifier = Modifier.padding(horizontal = 16.dp), enabled = false)
-            ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                listOf(0, 5, 10, 25, 50).forEach { n -> toggleableItem(checked = cap == n, label = n.toString(), onCheckedChange = { client.dispatch(Commands.setSavedQueueCap(n)) }) }
-            }
-            SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) })
-
-            SettingsSection(stringResource(R.string.settings_section_storage))
-            SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }) { Icon(Icons.Filled.ChevronRight, null) }
-            SettingRow(stringResource(R.string.downloads_clear_cache), formatBytes(storage.cacheBytes), onClick = { client.dispatch(Command.ClearStreamCache) })
-            val warn = storage.warnThresholdBytes
-            SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none))
-            val noLimit = stringResource(R.string.downloads_threshold_none)
-            ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                listOf(null, 2.0, 4.0, 8.0, 16.0).forEach { gb -> toggleableItem(checked = (gb?.let { it * 1e9 }) == warn, label = gb?.let { "${it.toInt()} GB" } ?: noLimit, onCheckedChange = { client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }) }
-            }
-
-            SettingsSection(stringResource(R.string.settings_section_battery))
-            SwitchRow(stringResource(R.string.settings_battery_saver), batterySaver, { client.dispatch(Commands.setBatterySaver(it)) }, stringResource(R.string.settings_battery_body))
-            SwitchRow(stringResource(R.string.settings_battery_auto), autoSaver.bool ?: true, { autoSaver.setBool(it) }, scope = autoSaver.scope)
-
-            SettingsSection(stringResource(R.string.settings_section_lyrics))
-            SwitchRow(stringResource(R.string.settings_external_lyrics), externalLyrics.bool ?: false, { client.dispatch(Commands.setExternalLyricsEnabled(it)) }, stringResource(R.string.settings_external_lyrics_privacy), externalLyrics.scope)
-
-            SettingsSection(stringResource(R.string.settings_section_ratings))
-            // ratings.loveBridge.enabled + threshold (1..5): "off" is the bridge disabled.
-            val bridgeOn = loveBridge.bool ?: false
-            val threshold = loveThreshold.int ?: 4
-            SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope)
-            val offLabel = stringResource(R.string.settings_love_threshold_off)
-            ButtonGroup(overflowIndicator = {}, modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                toggleableItem(checked = !bridgeOn, label = offLabel, onCheckedChange = { loveBridge.setBool(false) })
-                (1..5).forEach { n -> toggleableItem(checked = bridgeOn && threshold == n, label = "$n★", onCheckedChange = { loveThreshold.setInt(n); loveBridge.setBool(true) }) }
-            }
-
-            SettingsSection(stringResource(R.string.settings_section_customise))
-            SettingRow(stringResource(R.string.settings_section_customise), stringResource(R.string.settings_context_menu) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_media_buttons) + stringResource(R.string.dot_separator) + stringResource(R.string.settings_sidebar), onClick = { nav.navigate(Route.CustomiseSettings) }) { Icon(Icons.Filled.ChevronRight, null) }
-            SettingRow(stringResource(R.string.nav_filters), onClick = { nav.navigate(Route.Filters) }) { Icon(Icons.Filled.ChevronRight, null) }
-            SettingRow(stringResource(R.string.nav_stats), onClick = { nav.navigate(Route.Stats) }) { Icon(Icons.Filled.ChevronRight, null) }
-
-            SettingsSection(stringResource(R.string.settings_section_backup))
-            SwitchRow(stringResource(R.string.settings_export_with_secrets), includeSecrets, { includeSecrets = it })
-            SettingRow(stringResource(R.string.settings_export_config), onClick = { exportLauncher.launch("hocket-config.json") })
-            SettingRow(stringResource(R.string.settings_import_config), onClick = { importLauncher.launch(arrayOf("application/json", "text/plain")) })
-            SettingRow(stringResource(R.string.settings_copy_diagnostics), onClick = {
-                scope.launch {
-                    val text = (client.query(app.hocket.core.api.Query.Diagnostics) as? QueryResult.Text)?.data ?: ""
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Hocket diagnostics", text))
-                }
-            })
-
-            SettingsSection(stringResource(R.string.settings_section_about))
-            SettingRow(stringResource(R.string.settings_section_about), stringResource(R.string.settings_licence), onClick = { nav.navigate(Route.About) }) { Icon(Icons.Filled.ChevronRight, null) }
         }
     }
-    if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeServer(client::dispatch, s) }, onDismiss = { signOut = false }) }
-    importConfirm?.let { doc -> ConfirmDialog(stringResource(R.string.settings_import_confirm), stringResource(R.string.settings_import_config), onConfirm = { client.dispatch(Commands.importConfig(doc)) }, onDismiss = { importConfirm = null }, destructive = false) }
+}
+
+@Composable
+private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolean, onClick: () -> Unit) {
+    val outer = 24.dp
+    val inner = 6.dp
+    val shape = RoundedCornerShape(topStart = if (first) outer else inner, topEnd = if (first) outer else inner, bottomStart = if (last) outer else inner, bottomEnd = if (last) outer else inner)
+    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        ListItem(
+            headlineContent = { Text(category.title()) },
+            supportingContent = { Text(category.summary(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            leadingContent = { Icon(category.icon(), null, tint = MaterialTheme.colorScheme.primary) },
+            trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            modifier = Modifier.clickable(onClick = onClick).testTag("settings.category.${category.id}"),
+        )
+    }
+}
+
+private fun SettingsCategory.icon(): ImageVector = when (this) {
+    SettingsCategory.Account -> Icons.Filled.AccountCircle
+    SettingsCategory.Appearance -> Icons.Filled.Palette
+    SettingsCategory.Playback -> Icons.AutoMirrored.Filled.QueueMusic
+    SettingsCategory.Audio -> Icons.Filled.GraphicEq
+    SettingsCategory.Streaming -> Icons.Filled.NetworkCheck
+    SettingsCategory.Downloads -> Icons.Filled.Download
+    SettingsCategory.Lyrics -> Icons.Filled.Lyrics
+    SettingsCategory.Library -> Icons.Filled.LibraryMusic
+    SettingsCategory.Battery -> Icons.Filled.BatterySaver
+    SettingsCategory.Connect -> Icons.Filled.Devices
+    SettingsCategory.Customise -> Icons.Filled.Tune
+    SettingsCategory.Backup -> Icons.Filled.SettingsBackupRestore
+    SettingsCategory.About -> Icons.Filled.Info
+}
+
+@Composable
+fun SettingsCategory.title(): String = stringResource(
+    when (this) {
+        SettingsCategory.Account -> R.string.settings_category_account
+        SettingsCategory.Appearance -> R.string.settings_section_appearance
+        SettingsCategory.Playback -> R.string.settings_category_playback
+        SettingsCategory.Audio -> R.string.settings_section_audio
+        SettingsCategory.Streaming -> R.string.settings_category_streaming
+        SettingsCategory.Downloads -> R.string.settings_category_downloads
+        SettingsCategory.Lyrics -> R.string.settings_section_lyrics
+        SettingsCategory.Library -> R.string.settings_category_library
+        SettingsCategory.Battery -> R.string.settings_section_battery
+        SettingsCategory.Connect -> R.string.settings_category_connect
+        SettingsCategory.Customise -> R.string.settings_section_customise
+        SettingsCategory.Backup -> R.string.settings_category_backup
+        SettingsCategory.About -> R.string.settings_section_about
+    },
+)
+
+/** One line of the category's current values. */
+@Composable
+private fun SettingsCategory.summary(): String {
+    val client = LocalCoreClient.current
+    val dot = stringResource(R.string.dot_separator)
+    val onLabel = stringResource(R.string.settings_on)
+    val offLabel = stringResource(R.string.settings_off)
+    fun on(b: Boolean) = if (b) onLabel else offLabel
+    return when (this) {
+        SettingsCategory.Account -> {
+            val server by client.server.collectAsStateWithLifecycle()
+            val s = server
+            if (s == null) stringResource(R.string.settings_summary_no_server)
+            else stringResource(R.string.settings_server_body, s.url, s.username) + dot + (s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced))
+        }
+        SettingsCategory.Appearance -> {
+            val theme = setting(SettingKeys.DISPLAY_THEME).string ?: "system"
+            val accent = setting(SettingKeys.DISPLAY_ACCENT).string
+            val themeLabel = stringResource(when (theme) { "light" -> R.string.settings_theme_light; "dark" -> R.string.settings_theme_dark; else -> R.string.settings_theme_system })
+            stringResource(R.string.settings_theme) + ": " + themeLabel + dot + stringResource(R.string.settings_accent) + ": " + (accent ?: stringResource(R.string.settings_accent_dynamic))
+        }
+        SettingsCategory.Playback -> {
+            val queue by client.queue.collectAsStateWithLifecycle()
+            val cap = setting(SettingKeys.QUEUE_SAVED_CAP).int ?: 10
+            stringResource(R.string.settings_autoplay_short) + ": " + on(queue.autoplay) + dot + stringResource(R.string.settings_summary_saved_cap, cap)
+        }
+        SettingsCategory.Audio -> {
+            val audio by client.audio.collectAsStateWithLifecycle()
+            val rg = stringResource(when (audio.replayGain) { ReplayGainMode.Off -> R.string.settings_rg_off; ReplayGainMode.Track -> R.string.settings_rg_track; ReplayGainMode.Album -> R.string.settings_rg_album; ReplayGainMode.Auto -> R.string.settings_rg_auto })
+            stringResource(R.string.settings_replay_gain) + ": " + rg + dot + stringResource(R.string.settings_gapless) + ": " + on(audio.gapless)
+        }
+        SettingsCategory.Streaming -> stringResource(R.string.settings_summary_streaming)
+        SettingsCategory.Downloads -> {
+            val storage by client.storage.collectAsStateWithLifecycle()
+            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))
+        }
+        SettingsCategory.Lyrics -> stringResource(R.string.settings_summary_external_lyrics) + ": " + on(setting(SettingKeys.LYRICS_EXTERNAL_ENABLED).bool ?: false) +
+            dot + stringResource(R.string.lyrics_offset_value, setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS).int ?: 0)
+        SettingsCategory.Library -> {
+            val bridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED).bool ?: false
+            val threshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD).int ?: 4
+            stringResource(R.string.settings_love_threshold) + ": " + (if (bridge) "$threshold★" else stringResource(R.string.settings_love_threshold_off)) + dot + stringResource(R.string.nav_filters) + dot + stringResource(R.string.nav_stats)
+        }
+        SettingsCategory.Battery -> {
+            val saver by client.batterySaver.collectAsStateWithLifecycle()
+            stringResource(R.string.settings_battery_saver) + ": " + on(saver)
+        }
+        SettingsCategory.Connect -> {
+            val connection by client.connection.collectAsStateWithLifecycle()
+            when (connection.tier) {
+                ConnectionTier.Local -> stringResource(R.string.connection_local)
+                ConnectionTier.Lan -> stringResource(R.string.connection_lan, connection.peerCount.toInt())
+                ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
+            }
+        }
+        SettingsCategory.Customise -> stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_sidebar)
+        SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
+        SettingsCategory.About -> stringResource(R.string.settings_licence)
+    }
 }
 
 @Composable

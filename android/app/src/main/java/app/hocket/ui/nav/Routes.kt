@@ -22,6 +22,14 @@ sealed interface Route {
     @Serializable data object ConnectSettings : Route
     @Serializable data object CustomiseSettings : Route
     @Serializable data object About : Route
+    @Serializable data object SettingsAccount : Route
+    @Serializable data object SettingsAppearance : Route
+    @Serializable data object SettingsPlayback : Route
+    @Serializable data object SettingsDownloads : Route
+    @Serializable data object SettingsLyrics : Route
+    @Serializable data object SettingsLibrary : Route
+    @Serializable data object SettingsBattery : Route
+    @Serializable data object SettingsBackup : Route
 }
 
 /** Navigation items the user can choose and order (setting `ui.navItems`). */

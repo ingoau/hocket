@@ -98,6 +98,14 @@ import app.hocket.ui.screens.home.HomeScreen
 import app.hocket.ui.screens.library.LibraryScreen
 import app.hocket.ui.screens.search.SearchScreen
 import app.hocket.ui.screens.settings.AboutScreen
+import app.hocket.ui.screens.settings.AccountSettingsScreen
+import app.hocket.ui.screens.settings.AppearanceSettingsScreen
+import app.hocket.ui.screens.settings.BackupSettingsScreen
+import app.hocket.ui.screens.settings.BatterySettingsScreen
+import app.hocket.ui.screens.settings.DownloadsSettingsScreen
+import app.hocket.ui.screens.settings.LibrarySettingsScreen
+import app.hocket.ui.screens.settings.LyricsSettingsScreen
+import app.hocket.ui.screens.settings.PlaybackSettingsScreen
 import app.hocket.ui.screens.settings.AudioSettingsScreen
 import app.hocket.ui.screens.settings.ConnectSettingsScreen
 import app.hocket.ui.screens.settings.CustomiseSettingsScreen
@@ -341,5 +349,13 @@ private fun AppNavHost(nav: NavHostController, modifier: Modifier) {
         composable<Route.ConnectSettings> { ConnectSettingsScreen(nav) }
         composable<Route.CustomiseSettings> { CustomiseSettingsScreen(nav) }
         composable<Route.About> { AboutScreen(nav) }
+        composable<Route.SettingsAccount> { AccountSettingsScreen(nav) }
+        composable<Route.SettingsAppearance> { AppearanceSettingsScreen(nav) }
+        composable<Route.SettingsPlayback> { PlaybackSettingsScreen(nav) }
+        composable<Route.SettingsDownloads> { DownloadsSettingsScreen(nav) }
+        composable<Route.SettingsLyrics> { LyricsSettingsScreen(nav) }
+        composable<Route.SettingsLibrary> { LibrarySettingsScreen(nav) }
+        composable<Route.SettingsBattery> { BatterySettingsScreen(nav) }
+        composable<Route.SettingsBackup> { BackupSettingsScreen(nav) }
     }
 }
