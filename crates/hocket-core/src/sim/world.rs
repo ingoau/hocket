@@ -473,12 +473,6 @@ impl World {
     }
 
     fn deliver(&mut self, node: &str, ev: NetEvent) {
-        // DEBUGQD
-        if std::env::var("HOCKET_SIM_WIRE").is_ok() {
-            if let NetEvent::Message { peer, msg } = &ev {
-                eprintln!("WIRE [{:.0}] ->{node} from {peer}: {}", self.now(), crate::sim::world::dbg_msg(&msg.msg));
-            }
-        }
         if node == COORDINATOR_NODE {
             let input = match ev {
                 NetEvent::Accepted { peer } => RoomInput::Connected(peer),
@@ -1420,20 +1414,4 @@ pub fn doc_diff(a: &crate::api::SessionDocument, b: &crate::api::SessionDocument
 
 pub fn device_name(i: usize) -> String {
     format!("dev-{}", (b'a' + i as u8) as char)
-}
-
-// DEBUGQD
-pub fn dbg_msg(m: &crate::connect::Msg) -> String {
-    use crate::connect::Msg;
-    let opn = |o: &crate::connect::SessionOp| { let d = format!("{o:?}"); d.split(|c: char| c == ' ' || c == '{').next().unwrap_or("").to_string() };
-    match m {
-        Msg::Welcome { replica, .. } => format!("Welcome replica={:?}", replica.as_ref().map(|r| (r.document.revision, r.document.session_id.clone(), r.document.current.as_ref().map(|c| c.key.clone())))),
-        Msg::Hello { device, session_id, session_revision, .. } => format!("Hello {} sid={session_id:?} rev={session_revision}", device.id),
-        Msg::Op { base_revision, op, op_id, .. } => { let x = match op { crate::connect::SessionOp::Replace { document } => format!(" sid={} rev={} cur={:?}", document.session_id, document.revision, document.current.as_ref().map(|c| c.key.clone())), _ => String::new() }; format!("Op {op_id} base={base_revision} {}{x}", opn(op)) },
-        Msg::OpCommitted { op, revision, device_id, op_id, .. } => format!("OpCommitted {op_id} rev={revision} by {device_id} {}", opn(op)),
-        Msg::OpAck { op_id, revision } => format!("OpAck {op_id} rev={revision}"),
-        Msg::OpReject { op_id, current_revision, reason, document } => format!("OpReject {op_id} cur={current_revision} {reason:?} sid={} cur={:?}", document.session_id, document.current.as_ref().map(|c| c.key.clone())),
-        Msg::Document { document } => format!("Document rev={} sid={}", document.revision, document.session_id),
-        other => other.name().to_string(),
-    }
 }

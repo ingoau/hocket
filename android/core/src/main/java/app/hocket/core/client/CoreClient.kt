@@ -5,6 +5,8 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.Queries
 import app.hocket.core.api.*
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -151,27 +153,33 @@ class CoreClient(
     val trackPages = PageCache<TrackListKey, Track>(scope) { key, offset, limit ->
         when (val r = query(Queries.tracks(key.serverId, Page(offset.toUInt(), limit.toUInt()), key.sort, key.descending, key.filter))) {
             is QueryResult.Tracks -> PageCache.Page(r.data.items, r.data.offset.toInt(), r.data.total.toInt())
+            null -> unavailable() // leave the page absent; the next ensure() retries
             else -> PageCache.Page(emptyList(), offset, 0)
         }
     }
     val albumPages = PageCache<AlbumListKey, Album>(scope) { key, offset, limit ->
         when (val r = query(Queries.albums(key.serverId, Page(offset.toUInt(), limit.toUInt()), key.sort, key.descending, key.artistId, key.genre))) {
             is QueryResult.Albums -> PageCache.Page(r.data.items, r.data.offset.toInt(), r.data.total.toInt())
+            null -> unavailable() // leave the page absent; the next ensure() retries
             else -> PageCache.Page(emptyList(), offset, 0)
         }
     }
     val artistPages = PageCache<ArtistListKey, Artist>(scope, pageSize = 100) { key, offset, limit ->
         when (val r = query(Queries.artists(key.serverId, Page(offset.toUInt(), limit.toUInt())))) {
             is QueryResult.Artists -> PageCache.Page(r.data.items, r.data.offset.toInt(), r.data.total.toInt())
+            null -> unavailable() // leave the page absent; the next ensure() retries
             else -> PageCache.Page(emptyList(), offset, 0)
         }
     }
     val playlistTrackPages = PageCache<PlaylistTracksKey, Track>(scope) { key, offset, limit ->
         when (val r = query(Queries.playlistTracks(key.playlistId, Page(offset.toUInt(), limit.toUInt())))) {
             is QueryResult.Tracks -> PageCache.Page(r.data.items, r.data.offset.toInt(), r.data.total.toInt())
+            null -> unavailable() // leave the page absent; the next ensure() retries
             else -> PageCache.Page(emptyList(), offset, 0)
         }
     }
+
+    private fun unavailable(): Nothing = throw IllegalStateException("the core did not answer")
 
     // -- selection ---------------------------------------------------------------------------------
     private val _selection = MutableStateFlow(Selection())
@@ -231,7 +239,28 @@ class CoreClient(
     private val collector: kotlinx.coroutines.Job = scope.launch { core.events.collect(::onEvent) }
 
     fun dispatch(command: Command) = core.dispatch(command)
-    suspend fun query(query: Query): QueryResult = core.query(query)
+
+    /**
+     * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
+     * been freed while a screen was still composing, the release build's dead core, a query the core
+     * rejects). Screens run this from composition coroutines (`LaunchedEffect`, `produceState`),
+     * where a throw would crash the app; every caller already treats a missing result as "nothing".
+     * Cancellation still propagates.
+     */
+    suspend fun query(query: Query): QueryResult? = try {
+        core.query(query)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // The query type only: a payload can hold search text or ids.
+        Log.w(TAG, "query ${query::class.simpleName} failed: ${e.javaClass.simpleName}")
+        _queryFailures.value += 1
+        null
+    }
+
+    private val _queryFailures = MutableStateFlow(0)
+    /** How many queries failed soft (diagnostics and tests). */
+    val queryFailures: StateFlow<Int> = _queryFailures.asStateFlow()
 
     /** Ask the core to re-emit everything. Call on (re)attach. */
     fun requestSnapshot() = dispatch(Command.RequestSnapshot)
@@ -326,6 +355,7 @@ class CoreClient(
     }
 
     companion object {
+        private const val TAG = "CoreClient"
         fun emptyQueue() = QueueView(null, emptyList(), null, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)

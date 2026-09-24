@@ -188,33 +188,12 @@ impl HocketCore {
     /// Idempotent. Blocks: call it from a worker thread, never from the main thread, and free the
     /// object afterwards.
     pub fn shutdown(&self, timeout_ms: u64) -> bool {
-        shutdown_off_runtime(&self.core, Duration::from_millis(timeout_ms))
+        // `Core::shutdown_blocking` waits on a task that holds only the flush acknowledgement, never
+        // a `Core`, so freeing this object right afterwards (as `NativeCore.close()` does) can never
+        // leave the last handle, and with it the runtime, on one of the runtime's own workers.
+        self.core
+            .shutdown_blocking(Duration::from_millis(timeout_ms))
     }
-}
-
-/// Awaits [`Core::shutdown`] on a plain helper thread, never on the core's own runtime.
-///
-/// `Core::shutdown_blocking` awaits on a runtime task that owns a clone of the core. When the caller
-/// frees its handle right after the flush (as `NativeCore.close()` does), that task's clone is the
-/// last one and drops the tokio runtime from inside one of its own workers, which panics ("Cannot
-/// drop a runtime in a context where blocking is not allowed") and leaves the runtime half torn
-/// down. Here the only other clone lives on a thread outside any runtime, where dropping the last
-/// handle (and with it the runtime) is allowed. The shutdown future needs no runtime context: it
-/// sends on the actor's channel and awaits a oneshot.
-fn shutdown_off_runtime(core: &Core, timeout: Duration) -> bool {
-    let core = core.clone();
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let spawned = std::thread::Builder::new()
-        .name("hocket-shutdown".into())
-        .spawn(move || {
-            futures::executor::block_on(core.shutdown());
-            let _ = done_tx.send(());
-            // `core` drops here, off the runtime.
-        });
-    if spawned.is_err() {
-        return false;
-    }
-    done_rx.recv_timeout(timeout).is_ok()
 }
 
 /// Installs a tracing subscriber that forwards to logcat-friendly stderr. Call once.

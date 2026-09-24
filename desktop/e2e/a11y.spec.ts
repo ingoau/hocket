@@ -182,4 +182,22 @@ test.describe("axe: no violations anywhere", () => {
       await page.getByTestId("shuffle").click();
     }
   });
+
+  test("the always-on-top mini player, light and dark", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await playShowcase(page);
+    const opened = app.waitForEvent("window", { predicate: (w) => w.url().includes("window=mini") });
+    await page.getByRole("button", { name: "Mini player" }).click();
+    const mini = await opened;
+    await mini.waitForLoadState("domcontentloaded");
+    await expect(mini.getByTestId("mini-player")).toBeVisible();
+    for (const theme of THEMES) {
+      await setTheme(page, theme);
+      await expect(mini.locator("html")).toHaveAttribute("data-theme", theme);
+      await expectNoViolations(mini, `mini player (${theme})`);
+    }
+    // Its seek bar is the same keyboard slider.
+    await expect(mini.getByTestId("seek-slider")).toHaveAttribute("aria-valuetext", / of /);
+  });
 });
