@@ -131,6 +131,7 @@ export function hasRing(f: FocusInfo | undefined): boolean {
 /** Browser zoom, like Ctrl+= in a browser (200% = 2). */
 export async function setZoom(app: ElectronApplication, factor: number): Promise<void> {
   await app.evaluate(({ BrowserWindow }, f) => {
-    for (const w of BrowserWindow.getAllWindows()) if (w.isVisible()) w.webContents.setZoomFactor(f);
+    // Every real window (not the 1×1 media-session anchor), shown yet or not.
+    for (const w of BrowserWindow.getAllWindows()) if (w.getBounds().width > 100) w.webContents.setZoomFactor(f);
   }, factor);
 }

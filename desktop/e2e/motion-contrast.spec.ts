@@ -228,8 +228,6 @@ test.describe("motion, contrast and zoom", () => {
 
   test("200% zoom: the layout reflows with no sideways scrolling and no clipped controls", async ({ hocket }) => {
     const { app, page } = hocket;
-    await completeSetup(page);
-    await playShowcase(page);
     await setZoom(app, 2);
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(900);
     const check = async (label: string) => {
@@ -274,6 +272,16 @@ test.describe("motion, contrast and zoom", () => {
       });
       expect(problems, label).toEqual([]);
     };
+    // The setup form scrolls instead of being cut off top and bottom.
+    await expect(page.getByTestId("setup")).toBeVisible();
+    await check("200% setup");
+    await page.getByTestId("setup-connect").scrollIntoViewIfNeeded();
+    await expect(page.getByTestId("setup-connect")).toBeInViewport();
+    await setZoom(app, 1);
+    await completeSetup(page);
+    await playShowcase(page);
+    await setZoom(app, 2);
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(900);
     for (const view of ["home", "albums", "songs", "playlists", "genres", "downloads", "filters", "stats"]) {
       await page.getByTestId(`nav-${view}`).click();
       await expect(page.getByTestId(`view-${view}`)).toBeVisible();

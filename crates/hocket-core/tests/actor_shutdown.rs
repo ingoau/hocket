@@ -129,3 +129,252 @@ async fn shutdown_blocking_from_a_plain_thread() {
     .unwrap();
     assert!(again);
 }
+
+// -- owned-runtime teardown -------------------------------------------------
+//
+// `Core::new` owns its tokio runtime. Dropping a `Runtime` from inside any
+// runtime context panics ("Cannot drop a runtime in a context where blocking
+// is not allowed"), and from one of its own blocking threads it would wait on
+// itself. The last `Core` handle can go away anywhere a platform happens to
+// hold it: a plain thread, a task on the platform's own runtime, or a task on
+// the core's runtime (the old `shutdown_blocking` kept a clone in exactly
+// such a task). Every combination below must shut down cleanly, with the
+// dispatched state on disk.
+
+mod owned_runtime {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{mpsc, Once};
+    use std::time::Duration;
+
+    use hocket_core::api::*;
+    use hocket_core::Core;
+
+    const TIMEOUT: Duration = Duration::from_secs(20);
+
+    /// Panics anywhere in the process (including inside tokio tasks, whose
+    /// panics the runtime would otherwise swallow).
+    static PANICS: AtomicUsize = AtomicUsize::new(0);
+
+    fn count_panics() {
+        static HOOK: Once = Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                PANICS.fetch_add(1, Ordering::SeqCst);
+                previous(info);
+            }));
+        });
+    }
+
+    fn config(dir: &std::path::Path) -> CoreConfig {
+        CoreConfig {
+            data_dir: dir.join("data").to_string_lossy().into_owned(),
+            cache_dir: dir.join("cache").to_string_lossy().into_owned(),
+            device_id: "dev-owned".into(),
+            device_name: "Owned runtime".into(),
+            platform: Platform::Linux,
+            app_version: "test".into(),
+            audio: AudioMode::None,
+            coordinator_listen: None,
+        }
+    }
+
+    fn volume(core: &Core) -> f64 {
+        let q = core.query(Query::Snapshot);
+        match core.runtime().block_on(q).expect("snapshot") {
+            QueryResult::SnapshotResult(s) => s.transport.volume,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ShutdownOn {
+        /// `shutdown_blocking` on a plain thread (the JNI path).
+        PlainThreadBlocking,
+        /// `shutdown_blocking` inside a task on another runtime.
+        OtherRuntimeBlocking,
+        /// `shutdown().await` inside a task on another runtime (napi).
+        OtherRuntimeAsync,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum DropOn {
+        PlainThread,
+        OtherRuntimeTask,
+        OwnRuntimeTask,
+        OwnRuntimeBlocking,
+    }
+
+    fn shutdown(core: &Core, on: ShutdownOn, other: &tokio::runtime::Runtime) -> bool {
+        match on {
+            ShutdownOn::PlainThreadBlocking => {
+                let c = core.clone();
+                std::thread::spawn(move || c.shutdown_blocking(TIMEOUT))
+                    .join()
+                    .expect("shutdown thread")
+            }
+            ShutdownOn::OtherRuntimeBlocking => {
+                let c = core.clone();
+                other
+                    .block_on(other.spawn(async move { c.shutdown_blocking(TIMEOUT) }))
+                    .expect("shutdown task")
+            }
+            ShutdownOn::OtherRuntimeAsync => {
+                let c = core.clone();
+                other
+                    .block_on(other.spawn(async move {
+                        tokio::time::timeout(TIMEOUT, c.shutdown()).await.is_ok()
+                    }))
+                    .expect("shutdown task")
+            }
+        }
+    }
+
+    /// Drop `core` (the last handle) in `on`; waits until the drop returned.
+    fn drop_last(core: Core, on: DropOn, other: &tokio::runtime::Runtime) {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        match on {
+            DropOn::PlainThread => {
+                std::thread::spawn(move || {
+                    drop(core);
+                    let _ = done_tx.send(());
+                });
+            }
+            DropOn::OtherRuntimeTask => {
+                other.spawn(async move {
+                    drop(core);
+                    let _ = done_tx.send(());
+                });
+            }
+            DropOn::OwnRuntimeTask => {
+                let handle = core.runtime().clone();
+                handle.spawn(async move {
+                    drop(core);
+                    let _ = done_tx.send(());
+                });
+            }
+            DropOn::OwnRuntimeBlocking => {
+                let handle = core.runtime().clone();
+                handle.spawn_blocking(move || {
+                    drop(core);
+                    let _ = done_tx.send(());
+                });
+            }
+        }
+        done_rx
+            .recv_timeout(TIMEOUT)
+            .unwrap_or_else(|_| panic!("dropping the last handle ({on:?}) never returned"));
+    }
+
+    #[test]
+    fn last_handle_dropped_anywhere_after_shutdown_from_anywhere() {
+        count_panics();
+        let other = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let shutdowns = [
+            ShutdownOn::PlainThreadBlocking,
+            ShutdownOn::OtherRuntimeBlocking,
+            ShutdownOn::OtherRuntimeAsync,
+        ];
+        let drops = [
+            DropOn::PlainThread,
+            DropOn::OtherRuntimeTask,
+            DropOn::OwnRuntimeTask,
+            DropOn::OwnRuntimeBlocking,
+        ];
+        let mut round = 0u32;
+        for _ in 0..3 {
+            for &s in &shutdowns {
+                for &d in &drops {
+                    round += 1;
+                    let dir = tempfile::tempdir().unwrap();
+                    let want = f64::from(round % 90 + 5) / 100.0;
+                    let core = Core::new(config(dir.path())).expect("core");
+                    for i in 0..20 {
+                        core.dispatch(Command::SetVolume {
+                            volume: f64::from(i) / 100.0,
+                        })
+                        .unwrap();
+                    }
+                    core.dispatch(Command::SetVolume { volume: want }).unwrap();
+                    assert!(shutdown(&core, s, &other), "{s:?}: flush timed out");
+                    // A second handle held elsewhere goes first, so `core`
+                    // really is the last one.
+                    let spare = core.clone();
+                    std::thread::spawn(move || drop(spare)).join().unwrap();
+                    drop_last(core, d, &other);
+                    assert_eq!(PANICS.load(Ordering::SeqCst), 0, "{s:?} / {d:?}");
+
+                    // The work dispatched before shutdown reached the disk.
+                    let again = Core::new(config(dir.path())).expect("reopen");
+                    assert_eq!(volume(&again), want, "{s:?} / {d:?}");
+                    assert!(again.shutdown_blocking(TIMEOUT));
+                    drop(again);
+                }
+            }
+        }
+        drop(other);
+        assert_eq!(PANICS.load(Ordering::SeqCst), 0);
+    }
+
+    /// No shutdown at all: the last handle still goes away cleanly from
+    /// inside the core's own runtime or another one.
+    #[test]
+    fn last_handle_dropped_in_a_runtime_without_shutdown() {
+        count_panics();
+        let other = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for d in [
+            DropOn::OwnRuntimeTask,
+            DropOn::OwnRuntimeBlocking,
+            DropOn::OtherRuntimeTask,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let core = Core::new(config(dir.path())).expect("core");
+            core.dispatch(Command::SetVolume { volume: 0.3 }).unwrap();
+            if matches!(d, DropOn::OtherRuntimeTask) {
+                let (tx, rx) = mpsc::channel();
+                other.block_on(async move {
+                    tokio::spawn(async move {
+                        drop(core);
+                        let _ = tx.send(());
+                    })
+                    .await
+                    .unwrap();
+                });
+                rx.recv_timeout(TIMEOUT).expect("dropped");
+            } else {
+                drop_last(core, d, &other);
+            }
+            assert_eq!(PANICS.load(Ordering::SeqCst), 0, "{d:?}");
+        }
+    }
+
+    /// `shutdown_blocking` followed at once by dropping the caller's handle:
+    /// the task it spawned on the core's runtime must not be left holding
+    /// the last one.
+    #[test]
+    fn shutdown_blocking_then_immediate_drop() {
+        count_panics();
+        for _ in 0..30 {
+            let dir = tempfile::tempdir().unwrap();
+            let core = Core::new(config(dir.path())).expect("core");
+            core.dispatch(Command::SetVolume { volume: 0.4 }).unwrap();
+            let t = std::thread::spawn(move || {
+                let ok = core.shutdown_blocking(TIMEOUT);
+                drop(core);
+                ok
+            });
+            assert!(t.join().expect("no panic"));
+            // Give a straggling task on the (now shut down) runtime time to
+            // run its drop.
+            std::thread::sleep(Duration::from_millis(5));
+            assert_eq!(PANICS.load(Ordering::SeqCst), 0);
+        }
+    }
+}
