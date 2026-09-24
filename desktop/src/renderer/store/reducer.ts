@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import type { PlayerNotice } from "../lib/notice";
@@ -140,6 +140,20 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":
       return { ...state, libraryVersion: state.libraryVersion + 1, libraryChangedIds: e.data.ids };
+    case "libraryItemsChanged": {
+      // A rating or love set here or on another signed-in device. Lists refetch on the
+      // libraryChanged that follows; copies held in view state are patched now.
+      const items = e.data.items;
+      return {
+        ...state,
+        nowPlaying: state.nowPlaying && patchEntry(state.nowPlaying, items),
+        queue: patchQueue(state.queue, items),
+        lastServerSearch: state.lastServerSearch && patchSearch(state.lastServerSearch, items),
+      };
+    }
+    case "playlistChanged":
+      // Views refetch on the libraryChanged that follows.
+      return state;
     case "searchResults":
       return { ...state, lastServerSearch: e.data.results };
     case "sessionChanged":
@@ -227,6 +241,42 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return state;
     }
   }
+}
+
+// -- libraryItemsChanged: the core's new values onto copies the view already holds ---------------
+
+function findItem(items: LibraryItemState[], kind: LibraryItemState["kind"], id: string): LibraryItemState | undefined {
+  return items.find((i) => i.kind === kind && i.id === id);
+}
+
+export function patchTrack<T extends { id: string; rating: number; loved: boolean }>(t: T, items: LibraryItemState[]): T {
+  const s = findItem(items, "track", t.id);
+  return s && (s.rating !== t.rating || s.loved !== t.loved) ? { ...t, rating: s.rating, loved: s.loved } : t;
+}
+
+function patchEntry(e: QueueEntry, items: LibraryItemState[]): QueueEntry {
+  const track = patchTrack(e.track, items);
+  return track === e.track ? e : { ...e, track };
+}
+
+function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
+  const list = (l: QueueEntry[]) => l.map((e) => patchEntry(e, items));
+  return { ...q, history: list(q.history), current: q.current && patchEntry(q.current, items), playingNext: list(q.playingNext), upcoming: list(q.upcoming) };
+}
+
+export function patchSearch(r: SearchResults, items: LibraryItemState[]): SearchResults {
+  return {
+    ...r,
+    tracks: r.tracks.map((t) => patchTrack(t, items)),
+    albums: r.albums.map((a) => {
+      const s = findItem(items, "album", a.id);
+      return s ? { ...a, rating: s.rating, loved: s.loved } : a;
+    }),
+    artists: r.artists.map((a) => {
+      const s = findItem(items, "artist", a.id);
+      return s ? { ...a, loved: s.loved } : a;
+    }),
+  };
 }
 
 export function dismissToast(state: CoreState, id: string): CoreState {
