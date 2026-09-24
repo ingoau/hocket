@@ -89,8 +89,12 @@ class CoreHostReplayTest {
         CoreHost.resetForTests()
     }
 
+    /**
+     * The collector runs on the test's event loop but is not a child of it: it never completes on
+     * its own, and `runBlocking` would otherwise wait for it forever. [tearDown] cancels it.
+     */
     private fun kotlinx.coroutines.CoroutineScope.startReplay() {
-        replay = launch(start = CoroutineStart.UNDISPATCHED) { CoreHost.replayCredentials(core, store) }
+        replay = kotlinx.coroutines.CoroutineScope(coroutineContext + Job()).launch(start = CoroutineStart.UNDISPATCHED) { CoreHost.replayCredentials(core, store) }
     }
 
     @Test
