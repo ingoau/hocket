@@ -11,16 +11,28 @@
 //!   out-of-space as a loud `Problem`. [`Downloads::reconcile_playlist`] keeps
 //!   a playlist pin in step when the playlist changes (enqueues fetches and
 //!   removals). [`Downloads::set_gain`] stores gain computed at download time.
-//! - Stream cache: [`Downloads::cache_put`] / [`cache_get`](Downloads::cache_get)
-//!   / [`Downloads::enforce_cache_budget`] (LRU by bytes) /
-//!   [`Downloads::clear_stream_cache`]. Separate directory, separate policy.
+//!   A track already complete in the stream cache (the pin's profile or the
+//!   original) is moved into downloads instead of fetched again.
+//! - Stream cache (see `stream_cache.rs`): complete and partial entries
+//!   ([`Downloads::cache_begin`] / [`Downloads::cache_merge`] with
+//!   [`spans::SpanSet`]s, promoted in place when whole), validated against
+//!   the disk and the track's server metadata on every lookup
+//!   ([`Downloads::cache_complete`], [`Downloads::cache_partial`]), dropped
+//!   when a sync sees the track change
+//!   ([`Downloads::invalidate_changed_sources`]) or the OS removed the file
+//!   ([`Downloads::reconcile_stream_cache`]); scored eviction
+//!   ([`eviction_score`], [`Downloads::enforce_cache_budget`]) that skips
+//!   files in use; an automatic budget ([`Downloads::auto_cache_budget`]);
+//!   traffic counters for "data saved"; [`Downloads::clear_stream_cache`].
+//!   Separate directory, separate policy.
 //! - [`Downloads::resolve`] → `api::MediaSource` for a track: downloaded file →
 //!   cached file → stream URL with the transcoding profile chosen per network
 //!   and per platform `cannot_decode` list.
 //! - [`Downloads::storage_summary`] → `api::StorageSummary`.
 //!
 //! Layout: `<data_dir>/downloads/<server_id>/<track_id>.<suffix>` and
-//! `<cache_dir>/stream/<server_id>/<track_id>[.<profile hash>].<suffix>`.
+//! `<cache_dir>/stream/<server_id>/<track_id>[.<profile key>].<random>.<suffix>`
+//! (partial entries are sparse files of the stream's full length).
 
 pub mod spans;
 mod stream_cache;
