@@ -1562,6 +1562,14 @@ impl Engine {
         let was_attached = matches!(r.state, RemoteState::Attached { .. });
         let tier = r.tier;
         let delay = self.cfg.backoff.delay_ms(attempt);
+        self.log(
+            "debug",
+            format!(
+                "upstream {tier:?} {} lost (attempt {attempt}): {}; retry in {delay:.0} ms",
+                r.leader.as_deref().unwrap_or("coordinator"),
+                error.as_deref().unwrap_or("closed")
+            ),
+        );
         if let Some(r) = &mut self.remote {
             r.state = RemoteState::Backoff {
                 until: now + delay,
