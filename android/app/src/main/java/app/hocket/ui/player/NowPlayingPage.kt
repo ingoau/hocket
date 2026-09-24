@@ -111,7 +111,6 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.QueueSource
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
-import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.PlaylistPicker
 import app.hocket.ui.components.formatClock
@@ -123,8 +122,6 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.LineHeightStyle
-import app.hocket.ui.components.RatingStars
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.combinedClickable
 
 /**
@@ -166,7 +163,9 @@ internal fun FullPlayer(
     val density = LocalDensity.current
     var handoff by remember { mutableStateOf(false) }
     var sleepSheet by remember { mutableStateOf(false) }
-    var more by remember { mutableStateOf(false) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
+    val sleepLabel = stringResource(R.string.player_sleep_timer)
+    val resources = androidx.compose.ui.platform.LocalResources.current
     var addTo by remember { mutableStateOf(false) }
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
@@ -188,7 +187,14 @@ internal fun FullPlayer(
                         position = position,
                         hero = hero,
                         pageWidth = pageWidth,
-                        onMore = { more = true },
+                        onMore = {
+                            // The song menu is hosted at the app level, not in this (moving) sheet;
+                            // the player adds the sleep timer as its extra.
+                            val sleep = client.sleepTimer.value
+                            val sleepState = sleep?.let { t -> t.endsAt?.let { resources.getString(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: resources.getString(R.string.sleep_active_end_of_track) }
+                            track?.let { songMenu.open(it, extras = listOf(app.hocket.ui.components.SongMenuExtra(sleepLabel, Icons.Filled.Bedtime,
+                                onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep"))) }
+                        },
                         onAddTo = { addTo = true },
                     )
                 },
@@ -208,14 +214,6 @@ internal fun FullPlayer(
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
-    if (more && track != null) ActionSheet(Commands.tracks(listOf(track.id)), track.title, track.artist, onDismiss = { more = false },
-        onGoToAlbum = track.albumId?.let { id -> { onOpenAlbum(id) } }, onGoToArtist = track.artistId?.let { id -> { onOpenArtist(id) } },
-        extraTop = {
-            // As in Navic: the rating across the top of the song menu, then the sleep timer.
-            RatingStars(track.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(track.id, it)) }, starSize = 32.dp, tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).padding(vertical = 4.dp))
-            SleepTimerMenuRow(onClick = { more = false; sleepSheet = true })
-        })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
@@ -486,20 +484,6 @@ private fun ModeBar(mode: PlayerMode, onMode: (PlayerMode) -> Unit, pageWidth: D
             }
         }
     }
-}
-
-/** The More sheet's sleep-timer entry: the remaining time when one is set. */
-@Composable
-private fun SleepTimerMenuRow(onClick: () -> Unit) {
-    val client = LocalCoreClient.current
-    val sleep by client.sleepTimer.collectAsStateWithLifecycle()
-    androidx.compose.material3.ListItem(
-        headlineContent = { Text(stringResource(R.string.player_sleep_timer)) },
-        supportingContent = sleep?.let { t -> { Text(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)) } },
-        leadingContent = { Icon(Icons.Filled.Bedtime, null, tint = if (sleep != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) },
-        colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.clickable(onClick = onClick).testTag("player.sleep"),
-    )
 }
 
 private val PILL_PADDING = 12.dp

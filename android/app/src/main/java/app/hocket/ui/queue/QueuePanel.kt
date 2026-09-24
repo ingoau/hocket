@@ -87,7 +87,6 @@ import app.hocket.core.api.QueueSource
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.SelectionKind
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.ListArtCorner
@@ -196,7 +195,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val selecting = selection.active && kind == SelectionKind.QueueItems
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
-    var sheetFor by remember { mutableStateOf<QueueEntry?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     var ratingFor by remember { mutableStateOf<QueueEntry?>(null) }
     val historyLabel = stringResource(R.string.queue_section_history)
     val nowLabel = stringResource(R.string.queue_now)
@@ -337,7 +336,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                     extraActions = extra,
                                     onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) },
                                     onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
-                                    onMore = { sheetFor = entry },
+                                    onMore = { songMenu.open(entry.track, Commands.queueItems(listOf(entry.item.key))) },
                                     onRate = { ratingFor = entry },
                                     modifier = Modifier.drawBehind { if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) drawRect(swipeSurface) },
                                     handle = if (draggable) ({
@@ -359,7 +358,6 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
         }
         SelectionToolbar(Modifier.align(Alignment.BottomCenter))
     }
-    sheetFor?.let { e -> ActionSheet(Commands.queueItems(listOf(e.item.key)), e.track.title, e.track.artist, onDismiss = { sheetFor = null }) }
     ratingFor?.let { e ->
         RatingDialog(current = e.track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), Commands.queueItems(listOf(e.item.key)))); ratingFor = null }, onDismiss = { ratingFor = null })
     }

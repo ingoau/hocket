@@ -315,12 +315,14 @@ private val CollapsedRailWidth = 96.dp
 private fun MainShell(snackbar: SnackbarHostState) {
     val nav = rememberNavController()
     val sheet = rememberNowPlayingSheetState()
+    // The one song menu, hosted here (not inside the player sheet or a list) and opened from anywhere.
+    val songMenu = remember { app.hocket.ui.components.SongMenuController() }
     val client = LocalCoreClient.current
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible) {
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -420,6 +422,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 onOpenArtist = navigator.openArtist,
             )
             }
+            app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on (Navic): the surface colour eased in
             // from transparent, so content scrolling under them fades out instead of clashing.
             if (!wide || playerVisible) {
