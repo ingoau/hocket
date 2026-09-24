@@ -4,6 +4,7 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { TrackTable } from "../components/TrackTable";
+import { Icon } from "../components/Icon";
 import { useQuery } from "../store/queries";
 import { Tile, TileList } from "../components/Tile";
 
@@ -24,14 +25,14 @@ export function SearchView({ query }: { query: string }) {
       <div className="view-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {(local.data?.albums.length || server?.albums.length) ? (
           <section className="home-section" aria-labelledby="search-albums">
-            <h2 className="section-heading" id="search-albums">{t("search.albums")}</h2>
+            <h2 className="section-heading" id="search-albums"><span className="section-icon" aria-hidden="true"><Icon name="album" size={18} /></span>{t("search.albums")}</h2>
             <TileList label={t("search.albums")} className="scroller">{[...(local.data?.albums ?? []), ...(server?.albums ?? [])].map((a) => (
               <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} />
             ))}</TileList>
           </section>
         ) : null}
         <section className="search-songs" aria-labelledby="search-tracks" style={{ flex: 1, minHeight: 300, display: "flex", flexDirection: "column" }}>
-          <h2 className="section-heading" id="search-tracks">{t("search.tracks")}</h2>
+          <h2 className="section-heading" id="search-tracks"><span className="section-icon" aria-hidden="true"><Icon name="song" size={18} /></span>{t("search.tracks")}</h2>
           <TrackTable tracks={list} total={list.length} columns={["art", "title", "artist", "album", "rating", "duration"]} scope={`search:${query}`} label={t("search.tracks")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: list.map((x) => x.id), start_index: i, label: query, shuffle: false } })} emptyMessage={t("search.noResults", { query })} />
         </section>
       </div>

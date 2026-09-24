@@ -12,7 +12,7 @@ import { executeAction } from "../store/actions";
 export function SavedQueues() {
   const queues = useApp((s) => s.savedQueues);
   const d = bridge().dispatch;
-  if (!queues.length) return <EmptyState message={t("savedQueues.empty")} testId="saved-queues-empty" />;
+  if (!queues.length) return <EmptyState message={t("savedQueues.empty")} icon="restore" testId="saved-queues-empty" />;
   const sorted = [...queues].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastInteractedAt - a.lastInteractedAt);
   return (
     <div className="pane-body" role="list" data-testid="saved-queues">

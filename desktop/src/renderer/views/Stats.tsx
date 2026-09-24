@@ -21,7 +21,7 @@ export function Stats() {
         </div>
       </div>
       <div className="view-body">
-        {!loading && !data?.totalPlays ? <EmptyState message={t("stats.empty")} /> : null}
+        {!loading && !data?.totalPlays ? <EmptyState message={t("stats.empty")} icon="stats" /> : null}
         {data?.totalPlays ? (
           <div className="stack stats-stack">
             <div className="stat-heroes">

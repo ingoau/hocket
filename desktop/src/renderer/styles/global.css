@@ -50,6 +50,23 @@
   --surface-tonal-sunken: color-mix(in srgb, var(--accent-tint) 5%, var(--bg-sunken));
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.12), 0 1px 3px 1px rgba(0, 0, 0, 0.06);
   --shadow-2: 0 2px 6px 2px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.14);
+  /* One layout grid for every page. Filled blocks in a page body (heroes,
+     track-table headers, grouped lists, cards, genre cards) start at the
+     gutter; text that heads them (page titles, section headings) and the
+     content of hover-only rows and tiles sits one inset further in. */
+  --page-gutter: 20px;
+  --page-title-inset: 8px;
+  --page-pad: calc(var(--page-gutter) + var(--page-title-inset));
+  /* Type ramp for headings: one size per level everywhere. */
+  --title-display: clamp(36px, 2.4vw + 18px, 52px);
+  --title-section: 22px;
+  --title-card: 18px;
+  /* One set of control sizes (M3 XS / S): text buttons, small buttons, the
+     larger header and dialog actions, and text fields. */
+  --btn-h: 36px;
+  --btn-h-sm: 32px;
+  --btn-h-lg: 40px;
+  --field-h: 36px;
 }
 
 :root, :root[data-theme="light"] {
@@ -198,7 +215,8 @@ main:focus-visible { outline: none; }
     transform var(--dur-spring) var(--spring-bouncy);
 }
 .btn:where(:not(.player *, .fullscreen *)):active { transform: scale(0.95); border-radius: var(--shape-sm); transition-duration: 80ms, 80ms, 80ms, 80ms, 120ms, 120ms; }
-.btn.sm:where(:not(.player *, .fullscreen *)) { padding: 0 11px; }
+.btn:where(:not(.icon, .player *, .fullscreen *)) { height: var(--btn-h); }
+.btn.sm:where(:not(.icon, .player *, .fullscreen *)) { height: var(--btn-h-sm); padding: 0 12px; font-size: var(--fs-md); }
 .btn.sm:where(:not(.player *, .fullscreen *)):active { border-radius: var(--shape-xs); }
 .btn.primary:where(:not(.player *, .fullscreen *)) { box-shadow: var(--shadow-1); }
 .btn.primary:where(:not(.player *, .fullscreen *)):hover { box-shadow: var(--shadow-2); }
@@ -226,6 +244,9 @@ main:focus-visible { outline: none; }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--focus-ring); box-shadow: none; }
 .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
 .input::placeholder { color: var(--fg-faint); }
+/* Text fields share one height and shape (selects keep their own rules); a focused field squares off a little. */
+.input { height: var(--field-h); padding: 0 14px; border-radius: var(--shape-md); }
+.input:focus { border-radius: var(--shape-sm); }
 .select { padding-right: 24px; appearance: auto; }
 input[type="range"] { accent-color: var(--accent); height: 20px; }
 input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
@@ -240,24 +261,29 @@ input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px;
 .row { display: flex; align-items: center; gap: 8px; }
 .grow { flex: 1 1 auto; min-width: 0; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
-.badge { display: inline-block; padding: 1px 8px; border-radius: var(--shape-full); font-size: var(--fs-xs); background: var(--bg-active); color: var(--fg-muted); line-height: 1.5; }
+.badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: var(--shape-full); font-size: var(--fs-xs); font-weight: 600; background: var(--bg-active); color: var(--fg-muted); line-height: 1; white-space: nowrap; vertical-align: 1px; }
+/* On a sunken or tonal container a neutral badge lifts onto the pane surface instead. */
+:is(.setting-row, .pin-row, .order-item, .shortcut-row) .badge:not(.synced) { background: var(--bg-elev); }
 .badge.synced { background: var(--accent-soft); color: var(--accent-text); }
 .badge.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
 .badge.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .badge.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
 .kbd { display: inline-block; padding: 0 5px; min-width: 18px; text-align: center; border-radius: var(--shape-xs); border: 1px solid var(--border-strong); border-bottom-width: 2px; font-size: var(--fs-xs); color: var(--fg-muted); background: var(--bg-elev); font-family: var(--font-ui); line-height: 16px; }
 .divider { height: 1px; background: var(--border); margin: 6px 0; }
-.card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--shape-lg); padding: 16px; }
+.card { background: var(--surface-tonal-sunken); border-radius: var(--shape-xl); padding: 20px; min-width: 0; }
 h1, h2, h3 { margin: 0; font-weight: 600; }
 h1 { font-size: var(--fs-xxl); letter-spacing: -0.01em; }
 h2 { font-size: var(--fs-xl); }
 h3 { font-size: var(--fs-lg); }
 .section-title { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); padding: 8px 8px 4px; margin: 0; }
 /* Headings that keep the look of the old h3s at their new, correct level. */
-.section-heading, .card-title { font-size: var(--fs-lg); font-weight: 600; }
+/* Section headings (h2 in a page body): one size and weight on every page, the
+   text one inset in from the blocks below, an optional tonal cookie icon. */
+.section-heading { display: flex; align-items: center; gap: 12px; font-size: var(--title-section); font-weight: 750; letter-spacing: -0.01em; line-height: 1.2; margin: 0 0 12px var(--page-title-inset); }
+/* Titles inside a card or side sheet. */
+.card-title { font-size: var(--title-card); font-weight: 700; letter-spacing: -0.005em; line-height: 1.2; margin: 0 0 14px; }
 .dialog-title { font-size: var(--fs-lg); font-weight: 600; margin: 0; }
 .pane-title { font-size: var(--fs-sm); font-weight: 600; margin: 0; }
-.settings-heading { font-size: var(--fs-xl); margin-bottom: 12px; }
 
 /* ---- App shell ---------------------------------------------------------- */
 .app { display: grid; grid-template-rows: auto 1fr var(--player-h); height: 100%; background: var(--bg); }
@@ -326,9 +352,9 @@ h3 { font-size: var(--fs-lg); }
 /* Content */
 .content { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.view-header { display: flex; align-items: flex-end; gap: 12px; padding: 18px 20px 10px; }
-.view-header .actions { display: flex; gap: 6px; margin-left: auto; align-items: center; }
-.view-body { flex: 1; min-height: 0; overflow: auto; padding: 0 20px 20px; }
+.view-header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; padding: 28px var(--page-pad) 16px; }
+.view-header .actions { display: flex; gap: 8px; margin-left: auto; align-items: center; align-self: center; }
+.view-body { flex: 1; min-height: 0; overflow: auto; padding: 4px var(--page-gutter) 28px; }
 .view-body.no-pad { padding: 0; }
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 160px; color: var(--fg-muted); text-align: center; gap: 8px; padding: 20px; }
 .empty .btn { margin-top: 4px; }
@@ -371,7 +397,9 @@ h3 { font-size: var(--fs-lg); }
 .tile .play:active { transform: scale(0.9); transition-duration: 80ms, 100ms, 120ms; }
 
 /* Table */
-.table { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.table { display: flex; flex-direction: column; min-height: 0; flex: 1; --table-inset: 0px; }
+/* A table that fills an unpadded body lines up with the page gutter like everything else. */
+.view-body.no-pad > .table { --table-inset: var(--page-gutter); }
 .table-head { display: grid; height: 28px; align-items: center; border-bottom: 1px solid var(--border); color: var(--fg-muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.02em; padding: 0 12px; position: sticky; top: 0; background: var(--bg); z-index: 1; }
 .table-head .th { display: flex; align-items: center; gap: 4px; padding: 0 6px; height: 100%; white-space: nowrap; overflow: hidden; }
 .table-head .th.sortable { padding: 0; }
@@ -381,7 +409,7 @@ h3 { font-size: var(--fs-lg); }
 .table-head .th.sorted { color: var(--fg); }
 .table-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
 /* Rows are soft pills: rounded state layers on hover and selection, inset from the pane edge. */
-.tr { display: grid; height: var(--row-h); align-items: center; padding: 0 8px; border-radius: var(--shape-sm); position: absolute; left: 4px; right: 4px; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.tr { display: grid; height: var(--row-h); align-items: center; padding: 0 8px; border-radius: var(--shape-sm); position: absolute; left: var(--table-inset); right: var(--table-inset); transition: background-color var(--dur-short) var(--ease-emphasized); }
 .tr:hover { background: var(--bg-hover); }
 .tr.selected { background: var(--selection); }
 /* The keyboard cursor shows only while the table has focus. */
@@ -418,9 +446,6 @@ h3 { font-size: var(--fs-lg); }
 .detail-head .meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .detail-head .meta h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-head .meta .actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-/* The header's main actions are M3 "medium" buttons: taller pills, the primary one squarer when pressed. */
-.detail-head .meta .actions .btn:not(.icon) { height: 36px; padding: 0 18px; font-size: var(--fs-md); }
-.detail-head .meta .actions .btn.icon { width: 36px; height: 36px; }
 
 /* Player bar */
 .player { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(360px, 2fr) minmax(200px, 1fr); align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border); background: var(--bg-elev); position: relative; }
@@ -565,7 +590,7 @@ button.qrow { width: 100%; }
 .info-list { margin: 0; }
 .info-list dt, .info-list dd { margin: 0; }
 .dialog .list .li:hover { background: var(--bg-hover); }
-.dialog label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--fg-muted); }
+.dialog label { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); }
 
 .toasts { position: fixed; bottom: calc(var(--player-h) + 12px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 80; align-items: center; }
 /* Snackbars: inverse-surface pills that spring up from below. */
@@ -583,8 +608,7 @@ button.qrow { width: 100%; }
 .setup form { width: 400px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; margin: auto 0; }
 .setup-title { font-size: var(--fs-xl); }
 .setup .brand { font-size: var(--fs-xxl); font-weight: 700; letter-spacing: -0.02em; }
-.setup label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--fg-muted); }
-.setup .input { height: 34px; }
+.setup label { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); }
 .setup .error { color: var(--danger); font-size: var(--fs-sm); }
 .credential-warning { color: var(--fg); background: color-mix(in srgb, var(--danger) 12%, var(--bg-elev)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: var(--shape-md); padding: 10px 14px; font-size: var(--fs-sm); margin-bottom: 8px; }
 
@@ -606,18 +630,22 @@ button.qrow { width: 100%; }
 .cache-bar .partial { background: color-mix(in srgb, var(--accent) 45%, var(--bg-active)); }
 .data-saved { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
 .data-saved .figure { font-size: var(--fs-lg, 18px); font-weight: 600; font-variant-numeric: tabular-nums; }
-/* Tabs under a view header (Downloads). */
-.view-tabs-row { padding: 0 20px 8px; }
-/* A connected pill segment: the selected tab fills tonally, its pill springs. */
-.view-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--shape-full); background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border); max-width: 100%; flex-wrap: wrap; }
+/* Tabs under a view header (Downloads), with the page's status text on the right. */
+.view-tabs-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 0 var(--page-gutter) 16px; }
+.view-tabs-row > .muted { margin-left: auto; padding-right: var(--page-title-inset); }
+/* Segmented tabs (here and in the side panel's pane heads, m3-shell.css): a
+   sunken pill track; the selected segment fills with the opaque selected
+   tone and squares off slightly on its inner edge. */
+.view-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--shape-full); background: var(--bg-sunken); max-width: 100%; flex-wrap: wrap; }
 .view-tabs .tab {
-  height: 28px; padding: 0 14px; border-radius: var(--shape-full); border: none; background: transparent; color: var(--fg-muted); font-size: var(--fs-sm); font-weight: 500;
-  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), transform var(--dur-spring) var(--spring-bouncy);
+  height: 34px; padding: 0 18px; border-radius: var(--shape-full); border: none; background: transparent; color: var(--fg-muted); font-size: var(--fs-md); font-weight: 600;
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .view-tabs .tab:hover { background: var(--bg-hover); color: var(--fg); }
-.view-tabs .tab:active { transform: scale(0.95); transition-duration: 80ms, 80ms, 120ms; }
-.view-tabs .tab.active { background: var(--accent-soft); color: var(--fg); }
-.view-tabs .tab.active:hover { background: var(--selection); }
+.view-tabs .tab:active { transform: scale(0.95); transition-duration: 80ms, 80ms, 120ms, 120ms; }
+.view-tabs .tab.active, .view-tabs .tab.active:hover { background: var(--state-selected); color: var(--fg); font-weight: 700; }
+.view-tabs .tab.active:first-child { border-radius: var(--shape-full) var(--shape-sm) var(--shape-sm) var(--shape-full); }
+.view-tabs .tab.active:last-child { border-radius: var(--shape-sm) var(--shape-full) var(--shape-full) var(--shape-sm); }
 .offline-head { padding: 4px 4px 8px; gap: 12px; align-items: center; }
 .eq { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .eq > .row { flex-wrap: wrap; }
@@ -637,10 +665,9 @@ button.qrow { width: 100%; }
 
 /* Filters builder */
 .rules { display: flex; flex-direction: column; gap: 6px; }
-.rule-group { border: 1px solid var(--border); border-radius: var(--shape-lg); padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--bg-elev); }
+.rule-group { display: flex; flex-direction: column; }
 .rule-group .group-head { display: flex; align-items: center; gap: 8px; }
 .rule { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.rule .select, .rule .input { height: 26px; }
 
 /* Stats */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
@@ -668,9 +695,7 @@ button.qrow { width: 100%; }
 .mini .controls .spacer { flex: 1; }
 .mini .seek { font-size: 10px; }
 
-/* Home */
-.home-section { margin-bottom: 20px; }
-.home-section h2 { margin-bottom: 8px; display: flex; align-items: baseline; gap: 10px; }
+/* Home (and the search page's album row): horizontal carousels. */
 .home-section .scroller { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
 .home-section .scroller .tile { width: 150px; flex: 0 0 auto; }
 
@@ -683,8 +708,6 @@ button.qrow { width: 100%; }
 .genre-tile:active { transform: scale(0.97); transition-duration: 80ms, 80ms, 120ms, 120ms; }
 
 /* Downloads */
-.pin-row { display: grid; grid-template-columns: 44px 1fr auto auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.pin-row .art { width: 44px; height: 44px; border-radius: var(--shape-sm); }
 .filter-builder { display: grid; grid-template-columns: minmax(420px, 1fr) 300px; gap: 20px; }
 
 .window-controls { display: flex; gap: 0; margin-left: 4px; }
@@ -749,7 +772,7 @@ button.qrow { width: 100%; }
    rail, the side panel a drawer, the player bar two rows, and views reflow
    to one column so nothing scrolls sideways or is clipped. */
 @media (max-width: 900px) {
-  h1 { font-size: 22px; }
+  :root { --page-gutter: 8px; --title-display: 32px; --title-section: 20px; }
   .app { grid-template-rows: auto minmax(0, 1fr) auto; }
   .app-body { grid-template-columns: 52px minmax(0, 1fr); position: relative; }
   .sidebar .section-title, .sidebar .nav-item span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -773,8 +796,8 @@ button.qrow { width: 100%; }
   .volume input { width: 64px; }
   .toasts { bottom: 150px; max-width: calc(100vw - 24px); }
   .toast { flex-wrap: wrap; }
-  .view-header { flex-wrap: wrap; padding: 12px 12px 8px; }
-  .view-body { padding: 0 12px 12px; }
+  .view-header { padding: 16px var(--page-pad) 12px; }
+  .view-body { padding: 4px var(--page-gutter) 16px; }
   .detail-head { flex-wrap: wrap; padding: 12px; gap: 12px; }
   .detail-head .art { width: 120px; height: 120px; }
   .detail-head .meta { flex: 1 1 200px; }
@@ -789,7 +812,6 @@ button.qrow { width: 100%; }
   .shortcut-row { grid-template-columns: minmax(0, 1fr) auto; }
   .shortcut-row > :last-child { grid-column: 2; }
   .filter-builder { grid-template-columns: minmax(0, 1fr); }
-  .pin-row { grid-template-columns: 44px minmax(0, 1fr) auto; }
   .pin-row .badge { display: none; }
   .dialog { max-height: calc(100vh - 24px); overflow-y: auto; }
   .overlay { padding-top: 12px; }

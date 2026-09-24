@@ -28,13 +28,13 @@ export function Downloads({ tab }: { tab?: string }) {
       <div className="view-header">
         <h1>{t("downloads.title")}</h1>
         <div className="actions">
-          {sum ? <span className="muted small">{t("downloads.usage", { downloads: fmtBytes(sum.downloadsBytes), cache: fmtBytes(sum.cacheBytes), images: fmtBytes(sum.imagesBytes) })}</span> : null}
           <button type="button" className="btn tonal" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
         </div>
       </div>
       <div className="view-tabs-row">
         <Tabs id="downloads-tabs" className="tabs view-tabs" label={t("downloads.tabs")} selected={current} onSelect={(k) => navigate({ view: "downloads", param: k === "offline" ? "offline" : undefined }, true)}
           tabs={[{ key: "pins", label: t("downloads.tab.pins"), testId: "downloads-tab-pins" }, { key: "offline", label: t("downloads.tab.offline"), testId: "downloads-tab-offline" }]} />
+        {sum ? <span className="muted small">{t("downloads.usage", { downloads: fmtBytes(sum.downloadsBytes), cache: fmtBytes(sum.cacheBytes), images: fmtBytes(sum.imagesBytes) })}</span> : null}
       </div>
       {current === "pins" ? <Pins /> : <AvailableOffline />}
     </div>
@@ -54,7 +54,7 @@ function Pins() {
   };
   return (
     <div className="view-body" {...tabPanelProps("downloads-tabs", "pins")}>
-      {!list.length ? <EmptyState message={t("downloads.empty")} action={<button type="button" className="btn" onClick={() => navigate({ view: "albums" })}>{t("nav.albums")}</button>} /> : null}
+      {!list.length ? <EmptyState message={t("downloads.empty")} icon="download" action={<button type="button" className="btn" onClick={() => navigate({ view: "albums" })}>{t("nav.albums")}</button>} /> : null}
       {list.map((p) => (
         <div key={JSON.stringify(p.target)} className="pin-row" data-testid="pin-row">
           <Artwork id={p.coverArt} size={64} className="art" />
@@ -83,11 +83,11 @@ function AvailableOffline() {
   const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [serverId, "offline", filter.sort, filter.descending]);
   const play = (startIndex: number) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: t("downloads.tab.offline"), sort: filter.sort, tracks: [] }, startIndex, shuffle: false, saveOutgoing: true } } });
   return (
-    <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 8px" }} {...tabPanelProps("downloads-tabs", "offline")} data-testid="available-offline">
+    <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }} {...tabPanelProps("downloads-tabs", "offline")} data-testid="available-offline">
       <div className="row offline-head">
         <span className="muted small grow">{t("downloads.offlineHint")}</span>
         <span className="muted small" data-testid="available-offline-count">{t("downloads.offlineCount", { count: total })}</span>
-        <button type="button" className="btn sm" disabled={!total} onClick={() => play(0)}><Icon name="play" size={12} filled /> {t("downloads.playOffline")}</button>
+        <button type="button" className="btn sm tonal" disabled={!total} onClick={() => play(0)}><Icon name="play" size={12} filled /> {t("downloads.playOffline")}</button>
       </div>
       <TrackTable tracks={rows} total={total} columns={["art", "title", "artist", "album", "duration", "offline"]} scope="available-offline" label={t("downloads.tab.offline")} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("downloads.offlineEmpty")} testId="available-offline-table" />
     </div>

@@ -5,23 +5,17 @@
    sunken surface, contrast-checked in global.css) and anything selected fills
    with the opaque --state-selected. Text only ever sits on those surfaces. */
 
-/* ---- Shared: display type, section headings, page padding ---------------- */
-:is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-header { padding: 32px 32px 18px; align-items: flex-end; }
-:is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-header h1,
-.page-settings .settings-heading {
-  font-size: 48px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; margin: 0;
-}
-:is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-body:not(.no-pad) { padding: 0 32px 32px; }
-/* Section headings: sentence-case bold, not tiny uppercase labels. */
-:is(.page-settings, .page-filter-builder) .section-title {
-  font-size: 20px; font-weight: 700; letter-spacing: -0.005em; line-height: 1.2; text-transform: none; color: var(--fg); padding: 28px 4px 12px;
+/* ---- Shared ----------------------------------------------------------------
+   Page padding, display titles, section headings, buttons and text fields come
+   from the shared tokens and rules in global.css / m3-library.css. */
+/* Settings section headings (h2.section-title) read like every other page's section heading. */
+.page-settings .section-title {
+  font-size: var(--title-section); font-weight: 750; letter-spacing: -0.01em; line-height: 1.2; text-transform: none; color: var(--fg); padding: 28px var(--page-title-inset) 0;
 }
 
-/* Filled rounded fields on these pages: taller, softer, and squarer while focused. */
-:is(.page-settings, .page-filter-builder, .page-stats) :is(.input, .select) { height: 36px; padding: 0 14px; border-radius: var(--shape-md); }
-:is(.page-settings, .page-filter-builder, .page-stats) .select { padding-right: 30px; }
-:is(.page-settings, .page-filter-builder, .page-stats) :is(.input, .select):focus { border-radius: var(--shape-xs); }
-:is(.page-settings, .page-filter-builder, .page-stats) .btn.sm { height: 32px; }
+/* Filled rounded selects on these pages: taller, softer, and squarer while focused. */
+:is(.page-settings, .page-filter-builder, .page-stats) .select { height: 36px; padding: 0 30px 0 14px; border-radius: var(--shape-md); }
+:is(.page-settings, .page-filter-builder, .page-stats) .select:focus { border-radius: var(--shape-xs); }
 .page-stats .view-header .select { border-radius: var(--shape-full); padding-left: 18px; }
 
 /* ---- M3 switch -------------------------------------------------------------
@@ -75,7 +69,7 @@
 .page-settings .eq .bands input[type="range"]::-webkit-slider-thumb { height: 12px; width: 3px; box-shadow: 0 0 0 3px var(--slider-gap), -100vw 0 0 100vw var(--accent); }
 
 /* ---- Settings: pill section nav ------------------------------------------- */
-.page-settings .settings { grid-template-columns: 240px minmax(0, 1fr); }
+.page-settings .settings { grid-template-columns: 256px minmax(0, 1fr); }
 .page-settings .settings-nav { border-right: 0; padding: 24px 8px 24px 16px; display: flex; flex-direction: column; gap: 2px; }
 .page-settings .settings-nav .nav-item { height: 44px; padding: 0 18px 0 14px; gap: 14px; font-size: 14px; color: var(--fg-muted); flex: 0 0 auto; }
 .page-settings .settings-nav .nav-item + .nav-item { margin-top: 0; }
@@ -84,10 +78,10 @@
 .page-settings .settings-nav .nav-item.active { background: var(--state-selected); color: var(--fg); font-weight: 700; }
 .page-settings .settings-nav .nav-item.active:hover, .page-settings .settings-nav .nav-item.active:active { background: var(--state-selected); }
 .page-settings .settings-nav .nav-item:active { border-radius: var(--shape-sm); }
-.page-settings .settings-body { padding: 36px 40px 56px 32px; max-width: 920px; }
-.page-settings .settings-heading { margin-bottom: 24px; }
+.page-settings .settings-body { padding: 28px 40px 56px var(--page-gutter); max-width: 920px; }
+.page-settings .settings-heading { margin: 0 0 24px; padding-left: var(--page-title-inset); }
 .page-settings .settings-heading + .section-title { padding-top: 4px; }
-.page-settings .settings-body > .muted.small, .page-settings .settings-lede { font-size: var(--fs-md); margin-bottom: 16px !important; }
+.page-settings .settings-body > .muted.small, .page-settings .settings-lede { font-size: var(--fs-md); margin-bottom: 16px !important; padding-left: var(--page-title-inset); }
 
 /* Grouped ("segmented") lists: consecutive rows share one container, split by
    2px gaps, with big corners only on the ends of each run. */
@@ -102,10 +96,7 @@
 .page-settings .setting-row .label .desc { font-size: var(--fs-md); }
 .page-settings .setting-row .control { gap: 10px; }
 .page-settings .setting-row .control .mono.small { font-variant-numeric: tabular-nums; }
-.page-settings .setting-row .badge { background: var(--bg-elev); font-weight: 500; }
 .page-settings .setting-row .badge.synced { background: var(--state-selected); color: var(--fg); }
-.page-settings .setting-row .badge.ok { background: var(--bg-elev); }
-.page-settings .setting-row .badge.warn { background: var(--bg-elev); }
 .page-settings .setting-row :is(.input, .select) { background: var(--bg-elev); }
 .page-settings .setting-row.stacked { padding: 18px 20px 20px; gap: 14px; }
 /* A server: its name and details, then its actions underneath. */
@@ -196,25 +187,12 @@
 .setup .spin { animation: spin 1.2s linear infinite; }
 
 /* ---- Downloads -------------------------------------------------------------- */
-.page-downloads .view-header .actions { gap: 12px; }
-.page-downloads .view-tabs-row { padding: 0 32px 18px; }
-/* A connected button group: outer ends round, inner corners tight; the
-   selected segment fills tonally and morphs into a full pill. */
-.page-downloads .view-tabs { background: none; box-shadow: none; padding: 0; gap: 2px; border-radius: 0; }
-.page-downloads .view-tabs .tab {
-  height: 40px; padding: 0 22px; font-size: 14px; color: var(--fg); background: var(--bg-sunken); border-radius: var(--shape-xs);
-  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
-}
-.page-downloads .view-tabs .tab:first-child { border-radius: var(--shape-full) var(--shape-xs) var(--shape-xs) var(--shape-full); }
-.page-downloads .view-tabs .tab:last-child { border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs); }
-.page-downloads .view-tabs .tab:hover { background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--fg); }
-.page-downloads .view-tabs .tab.active, .page-downloads .view-tabs .tab.active:hover { background: var(--state-selected); color: var(--fg); font-weight: 700; border-radius: var(--shape-full); box-shadow: none; }
-.page-downloads .offline-head { padding: 0 24px 10px; }
+.page-downloads .offline-head { padding: 0 var(--page-gutter) 10px var(--page-pad); }
 
 /* Rows of the Downloads and Filters lists: grouped rounded list items. */
-:is(.page-downloads, .page-filters) .pin-row {
-  grid-template-columns: 56px minmax(0, 1fr) auto auto; gap: 16px; padding: 10px 12px 10px 10px; margin-top: 2px;
-  background: var(--surface-tonal-sunken); border-bottom: 0; border-radius: var(--shape-xs);
+.pin-row {
+  display: grid; align-items: center; grid-template-columns: 56px minmax(0, 1fr) auto auto; gap: 16px; padding: 10px 12px 10px 10px; margin-top: 2px;
+  background: var(--surface-tonal-sunken); border-radius: var(--shape-xs);
   transition: background-color var(--dur-short) var(--ease-emphasized);
 }
 :is(.page-downloads, .page-filters) .pin-row:not(.pin-row + .pin-row) { margin-top: 0; border-top-left-radius: var(--shape-xl); border-top-right-radius: var(--shape-xl); }
@@ -224,7 +202,7 @@
 .page-downloads .pin-row .art { width: 56px; height: 56px; border-radius: var(--shape-md); transition: border-radius var(--dur-spring-long) var(--spring-fast); }
 .page-downloads .pin-row:hover .art { border-radius: var(--shape-xl); }
 .page-downloads .pin-row .small.muted { margin-top: 2px; }
-.page-downloads .pin-row .badge { background: var(--bg-elev); text-transform: capitalize; font-weight: 500; }
+.page-downloads .pin-row .badge { text-transform: capitalize; }
 /* Download progress: M3 linear progress, rounded ends, a gap, a stop dot. */
 .page-downloads .pin-row .progress { height: 6px; display: flex; background: none; border-radius: 0; overflow: visible; margin-top: 8px !important; max-width: 420px; }
 .page-downloads .pin-row .progress > div { flex: 0 1 auto; border-radius: var(--shape-full); }
@@ -242,13 +220,11 @@
   transition: border-radius var(--dur-spring-long) var(--spring-fast), transform var(--dur-spring-long) var(--spring-bouncy);
 }
 .page-filters .filter-row:hover .filter-avatar { border-radius: 50%; transform: rotate(-8deg); }
-.page-filters .filter-row .link-button .badge { background: var(--bg-elev); vertical-align: 1px; }
 .page-filters .filter-row .link-button .small { margin-top: 2px; font-weight: 400; }
 
 /* ---- Filter builder ------------------------------------------------------------ */
 .page-filter-builder .filter-builder { grid-template-columns: minmax(420px, 1fr) 320px; gap: 28px; align-items: start; }
 .page-filter-builder .filter-builder > .stack { gap: 16px; }
-.page-filter-builder [data-testid="filter-name"] { height: 48px; font-size: var(--fs-lg); padding: 0 18px; }
 .page-filter-builder .capability-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 10px; border-radius: var(--shape-sm); font-size: var(--fs-md); font-weight: 500; line-height: 1.2; }
 .page-filter-builder .rules { gap: 10px; }
 /* Rule groups are tonal cards; a nested group flips to the pane surface so the nesting reads. */
@@ -259,17 +235,16 @@
 .page-filter-builder .rule-group .group-head { gap: 8px; flex-wrap: wrap; }
 .page-filter-builder .rule-group .group-head .select { border-radius: var(--shape-full); font-weight: 600; }
 /* "Add rule" / "Add group" are assist chips: small corners, an outline, squarer still when pressed. */
-.page-filter-builder .group-head .btn.sm { height: 32px; padding: 0 12px 0 8px; border-radius: var(--shape-sm); background: transparent; border: 1px solid var(--border-strong); font-size: var(--fs-md); }
+.page-filter-builder .group-head .btn.sm { padding: 0 12px 0 8px; border-radius: var(--shape-sm); background: transparent; border: 1px solid var(--border-strong); }
 .page-filter-builder .group-head .btn.sm:hover { background: var(--bg-hover); }
 .page-filter-builder .group-head .btn.sm:active { border-radius: var(--shape-xs); }
 .page-filter-builder .rule { gap: 8px; }
 .page-filter-builder .rule > .input:not([type]) { flex: 1 1 160px; min-width: 0; }
 .page-filter-builder .filter-builder > .stack > .row { flex-wrap: wrap; gap: 10px 16px; }
-.page-filter-builder .rule .select, .page-filter-builder .rule .input { height: 36px; }
 .page-filter-builder .rule .btn.icon.sm { width: 32px; height: 32px; }
 /* The sample: a tonal side card. */
 .page-filter-builder .filter-sample { background: var(--surface-tonal-sunken); border-radius: var(--shape-xl); padding: 4px 8px 12px; min-width: 0; }
-.page-filter-builder .filter-sample .section-title { padding: 16px 12px 10px; font-size: 18px; }
+.page-filter-builder .filter-sample .card-title { padding: 16px 12px 0; margin-bottom: 10px; }
 .page-filter-builder .filter-sample .qrow { height: 48px !important; margin: 0; border-radius: var(--shape-md); padding: 0 10px; }
 .page-filter-builder .filter-sample .qrow .art { width: 36px; height: 36px; border-radius: var(--shape-sm); }
 
@@ -285,8 +260,6 @@
 .page-stats .stat-figure { font-size: 56px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .page-stats .stat-unit { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; color: var(--fg-muted); }
 .page-stats .stat-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.page-stats .card { background: var(--surface-tonal-sunken); border: 0; border-radius: var(--shape-xl); padding: 20px; }
-.page-stats .card-title { font-size: 20px; font-weight: 700; letter-spacing: -0.005em; margin-bottom: 14px; }
 .page-stats .bars { gap: 4px; height: 140px; }
 .page-stats .bars div { border-radius: var(--shape-full); min-height: 8px; opacity: 1; background: var(--accent); transition: background-color var(--dur-short) var(--ease-emphasized); }
 .page-stats .bars div:hover { background: var(--accent-text); }
@@ -330,7 +303,6 @@
   .page-settings .cache-bar::after, .page-downloads .pin-row .progress::after { forced-color-adjust: none; background: Canvas; border: 1px solid CanvasText; }
   .page-settings .cache-bar { border: 0; }
   .page-downloads .pin-row .progress { border: 0; }
-  .page-downloads .view-tabs .tab.active { outline: 2px solid Highlight; }
   .page-stats .bars div:hover { background: Highlight; }
   .setup-shapes { display: none; }
   .mini .btn.mini-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
@@ -338,16 +310,12 @@
 
 /* ---- Narrow windows and 200% zoom --------------------------------------------- */
 @media (max-width: 900px) {
-  :is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-header { padding: 16px 16px 12px; }
-  :is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-header h1, .page-settings .settings-heading { font-size: 32px; }
-  :is(.page-downloads, .page-filters, .page-filter-builder, .page-stats) .view-body:not(.no-pad) { padding: 0 16px 16px; }
-  .page-downloads .view-tabs-row { padding: 0 16px 12px; }
-  .page-downloads .offline-head { padding: 0 8px 8px; flex-wrap: wrap; }
+  .page-downloads .offline-head { padding: 0 var(--page-gutter) 8px var(--page-pad); flex-wrap: wrap; }
   .page-settings .settings { grid-template-columns: minmax(0, 1fr); }
   .page-settings .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 12px 16px 4px; border-bottom: 0; }
   .page-settings .settings-nav .nav-item { height: 36px; padding: 0 14px 0 10px; gap: 8px; font-size: var(--fs-md); background: var(--bg-sunken); }
   .page-settings .settings-nav .nav-item .icon { width: 18px; height: 18px; }
-  .page-settings .settings-body { padding: 16px 16px 28px; }
+  .page-settings .settings-body { padding: 16px var(--page-gutter) 28px; }
   .page-settings .setting-row { padding: 12px 16px; gap: 10px; }
   .page-settings .setting-row .control { justify-content: flex-start; }
   /* A lone switch stays beside its label. */
@@ -355,7 +323,7 @@
   .page-settings .shortcut-row { padding-left: 16px; grid-template-columns: minmax(0, 1fr) auto auto; }
   .page-settings .shortcut-row > :last-child { grid-column: auto; }
   .page-settings .shortcut-row .rec { min-width: 0; }
-  :is(.page-downloads, .page-filters) .pin-row { grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; }
+  .pin-row { grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; }
   .page-filter-builder .filter-builder { grid-template-columns: minmax(0, 1fr); }
   .page-stats .stat-figure { font-size: 44px; }
   .setup { padding: 16px; }

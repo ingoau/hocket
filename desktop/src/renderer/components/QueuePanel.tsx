@@ -131,7 +131,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     window.setTimeout(() => { programmatic.current = false; }, first || reducedMotion ? 50 : 600);
   }, [currentKey, reducedMotion]);
 
-  if (!queue.current && !all.length) return <EmptyState message={t("queue.empty")} testId="queue-empty" />;
+  if (!queue.current && !all.length) return <EmptyState message={t("queue.empty")} icon="queue" testId="queue-empty" />;
 
   const idPrefix = large ? "fsq" : "q";
   const header = large ? <QueueHeader /> : null;

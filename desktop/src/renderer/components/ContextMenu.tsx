@@ -65,7 +65,8 @@ export function ContextMenu() {
 
   useLayoutEffect(() => {
     if (!menu || !ref.current) return;
-    const r = ref.current.getBoundingClientRect();
+    // Layout size, not getBoundingClientRect(): the menu opens scaled down by its entrance animation.
+    const r = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };
     const x = Math.min(menu.x, window.innerWidth - r.width - 6);
     const y = Math.min(menu.y, window.innerHeight - r.height - 6);
     setPos({ x: Math.max(4, x), y: Math.max(4, y) });

@@ -38,13 +38,13 @@ export function ArtistDetail({ id }: { id: string }) {
       <div className="view-body">
         {topList.length ? (
           <>
-            <h2 className="section-heading">{t("artist.topSongs")}</h2>
+            <h2 className="section-heading"><span className="section-icon" aria-hidden="true"><Icon name="stats" size={18} /></span>{t("artist.topSongs")}</h2>
             <div style={{ height: Math.min(topList.length, 10) * 30 + 40, display: "flex", flexDirection: "column" }}>
               <TrackTable tracks={topList} total={topList.length} columns={["art", "title", "album", "rating", "plays", "duration"]} scope={`artist-top:${id}`} label={t("artist.topSongs")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topList.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } })} playingTrackId={playing} testId="artist-top" />
             </div>
           </>
         ) : null}
-        <h2 className="section-heading">{t("artist.albums")}</h2>
+        <h2 className="section-heading"><span className="section-icon" aria-hidden="true"><Icon name="album" size={18} /></span>{t("artist.albums")}</h2>
         <TileList label={t("artist.albums")} className="grid">
           {(albums.data?.items ?? []).map((al) => (
             <Tile key={al.id} title={al.name} subtitle={`${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} testId="artist-album" />

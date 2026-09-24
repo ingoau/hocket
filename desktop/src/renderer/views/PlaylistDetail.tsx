@@ -41,7 +41,7 @@ export function PlaylistDetail({ id }: { id: string }) {
           </div>
         </div>
       </div>
-      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 8px" }}>
+      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={rows} total={total} columns={["index", "art", "title", "artist", "album", "rating", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
           onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}
           onDelete={editable ? (indices) => bridge().dispatch({ type: "playlistRemove", data: { playlist_id: id, indices } }) : undefined}

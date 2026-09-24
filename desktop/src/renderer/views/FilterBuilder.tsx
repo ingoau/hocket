@@ -82,7 +82,7 @@ export function FilterBuilder({ id }: { id: string }) {
         <h1>{existing ? filterName(existing) : t("filters.builder")}</h1>
         <div className="actions">
           <span className="muted" data-testid="filter-count">{preview ? t("filters.count", { count: preview.count }) : <Icon name="spinner" className="spin" size={13} />}</span>
-          <button type="button" className="btn" onClick={play} disabled={!preview?.count}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
+          <button type="button" className="btn tonal" onClick={play} disabled={!preview?.count}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
           <button type="button" className="btn primary" onClick={save} disabled={!valid} data-testid="filter-save">{t("filters.save")}</button>
         </div>
       </div>
@@ -108,7 +108,7 @@ export function FilterBuilder({ id }: { id: string }) {
           </div>
         </div>
         <div className="filter-sample">
-          <div className="section-title filter-sample-title">{t("filters.sample")}</div>
+          <div className="card-title filter-sample-title">{t("filters.sample")}</div>
           {(preview?.sample ?? []).map((s) => (
             <div key={s.id} className="qrow" style={{ height: 36 }}><Artwork id={s.coverArt} size={64} className="art" /><div className="text"><div className="t1">{s.title}</div><div className="t2">{s.artist}</div></div></div>
           ))}
