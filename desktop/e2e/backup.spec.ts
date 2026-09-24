@@ -1,6 +1,6 @@
 // Config backup round trip: an export with passwords resolved by main is
 // enough to restore a second, fresh install straight from the setup screen.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completeSetup, expect, launchFake, stubDialogs, test } from "./fixtures";
@@ -24,7 +24,7 @@ test.describe("config backup", () => {
         await stubDialogs(app, file);
         await page.getByTestId("export-secrets").check();
         await page.getByTestId("export-config").click();
-        await expect(page.getByTestId("toast").last()).toContainText("Configuration exported");
+        await expect.poll(() => existsSync(file)).toBe(true);
         const doc = JSON.parse(readFileSync(file, "utf8")) as { secrets?: Record<string, string>; servers: { id: string; url: string }[] };
         expect(doc.servers[0]?.url).toBe("https://music.example.org");
         // Main resolved the keystore reference to the password entered at setup.

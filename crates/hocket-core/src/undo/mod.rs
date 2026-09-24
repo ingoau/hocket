@@ -429,8 +429,17 @@ impl Entry {
             device_id: self.device_id.clone(),
             at: self.at,
             note: self.note.clone(),
+            replaces_queue: replaces_queue(&self.kind),
         }
     }
+}
+
+/// Undo kinds whose action replaces or empties the whole queue.
+pub fn replaces_queue(kind: &str) -> bool {
+    matches!(
+        kind,
+        "playContext" | "playTracks" | "clearQueue" | "restoreSavedQueue"
+    )
 }
 
 /// What the actor performs after `undo` / `redo`.

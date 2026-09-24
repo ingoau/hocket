@@ -51,7 +51,6 @@ export function FilterBuilder({ id }: { id: string }) {
   const navigate = useApp((s) => s.navigate);
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const nativeApi = useApp((s) => s.servers[0]?.capabilities.nativeApi ?? false);
-  const exported = useApp((s) => s.exported);
   const existing = filters.find((f) => f.id === id);
   const [filter, setFilter] = useState<Filter>(() => existing ?? { id: `flt-${Date.now().toString(36)}`, name: "", root: { type: "all", data: [{ type: "rule", data: defaultRule() }] }, sort: "title", descending: false, limit: undefined });
   const [preview, setPreview] = useState<FilterPreview | undefined>(undefined);
@@ -62,11 +61,6 @@ export function FilterBuilder({ id }: { id: string }) {
     }, 150);
     return () => clearTimeout(h);
   }, [filter]);
-  useEffect(() => {
-    if (exported?.kind === "nsp" && Date.now() - exported.at < 2000 && exported.path) {
-      useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `nsp-${exported.at}`, message: t("filters.exported", { path: exported.path }), actionLabel: undefined, actionCommand: undefined, durationMs: 4000 } } });
-    }
-  }, [exported]);
 
   const valid = filter.name.trim().length > 0;
   const save = () => bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
