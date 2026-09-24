@@ -1083,6 +1083,21 @@ impl Room {
                     }
                 }
             }
+            Msg::HandoffRequest { target, .. } => {
+                if let Some(owner) = self.lease.live_owner(now).cloned() {
+                    if owner != target {
+                        if let Some(p) = self.peer_of_device(&owner) {
+                            self.send(
+                                &p,
+                                Msg::HandoffRequest {
+                                    target,
+                                    from: device_id,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             Msg::LeaseHeartbeat { epoch, sent_at } => {
                 match self.lease.heartbeat(&device_id, epoch, now) {
                     Ok(LeaseEvent::Renewed { lease }) | Ok(LeaseEvent::Changed { lease, .. }) => {
@@ -2419,6 +2434,27 @@ mod tests {
             [Msg::PrimeRequest { track_id, from }] if track_id == "t9" && from == "b"
         ));
         assert!(sent(&outs, "p2").is_empty());
+        // and handoff requests (a non-owner pulling playback to itself)
+        let outs = r.handle(RoomInput::Message(
+            "p2".into(),
+            WireMessage::new(Msg::HandoffRequest {
+                target: "b".into(),
+                from: "x".into(),
+            }),
+        ));
+        assert!(matches!(
+            &sent(&outs, "p1")[..],
+            [Msg::HandoffRequest { target, from }] if target == "b" && from == "b"
+        ));
+        // one naming the owner itself goes nowhere
+        let outs = r.handle(RoomInput::Message(
+            "p2".into(),
+            WireMessage::new(Msg::HandoffRequest {
+                target: "a".into(),
+                from: "b".into(),
+            }),
+        ));
+        assert!(sent(&outs, "p1").is_empty());
     }
 
     #[test]

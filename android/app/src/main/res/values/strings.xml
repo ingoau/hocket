@@ -224,6 +224,7 @@
     <string name="player_autoplay_off">Autoplay off</string>
     <string name="player_sleep_timer">Sleep timer</string>
     <string name="player_connect">Play on another device</string>
+    <string name="player_take_over">Play here</string>
     <string name="player_playing_on">Playing on %1$s</string>
     <string name="player_resume_offer">%1$s was playing %2$s</string>
     <string name="player_resume_here">Resume here</string>
@@ -255,7 +256,7 @@
     <string name="handoff_preparing">Preparing…</string>
     <string name="handoff_playing">Playing</string>
     <string name="handoff_last_seen">Seen %1$s ago</string>
-    <string name="handoff_hint">Devices pre-buffer while you decide. Playback keeps going here until you pick one.</string>
+    <string name="handoff_hint">Devices pre-buffer while you decide. Playback keeps going here until you pick one. Long-press the Connect button to take over playback here.</string>
     <string name="connection_local">Not connected</string>
     <string name="connection_lan">LAN · %1$d peers</string>
     <string name="connection_coordinator">Coordinator · %1$d peers</string>

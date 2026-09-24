@@ -89,7 +89,9 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         {sleep ? <span className="badge"><Icon name="sleep" size={11} title={t("player.sleepTimer")} /></span> : null}
         {batterySaver ? <span className="badge"><Icon name="battery" size={11} title={t("player.batterySaver")} /></span> : null}
         <Volume />
-        <button type="button" className={`btn icon ${remote ? "on" : ""}`} aria-label={t("player.connect")} title={t("player.connect")} onClick={() => void executeAction("ui.playOn")} data-testid="connect-button"><Icon name="devices" size={15} /></button>
+        <button type="button" className={`btn icon ${remote ? "on" : ""}`} aria-label={t("player.connect")} title={t("player.connectHint")} onClick={() => void executeAction("ui.playOn")}
+          onContextMenu={(e) => { e.preventDefault(); const self = devices.find((x) => x.isSelf); if (remote && self) d({ type: "handoffTo", data: { device_id: self.id } }); else void executeAction("ui.playOn"); }}
+          data-testid="connect-button"><Icon name="devices" size={15} /></button>
         <button type="button" className={`btn icon ${sideOpen && !panels.queueCollapsed ? "on" : ""}`} aria-pressed={sideOpen && !panels.queueCollapsed} aria-label={t("player.queue")} title={`${t("player.queue")} (Q)`} onClick={() => void executeAction("ui.queue")} data-testid="toggle-queue"><Icon name="queue" size={15} /></button>
         <button type="button" className={`btn icon ${sideOpen && !panels.lyricsCollapsed ? "on" : ""}`} aria-pressed={sideOpen && !panels.lyricsCollapsed} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} data-testid="toggle-lyrics"><Icon name="lyrics" size={15} /></button>
         <button type="button" className={`btn icon ${fullscreen ? "on" : ""}`} aria-label={t("player.fullscreen")} title={`${t("player.fullscreen")} (F)`} onClick={() => setFullscreen(!fullscreen)} data-testid="toggle-fullscreen"><Icon name="fullscreen" size={15} /></button>
