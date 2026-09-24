@@ -87,8 +87,10 @@ class NavBarCustomisationTest {
         return core
     }
 
-    private fun openEditorByLongPress() {
-        compose.onNodeWithTag("navBar").performTouchInput { longClick(center) }
+    /** The editor sheet, from the account sheet's "Customise bottom bar" (holding the bar does not open it). */
+    private fun openEditor() {
+        click("account.button")
+        click("account.editBar")
         await("bottomBar.editor")
     }
 
@@ -130,7 +132,7 @@ class NavBarCustomisationTest {
         }
         core.start()
         await("navBar")
-        openEditorByLongPress()
+        openEditor()
         // Add Albums, move it up once (the TalkBack action), remove Search.
         click("bottomBar.add")
         click("bottomBar.addItem.albums")
@@ -158,7 +160,7 @@ class NavBarCustomisationTest {
     fun theBarHoldsTwoToFiveItemsAndSaysWhy() {
         start(InMemoryNavBarPrefs(listOf("home", "search", "library", "albums", "songs")))
         compose.waitUntil(5_000) { bar().size == 5 }
-        openEditorByLongPress()
+        openEditor()
         click("bottomBar.add")
         await("bottomBar.message")
         assertTrue(compose.onNodeWithTag("bottomBar.message").fetchSemanticsNode().config[SemanticsProperties.Text].joinToString { it.text }.contains("at most 5"))
@@ -170,7 +172,7 @@ class NavBarCustomisationTest {
     fun removingBelowTwoIsRefusedWithAMessage() {
         start(InMemoryNavBarPrefs(listOf("home", "search")))
         compose.waitUntil(5_000) { bar() == listOf("home", "search") }
-        openEditorByLongPress()
+        openEditor()
         click("bottomBar.remove.home")
         await("bottomBar.message")
         assertTrue(compose.onNodeWithTag("bottomBar.message").fetchSemanticsNode().config[SemanticsProperties.Text].joinToString { it.text }.contains("at least 2"))
@@ -248,9 +250,19 @@ class NavBarCustomisationTest {
     @Test
     fun theEditorPassesTheAccessibilityChecks() {
         start()
-        openEditorByLongPress()
+        openEditor()
         A11yChecks.assertAccessible(compose, "bottom bar editor")
-        // Long-press did not also navigate.
-        assertEquals(listOf("home"), selected())
+    }
+
+    @Test
+    fun holdingTheBarDoesNotOpenTheEditor() {
+        start()
+        compose.waitUntil(5_000) { bar().size == 3 }
+        compose.onNodeWithTag("navBar").performTouchInput { longClick(center) }
+        compose.waitForIdle()
+        assertFalse(exists("bottomBar.editor"))
+        // Nor does an item offer an "edit" accessibility action any more.
+        val actions = compose.onNodeWithTag("navBar.home").fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions).orEmpty()
+        assertTrue(actions.none { it.label == "Customise bottom bar" })
     }
 }
