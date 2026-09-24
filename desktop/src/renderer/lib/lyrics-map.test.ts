@@ -59,9 +59,10 @@ describe("lyrics mapping of an enhanced (syllable + background agent) document",
     expect(bg.length).toBeGreaterThan(0);
     for (const i of bg) expect(m.lines[i - 1]!.isBG).toBe(false);
     expect(m.lines.filter((l) => l.isBG).every((l) => !l.isDuet)).toBe(true);
-    // A cue-less line is one word with the line's timing.
+    // A cue-less line is one word that lights at the line's start (no fabricated sweep) and holds to the line's end.
     const plain = m.lines.find((l) => l.words[0]!.word.startsWith("We've"))!;
-    expect(plain.words).toEqual([{ word: "We've seen it several times", startTime: 21_000, endTime: 23_500 }]);
+    expect(plain.words).toEqual([{ word: "We've seen it several times", startTime: 21_000, endTime: 21_001 }]);
+    expect([plain.startTime, plain.endTime]).toEqual([21_000, 23_500]);
     // Gap: the line ends before the next starts; nothing is stretched.
     const gap = m.lines.find((l) => l.words[0]!.word === "I " && l.startTime === 8800)!;
     expect(gap.endTime).toBe(10_500);

@@ -49,7 +49,15 @@ function lineWords(line: ApiLine, tier: Lyrics["tier"], offset: number): AmllWor
     });
     return out;
   }
-  // Line tier: one word with the line's timing. Never fabricate syllables.
+  if (tier === "syllable") {
+    // A cue-less line inside a syllable document. AMLL would split the one
+    // word on whitespace and spread the line's duration across the pieces (a
+    // fabricated sweep), so give the word no duration: the whole line lights
+    // up at its start and holds until its end, which is all the server said.
+    return [{ word: line.text, startTime: Math.max(0, start), endTime: Math.max(0, start) + 1 }];
+  }
+  // Line tier: one word per line with the line's timing. AMLL treats a
+  // document whose lines all have one word as non-dynamic (no word sweep).
   return [{ word: line.text, startTime: Math.max(0, start), endTime: Math.max(0, end) }];
 }
 

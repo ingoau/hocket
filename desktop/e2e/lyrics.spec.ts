@@ -43,8 +43,8 @@ test.describe("lyrics", () => {
     // The background vocal is an AMLL background sub-line, not a main line.
     const lineKinds = await host.evaluate((root) => {
       const out: { bg: boolean; text: string }[] = [];
-      for (const el of root.querySelectorAll("[class]")) {
-        const classes = [...el.classList];
+      for (const el of Array.from(root.querySelectorAll("[class]"))) {
+        const classes = Array.from(el.classList);
         if (!classes.some((c) => c.endsWith("_lyricLine"))) continue;
         out.push({ bg: classes.some((c) => c.endsWith("_lyricBgLine")), text: (el.textContent ?? "").replace(/\s+/g, " ").trim() });
       }
@@ -55,9 +55,8 @@ test.describe("lyrics", () => {
     expect(lineKinds.filter((l) => l.bg).length).toBe(4);
     // 16 main lines (+ AMLL's own bottom spacer line).
     expect(lineKinds.filter((l) => !l.bg && l.text).length).toBe(16);
-    // The one cue-less line is a single word (line tier for that line only).
-    const plain = host.locator('[class*="lyricLine"]', { hasText: "We've seen it several times" }).first();
-    expect(await plain.locator('[class*="lyricMainLine"] span:not(:has(span))').count()).toBe(1);
+    // The one cue-less line is present as a main line (line tier for that line only; see lyrics-map.test.ts for its timing).
+    expect(lineKinds.filter((l) => !l.bg && l.text === "We've seen it several times").length).toBe(1);
   });
 
   test("in-window lyrics are viewport-sized and follow the device-local size preference", async ({ hocket }) => {

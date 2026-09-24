@@ -31,7 +31,9 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   const dispatch = vi.fn<(c: Command) => void>(coreOverrides.dispatch ?? (() => undefined));
   const query = vi.fn<(q: Query) => Promise<QueryResult>>(coreOverrides.query ?? (async () => ({ type: "unit" }) as unknown as QueryResult));
   const onCommand = vi.fn();
-  const passwordFor = vi.fn<(url: string, username: string) => string | undefined>(() => "secret");
+  // A method that needs `this`, like ServerCredentialStore.passwordFor: an unbound call must fail.
+  const store = { secret: "secret", passwordFor: vi.fn(function (this: { secret: string }, _url: string, _username: string): string | undefined { return this.secret; }) };
+  const passwordFor = store.passwordFor;
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
     core: { kind: "fake", dispatch, query, onEvent: () => () => undefined, shutdown: async () => undefined },
@@ -42,7 +44,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     onVisibilityReport: vi.fn(),
     onNetworkReport: vi.fn(),
     prefs: { get: () => ({ closeToTray: true }), set: (p) => ({ closeToTray: p.closeToTray ?? true }) },
-    credentials: { passwordFor },
+    credentials: store,
   });
   return { dispatch, query, onCommand, artwork, passwordFor };
 }

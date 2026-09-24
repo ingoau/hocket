@@ -187,7 +187,7 @@ export function installIpc(deps: IpcDeps): void {
     try {
       const doc = parseConfigDocument(raw);
       if (doc.secrets) {
-        const { document, resolved, unresolved } = resolveSecretReferences(doc, deps.credentials.passwordFor);
+        const { document, resolved, unresolved } = resolveSecretReferences(doc, (url, username) => deps.credentials.passwordFor(url, username));
         if (unresolved) console.warn(`[ipc] config export: ${unresolved} server password(s) are not in the credential store and were left out`);
         if (resolved) {
           const warn = await dialog.showMessageBox(win, {

@@ -1,6 +1,6 @@
 // Config backup round trip: an export with passwords resolved by main is
 // enough to restore a second, fresh install straight from the setup screen.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completeSetup, expect, launchFake, stubDialogs, test } from "./fixtures";
@@ -11,6 +11,7 @@ test.describe("config backup", () => {
     const first = mkdtempSync(join(tmpdir(), "hocket-backup-a-"));
     const second = mkdtempSync(join(tmpdir(), "hocket-backup-b-"));
     const file = join(first, "export", "hocket-config.json");
+    mkdirSync(join(first, "export"));
     try {
       let { app, page } = await launchFake(first);
       try {

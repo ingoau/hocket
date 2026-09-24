@@ -472,8 +472,11 @@ fn hostile_lan_peer_is_never_admitted_and_lan_hellos_carry_no_credential() {
     cfg.hostile = true;
     cfg.keep_logs = true;
     let mut w = World::new(cfg);
-    w.run_for(8_000.0);
+    // The rogue wins every election; the honest devices knock, are turned
+    // away (it cannot prove itself), and after a few tries ignore it.
+    w.run_for(20_000.0);
     let rogue = w.hostile_index().unwrap();
+    for d in &w.devices { eprintln!("DBG {:?}", d.engine); for l in &d.log { eprintln!("  {l}"); } }
     let serving: Vec<&str> = w.devices[..3]
         .iter()
         .filter(|d| d.engine.is_serving())

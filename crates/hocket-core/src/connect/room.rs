@@ -1079,11 +1079,13 @@ impl Room {
             Msg::ScrobbleSubmitted {
                 track_id,
                 started_at,
-                ..
+                device_id: d,
             } => {
-                // Recorded under the member's identity, whatever the frame claimed.
-                self.replica
-                    .claim_scrobble(&track_id, started_at, &device_id, now);
+                // Knowledge, not a claim: members relay what they know other
+                // devices scrobbled (a LAN leader carrying its room's log to
+                // the coordinator), so the announced device stands. A lie
+                // here only lets the named device scrobble its own play.
+                self.replica.claim_scrobble(&track_id, started_at, &d, now);
                 self.dirty = true;
             }
             Msg::ScrobbleDedupeQuery {

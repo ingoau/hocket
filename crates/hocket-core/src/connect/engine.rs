@@ -21,7 +21,7 @@
 //! Ops are optimistic: applied locally at submission, confirmed by `OpAck`,
 //! rolled back on `OpReject` or when someone else's op commits first.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,17 @@ const PING_BURST_INTERVAL_MS: f64 = 300.0;
 const CONNECT_TIMEOUT_MS: f64 = 15_000.0;
 /// While on the LAN tier with a coordinator configured, retry it this often.
 const COORDINATOR_RETRY_MS: f64 = 60_000.0;
+/// A LAN peer that failed the mutual proof (or refused our challenge) is
+/// left out of elections for this long. Its advert alone earns no trust,
+/// so a flapping advert cannot reset the clock.
+pub const LAN_BLOCK_MS: f64 = 600_000.0;
+/// A LAN leader that keeps turning us away before the proof (`Bye`,
+/// `Refuse{Full}`) is blocked after this many consecutive attempts, so an
+/// unauthenticated advert cannot keep every device busy knocking. The
+/// block starts short (an honest peer mid-election is turned away too)
+/// and doubles each time, up to [`LAN_BLOCK_MS`].
+const LAN_STRIKES: u32 = 3;
+const LAN_STRIKE_BLOCK_MS: f64 = 30_000.0;
 /// Cap on locally confirmed ops kept for a fast-forward replay.
 const UNSYNCED_CAP: usize = 500;
 /// Advertise the session revision at most this often.
@@ -550,9 +561,12 @@ pub struct Engine {
     settings: Vec<Setting>,
 
     lan_peers: Vec<PeerAdvert>,
-    /// LAN peers that failed the mutual proof (or refused us): ignored by
-    /// the election until their advert goes away.
-    lan_blocklist: BTreeSet<DeviceId>,
+    /// LAN peers that failed the mutual proof (or refused us), with the
+    /// local time until which the election ignores them.
+    lan_blocklist: BTreeMap<DeviceId, EpochMs>,
+    /// Consecutive pre-proof turn-aways per LAN leader (see [`LAN_STRIKES`])
+    /// and how many blocks that earned so far (doubling the next one).
+    lan_strikes: BTreeMap<DeviceId, (u32, u32)>,
     /// We followed a LAN leader while a coordinator is configured: that
     /// leader carries the LAN session to the coordinator, so on the next
     /// coordinator welcome we adopt without filing and without replaying.
@@ -577,7 +591,10 @@ impl std::fmt::Debug for Engine {
             .field("owns", &self.held.is_some())
             .field("detached", &self.detached)
             .field("lan_deferred", &self.lan_deferred)
-            .field("lan_blocklist", &self.lan_blocklist)
+            .field(
+                "lan_blocklist",
+                &self.lan_blocklist.keys().collect::<Vec<_>>(),
+            )
             .field("lost_members_at", &self.lost_members_at)
             .field("deferred_scrobbles", &self.deferred_scrobbles.len())
             .field("scrobble_queries", &self.scrobble_queries.len())
@@ -659,7 +676,8 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             lan_peers: vec![],
-            lan_blocklist: BTreeSet::new(),
+            lan_blocklist: BTreeMap::new(),
+            lan_strikes: BTreeMap::new(),
             lan_deferred: false,
             last_known_lan: HashMap::new(),
             last_advert: None,
@@ -929,6 +947,7 @@ impl Engine {
                 self.cfg.lan_key = key;
                 self.room.set_lan_auth(self.cfg.room_lan_auth());
                 self.lan_blocklist.clear();
+                self.lan_strikes.clear();
                 // Inbound members were admitted under the old key.
                 let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
                 for p in inbound {
@@ -979,7 +998,8 @@ impl Engine {
             Input::PeerDiscovered(advert) => self.on_peer_discovered(advert),
             Input::PeerLost { device_id } => {
                 self.lan_peers.retain(|p| p.device_id != device_id);
-                self.lan_blocklist.remove(&device_id);
+                // The block outlives the advert on purpose; strikes don't.
+                self.lan_strikes.remove(&device_id);
                 self.reevaluate();
             }
             Input::LocalOp { op } => self.on_local_op(op),
@@ -1299,10 +1319,16 @@ impl Engine {
         if !self.cfg.lan_enabled || self.cfg.lan_key.is_none() || self.lan_peers.is_empty() {
             return None;
         }
+        let now = self.now_local_ms();
         let mut cands: Vec<Candidate> = self
             .lan_peers
             .iter()
-            .filter(|p| !self.lan_blocklist.contains(&p.device_id))
+            .filter(|p| {
+                self.lan_blocklist
+                    .get(&p.device_id)
+                    .map(|until| now >= *until)
+                    .unwrap_or(true)
+            })
             .map(|p| Candidate {
                 device_id: p.device_id.clone(),
                 session_revision: p.session_revision,
@@ -1644,13 +1670,43 @@ impl Engine {
         if let Some(l) = r.leader.clone() {
             self.log(
                 "warn",
-                format!("LAN peer {l} rejected: {reason}; ignoring it until it goes away"),
+                format!("LAN peer {l} rejected: {reason}; ignoring it for a while"),
             );
-            self.lan_blocklist.insert(l);
+            let until = self.now_local_ms() + LAN_BLOCK_MS;
+            self.lan_blocklist.insert(l.clone(), until);
+            self.lan_strikes.remove(&l);
         }
         self.drop_remote(Some(format!("LAN peer rejected: {reason}")));
         self.reevaluate();
         self.emit_connection();
+    }
+
+    /// The LAN leader turned us away before the proof (`Bye`, full): an
+    /// ordinary loss the first times, a block once it keeps happening.
+    /// Returns whether it was blocked.
+    fn lan_leader_strike(&mut self, reason: &str) -> bool {
+        let Some(l) = self.remote.as_ref().and_then(|r| r.leader.clone()) else {
+            return false;
+        };
+        let (strikes, blocks) = self.lan_strikes.entry(l.clone()).or_insert((0, 0));
+        *strikes += 1;
+        if *strikes < LAN_STRIKES {
+            return false;
+        }
+        *strikes = 0;
+        let level = *blocks;
+        *blocks = blocks.saturating_add(1);
+        let block = (LAN_STRIKE_BLOCK_MS * 2f64.powi(level.min(16) as i32)).min(LAN_BLOCK_MS);
+        self.log(
+            "warn",
+            format!("LAN peer {l} {reason}; ignoring it for {:.0} s", block / 1000.0),
+        );
+        let until = self.now_local_ms() + block;
+        self.lan_blocklist.insert(l, until);
+        self.drop_remote(Some(format!("LAN peer rejected: {reason}")));
+        self.reevaluate();
+        self.emit_connection();
+        true
     }
 
     /// Frames from a LAN upstream before our Hello went out: only the
@@ -1708,8 +1764,8 @@ impl Engine {
             }
             Msg::Refuse { .. } | Msg::Bye { .. } => {
                 // Not serving right now (mid-election, full): an ordinary
-                // loss, handled with backoff like any other, not a rogue.
-                return false;
+                // loss with backoff, unless it keeps happening.
+                return self.lan_leader_strike("it keeps turning us away");
             }
             other => {
                 self.reject_lan_leader(&format!("sent {} before proving itself", other.name()));
@@ -2207,8 +2263,13 @@ impl Engine {
         // the LAN session back; we adopt the coordinator's word when we get
         // there, filing and replaying nothing.
         let deferred = remote && via_coordinator && self.lan_deferred;
-        if remote && !via_coordinator && self.coordinator_target().is_some() {
-            self.lan_deferred = true;
+        if remote && !via_coordinator {
+            if let Some(l) = self.remote.as_ref().and_then(|r| r.leader.clone()) {
+                self.lan_strikes.remove(&l);
+            }
+            if self.coordinator_target().is_some() {
+                self.lan_deferred = true;
+            }
         }
         if via_coordinator {
             self.lan_deferred = false;
@@ -4381,7 +4442,7 @@ mod tests {
         assert!(!wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
-        assert!(e.lan_blocklist.contains("rogue2"));
+        assert!(e.lan_blocklist.contains_key("rogue2"));
         assert_eq!(e.remote.as_ref().unwrap().leader.as_deref(), Some("honest"));
         // a proof for the right key but the wrong identity is no better
         let _ = nonce;
