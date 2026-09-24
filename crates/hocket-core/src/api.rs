@@ -37,8 +37,10 @@ use typeshare::typeshare;
 /// additive changes don't need it.
 pub const API_SCHEMA_VERSION: u32 = 1;
 /// Protocol floor below which the Connect handshake refuses to talk.
-pub const PROTOCOL_MIN_VERSION: u32 = 1;
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Aliases of the wire constants so the two can never drift apart.
+pub const PROTOCOL_MIN_VERSION: u32 = crate::connect::wire::PROTOCOL_MIN;
+/// Connect wire protocol spoken by this build (2 added mutual LAN auth).
+pub const PROTOCOL_VERSION: u32 = crate::connect::wire::PROTOCOL;
 
 // ---------------------------------------------------------------------------
 // Identity

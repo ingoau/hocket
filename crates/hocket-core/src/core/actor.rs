@@ -842,7 +842,10 @@ impl Actor {
                 return;
             }
         };
-        let state = PersistedConnectState { sync_base };
+        let state = PersistedConnectState {
+            sync_base,
+            known_scrobbled: engine.known_scrobbled(),
+        };
         let state_json = match serde_json::to_string(&state) {
             Ok(j) => j,
             Err(e) => {

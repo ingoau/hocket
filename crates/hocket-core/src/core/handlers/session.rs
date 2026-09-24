@@ -77,12 +77,15 @@ impl Actor {
             },
             _ => crate::session::new_document(&scope, crate::util::new_id(), self.now()),
         };
-        let sync_base = self
+        let persisted = self
             .db
             .saved_state_get::<PersistedConnectState>(&format!("connect:{scope}"))
             .ok()
-            .flatten()
-            .and_then(|s| s.sync_base);
+            .flatten();
+        let (sync_base, known_scrobbled) = match persisted {
+            Some(s) => (s.sync_base, s.known_scrobbled),
+            None => (None, vec![]),
+        };
         let device = DeviceInfo {
             id: self.cfg.device_id.clone(),
             name: self.cfg.device_name.clone(),
@@ -109,7 +112,9 @@ impl Actor {
             .get_bool(crate::settings::keys::CONNECT_LAN_DISCOVERY)
             && self.cfg.coordinator_listen.is_none();
         let reducer = TunableReducer::shared(self.reducer_policy.clone());
-        let engine = Engine::new(cfg, self.clock.clone(), reducer, doc.clone(), sync_base);
+        let mut engine = Engine::new(cfg, self.clock.clone(), reducer, doc.clone(), sync_base);
+        // The scrobble dedupe log survives restarts (review connect #16).
+        engine.restore_known_scrobbled(known_scrobbled);
         self.last_saved_queues = doc.saved_queues.clone();
         self.last_doc = Some(doc.clone());
         self.engine = Some(engine);

@@ -3502,11 +3502,36 @@ impl Engine {
 #[serde(rename_all = "camelCase")]
 pub struct PersistedConnectState {
     pub sync_base: Option<SyncBase>,
+    /// Plays this device knows are scrobbled (its own and, when it led a LAN
+    /// room, its members'), so a restarted leader still answers dedupe
+    /// queries. Restore with [`Engine::restore_known_scrobbled`].
+    #[serde(default)]
+    pub known_scrobbled: Vec<KnownScrobble>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_connect_state_reads_old_rows_and_round_trips_known_scrobbles() {
+        let old: PersistedConnectState = serde_json::from_str(r#"{"syncBase":null}"#).unwrap();
+        assert!(
+            old.known_scrobbled.is_empty(),
+            "rows written before the field existed still load"
+        );
+        let state = PersistedConnectState {
+            sync_base: None,
+            known_scrobbled: vec![KnownScrobble {
+                track_id: "t1".into(),
+                started_at: 1_000.0,
+                device_id: "d1".into(),
+            }],
+        };
+        let back: PersistedConnectState =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(back, state);
+    }
     use crate::api::Platform;
     use crate::connect::session_adapter::RealReducer;
     use std::sync::atomic::{AtomicU64, Ordering};
