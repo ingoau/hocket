@@ -92,6 +92,8 @@ test.describe("lyrics", () => {
     // The fullscreen player keeps its large layout regardless.
     await page.getByTestId("content").click();
     await page.keyboard.press("f");
+    // It opens on the artwork; L shows the lyrics in its place.
+    await page.keyboard.press("l");
     const fs = page.getByTestId("fullscreen-player").locator(".amll-lyric-player").first();
     await expect(fs).toBeVisible();
     expect(await fs.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThan(medium * 1.5);

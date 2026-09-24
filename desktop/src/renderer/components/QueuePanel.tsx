@@ -35,6 +35,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const setSelection = useApp((s) => s.setSelection);
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   // Pointer drag only: the keyboard reorders with Alt+Up/Down on the listbox.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const d = bridge().dispatch;
@@ -70,8 +71,6 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     void openContextMenu(e, { type: "queueItems", data: { keys: ks } });
   };
   const onKey = (e: React.KeyboardEvent) => {
-    // Keys on the section buttons (Clear) are theirs.
-    if (e.target !== e.currentTarget) return;
     const idx = focusKey ? keys.indexOf(focusKey) : -1;
     if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && focusKey) {
       e.preventDefault();
@@ -119,13 +118,13 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const currentKey = queue.current?.item.key;
   const settled = useRef(false);
   useLayoutEffect(() => {
-    const list = listRef.current;
-    const head = list?.querySelector<HTMLElement>('[data-group="current"]');
+    const list = scrollRef.current;
+    const head = listRef.current?.querySelector<HTMLElement>('[data-group="current"]');
     if (!list || !head) return;
     const first = !settled.current;
     settled.current = true;
     if (!first && (Date.now() - lastTouch.current < IDLE_MS || list.contains(document.activeElement) && document.activeElement !== list)) return;
-    const top = head.offsetTop - list.offsetTop;
+    const top = head.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
     if (Math.abs(list.scrollTop - top) < 2) return;
     programmatic.current = true;
     list.scrollTo({ top, behavior: first || reducedMotion ? "auto" : "smooth" });
@@ -141,23 +140,24 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "next" || kind === "upcoming"}
       onClick={(ev) => click(ev, e.item.key)} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => onContext(ev, e.item.key)} />
   );
-  // Section headers are presentational labels for their group; the Clear
-  // buttons in them are their own Tab stops (the list's keys ignore them).
-  const group = (key: string, label: React.ReactNode, entries: QueueEntry[], kind: "history" | "current" | "next" | "upcoming", extra?: { sub?: string; action?: React.ReactNode }) =>
+  // Section headers label their group. A section's Clear button can't live in
+  // the listbox (it holds options only): it follows the list and is anchored
+  // onto its (sticky) header with CSS anchor positioning.
+  const anchor = (key: string) => `--${idPrefix}-sec-${key}`;
+  const group = (key: string, label: React.ReactNode, entries: QueueEntry[], kind: "history" | "current" | "next" | "upcoming", sub?: string) =>
     entries.length ? (
       <div role="group" aria-labelledby={`${idPrefix}-grp-${key}`} key={key} className={`queue-group ${kind}`} data-group={kind}>
-        <div className="queue-section">
+        <div className="queue-section" style={{ anchorName: anchor(key) } as React.CSSProperties}>
           <div className="queue-section-text">
             <span id={`${idPrefix}-grp-${key}`}>{label}</span>
-            {extra?.sub ? <span className="queue-section-sub">{extra.sub}</span> : null}
+            {sub ? <span className="queue-section-sub">{sub}</span> : null}
           </div>
-          {extra?.action}
         </div>
         {entries.map((e) => row(e, kind))}
       </div>
     ) : null;
-  const clearButton = (label: string, testId: string, onClick: () => void) => (
-    <button type="button" className="btn sm ghost queue-clear" aria-label={label} title={label} onClick={onClick} data-testid={testId}>{t("queue.clearShort")}</button>
+  const clearButton = (key: string, label: string, testId: string, onClick: () => void) => (
+    <button type="button" className="btn sm ghost queue-clear" style={{ positionAnchor: anchor(key) } as React.CSSProperties} aria-label={label} title={label} onClick={onClick} data-testid={testId}>{t("queue.clearShort")}</button>
   );
   // Focus with no cursor yet starts on the current item.
   const onFocus = (e: React.FocusEvent) => {
@@ -169,16 +169,19 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   return (
     <div className={`queue-wrap ${large ? "large" : ""}`}>
       {header}
-      <div ref={listRef} className="pane-body queue-list" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} aria-describedby={`${idPrefix}-hint`} aria-activedescendant={activeId} tabIndex={0} onKeyDown={onKey} onFocus={onFocus} data-testid="queue-timeline"
-        onScroll={touched} onWheel={touched} onPointerDown={touched}>
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd} accessibility={{ container: document.body }}>
-          {group("history", t("queue.history"), queue.history, "history", { action: clearButton(t("queue.clearHistory"), "queue-clear-history", () => { d({ type: "removeQueueItems", data: { keys: queue.history.map((e) => e.item.key) } }); publish(EMPTY_SELECTION); }) })}
-          {queue.current ? group("current", t("queue.nowPlaying"), [queue.current], "current") : null}
-          <SortableContext items={reorderable} strategy={verticalListSortingStrategy}>
-            {group("next", t("queue.playingNext"), queue.playingNext, "next", { action: clearButton(t("queue.clearInsertions"), "queue-clear-next", () => d({ type: "clearInsertions" })) })}
-            {group("upcoming", t("queue.continuePlaying"), queue.upcoming, "upcoming", { sub: queue.contextLabel ? t("queue.fromContext", { context: queue.contextLabel }) : undefined })}
-          </SortableContext>
-        </DndContext>
+      <div ref={scrollRef} className="pane-body queue-scroll" onScroll={touched} onWheel={touched} onPointerDown={touched} data-testid="queue-scroll">
+        <div ref={listRef} className="queue-list" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} aria-describedby={`${idPrefix}-hint`} aria-activedescendant={activeId} tabIndex={0} onKeyDown={onKey} onFocus={onFocus} data-testid="queue-timeline">
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd} accessibility={{ container: document.body }}>
+            {group("history", t("queue.history"), queue.history, "history")}
+            {queue.current ? group("current", t("queue.nowPlaying"), [queue.current], "current") : null}
+            <SortableContext items={reorderable} strategy={verticalListSortingStrategy}>
+              {group("next", t("queue.playingNext"), queue.playingNext, "next")}
+              {group("upcoming", t("queue.continuePlaying"), queue.upcoming, "upcoming", queue.contextLabel ? t("queue.fromContext", { context: queue.contextLabel }) : undefined)}
+            </SortableContext>
+          </DndContext>
+        </div>
+        {queue.history.length ? clearButton("history", t("queue.clearHistory"), "queue-clear-history", () => { d({ type: "removeQueueItems", data: { keys: queue.history.map((e) => e.item.key) } }); publish(EMPTY_SELECTION); }) : null}
+        {queue.playingNext.length ? clearButton("next", t("queue.clearInsertions"), "queue-clear-next", () => d({ type: "clearInsertions" })) : null}
         {queue.totalUpcoming > queue.upcoming.length ? <div className="queue-more">{t("queue.more", { count: queue.totalUpcoming - queue.upcoming.length })}</div> : null}
       </div>
       <span id={`${idPrefix}-hint`} className="sr-only">{t("a11y.queueHint")}</span>

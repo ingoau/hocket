@@ -8,7 +8,9 @@
 .queue-section { display: flex; align-items: center; gap: 8px; min-height: 30px; }
 .queue-section-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .queue-section-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-section .queue-clear { flex: 0 0 auto; text-transform: none; letter-spacing: 0; height: 22px; border-radius: 11px; font-weight: 500; }
+.queue-scroll { position: relative; }
+/* Clear buttons sit outside the listbox, anchored onto their section's sticky header. */
+.queue-clear { position: absolute; z-index: 2; top: anchor(center); right: anchor(right); translate: -8px -50%; text-transform: none; letter-spacing: 0; height: 22px; border-radius: 11px; font-weight: 500; }
 .queue-more { padding: 8px 12px; color: var(--fg-muted); font-size: var(--fs-xs); }
 .qrow .grip { display: inline-flex; flex: 0 0 auto; }
 .qrow .grip-space { width: 14px; flex: 0 0 auto; }
@@ -109,7 +111,8 @@
 .np-pane-lyrics .lyrics-static { font-size: 22px; }
 .np .queue-wrap { height: 100%; }
 .np .queue-header { display: flex; gap: 8px; padding: 0 0 12px; flex: 0 0 auto; flex-wrap: wrap; }
-.np .queue-list { border-radius: 20px; padding-bottom: 60cqh; scroll-padding-top: 0; }
+.np .queue-scroll { border-radius: 20px; }
+.np .queue-list { padding-bottom: 60cqh; }
 .np .queue-section { background: rgba(12, 12, 16, 0.5); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-radius: 14px; padding: 8px 12px; margin: 0 0 4px; font-size: var(--fs-sm); text-transform: none; letter-spacing: 0; color: #fff; }
 .np .queue-section-sub { color: rgba(255, 255, 255, 0.8); }
 .np .queue-group.history .qrow { opacity: 0.85; }
@@ -159,3 +162,6 @@
   .np .queue-section { background: Canvas; }
   .np-card { border: 1px solid CanvasText; }
 }
+
+/* While the player is open, snackbars drop in from the top instead of covering the transport. */
+.app:has(.fullscreen.np) .toasts { bottom: auto; top: 16px; }

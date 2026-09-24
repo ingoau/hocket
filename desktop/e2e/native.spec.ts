@@ -71,7 +71,7 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("album-play").click();
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
       await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
-      await expect(page.getByTestId("queue-timeline")).toContainText("Continuing from");
+      await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
       const firstTitle = await page.getByTestId("queue-row-current").locator(".t1").textContent();
 
       // Position extrapolates from TransportChanged stamps while playing.

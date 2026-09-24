@@ -286,10 +286,14 @@ test.describe("keyboard only", () => {
       expect(inside, `Tab #${i}`).toBe(true);
       expect(hasRing(await focused(page)), `ring at Tab #${i}`).toBe(true);
     }
-    // Tabs inside fullscreen rove too.
-    await tabTo(page, byTestId("fs-tab-lyrics"), "the Lyrics tab");
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.getByTestId("fs-tab-related")).toHaveAttribute("aria-selected", "true");
+    // The Lyrics / Queue / About toggles are buttons: Enter shows the pane, again brings the artwork back.
+    await tabTo(page, byTestId("fs-mode-queue"), "the Queue toggle");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
+    await expect(fs.getByTestId("queue-timeline")).toBeVisible();
+    await expect(page.getByTestId("fs-mode-queue")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "false");
     await page.keyboard.press("Escape");
     await expect(fs).toHaveCount(0);
     await expect(page.getByTestId("nav-albums")).toBeFocused();

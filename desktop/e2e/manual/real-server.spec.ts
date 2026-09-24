@@ -128,7 +128,7 @@ test.describe("real server (manual)", () => {
       // (The button, not F: F in a focused album grid is type-ahead.)
       await page.getByTestId("toggle-fullscreen").click();
       await expect(page.getByTestId("fullscreen-player")).toBeVisible();
-      await page.getByTestId("fs-tab-lyrics").click();
+      await page.getByTestId("fs-mode-lyrics").click();
       await page.waitForTimeout(4000);
       await shot("fullscreen-lyrics");
       await page.keyboard.press("Escape");
