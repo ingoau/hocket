@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendCommandLoadInner
 import app.hocket.core.api.BackendCommandSetNextInner
+import app.hocket.core.api.BackendReport
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource
 import app.hocket.core.api.OfflineState
@@ -15,8 +16,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
+import androidx.media3.common.PlaybackException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,5 +65,33 @@ class ExoBackendTest {
         assertNull("after Stop there is nothing to report an error against", backend.errorKey())
         backend.handle(BackendCommand.SetNext(BackendCommandSetNextInner(source("c"))))
         assertEquals(0, backend.player.mediaItemCount)
+    }
+
+    private fun reports() = dispatched.filterIsInstance<Command.BackendReport>().map { it.data.report }
+
+    @Test
+    fun autoTransitionEndsThePlayedItemBeforeTheTransition() {
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        // Stand-in for ExoPlayer's own advance: the follow-up becomes current, then the AUTO callback.
+        backend.player.seekToNextMediaItem()
+        dispatched.clear()
+        backend.onAutoTransition(backend.player.currentMediaItem!!)
+        val reports = reports()
+        assertEquals(BackendReport.Ended(app.hocket.core.api.BackendReportEndedInner("a")), reports[0])
+        assertEquals(BackendReport.TransitionedToNext(app.hocket.core.api.BackendReportTransitionedToNextInner("b")), reports[1])
+        assertEquals("the played item is dropped: current(+next)", 1, backend.player.mediaItemCount)
+        assertEquals("b", backend.player.currentMediaItem?.mediaId)
+    }
+
+    @Test
+    fun networkErrorsAreRetriedWithBackoffThenGiveUp() {
+        assertTrue(ExoBackend.isRecoverable(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED))
+        assertTrue(ExoBackend.isRecoverable(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT))
+        assertFalse(ExoBackend.isRecoverable(PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND))
+        assertFalse(ExoBackend.isRecoverable(PlaybackException.ERROR_CODE_DECODING_FAILED))
+        val delays = generateSequence(0) { it + 1 }.map { ExoBackend.recoveryDelayMs(it) }.takeWhile { it != null }.toList()
+        assertTrue("backs off", delays.zipWithNext().all { (a, b) -> a!! < b!! })
+        assertTrue("keeps trying for about a minute", delays.sumOf { it!! } in 45_000L..120_000L)
+        assertNull(ExoBackend.recoveryDelayMs(delays.size))
     }
 }

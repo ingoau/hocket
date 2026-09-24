@@ -29,7 +29,12 @@ import kotlinx.coroutines.launch
  *   `Event.Backend` -> [ExoBackend], `Event.MediaSession` -> [MediaSessionBridge].
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
  * - Stays a foreground service (type `mediaPlayback`) while the media session says something is
- *   playing; Media3 handles the notification and foreground promotion. When nothing has played for
+ *   playing; Media3 handles the notification and foreground promotion. That only happens for a
+ *   session the service knows about: Media3 adds one when a controller connects through
+ *   [onGetSession], but the UI binds for the core, not as a controller, so the session is added
+ *   explicitly in [onCreate]. Without that there was no notification, no lock-screen or quick-settings
+ *   controls, and no foreground promotion, so a backgrounded process could be killed mid-song.
+ *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself.
  * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
  *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
@@ -76,6 +81,7 @@ class PlaybackService : MediaSessionService() {
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         bridge = MediaSessionBridge(this, CoreSessionPlayer(Looper.getMainLooper(), ::dispatch), ::dispatch, launch)
+        addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch)
         battery = BatterySaverMonitor(this, ::dispatch)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
