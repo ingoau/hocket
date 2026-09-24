@@ -700,6 +700,8 @@ class FakeCore(
             is Command.Pin -> pin(c.data.target, c.data.transcode)
             is Command.Unpin -> { pins.removeAll { it.target == c.data.target }; emitPins(); toast("Download removed") }
             Command.ClearStreamCache -> { storage = storage.copy(cacheBytes = 0.0); emit(Event.StorageChanged(EventStorageChangedInner(storage))); toast("Stream cache cleared") }
+            // The fake plays nothing through a backend: stream capabilities change nothing here.
+            is Command.SetBackendCapabilities -> Unit
             is Command.SetStorageWarnThreshold -> { warnThreshold = c.data.bytes; emitPins() }
 
             is Command.CancelJob -> updateJob(c.data.id) { it.copy(state = JobState.Cancelled) }
