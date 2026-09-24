@@ -12,7 +12,7 @@
 //
 // A modal dialog: focus moves in on open (the collapse button), Tab stays
 // inside, Escape closes, and focus returns to what opened it.
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
 import { useApp, type NowPlayingMode } from "../store/app";
@@ -30,6 +30,7 @@ import { openMenuFromButton } from "../components/ContextMenu";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePrefersReducedMotion } from "../lib/media";
+import { volumeValueText } from "../lib/a11y";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 
 type Pane = Exclude<NowPlayingMode, "art">;
@@ -38,8 +39,8 @@ const PANES: { key: Pane; icon: string }[] = [
   { key: "queue", icon: "queue" },
   { key: "about", icon: "info" },
 ];
-const ART_RADIUS = 28;
-const THUMB_RADIUS = 12;
+/** The artwork's corner radius as laid out (the stylesheet sizes it per layout). */
+const radiusOf = (el: HTMLElement) => Number.parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
 
 /** The motion tokens the stylesheet uses, from lib/spring.ts. */
 const MOTION = {
@@ -107,12 +108,12 @@ export function FullscreenPlayer() {
   // on open, fly it up from the player bar's. Then remember where it rests.
   useLayoutEffect(() => {
     const el = visibleArt();
-    const radius = mode === "art" ? ART_RADIUS : THUMB_RADIUS;
     const prev = flight.current;
     if (!el) {
       flight.current = undefined;
       return;
     }
+    const radius = radiusOf(el);
     if (el.getAnimations().length && prev?.mode === mode) return;
     let from: { rect: DOMRect; radius: number } | undefined;
     if (!prev) {
@@ -168,6 +169,7 @@ export function FullscreenPlayer() {
           )}
         </div>
 
+        <div className="np-controls">
         <div className="np-info">
           {mode !== "art" ? (
             <button ref={thumbArt} type="button" className="np-thumb" aria-label={t("nowPlaying.showArtwork")} title={t("nowPlaying.showArtwork")} onClick={() => choose("art")} data-testid="np-thumb">{art}</button>
@@ -210,6 +212,8 @@ export function FullscreenPlayer() {
           <button type="button" className={`np-tonal ${sleep ? "on" : ""}`} aria-label={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} title={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} onClick={() => openDialog({ kind: "sleepTimer" })} data-testid="fs-sleep"><Icon name="sleep" size={18} /></button>
         </div>
 
+        <NpVolume />
+
         <div className="np-modes" role="group" aria-label={t("nowPlaying.views")}>
           {PANES.map((p) => (
             <button key={p.key} type="button" className={`np-mode ${mode === p.key ? "on" : ""}`} aria-pressed={mode === p.key} onClick={() => choose(mode === p.key ? "art" : p.key)} data-testid={`fs-mode-${p.key}`}>
@@ -217,6 +221,7 @@ export function FullscreenPlayer() {
               <span>{t(`nowPlaying.view.${p.key}`)}</span>
             </button>
           ))}
+        </div>
         </div>
       </div>
     </div>
@@ -306,6 +311,35 @@ function Related({ trackId }: { trackId: string }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * Volume, shown in the wide layout (the player bar is covered): an M3
+ * Expressive slider — a thick rounded track, a gap either side of a bar
+ * thumb — over a native range input, so keys and assistive tech work as usual.
+ */
+function NpVolume() {
+  const volume = useApp((s) => s.transport.volume);
+  const [muted, setMuted] = useState<number | undefined>(undefined);
+  const set = (v: number) => bridge().dispatch({ type: "setVolume", data: { volume: v } });
+  const toggle = () => {
+    if (muted !== undefined) { set(muted); setMuted(undefined); } else { setMuted(volume); set(0); }
+  };
+  // Arrows move 5 %, Page keys 20 %, like the player bar's.
+  const onKey = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : e.key === "PageUp" ? 0.2 : e.key === "PageDown" ? -0.2 : 0;
+    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMuted(undefined);
+    set(Math.round(Math.max(0, Math.min(1, volume + step)) * 100) / 100);
+  };
+  return (
+    <div className="np-volume">
+      <button type="button" className="np-icon-btn sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="fs-mute"><Icon name={volume === 0 ? "mute" : "volume"} size={18} /></button>
+      <input type="range" className="np-range" min={0} max={1} step={0.01} value={volume} style={{ "--v": `${volume * 100}%` } as CSSProperties} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, Math.round((volume - Math.sign(e.deltaY) * 0.05) * 100) / 100)))} data-testid="fs-volume" />
     </div>
   );
 }

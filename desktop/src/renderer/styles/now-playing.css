@@ -34,7 +34,7 @@
 .np-pane { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; animation: np-pane-in var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
 @keyframes np-pane-in { from { opacity: 0; transform: translateY(18px) scale(0.98); } }
 
-.np-info, .np-seek, .np-transport, .np-options, .np-modes { position: relative; z-index: 1; }
+.np-controls { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 14px; flex: 0 0 auto; min-width: 0; }
 .np-info { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; min-width: 0; }
 .np-thumb { flex: 0 0 auto; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
 .np-thumb:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 12px; }
@@ -56,22 +56,34 @@
 .np-icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
 .np-icon-btn.heart.on { color: #ff9aae; }
 
-/* Wavy seek bar */
-.np-seek { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
-.np-seek-bar { position: relative; height: 28px; touch-action: none; border-radius: 8px; }
+/* Wavy seek bar (WavySeek.tsx draws the wave; the geometry lives there). */
+.np-seek { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0; }
+.np-seek-bar { position: relative; height: 40px; touch-action: none; border-radius: 12px; }
 .np-seek-bar[aria-disabled="true"] { opacity: 0.6; }
+.np-seek-bar:focus-visible { outline-offset: 2px; border-radius: 12px; }
 .np-seek-bar svg { display: block; overflow: visible; }
-.np-seek-bar .played { fill: none; stroke: #fff; stroke-width: 4px; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.np-seek-bar .rest { stroke: rgba(255, 255, 255, 0.3); stroke-width: 4px; stroke-linecap: round; }
-.np-seek-bar .thumb { fill: #fff; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); transform-box: fill-box; transform-origin: center; }
-.np-seek-bar.dragging .thumb, .np-seek-bar:hover .thumb { transform: scaleY(1.2); }
-/* The wave: flat while paused, rising with a spring when playing, travelling forward. */
-.np-seek-bar .wave { transform-box: fill-box; transform-origin: center; transform: scaleY(0.001); transition: transform var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
-.np-seek-bar.playing .wave { transform: none; }
-.np-seek-bar.playing .played { animation: np-wave 1.3s linear infinite; }
-@keyframes np-wave { to { transform: translateX(32px); } }
-.np-seek-bar .hover-time { position: absolute; bottom: 30px; transform: translateX(-50%); background: rgba(20, 20, 24, 0.92); color: #fff; padding: 2px 8px; border-radius: 10px; font-size: var(--fs-xs); pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.np-seek-bar .played { fill: none; stroke: #fff; stroke-width: 6px; stroke-linecap: round; stroke-linejoin: round; }
+.np-seek-bar .rest { stroke: rgba(255, 255, 255, 0.28); stroke-width: 6px; stroke-linecap: round; }
+.np-seek-bar .stop { fill: #fff; }
+/* The thumb stretches (a spring) while hovered and more while held. */
+.np-seek-bar .thumb { fill: #fff; transform-box: fill-box; transform-origin: center; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); }
+.np-seek-bar:hover .thumb { transform: scaleY(1.12); }
+.np-seek-bar.dragging .thumb { transform: scale(0.7, 1.25); }
+.np-seek-bar .hover-time, .np-seek-bar .value-bubble { position: absolute; bottom: 42px; transform: translateX(-50%); padding: 4px 10px; border-radius: 14px; font-size: var(--fs-sm); font-weight: 600; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.np-seek-bar .hover-time { background: rgba(16, 16, 20, 0.88); color: #fff; }
+/* The value indicator: a filled pill that pops up over the thumb. */
+.np-seek-bar .value-bubble { background: #fff; color: #121214; animation: np-bubble var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); transform-origin: 50% 100%; }
+@keyframes np-bubble { from { transform: translateX(-50%) scale(0.4); opacity: 0; } }
+.np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; margin-top: -4px; }
+
+/* Volume (wide layout): a thick rounded track with a gap either side of a bar thumb. */
+.np-volume { display: none; align-items: center; gap: 10px; flex: 0 0 auto; }
+.np-range { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 28px; background: transparent; margin: 0; --v: 50%; }
+.np-range::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; background: linear-gradient(to right, #fff 0 max(0px, calc(var(--v) - 7px)), transparent max(0px, calc(var(--v) - 7px)) calc(var(--v) + 7px), rgba(255, 255, 255, 0.28) calc(var(--v) + 7px)); }
+.np-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 5px; height: 26px; margin-top: -6px; border-radius: 3px; background: #fff; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); }
+.np-range:hover::-webkit-slider-thumb { transform: scaleY(1.12); }
+.np-range:active::-webkit-slider-thumb { transform: scale(0.7, 1.2); }
+.np-range:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 10px; }
 
 /* Transport: the play button morphs between a pill (paused) and a rounded square (playing). */
 .np-transport { display: flex; align-items: center; justify-content: center; gap: 28px; flex: 0 0 auto; }
@@ -141,11 +153,43 @@
 .np .related-row .art { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
 .np .related-row .why { font-size: var(--fs-xs); color: var(--fg-muted); }
 
+/* ---- Wide windows: a desktop layout, not a stretched phone -----------------
+   The stage (artwork, or the pane that replaces it) fills the left; the
+   controls are a column on the right, vertically centred, with volume. The
+   artwork still flies between the stage and the thumbnail beside the title. */
+@media (min-width: 1100px) and (min-height: 620px) {
+  .np-stage, .np[data-mode] .np-stage { width: min(calc(100% - 96px), 1520px); display: grid; grid-template-columns: minmax(0, 1fr) clamp(380px, 32vw, 480px); grid-template-rows: auto minmax(0, 1fr); column-gap: clamp(40px, 5vw, 96px); row-gap: 20px; padding: 28px 0 36px; }
+  .np-head { grid-column: 1 / -1; }
+  .np-main { grid-column: 1; grid-row: 2; }
+  .np-controls { grid-column: 2; grid-row: 2; align-self: center; gap: 20px; }
+  .np-art { border-radius: 36px; }
+  .np-art-slot { place-items: center; }
+  .np-info { flex-wrap: wrap; row-gap: 10px; }
+  .np-thumb { width: 80px; height: 80px; border-radius: 20px; }
+  .np-text { flex: 1 1 200px; }
+  .np-text .t1 { font-size: clamp(28px, 2.4vw, 40px); line-height: 1.12; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .np-text .t2 { font-size: 18px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .np-actions { order: 3; flex-basis: 100%; margin-left: -10px; }
+  .np-transport { gap: 32px; }
+  .np-play { height: 92px; }
+  .np-play.paused { width: 124px; border-radius: 46px; }
+  .np-play.playing { width: 92px; border-radius: 30px; }
+  .np-skip { width: 72px; height: 72px; border-radius: 36px; }
+  .np-volume { display: flex; }
+  .np-options { justify-content: space-between; }
+  .np-tonal { flex: 1 1 0; }
+  .np-modes { justify-content: stretch; }
+  .np-mode { flex: 1 1 0; justify-content: center; padding: 0 12px; }
+  .np-pane { background: rgba(0, 0, 0, 0.16); border-radius: 32px; padding: 20px 20px 0; }
+  .np-pane-lyrics { background: none; padding: 0; }
+  .np .queue-list { padding-bottom: 40cqh; }
+}
+
 /* Short or narrow windows (and 200% zoom): the page scrolls rather than squashing the controls. */
 @media (max-width: 900px), (max-height: 620px) {
   .fullscreen.np { overflow-y: auto; }
   .np-stage { height: auto; min-height: 100%; width: min(calc(100% - 32px), 680px) !important; padding: 12px 0 16px; gap: 12px; }
-  .np-main { flex: 0 0 auto; height: min(70vw, 56vh); min-height: 220px; }
+  .np-main { flex: 0 0 auto; height: max(200px, min(70vw, calc(100vh - 430px))); }
   .np-text .t1 { font-size: 20px; }
   .np-transport { gap: 16px; }
   .np-mode { padding: 0 14px 0 12px; }
@@ -158,7 +202,10 @@
   .np-tonal.on, .np-mode.on, .np-chip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   .np-seek-bar .played { stroke: Highlight; }
   .np-seek-bar .rest { stroke: GrayText; }
-  .np-seek-bar .thumb { fill: CanvasText; }
+  .np-seek-bar .thumb, .np-seek-bar .stop { fill: CanvasText; }
+  .np-seek-bar .value-bubble { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+  .np-range::-webkit-slider-runnable-track { forced-color-adjust: none; background: GrayText; }
+  .np-range::-webkit-slider-thumb { forced-color-adjust: none; background: CanvasText; }
   .np .queue-section { background: Canvas; }
   .np-card { border: 1px solid CanvasText; }
 }

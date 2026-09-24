@@ -72,6 +72,13 @@ test.describe("playback and queue", () => {
     // The fluid background is fed the cover art, not the fallback gradient.
     const bg = fs.getByTestId("fluid-bg");
     await expect(bg).toHaveAttribute("data-source", "artwork");
+    // Wide windows get the desktop layout: the controls column carries volume (the player bar is covered).
+    const vol = fs.getByTestId("fs-volume");
+    await expect(vol).toBeVisible();
+    const v0 = Number(await vol.inputValue());
+    await vol.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => Math.round(Number(await vol.inputValue()) * 100)).toBe(Math.round((v0 - 0.05) * 100));
     // It opens on the artwork; Lyrics / Queue / About replace it in place and the artwork shrinks next to the title.
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
     await expect(fs.getByTestId("np-source")).not.toHaveText("");
