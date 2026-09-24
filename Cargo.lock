@@ -1162,8 +1162,10 @@ dependencies = [
 name = "hocket-android"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "hocket-core",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

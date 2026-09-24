@@ -84,9 +84,33 @@ impl HocketCore {
     /// Idempotent. Blocks: call it from a worker thread, never from the main thread, and free the
     /// object afterwards.
     pub fn shutdown(&self, timeout_ms: u64) -> bool {
-        self.core
-            .shutdown_blocking(Duration::from_millis(timeout_ms))
+        shutdown_off_runtime(&self.core, Duration::from_millis(timeout_ms))
     }
+}
+
+/// Awaits [`Core::shutdown`] on a plain helper thread, never on the core's own runtime.
+///
+/// `Core::shutdown_blocking` awaits on a runtime task that owns a clone of the core. When the caller
+/// frees its handle right after the flush (as `NativeCore.close()` does), that task's clone is the
+/// last one and drops the tokio runtime from inside one of its own workers, which panics ("Cannot
+/// drop a runtime in a context where blocking is not allowed") and leaves the runtime half torn
+/// down. Here the only other clone lives on a thread outside any runtime, where dropping the last
+/// handle (and with it the runtime) is allowed. The shutdown future needs no runtime context: it
+/// sends on the actor's channel and awaits a oneshot.
+fn shutdown_off_runtime(core: &Core, timeout: Duration) -> bool {
+    let core = core.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new()
+        .name("hocket-shutdown".into())
+        .spawn(move || {
+            futures::executor::block_on(core.shutdown());
+            let _ = done_tx.send(());
+            // `core` drops here, off the runtime.
+        });
+    if spawned.is_err() {
+        return false;
+    }
+    done_rx.recv_timeout(timeout).is_ok()
 }
 
 /// Installs a tracing subscriber that forwards to logcat-friendly stderr. Call once.
@@ -105,3 +129,60 @@ pub fn core_version() -> String {
 
 #[cfg(test)]
 mod fixtures;
+
+#[cfg(test)]
+mod shutdown_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Once};
+
+    use super::*;
+
+    /// Panics on any thread (the runtime's workers included), counted by a process-wide hook.
+    static PANICS: AtomicUsize = AtomicUsize::new(0);
+    static HOOK: Once = Once::new();
+
+    fn count_panics() {
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                PANICS.fetch_add(1, Ordering::SeqCst);
+                previous(info);
+            }));
+        });
+    }
+
+    fn core(dir: &std::path::Path) -> Arc<HocketCore> {
+        let config = serde_json::json!({
+            "dataDir": dir.join("data").to_string_lossy(),
+            "cacheDir": dir.join("cache").to_string_lossy(),
+            "deviceId": "shutdown-test",
+            "deviceName": "test",
+            "platform": "android",
+            "appVersion": "0.0.0-test",
+            "audio": "external",
+        });
+        HocketCore::new(config.to_string()).expect("core")
+    }
+
+    /// `NativeCore.close()`: shut down, then free the handle straight away. The last reference to
+    /// the core (and its tokio runtime) must never be dropped on one of the runtime's own workers.
+    #[test]
+    fn shutdown_then_free_never_drops_the_runtime_on_its_own_worker() {
+        count_panics();
+        for _ in 0..24 {
+            let dir = tempfile::tempdir().unwrap();
+            let c = core(dir.path());
+            c.dispatch(r#"{"type":"start"}"#.into()).unwrap();
+            assert!(c.shutdown(10_000), "the flush completes in time");
+            assert!(c.shutdown(10_000), "a second shutdown returns at once");
+            drop(c);
+            // Give a worker that would have dropped the runtime the chance to do (and panic) so.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            PANICS.load(Ordering::SeqCst),
+            0,
+            "a thread panicked during shutdown"
+        );
+    }
+}
