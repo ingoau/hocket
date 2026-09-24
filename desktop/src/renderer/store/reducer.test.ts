@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Snapshot } from "@core/api";
-import { applySnapshot, dismissToast, initialCoreState, isEstablished, reduce, settingValue } from "./reducer";
+import { applySnapshot, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
   servers: [],
@@ -21,16 +21,6 @@ const snapshot: Snapshot = {
   batterySaver: true,
   syncProgress: undefined,
 };
-
-describe("isEstablished", () => {
-  const base = { id: "s", url: "u", username: "a", name: "n", reachable: true, capabilities: { serverVersion: undefined, openSubsonic: false, extensions: [], transcodeOffset: false, formPost: false, songLyrics: false, sonicSimilarity: false, apiKeyAuthentication: false, transcodingExtension: false, nativeApi: false, meetsFloor: false } };
-  it("treats null optionals from the core like undefined", () => {
-    expect(isEstablished({ ...base, lastSync: null as unknown as undefined })).toBe(false);
-    expect(isEstablished({ ...base, lastSync: undefined })).toBe(false);
-    expect(isEstablished({ ...base, lastSync: 5 })).toBe(true);
-    expect(isEstablished({ ...base, capabilities: { ...base.capabilities, serverVersion: "0.63.1" } })).toBe(true);
-  });
-});
 
 describe("reducer", () => {
   it("applies a snapshot on Started", () => {

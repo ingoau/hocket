@@ -151,12 +151,13 @@ Settings keys are the registry's (`crates/hocket-core/src/settings/registry.rs`)
 `actions.order.*`, `shortcuts`. Close-to-tray is not a registry key; it is a device-local
 preference in main's state file, exposed as `window.hocket.prefs`.
 
-Two real-core behaviours the renderer accounts for: `Query.Artwork` answers with a `file://` URL
-(`artworkFilePath` in `src/shared/constants.ts`), and the core only fetches lyrics on
-`Query.Lyrics`/`FetchLyrics`, so the store asks when the current track changes and
-`LyricsChanged` fills in late answers. Optional fields arrive as `null`, never `undefined`.
-A fresh undoable mutation produces only `UndoChanged`; the reducer synthesises the
-"<label> · Undo" toast from it, once per entry id.
+Real-core behaviours the renderer relies on: `AddServer` probes first, so `ServersChanged` only
+arrives for a working server (a failed probe is `Error{auth|network|server}` + a toast, and the
+setup screen stays); the core emits `LyricsChanged` on every `NowPlayingChanged` (the store asks
+`Query.Lyrics` once on attach for whatever is already playing); `Query.Artwork` returns a
+filesystem path (`artworkFilePath` in `src/shared/constants.ts` also tolerates `file://`).
+Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation produces only
+`UndoChanged`; the reducer synthesises the "<label> · Undo" toast from it, once per entry id.
 
 ## Panel and keyboard conventions
 

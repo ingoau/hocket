@@ -3,7 +3,6 @@
 import { useEffect } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "./store/app";
-import { isEstablished } from "./store/reducer";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { extractAccent } from "./lib/accent";
@@ -24,8 +23,8 @@ import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 
 export function App() {
   const ready = useApp((s) => s.ready);
-  // A server that never answered a probe (wrong password, bad URL) keeps the setup screen up.
-  const hasServer = useApp((s) => s.servers.some(isEstablished));
+  // The core probes before installing: ServersChanged only arrives once a server is real.
+  const hasServer = useApp((s) => s.servers.length > 0);
   const fullscreen = useApp((s) => s.fullscreen);
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);

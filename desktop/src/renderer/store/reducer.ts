@@ -90,13 +90,6 @@ export const initialCoreState: CoreState = {
   announcedUndo: [],
 };
 
-/**
- * A server counts as established once a probe succeeded (version known) or a
- * sync ran. Optional fields arrive from the core as `null`, never `undefined`.
- */
-export function isEstablished(s: ServerInfo): boolean {
-  return !!s.capabilities.serverVersion || s.lastSync != null;
-}
 
 export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
   return {

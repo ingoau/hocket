@@ -249,20 +249,16 @@ function recomputePerf(): void {
 /** Wire the bridge once at startup. Returns a disposer. */
 export function connectStore(): () => void {
   const b = bridge();
-  // The core fetches lyrics only on Query.Lyrics / FetchLyrics, never on its
-  // own at a track change, so ask when the current track changes; a miss is
-  // answered later by LyricsChanged.
-  let lyricsFor: string | undefined;
+  // The core emits LyricsChanged on every NowPlayingChanged; the snapshot on
+  // (re)attach carries no lyrics, so ask once for whatever is already playing.
   const requestLyrics = (trackId: string | undefined) => {
-    if (!trackId || trackId === lyricsFor) return;
-    lyricsFor = trackId;
+    if (!trackId) return;
     void b.query({ type: "lyrics", data: { track_id: trackId } }).then((r) => {
-      if (r.type === "lyricsResult" && r.data && lyricsFor === trackId) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
+      if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);
   };
   const offEvent = b.onEvent((e) => {
     useApp.getState().applyEvent(e);
-    if (e.type === "nowPlayingChanged") requestLyrics(e.data.entry?.track.id);
     if (e.type === "started") requestLyrics(e.data.snapshot.queue.current?.track.id);
     if (e.type === "started" || (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps"))) recomputePerf();
     if (e.type === "started") {

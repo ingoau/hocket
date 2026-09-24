@@ -16,7 +16,7 @@ export const DEV_SERVER_URL = "http://localhost:5178";
 /** Fixed artwork cache sizes, per design.md "Player features → Caching". */
 export const ARTWORK_SIZES = { thumb: 64, grid: 300, full: 1000 } as const;
 
-/** Query.Artwork answers with a `file://` URL (or a bare path); both become a filesystem path. */
+/** Query.Artwork answers with a filesystem path; a `file://` URL is tolerated too. */
 export function artworkFilePath(pathOrUrl: string): string {
   if (!pathOrUrl.startsWith("file://")) return pathOrUrl;
   try {

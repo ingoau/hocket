@@ -26,5 +26,6 @@ test.describe("first run", () => {
     await page.getByTestId("setup-password").fill("x");
     await page.getByTestId("setup-connect").click();
     await expect(page.getByTestId("setup-error")).toContainText("Wrong username or password");
+    await expect(page.getByTestId("setup")).toBeVisible();
   });
 });

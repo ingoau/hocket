@@ -698,7 +698,11 @@ export class FakeCore implements CoreHandle {
       return;
     }
     if (!silent && username.toLowerCase() === "wrong") {
-      this.later(600, () => this.emit({ type: "error", data: { kind: "auth", message: "Wrong username or password", detail: "Subsonic error 40" } }));
+      // Like the core: a failed probe is Error + toast only; no ServersChanged, no job, no problem.
+      this.later(600, () => {
+        this.toast("Couldn't reach the server: authentication failed: Wrong username or password", false);
+        this.emit({ type: "error", data: { kind: "auth", message: "server probe failed", detail: "authentication failed: Wrong username or password" } });
+      });
       return;
     }
     const id = `srv-${hash32(url + username).toString(16)}`;
@@ -2148,7 +2152,7 @@ export class FakeCore implements CoreHandle {
         return undefined;
       }
     }
-    return `file://${file}`;
+    return file;
   }
 
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
