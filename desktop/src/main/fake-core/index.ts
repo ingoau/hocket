@@ -20,11 +20,33 @@ import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
 import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library";
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
+import { FakeStreamCache, trackBytes } from "./stream-cache";
+import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_NOTHING, OFFLINE_NOTICE_SKIPPING } from "@shared/constants";
 
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
 const HISTORY_CAP = 200;
 const UPCOMING_VIEW_CAP = 400;
+/** Played this long (real time), the current track is complete in the stream cache and the next two are prefetched. */
+const CACHE_FILL_AFTER_MS = 5000;
+/** Items skipped in a row as unavailable offline before playback stops (the core's MAX_OFFLINE_SKIPS). */
+const MAX_OFFLINE_SKIPS = 500;
+const FREE_BYTES = 120 * 1024 ** 3;
+
+/** The core's built-in filters (crates/hocket-core/src/filters/mod.rs `default_filters`), listed first. */
+function builtinFilters(): Filter[] {
+  const rule = (field: FilterRule["field"], op: FilterRule["op"], value: FilterRule["value"]): FilterNode => ({ type: "rule", data: { field, op, value } });
+  const b = (id: string, name: string, root: FilterNode, sort: SortOrder, descending: boolean, limit?: number): Filter => ({ id: `builtin:${id}`, name, root, sort, descending, limit });
+  return [
+    b("recently-added", "Recently added", { type: "all", data: [rule("dateAdded", "inTheLast", { type: "days", data: 30 })] }, "dateAdded", true, 500),
+    b("never-played", "Never played", { type: "all", data: [rule("playCount", "is", { type: "number", data: 0 }), rule("localPlayCount", "is", { type: "number", data: 0 })] }, "random", false),
+    b("top-rated", "Top rated", { type: "all", data: [rule("rating", "gt", { type: "number", data: 3 })] }, "rating", true),
+    b("loved", "Loved", { type: "all", data: [rule("loved", "isTrue", { type: "bool", data: true })] }, "dateAdded", true),
+    b("downloaded", "Downloaded", { type: "all", data: [rule("downloaded", "isTrue", { type: "bool", data: true })] }, "artist", false),
+    { ...b("available-offline", "Available offline", { type: "all", data: [rule("availableOffline", "isTrue", { type: "bool", data: true })] }, "artist", false), id: AVAILABLE_OFFLINE_FILTER_ID },
+    b("recently-played", "Recently played", { type: "any", data: [rule("lastPlayed", "inTheLast", { type: "days", data: 14 }), rule("localLastPlayed", "inTheLast", { type: "days", data: 14 })] }, "playCount", true, 200),
+  ];
+}
 
 interface SessionState {
   context?: QueueContext;
@@ -129,6 +151,11 @@ export class FakeCore implements CoreHandle {
   private selection: ActionTarget = { type: "none" };
   private playHistory: PlayHistoryEntry[] = [];
   private playerNotice: string | undefined;
+  private cache = new FakeStreamCache();
+  /** Items skipped in a row because they can't play offline. */
+  private offlineSkips = 0;
+  /** The current item has already filled the cache / triggered prefetch. */
+  private cacheFilledKey: string | undefined;
   private autoplaySettings: AutoplaySettings = { chain: ["sonicSimilarity", "similarSongs", "topSongs", "random"], seedWindow: 5, minSimilarity: 0.4, exclusionWindow: 50, filterId: undefined };
   private ticker: NodeJS.Timeout | undefined;
   private timers = new Set<NodeJS.Timeout>();
@@ -218,10 +245,20 @@ export class FakeCore implements CoreHandle {
         return;
       case "requestSnapshot":
         this.emitSnapshot();
+        // Like the core's attach: the state the snapshot doesn't carry follows as events.
+        this.emit({ type: "pinsChanged", data: { pins: this.pins } });
+        this.emit({ type: "storageChanged", data: { storage: this.storage() } });
+        this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         return;
-      case "setNetworkState":
+      case "setNetworkState": {
+        const wasOffline = this.isOffline();
         this.network = cmd.data.state;
+        if (wasOffline && !this.isOffline()) {
+          this.offlineSkips = 0;
+          if (this.playerNotice === OFFLINE_NOTICE_SKIPPING || this.playerNotice === OFFLINE_NOTICE_NOTHING) this.setNotice(undefined);
+        }
         return;
+      }
       case "setVisibility":
         return;
       case "setBatterySaver":
@@ -433,10 +470,20 @@ export class FakeCore implements CoreHandle {
       case "unpin":
         this.unpin(cmd.data.target);
         return;
-      case "clearStreamCache":
-        if (this.lib) for (const t of this.lib.tracks) if (t.offline === "cached") t.offline = "none";
+      case "clearStreamCache": {
+        const ids = this.lib ? this.cache.clear(this.lib.tracksById) : [];
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
-        this.libraryChanged("tracks", []);
+        this.libraryChanged("tracks", ids);
+        this.emitQueue();
+        return;
+      }
+      case "primeAlbum": {
+        const first = this.lib?.albumTracks.get(cmd.data.album_id)?.[0];
+        this.prime("album", cmd.data.album_id, first);
+        return;
+      }
+      case "primeTrack":
+        this.prime("track", cmd.data.track_id, cmd.data.track_id);
         return;
       case "setStorageWarnThreshold":
         this.setSettingValue("storage.warnThresholdBytes", JSON.stringify(cmd.data.bytes ?? 4 * 1024 ** 3));
@@ -469,6 +516,7 @@ export class FakeCore implements CoreHandle {
         this.emitProblems();
         return;
       case "saveFilter": {
+        // A saved filter with a built-in's id overrides it (like the core).
         const idx = this.filters.findIndex((f) => f.id === cmd.data.filter.id);
         if (idx >= 0) this.filters[idx] = cmd.data.filter;
         else this.filters.push(cmd.data.filter);
@@ -476,6 +524,8 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "deleteFilter":
+        // Built-ins stay (deleting one only drops a saved override, which the fake doesn't keep apart).
+        if (cmd.data.id.startsWith("builtin:")) return;
         this.filters = this.filters.filter((f) => f.id !== cmd.data.id);
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         return;
@@ -515,9 +565,11 @@ export class FakeCore implements CoreHandle {
         return;
       case "setSetting":
         this.setSettingValue(cmd.data.key, cmd.data.value);
+        if (cmd.data.key === "storage.cacheMaxBytes") this.applyCacheBudget();
         return;
       case "resetSetting":
         this.seedSettings(cmd.data.key);
+        if (cmd.data.key === "storage.cacheMaxBytes") this.applyCacheBudget();
         return;
       case "setSettingsSync":
         this.setSettingValue("sync.enabled", JSON.stringify(cmd.data.enabled));
@@ -726,19 +778,25 @@ export class FakeCore implements CoreHandle {
     };
     this.servers = [server];
     this.lib = generateLibrary(id, this.opts.seed, this.opts.trackCount);
+    this.cache = new FakeStreamCache(this.lib.tracks);
+    // The seeded cache respects the budget, like one the core has been keeping.
+    this.cache.evict(this.lib.tracksById, this.cacheBudget().bytes);
     this.pins = this.lib.albums.filter((a) => a.offline === "downloaded").map((a) => ({ target: { type: "album", data: { id: a.id } }, label: `${a.artist} — ${a.name}`, coverArt: a.coverArt, trackCount: a.songCount, downloadedCount: a.songCount, bytes: a.durationMs * 120, createdAt: Date.now() - 86_400_000, transcoded: false }));
     const firstPl = this.lib.playlists[0];
     if (firstPl) this.pins.push({ target: { type: "playlist", data: { id: firstPl.playlist.id } }, label: firstPl.playlist.name, coverArt: firstPl.playlist.coverArt, trackCount: firstPl.trackIds.length, downloadedCount: firstPl.trackIds.length, bytes: firstPl.playlist.durationMs * 100, createdAt: Date.now() - 3 * 86_400_000, transcoded: true });
     this.filters = [
+      ...builtinFilters(),
       { id: "flt-1", name: "Loved, last 90 days", root: { type: "all", data: [{ type: "rule", data: { field: "loved", op: "isTrue", value: { type: "bool", data: true } } }, { type: "rule", data: { field: "lastPlayed", op: "inTheLast", value: { type: "days", data: 90 } } }] }, sort: "lastPlayed" as unknown as SortOrder, descending: true, limit: undefined },
       { id: "flt-2", name: "Downloaded high energy", root: { type: "all", data: [{ type: "rule", data: { field: "downloaded", op: "isTrue", value: { type: "bool", data: true } } }, { type: "rule", data: { field: "energy", op: "gt", value: { type: "number", data: 0.7 } } }] }, sort: "energy", descending: true, limit: 100 },
     ];
-    this.filters[0]!.sort = "playCount";
+    this.filters.find((f) => f.id === "flt-1")!.sort = "playCount";
     this.playHistory = this.seedHistory();
     if (!silent) {
       this.persistServer({ url, username, name });
       this.later(400, () => {
         this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "filtersChanged", data: { filters: this.filters } });
+        this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.runSyncJob(true);
         if (this.started) this.afterServerReady();
       });
@@ -1000,7 +1058,14 @@ export class FakeCore implements CoreHandle {
       s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
     } else if (s.autoplay && this.lib) {
       const seedTrack = this.lib.tracksById.get(s.current.trackId);
-      const pick = this.related(seedTrack?.id ?? "", 5).find((r) => !s.history.some((h) => h.trackId === r.track.id));
+      // Offline, autoplay picks from what plays offline (the core's offline autoplay).
+      const offline = this.isOffline();
+      const fresh = (id: string) => !s.history.some((h) => h.trackId === id) && id !== s.current?.trackId;
+      let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || FakeStreamCache.availableOffline(r.track)));
+      if (!pick && offline) {
+        const t = this.lib.tracks.find((x) => FakeStreamCache.availableOffline(x) && fresh(x.id));
+        if (t) pick = { track: summary(t), provider: "random", reason: "Available offline", score: undefined };
+      }
       if (pick) {
         s.current = { key: newKey(), trackId: pick.track.id, source: { type: "autoplay", data: { provider: pick.provider, reason: pick.reason, score: pick.score } }, unavailable: false };
       } else {
@@ -1051,6 +1116,7 @@ export class FakeCore implements CoreHandle {
 
   private loadCurrent(positionMs: number, play: boolean): void {
     const cur = this.session.current;
+    if (this.skipIfUnavailableOffline(cur, play)) return;
     this.transport = {
       ...this.transport,
       lease: { owner: this.config.deviceId, epoch: this.transport.lease.epoch + 1, expiresAt: Date.now() + 20_000 },
@@ -1059,13 +1125,52 @@ export class FakeCore implements CoreHandle {
       playedMs: 0,
     };
     this.consecutiveFailures = 0;
-    if (cur && this.playerNotice && !cur.unavailable) {
-      this.playerNotice = undefined;
-      this.emit({ type: "playerNotice", data: { message: undefined } });
+    this.cacheFilledKey = undefined;
+    const curTrack = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
+    if (curTrack && play) this.cache.playStarted(curTrack);
+    // The offline notices stay until something has played a moment (tick), like the core's clear on Playing.
+    if (cur && this.playerNotice && !cur.unavailable && this.playerNotice !== OFFLINE_NOTICE_SKIPPING) {
+      this.setNotice(undefined);
     }
     this.emitNowPlaying();
     this.emitTransport();
     if (cur) this.emitLyrics(cur.trackId);
+  }
+
+  /**
+   * Offline, an item that is neither downloaded nor complete in the cache is
+   * skipped as unavailable (the core's skip_if_unavailable_offline); a run of
+   * skips that empties the queue says nothing is available offline.
+   */
+  private skipIfUnavailableOffline(cur: QueueItem | undefined, play: boolean): boolean {
+    if (!cur) {
+      if (this.offlineSkips > 0) {
+        this.offlineSkips = 0;
+        this.setNotice(OFFLINE_NOTICE_NOTHING);
+      }
+      return false;
+    }
+    const t = this.lib?.tracksById.get(cur.trackId);
+    if (!this.isOffline() || !t || FakeStreamCache.availableOffline(t)) {
+      this.offlineSkips = 0;
+      return false;
+    }
+    this.offlineSkips += 1;
+    if (this.offlineSkips > MAX_OFFLINE_SKIPS) {
+      this.offlineSkips = 0;
+      this.transport.position = { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false };
+      this.setNotice(OFFLINE_NOTICE_NOTHING);
+      this.emitTransport();
+      return true;
+    }
+    if (this.playerNotice !== OFFLINE_NOTICE_SKIPPING) this.setNotice(OFFLINE_NOTICE_SKIPPING);
+    cur.unavailable = true;
+    this.transport = { ...this.transport, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: play }, playedMs: 0 };
+    // Skipped on the next turn, never from inside the load.
+    this.later(0, () => {
+      if (this.session.current?.key === cur.key) this.next(false);
+    });
+    return true;
   }
 
   private setPlaying(playing: boolean): void {
@@ -1104,6 +1209,8 @@ export class FakeCore implements CoreHandle {
     if (!cur || !this.transport.position.isPlaying) return;
     const pos = this.positionNow();
     this.transport.playedMs += 250;
+    if (this.transport.playedMs >= 3000 && this.playerNotice === OFFLINE_NOTICE_SKIPPING && !this.session.current?.unavailable) this.setNotice(undefined);
+    this.fillCache();
     if (this.sleepTimer?.endsAt !== undefined && Date.now() >= this.sleepTimer.endsAt) {
       this.sleepTimer = undefined;
       this.emit({ type: "sleepTimerChanged", data: { timer: undefined } });
@@ -1574,10 +1681,91 @@ export class FakeCore implements CoreHandle {
   }
 
   private storage(): StorageSummary {
-    const dl = this.lib?.tracks.filter((t) => t.offline === "downloaded").reduce((s, t) => s + (t.sizeBytes ?? 0), 0) ?? 0;
-    const cache = this.lib?.tracks.filter((t) => t.offline === "cached").reduce((s, t) => s + (t.sizeBytes ?? 0), 0) ?? 0;
+    const dl = this.lib?.tracks.filter((t) => t.offline === "downloaded").reduce((s, t) => s + trackBytes(t), 0) ?? 0;
+    const cache = this.lib ? this.cache.usedBytes(this.lib.tracksById) : 0;
     const warn = this.settingNumber("storage.warnThresholdBytes");
-    return { downloadsBytes: dl, cacheBytes: cache, imagesBytes: 48 * 1024 * 1024, warnThresholdBytes: warn > 0 ? warn : undefined, freeBytes: 120 * 1024 ** 3 };
+    const budget = this.cacheBudget();
+    return {
+      downloadsBytes: dl,
+      cacheBytes: cache,
+      imagesBytes: 48 * 1024 * 1024,
+      warnThresholdBytes: warn > 0 ? warn : undefined,
+      freeBytes: FREE_BYTES,
+      partialCacheBytes: this.cache.partialBytes(),
+      cacheBudgetBytes: budget.bytes,
+      cacheBudgetAuto: budget.auto,
+      servedFromDiskBytes: this.cache.servedFromDiskBytes,
+      fetchedBytes: this.cache.fetchedBytes,
+      dataSavedBytes: this.cache.dataSavedBytes,
+    };
+  }
+
+  // ---- Stream cache (see stream-cache.ts) -------------------------------
+  private isOffline(): boolean {
+    return this.network?.kind === "offline";
+  }
+
+  private cacheBudget(): { bytes: number; auto: boolean } {
+    const v = this.settingNumber("storage.cacheMaxBytes");
+    return FakeStreamCache.budget(v > 0 ? v : undefined, FREE_BYTES);
+  }
+
+  /** The budget changed: evict what no longer fits, and say so. */
+  private applyCacheBudget(): void {
+    const evicted = this.lib ? this.cache.evict(this.lib.tracksById, this.cacheBudget().bytes) : [];
+    this.emit({ type: "storageChanged", data: { storage: this.storage() } });
+    if (evicted.length) {
+      this.libraryChanged("tracks", evicted);
+      this.emitQueue();
+    }
+  }
+
+  /** The album primer, on the transport owner (this device in the fake), gated on its network and battery. */
+  private prime(kind: "album" | "track", id: string, trackId: string | undefined): void {
+    const t = trackId ? this.lib?.tracksById.get(trackId) : undefined;
+    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered, batterySaver: this.batterySaver }, Date.now());
+    this.emit({ type: "log", data: { level: "debug", target: "fake_core::prime", message: `prime ${kind} ${id} -> ${rec.trackId ?? "?"}: ${rec.outcome}${rec.reason ? ` (${rec.reason})` : ""}` } });
+    if (rec.outcome === "primed") this.emit({ type: "storageChanged", data: { storage: this.storage() } });
+  }
+
+  /** Played a while: the current track is complete in the cache, and the next two are prefetched (network and battery permitting). */
+  private fillCache(): void {
+    const s = this.session;
+    const cur = s.current;
+    if (!cur || !this.lib || this.cacheFilledKey === cur.key || this.transport.playedMs < CACHE_FILL_AFTER_MS) return;
+    this.cacheFilledKey = cur.key;
+    const changed: string[] = [];
+    const t = this.lib.tracksById.get(cur.trackId);
+    if (t && !this.isOffline() && this.cache.fill(t, false)) changed.push(t.id);
+    const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false)) && !(this.batterySaver && this.setting<boolean>("battery.pausePrefetch", true));
+    if (prefetchOk) {
+      const upcoming = [...s.insertions.map((i) => i.trackId), ...s.order.slice(s.cursor + 1).map((ci) => s.context?.tracks?.[ci] ?? "")].slice(0, 2);
+      for (const id of upcoming) {
+        const u = this.lib.tracksById.get(id);
+        if (u && this.cache.fill(u, true)) changed.push(u.id);
+      }
+    }
+    if (!changed.length) return;
+    const evicted = this.cache.evict(this.lib.tracksById, this.cacheBudget().bytes);
+    this.libraryChanged("tracks", [...changed, ...evicted]);
+    this.emit({ type: "storageChanged", data: { storage: this.storage() } });
+    this.emitQueue();
+    this.emitNowPlaying();
+  }
+
+  private setting<T>(key: string, fallback: T): T {
+    try {
+      const v = JSON.parse(this.settings.get(key)?.value ?? "null") as unknown;
+      return v === null || v === undefined ? fallback : (v as T);
+    } catch {
+      return fallback;
+    }
+  }
+
+  private setNotice(message: string | undefined): void {
+    if (this.playerNotice === message) return;
+    this.playerNotice = message;
+    this.emit({ type: "playerNotice", data: { message } });
   }
 
   // ---- Settings --------------------------------------------------------
@@ -1612,6 +1800,7 @@ export class FakeCore implements CoreHandle {
       ["connect.lanDiscovery", true, "deviceLocal"],
       ["storage.warnThresholdBytes", 4 * 1024 ** 3, "deviceLocal"],
       ["storage.cacheMaxBytes", 2 * 1024 ** 3, "deviceLocal"],
+      ["storage.prefetchOnMobileData", false, "deviceLocal"],
       ["downloads.transcode", false, "deviceLocal"],
       ["downloads.wifiOnly", true, "deviceLocal"],
       ["sleep.defaultMinutes", 30, "accountSynced"],
@@ -2269,6 +2458,9 @@ export class FakeCore implements CoreHandle {
       `undo depth: ${this.undoStack.length}`,
       `battery saver: ${this.batterySaver}`,
       `network: ${JSON.stringify(this.network)}`,
+      `stream cache: ${this.lib ? this.cache.usedBytes(this.lib.tracksById) : 0} bytes (${this.cache.partialBytes()} partial), budget ${this.cacheBudget().bytes}${this.cacheBudget().auto ? " (automatic)" : ""}`,
+      `primes: ${this.cache.primes.length}`,
+      ...this.cache.primes.slice(-20).map((p) => `  prime ${p.kind} ${p.id} -> ${p.trackId ?? "?"} ${p.outcome}${p.reason ? ` (${p.reason})` : ""} at ${p.at}`),
       "recent log:",
       "  (no crashes recorded)",
     ].join("\n");
@@ -2459,6 +2651,8 @@ export class FakeCore implements CoreHandle {
       case "downloaded":
         return t.offline === "downloaded";
       case "cached":
+        return t.offline === "cached";
+      case "availableOffline":
         return t.offline === "cached" || t.offline === "downloaded";
       case "inPlaylist":
         return this.lib?.playlists.some((p) => p.trackIds.includes(t.id)) ?? false;
@@ -2466,7 +2660,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private localOnlyFields(node: FilterNode): FilterRule["field"][] {
-    const localOnly: FilterRule["field"][] = ["downloaded", "cached", "localPlayCount", "localLastPlayed", "inPlaylist", "bpm", "key", "energy", "mood"];
+    const localOnly: FilterRule["field"][] = ["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist", "bpm", "key", "energy", "mood"];
     const out = new Set<FilterRule["field"]>();
     const walk = (n: FilterNode) => {
       if (n.type === "rule") {

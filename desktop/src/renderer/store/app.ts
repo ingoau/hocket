@@ -300,7 +300,11 @@ export function connectStore(): () => void {
     b.window.reportVisibility(visible);
   };
   document.addEventListener("visibilitychange", onVis);
-  const onOnline = () => b.window.reportNetwork(navigator.onLine);
+  const onOnline = () => {
+    b.window.reportNetwork(navigator.onLine);
+    // The core has no network event: mirror the browser's view so the offline banner follows it.
+    useApp.setState((st) => ({ network: navigator.onLine ? (st.network?.kind === "offline" ? { kind: "unknown", metered: false, networkId: undefined } : st.network) : { kind: "offline", metered: false, networkId: undefined } }));
+  };
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOnline);
   // Attach: the core re-emits everything with current state.

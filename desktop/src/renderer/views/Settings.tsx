@@ -352,24 +352,97 @@ function Connect() {
   );
 }
 
+const GIB = 1024 ** 3;
+/** The registry default of storage.cacheMaxBytes: the core reads it as "automatic". */
+const CACHE_DEFAULT_BYTES = 2 * GIB;
+
 function Storage() {
   const storage = useApp((s) => s.storage);
   const { data } = useQuery(() => ({ type: "storage" }), "storage", [], { static: true });
   const s = storage ?? data;
   const warn = useSetting<number | null>(SK.storageWarnThresholdBytes, null);
+  const partial = s?.partialCacheBytes ?? 0;
+  const budget = s?.cacheBudgetBytes ?? 0;
   return (
     <>
-      <Row title={t("settings.storage")} settingKey="storage"><span className="muted small">{s ? t("downloads.usage", { downloads: fmtBytes(s.downloadsBytes), cache: fmtBytes(s.cacheBytes), images: fmtBytes(s.imagesBytes) }) : "–"}</span></Row>
+      <Row title={t("settings.storageUsage")} settingKey="storage"><span className="muted small" data-testid="storage-usage">{s ? t("settings.storageUsageDetail", { downloads: fmtBytes(s.downloadsBytes), images: fmtBytes(s.imagesBytes) }) : "–"}</span></Row>
+      <Row title={t("settings.cacheUsage")} settingKey="storage" stacked>
+        <div className="cache-usage" data-testid="cache-usage">
+          {/* The text says it all; the bar is a picture of it (complete, then partial, against the budget). */}
+          <div className="cache-bar" aria-hidden="true">
+            <div className="complete" style={{ width: `${budget ? Math.min(100, ((s?.cacheBytes ?? 0) - partial) / budget * 100) : 0}%` }} />
+            <div className="partial" style={{ width: `${budget ? Math.min(100, partial / budget * 100) : 0}%` }} />
+          </div>
+          <span className="muted small">{s ? t("settings.cacheUsageDetail", { total: fmtBytes(s.cacheBytes), budget: budget ? fmtBytes(budget) : "–", complete: fmtBytes(Math.max(0, s.cacheBytes - partial)), partial: fmtBytes(partial) }) : "–"}</span>
+        </div>
+      </Row>
+      <CacheBudgetRow budget={budget} auto={s?.cacheBudgetAuto ?? true} />
+      <Row title={t("settings.dataSaved")} settingKey="storage" stacked>
+        <div className="data-saved">
+          <span className="figure" data-testid="data-saved">{fmtBytes(s?.dataSavedBytes ?? 0)}</span>
+          <span className="muted small">{t("settings.dataSavedDetail", { served: fmtBytes(s?.servedFromDiskBytes ?? 0), fetched: fmtBytes(s?.fetchedBytes ?? 0) })}</span>
+        </div>
+      </Row>
+      <Toggle settingKey={SK.storagePrefetchOnMobileData} title={t("settings.prefetchMobile")} desc={t("settings.prefetchMobileDesc")} />
       <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
-        <select className="select" value={warn ? Math.round(warn / 1024 ** 3) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * 1024 ** 3 : undefined } })}>
+        <select className="select" value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
           {[2, 4, 5, 10, 20, 50, 100].map((g) => <option key={g} value={g}>{g} GB</option>)}
         </select>
       </Row>
-      <Row title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button></Row>
+      <Row title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })} data-testid="clear-cache">{t("downloads.clearCache")}</button></Row>
       <Toggle settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} desc={t("settings.batterySaverNow")} />
       <BatterySaverRow />
     </>
+  );
+}
+
+/** Round to a quarter GB for the custom field. */
+function toGb(bytes: number): number {
+  return Math.max(0.25, Math.round((bytes / GIB) * 4) / 4);
+}
+
+/**
+ * The stream cache budget: automatic (the setting unset; the core sizes it
+ * from the volume and reports it) or a custom size in GB. The core treats a
+ * value equal to the registry default (2 GiB) as automatic, so a custom
+ * choice never starts there.
+ */
+function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
+  const set = useApp((s) => s.setSetting);
+  const [custom, setCustom] = useState(!auto);
+  const [draft, setDraft] = useState(() => String(toGb(budget || 4 * GIB)));
+  useEffect(() => { setCustom(!auto); }, [auto]);
+  useEffect(() => { if (!auto && budget) setDraft(String(toGb(budget))); }, [auto, budget]);
+  const commit = (gb: number) => {
+    if (!Number.isFinite(gb) || gb <= 0) return;
+    set(SK.storageCacheMaxBytes, Math.round(gb * GIB));
+  };
+  const choose = (mode: string) => {
+    if (mode === "auto") {
+      setCustom(false);
+      bridge().dispatch({ type: "resetSetting", data: { key: SK.storageCacheMaxBytes } });
+      return;
+    }
+    setCustom(true);
+    let gb = toGb(budget || 4 * GIB);
+    if (gb * GIB === CACHE_DEFAULT_BYTES) gb = 4;
+    setDraft(String(gb));
+    commit(gb);
+  };
+  return (
+    <Row title={t("settings.cacheBudget")} desc={t("settings.cacheBudgetDesc")} settingKey={SK.storageCacheMaxBytes}>
+      <select className="select" value={custom ? "custom" : "auto"} aria-label={t("settings.cacheBudget")} onChange={(e) => choose(e.target.value)} data-testid="cache-budget-mode">
+        <option value="auto">{t("settings.cacheBudgetAuto", { size: auto && budget ? fmtBytes(budget) : "–" })}</option>
+        <option value="custom">{t("settings.cacheBudgetCustom")}</option>
+      </select>
+      {custom ? (
+        <>
+          <input className="input" type="number" min={0.25} step={0.25} style={{ width: 80 }} value={draft} aria-label={t("settings.cacheBudgetCustomValue")} onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(Number(draft))} onKeyDown={(e) => { if (e.key === "Enter") commit(Number(draft)); }} data-testid="cache-budget-gb" />
+          <span className="muted small">{t("settings.cacheBudgetGb")}</span>
+        </>
+      ) : null}
+    </Row>
   );
 }
 

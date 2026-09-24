@@ -23,7 +23,7 @@ describe("track table columns at narrow widths (200% zoom, small windows)", () =
   });
 
   it("fits: the kept columns' minimum widths never exceed the width", () => {
-    const min: Record<string, number> = { art: 34, title: 140, artist: 100, album: 100, year: 52, genre: 70, rating: 92, love: 30, plays: 52, bpm: 52, duration: 56, offline: 22 };
+    const min: Record<string, number> = { art: 34, title: 140, artist: 100, album: 100, year: 52, genre: 70, rating: 92, love: 30, plays: 52, bpm: 52, duration: 56, offline: 28 };
     for (const w of [400, 500, 600, 704, 824, 900]) {
       const kept = fitColumns(SONGS, w);
       expect(kept.reduce((s, c) => s + (min[c] ?? 0), 34), `width ${w}`).toBeLessThanOrEqual(w);

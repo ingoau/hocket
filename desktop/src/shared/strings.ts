@@ -332,7 +332,7 @@ const STRINGS = {
   "settings.cacheBudgetCustomValue": "Custom stream cache size in GB",
   "settings.cacheBudgetGb": "GB",
   "settings.dataSaved": "Data saved",
-  "settings.dataSavedDetail": "{saved} not downloaded again · {served} played from this device · {fetched} fetched from the server",
+  "settings.dataSavedDetail": "{served} played from this device · {fetched} fetched from the server",
   "settings.prefetchMobile": "Prefetch upcoming songs on mobile data",
   "settings.prefetchMobileDesc": "Also cache the next two songs in the queue on metered or cellular connections.",
   "settings.savedQueueCap": "Keep up to {n} recent queues",

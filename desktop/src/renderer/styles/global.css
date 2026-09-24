@@ -194,7 +194,8 @@ h3 { font-size: var(--fs-lg); }
 .app { display: grid; grid-template-rows: auto 1fr var(--player-h); height: 100%; background: var(--bg); }
 .app-body { display: grid; grid-template-columns: var(--sidebar-w, 220px) minmax(0, 1fr) var(--right-w, auto); min-height: 0; }
 .dev-banner { background: #f0b04a; color: #201400; font-size: var(--fs-xs); padding: 2px 10px; text-align: center; }
-.offline-banner { background: var(--bg-active); color: var(--fg-muted); font-size: var(--fs-xs); padding: 2px 10px; text-align: center; }
+.offline-banner { background: var(--bg-active); color: var(--fg-muted); font-size: var(--fs-xs); padding: 2px 10px; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.offline-banner .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
 
 /* Sidebar */
 .sidebar { display: flex; flex-direction: column; background: var(--bg-sunken); border-right: 1px solid var(--border); min-height: 0; min-width: 0; position: relative; }
@@ -287,6 +288,15 @@ h3 { font-size: var(--fs-lg); }
 .tr .td.title { color: var(--fg); }
 .tr .td.sub { color: var(--fg-muted); }
 .tr .offline { color: var(--ok); }
+/* Where a track's audio is on this device (OfflineBadge): downloaded, or complete in the stream cache. */
+.offline-badge { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.offline-badge.downloaded { color: var(--ok); }
+.offline-badge.cached { color: var(--fg-muted); }
+/* The index cell's play button replaces the number on hover (the row is the Tab stop; Enter plays). */
+.tr .td.index { position: relative; }
+.tr .row-play { position: absolute; inset: 0 0 0 auto; width: 26px; display: flex; align-items: center; justify-content: center; opacity: 0; background: transparent; border: none; color: var(--fg); padding: 0; }
+.tr:hover .row-play, .tr .row-play:focus-visible { opacity: 1; }
+.tr:hover .td.index .n { visibility: hidden; }
 .tr .art { width: 22px; height: 22px; border-radius: 3px; vertical-align: middle; margin-right: 8px; }
 .stars { display: inline-flex; gap: 1px; color: var(--fg-faint); }
 .stars .star { display: inline-flex; padding: 0; line-height: 0; border-radius: 2px; }
@@ -459,6 +469,19 @@ button.qrow { width: 100%; }
 .setting-row .label .title > .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setting-row .control { display: flex; align-items: center; gap: 8px; }
 .setting-row.stacked { grid-template-columns: minmax(0, 1fr); }
+.cache-usage { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.cache-bar { display: flex; height: 6px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
+.cache-bar .complete { background: var(--accent); }
+.cache-bar .partial { background: color-mix(in srgb, var(--accent) 45%, var(--bg-active)); }
+.data-saved { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.data-saved .figure { font-size: var(--fs-lg, 18px); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Tabs under a view header (Downloads). */
+.view-tabs-row { padding: 0 20px 8px; }
+.view-tabs { display: flex; gap: 4px; }
+.view-tabs .tab { height: 26px; padding: 0 12px; border-radius: 13px; border: none; background: transparent; color: var(--fg-muted); font-size: var(--fs-sm); }
+.view-tabs .tab:hover { background: var(--bg-hover); color: var(--fg); }
+.view-tabs .tab.active { background: var(--bg-active); color: var(--fg); }
+.offline-head { padding: 4px 4px 8px; gap: 12px; align-items: center; }
 .eq { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .eq > .row { flex-wrap: wrap; }
 .eq canvas { width: 100%; height: 220px; border-radius: var(--radius); background: var(--bg-sunken); display: block; touch-action: none; }
@@ -563,6 +586,10 @@ button.qrow { width: 100%; }
    state drawn with them (selection, the keyboard cursor, the current item,
    toggles, the seek fill) gets a system-colour equivalent here. */
 @media (forced-colors: active) {
+  .cache-bar { border: 1px solid CanvasText; }
+  .cache-bar .complete { forced-color-adjust: none; background: Highlight; }
+  .cache-bar .partial { forced-color-adjust: none; background: GrayText; }
+  .view-tabs .tab.active { outline: 2px solid Highlight; }
   :focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
   .skip-link { border-color: Highlight; }
   .btn, .input, .select, .textarea, .tab, .kbd, .badge { border: 1px solid ButtonText; }

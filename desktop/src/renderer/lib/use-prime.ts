@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { bridge } from "../core/bridge";
 import { useApp } from "../store/app";
-import { IntentPrimer, VisitDwell } from "./prime";
+import { IntentPrimer, VisitDwell, type Point } from "./prime";
 
 /** The window is on screen, focused, and nothing modal covers the page. */
 function useActivePage(): boolean {
@@ -30,7 +30,8 @@ export function useAlbumDwellPrime(albumId: string | undefined): void {
 }
 
 export interface IntentHandlers {
-  onPointerEnter: () => void;
+  onPointerEnter: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
   onPointerLeave: () => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -49,16 +50,20 @@ export interface Primer {
  * so content scrolling under a resting pointer never primes.
  */
 export function usePlayIntent(visitKey: string, kind: "track" | "album" = "track"): Primer {
-  const primer = useMemo(
-    () => new IntentPrimer((id) => bridge().dispatch(kind === "album" ? { type: "primeAlbum", data: { album_id: id } } : { type: "primeTrack", data: { track_id: id } })),
-    [visitKey, kind],
-  );
+  const primer = useMemo(() => {
+    void visitKey; // a new visit is a new primer: every id may prime again
+    return new IntentPrimer((id) => bridge().dispatch(kind === "album" ? { type: "primeAlbum", data: { album_id: id } } : { type: "primeTrack", data: { track_id: id } }));
+  }, [visitKey, kind]);
   useEffect(() => {
-    const onScroll = () => primer.scrolled();
+    let pointer: Point | undefined;
+    const onMove = (e: PointerEvent) => { pointer = { x: e.clientX, y: e.clientY }; };
+    const onScroll = () => primer.scrolled(pointer);
     // Capture: scroll events don't bubble, and every list scrolls its own box.
+    document.addEventListener("pointermove", onMove, { capture: true, passive: true });
     document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     document.addEventListener("wheel", onScroll, { capture: true, passive: true });
     return () => {
+      document.removeEventListener("pointermove", onMove, { capture: true });
       document.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("wheel", onScroll, { capture: true });
       primer.dispose();
@@ -68,7 +73,8 @@ export function usePlayIntent(visitKey: string, kind: "track" | "album" = "track
     enter: (id) => { if (id) primer.enter(id); },
     leave: (id) => { if (id) primer.leave(id); },
     bind: (id) => ({
-      onPointerEnter: () => { if (id) primer.enter(id); },
+      onPointerEnter: (e) => { if (id) primer.enter(id, { x: e.clientX, y: e.clientY }); },
+      onPointerMove: (e) => { if (id) primer.enter(id, { x: e.clientX, y: e.clientY }); },
       onPointerLeave: () => { if (id) primer.leave(id); },
       onFocus: () => { if (id) primer.enter(id); },
       onBlur: () => { if (id) primer.leave(id); },

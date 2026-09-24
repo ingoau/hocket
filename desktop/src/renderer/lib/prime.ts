@@ -8,8 +8,9 @@
 //   `reset()`).
 // - IntentPrimer: the pointer rests on (or keyboard focus sits on) a play
 //   control for ~300 ms. Fires once per id per visit. A scroll cancels every
-//   pending intent and ignores new ones for a moment, so content moving under
-//   a stationary pointer (scroll-by in a grid or list) never primes.
+//   pending intent; arrivals right after it, or at the very spot the pointer
+//   was parked when the content scrolled, are the content moving under a
+//   stationary pointer (scroll-by in a grid or list) and never prime.
 //
 // Pure timers, no React: see use-prime.ts for the hooks and prime.test.ts.
 
@@ -17,6 +18,12 @@ export const ALBUM_DWELL_MS = 2000;
 export const INTENT_DWELL_MS = 300;
 /** After a scroll, pointer "arrivals" are content moving under the pointer. */
 export const SCROLL_QUIET_MS = 250;
+
+/** Pointer position in viewport pixels. */
+export interface Point {
+  x: number;
+  y: number;
+}
 
 export interface TimerApi {
   setTimeout(fn: () => void, ms: number): unknown;
@@ -87,16 +94,23 @@ export class IntentPrimer {
   private pending = new Map<string, unknown>();
   private primed = new Set<string>();
   private lastScroll = Number.NEGATIVE_INFINITY;
+  /** Where the pointer was when the content last scrolled under it. */
+  private parkedAt: Point | undefined;
   private readonly timers: TimerApi;
 
   constructor(private readonly onPrime: (id: string) => void, private readonly delayMs = INTENT_DWELL_MS, timers: TimerApi = defaultTimers, private readonly quietMs = SCROLL_QUIET_MS) {
     this.timers = timers;
   }
 
-  /** Pointer entered (or focus arrived on) the control for `id`. */
-  enter(id: string): void {
+  /**
+   * Pointer entered or moved on (`at`), or focus arrived on (no `at`), the
+   * control for `id`.
+   */
+  enter(id: string, at?: Point): void {
     if (!id || this.primed.has(id) || this.pending.has(id)) return;
     if (this.timers.now() - this.lastScroll < this.quietMs) return;
+    // The pointer hasn't moved since the content scrolled: it didn't come here.
+    if (at && this.parkedAt && Math.abs(at.x - this.parkedAt.x) < 1 && Math.abs(at.y - this.parkedAt.y) < 1) return;
     const h = this.timers.setTimeout(() => {
       this.pending.delete(id);
       if (this.primed.has(id)) return;
@@ -114,9 +128,10 @@ export class IntentPrimer {
     this.pending.delete(id);
   }
 
-  /** Something scrolled: whatever is under the pointer got there by moving. */
-  scrolled(): void {
+  /** Something scrolled (the pointer at `pointer`): whatever is under it got there by moving. */
+  scrolled(pointer?: Point): void {
     this.lastScroll = this.timers.now();
+    this.parkedAt = pointer;
     for (const h of this.pending.values()) this.timers.clearTimeout(h);
     this.pending.clear();
   }
@@ -127,6 +142,7 @@ export class IntentPrimer {
     this.pending.clear();
     this.primed.clear();
     this.lastScroll = Number.NEGATIVE_INFINITY;
+    this.parkedAt = undefined;
   }
 
   hasPrimed(id: string): boolean {

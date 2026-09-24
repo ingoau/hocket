@@ -42,7 +42,7 @@ const COLUMNS: Record<ColumnId, Column> = {
   plays: { id: "plays", label: t("col.plays"), width: "52px", sort: "playCount", num: true },
   added: { id: "added", label: t("col.added"), width: "96px", sort: "dateAdded" },
   bpm: { id: "bpm", label: t("col.bpm"), width: "52px", sort: "bpm", num: true },
-  offline: { id: "offline", label: "", sr: t("col.offline"), width: "22px" },
+  offline: { id: "offline", label: "", sr: t("col.offline"), width: "28px" },
 };
 
 /** Columns in the order they give way when the table is narrow (last goes first); the title never does. */

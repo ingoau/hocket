@@ -134,6 +134,28 @@ describe("IntentPrimer (hover / focus on a play control)", () => {
     expect(prime.mock.calls).toEqual([["d"]]);
   });
 
+  it("an arrival where the pointer was parked when the content scrolled never primes, however late", () => {
+    const prime = vi.fn();
+    const p = new IntentPrimer(prime);
+    const parked = { x: 100, y: 200 };
+    p.scrolled(parked);
+    // The browser's hover update after the scroll settles: same spot, much later.
+    vi.advanceTimersByTime(2000);
+    p.enter("a", { ...parked });
+    vi.advanceTimersByTime(2000);
+    expect(prime).not.toHaveBeenCalled();
+    // The user moves the pointer on the control: that's intent.
+    p.enter("a", { x: 104, y: 201 });
+    vi.advanceTimersByTime(INTENT_DWELL_MS);
+    expect(prime).toHaveBeenCalledWith("a");
+    // Keyboard focus (no position) isn't affected by where the pointer is.
+    p.scrolled(parked);
+    vi.advanceTimersByTime(SCROLL_QUIET_MS);
+    p.enter("b");
+    vi.advanceTimersByTime(INTENT_DWELL_MS);
+    expect(prime.mock.calls).toEqual([["a"], ["b"]]);
+  });
+
   it("nothing fires after dispose", () => {
     const prime = vi.fn();
     const p = new IntentPrimer(prime);
