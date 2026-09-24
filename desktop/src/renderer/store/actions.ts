@@ -45,6 +45,11 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       app.focusSearch();
       return;
     case "toggleQueuePanel":
+      // In the fullscreen player Q and L switch its stage instead of the hidden side panel.
+      if (app.fullscreen) {
+        app.setNowPlayingMode(app.nowPlayingMode === "queue" ? "art" : "queue");
+        return;
+      }
       if (isNarrow()) {
         // The drawer: open it on the queue, or close it when the queue is already showing.
         const showing = app.drawerOpen && !app.panels.queueCollapsed;
@@ -55,6 +60,10 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       app.setPanels(app.panels.rightOpen && !app.panels.queueCollapsed ? { queueCollapsed: true } : { rightOpen: true, queueCollapsed: false });
       return;
     case "toggleLyrics":
+      if (app.fullscreen) {
+        app.setNowPlayingMode(app.nowPlayingMode === "lyrics" ? "art" : "lyrics");
+        return;
+      }
       if (isNarrow()) {
         const showing = app.drawerOpen && !app.panels.lyricsCollapsed;
         app.setDrawerOpen(!showing);

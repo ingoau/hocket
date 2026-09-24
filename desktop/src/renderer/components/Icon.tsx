@@ -6,7 +6,7 @@
 import type { CSSProperties } from "react";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BatteryMedium, Bug, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
-  Cloud, CloudOff, Command, Copy, Disc3, Download, Ellipsis, ExternalLink, FastForward, Filter, Folder, GripVertical, HardDrive, Heart, HeartOff,
+  Cloud, CloudOff, Command, Copy, Disc3, Download, Ellipsis, EllipsisVertical, ExternalLink, FastForward, Filter, Folder, GripHorizontal, GripVertical, HardDrive, Heart, HeartOff,
   History, House, Infinity as InfinityIcon, Info, LayoutGrid, Library, ListEnd, ListFilterPlus, ListMusic, ListPlus, ListStart, LoaderCircle,
   Maximize2, MicVocal, Minus, MonitorSmartphone, Moon, Music, Network, Pause, Pencil, PictureInPicture2, Pin, PinOff, Play, Plus,
   Redo2, Repeat, Repeat1, Rewind, RotateCcw, Search, Settings, Shuffle, SkipBack, SkipForward, Square, SquareCheck, Star, StarOff,
@@ -27,7 +27,7 @@ const ICONS: Record<string, LucideIcon> = {
   chevronDown: ChevronDown, chevronRight: ChevronRight, chevronLeft: ChevronLeft, chevronUp: ChevronUp,
   arrowDown: ArrowDown, arrowUp: ArrowUp, back: ArrowLeft, forwardArrow: ArrowRight, undo: Undo2, redo: Redo2,
   playNext: ListStart, playLater: ListEnd, pin: Pin, pinOff: PinOff, restore: History, seek: ArrowRight, sleep: Moon, bug: Bug,
-  selectAll: SquareCheck, grip: GripVertical, more: Ellipsis, minimize: Minus, maximize: Square, restoreWin: Copy,
+  selectAll: SquareCheck, grip: GripVertical, dragHandle: GripHorizontal, more: Ellipsis, moreVert: EllipsisVertical, minimize: Minus, maximize: Square, restoreWin: Copy,
   spinner: LoaderCircle, offline: WifiOff, warn: TriangleAlert, battery: BatteryMedium, external: ExternalLink, folder: Folder,
   copy: Copy, resume: RotateCcw, music: Music, cloud: Cloud, lan: Network, plus: Plus,
 };

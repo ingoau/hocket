@@ -1,0 +1,161 @@
+/* The fullscreen "Now playing" view and the queue timeline. Loaded after
+   global.css. Motion comes from lib/spring.ts through --spring-* custom
+   properties set on the view (springs sampled into linear() easings).
+   Text over the background is white or 80 % white; FluidBackground's scrim is
+   sized so both reach 4.5:1, and .np-fade only ever darkens. */
+
+/* ---- Queue timeline (side panel and fullscreen) ------------------------- */
+.queue-section { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.queue-section-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.queue-section-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-section .queue-clear { flex: 0 0 auto; text-transform: none; letter-spacing: 0; height: 22px; border-radius: 11px; font-weight: 500; }
+.queue-more { padding: 8px 12px; color: var(--fg-muted); font-size: var(--fs-xs); }
+.qrow .grip { display: inline-flex; flex: 0 0 auto; }
+.qrow .grip-space { width: 14px; flex: 0 0 auto; }
+
+/* ---- Fullscreen player --------------------------------------------------- */
+.fullscreen.np { display: block; overflow: hidden; }
+.np-fade { position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.12) 40%, rgba(0, 0, 0, 0.62) 100%); }
+.np-stage { position: relative; z-index: 1; height: 100%; width: min(calc(100% - 48px), 680px); margin: 0 auto; padding: 18px 0 22px; display: flex; flex-direction: column; gap: 14px; }
+.np[data-mode="queue"] .np-stage, .np[data-mode="lyrics"] .np-stage, .np[data-mode="about"] .np-stage { width: min(calc(100% - 48px), 760px); }
+
+.np-head { display: flex; align-items: center; gap: 12px; min-height: 44px; flex: 0 0 auto; }
+.np-source { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.np-kicker { font-size: var(--fs-sm); color: var(--fg-muted); }
+.np-source-name { font-size: var(--fs-lg); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.np-main { flex: 1 1 auto; min-height: 0; container-type: size; display: flex; }
+.np-art-slot { width: 100%; height: 100%; display: grid; place-items: center; }
+.np-art { width: min(100cqw, 100cqh); aspect-ratio: 1; border-radius: 28px; overflow: hidden; box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.3); background: rgba(255, 255, 255, 0.06); }
+.np-art-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.np-art-img.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-muted); background: rgba(255, 255, 255, 0.06); }
+.np-pane { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; animation: np-pane-in var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
+@keyframes np-pane-in { from { opacity: 0; transform: translateY(18px) scale(0.98); } }
+
+.np-info, .np-seek, .np-transport, .np-options, .np-modes { position: relative; z-index: 1; }
+.np-info { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; min-width: 0; }
+.np-thumb { flex: 0 0 auto; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
+.np-thumb:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 12px; }
+.np-text { flex: 1; min-width: 0; text-align: left; }
+.np-text .t1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-text .t2 { font-size: 16px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.np-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; border-radius: 4px; }
+.np-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.np-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+
+/* Buttons: circles with a state layer; pressing squashes them a little, springing back. */
+.np-icon-btn, .np-skip, .np-play, .np-tonal, .np-mode, .np-chip, .np-thumb {
+  -webkit-appearance: none; appearance: none; font: inherit; cursor: default;
+  transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), border-radius var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), width var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), background-color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease));
+}
+.np-icon-btn:active, .np-skip:active, .np-tonal:active, .np-mode:active, .np-chip:active, .np-thumb:active { transform: scale(0.9); }
+.np-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 22px; border: 0; background: transparent; color: #fff; padding: 0; }
+.np-icon-btn.sm { width: 32px; height: 32px; }
+.np-icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.np-icon-btn.heart.on { color: #ff9aae; }
+
+/* Wavy seek bar */
+.np-seek { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.np-seek-bar { position: relative; height: 28px; touch-action: none; border-radius: 8px; }
+.np-seek-bar[aria-disabled="true"] { opacity: 0.6; }
+.np-seek-bar svg { display: block; overflow: visible; }
+.np-seek-bar .played { fill: none; stroke: #fff; stroke-width: 4px; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.np-seek-bar .rest { stroke: rgba(255, 255, 255, 0.3); stroke-width: 4px; stroke-linecap: round; }
+.np-seek-bar .thumb { fill: #fff; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); transform-box: fill-box; transform-origin: center; }
+.np-seek-bar.dragging .thumb, .np-seek-bar:hover .thumb { transform: scaleY(1.2); }
+/* The wave: flat while paused, rising with a spring when playing, travelling forward. */
+.np-seek-bar .wave { transform-box: fill-box; transform-origin: center; transform: scaleY(0.001); transition: transform var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
+.np-seek-bar.playing .wave { transform: none; }
+.np-seek-bar.playing .played { animation: np-wave 1.3s linear infinite; }
+@keyframes np-wave { to { transform: translateX(32px); } }
+.np-seek-bar .hover-time { position: absolute; bottom: 30px; transform: translateX(-50%); background: rgba(20, 20, 24, 0.92); color: #fff; padding: 2px 8px; border-radius: 10px; font-size: var(--fs-xs); pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+
+/* Transport: the play button morphs between a pill (paused) and a rounded square (playing). */
+.np-transport { display: flex; align-items: center; justify-content: center; gap: 28px; flex: 0 0 auto; }
+.np-skip { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 32px; border: 0; background: transparent; color: #fff; padding: 0; }
+.np-skip:hover { background: rgba(255, 255, 255, 0.12); border-radius: 22px; }
+.np-play { display: inline-flex; align-items: center; justify-content: center; height: 80px; border: 0; padding: 0; background: #fff; color: #121214; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+.np-play.paused { width: 104px; border-radius: 40px; }
+.np-play.playing { width: 80px; border-radius: 26px; }
+.np-play:hover { background: #f1f1f4; }
+.np-play:active { transform: scale(0.92); }
+.np-play:focus-visible { outline: 3px solid #fff; outline-offset: 3px; border-radius: 40px; }
+.np-play .spin { animation: spin 1.2s linear infinite; }
+
+/* Playback options: tonal buttons; on, they fill and square off a little. */
+.np-options { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 0 0 auto; flex-wrap: wrap; }
+.np-tonal { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 40px; border-radius: 20px; border: 0; padding: 0; background: rgba(255, 255, 255, 0.12); color: #fff; }
+.np-tonal:hover { background: rgba(255, 255, 255, 0.2); }
+.np-tonal.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: 12px; }
+.np-tonal.on:hover { background: #fff; }
+
+/* Lyrics / Queue / About */
+.np-modes { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
+.np-mode { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; border: 1px solid rgba(255, 255, 255, 0.34); background: transparent; color: #fff; font-size: var(--fs-lg); font-weight: 500; }
+.np-mode:hover { background: rgba(255, 255, 255, 0.12); }
+.np-mode.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-color: transparent; border-radius: 14px; }
+.np-mode.on:hover { background: #fff; }
+
+/* Chips (queue header, About) */
+.np-chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 12px; border-radius: 17px; border: 0; background: rgba(255, 255, 255, 0.12); color: #fff; font-size: var(--fs-md); font-weight: 500; }
+.np-chip:hover { background: rgba(255, 255, 255, 0.2); }
+.np-chip.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: 10px; }
+
+/* Panes */
+.np .empty { color: var(--fg-muted); }
+.np-pane-lyrics .lyrics-pane, .np-pane-lyrics .amll-host { height: 100%; }
+.np-pane-lyrics .amll-host.large { mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 48px), transparent 100%); }
+.np-pane-lyrics .lyrics-static { font-size: 22px; }
+.np .queue-wrap { height: 100%; }
+.np .queue-header { display: flex; gap: 8px; padding: 0 0 12px; flex: 0 0 auto; flex-wrap: wrap; }
+.np .queue-list { border-radius: 20px; padding-bottom: 60cqh; scroll-padding-top: 0; }
+.np .queue-section { background: rgba(12, 12, 16, 0.5); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-radius: 14px; padding: 8px 12px; margin: 0 0 4px; font-size: var(--fs-sm); text-transform: none; letter-spacing: 0; color: #fff; }
+.np .queue-section-sub { color: rgba(255, 255, 255, 0.8); }
+.np .queue-group.history .qrow { opacity: 0.85; }
+.np .qrow { height: 60px; border-radius: 16px; margin: 0 0 2px; padding: 0 10px; gap: 12px; }
+.np .qrow .art { width: 44px; height: 44px; border-radius: 10px; }
+.np .qrow .t1 { font-size: var(--fs-lg); font-weight: 500; }
+.np .qrow .t2 { font-size: var(--fs-sm); }
+.np .qrow.current { background: rgba(255, 255, 255, 0.14); }
+.np .qrow .grip { opacity: 0.55; }
+.np .qrow:hover .grip { opacity: 1; }
+.np .queue-clear { color: #fff; }
+
+.np-about { height: 100%; min-height: 0; }
+.np-about-scroll { height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; border-radius: 24px; }
+.np-card { background: rgba(0, 0, 0, 0.28); border-radius: 24px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+.np-card-title { margin: 0; font-size: var(--fs-lg); font-weight: 700; }
+.np-facts { margin: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 20px; }
+.np-fact { min-width: 0; }
+.np-fact.wide { grid-column: 1 / -1; }
+.np-fact dt { font-size: var(--fs-sm); color: var(--fg-muted); margin: 0 0 2px; }
+.np-fact dd { margin: 0; font-size: var(--fs-lg); overflow-wrap: anywhere; }
+.np-muted { color: var(--fg-muted); }
+.np-card .plain-list { width: 100%; }
+.np .related-row { display: flex; gap: 12px; padding: 8px 10px; align-items: center; border-radius: 14px; }
+.np .related-row:hover { background: rgba(255, 255, 255, 0.1); }
+.np .related-row .art { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
+.np .related-row .why { font-size: var(--fs-xs); color: var(--fg-muted); }
+
+/* Short or narrow windows (and 200% zoom): the page scrolls rather than squashing the controls. */
+@media (max-width: 900px), (max-height: 620px) {
+  .fullscreen.np { overflow-y: auto; }
+  .np-stage { height: auto; min-height: 100%; width: min(calc(100% - 32px), 680px) !important; padding: 12px 0 16px; gap: 12px; }
+  .np-main { flex: 0 0 auto; height: min(70vw, 56vh); min-height: 220px; }
+  .np-text .t1 { font-size: 20px; }
+  .np-transport { gap: 16px; }
+  .np-mode { padding: 0 14px 0 12px; }
+}
+
+@media (forced-colors: active) {
+  .np-fade { display: none; }
+  .np-play, .np-tonal, .np-mode, .np-chip, .np-icon-btn, .np-skip { border: 1px solid ButtonText; }
+  .np-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; }
+  .np-tonal.on, .np-mode.on, .np-chip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .np-seek-bar .played { stroke: Highlight; }
+  .np-seek-bar .rest { stroke: GrayText; }
+  .np-seek-bar .thumb { fill: CanvasText; }
+  .np .queue-section { background: Canvas; }
+  .np-card { border: 1px solid CanvasText; }
+}
