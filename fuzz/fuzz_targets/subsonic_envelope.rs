@@ -7,7 +7,9 @@ use hocket_core::subsonic::convert::{
     album_changed_ms, album_from_id3, artist_from_id3, child_changed_ms, genre_from_body,
     playlist_from_body, summary_of, track_from_child,
 };
-use hocket_core::subsonic::types::{parse_iso_ms, AlbumId3, ArtistId3, Child, NativeLogin, NativePlaylist};
+use hocket_core::subsonic::types::{
+    parse_iso_ms, AlbumId3, ArtistId3, Child, NativeLogin, NativePlaylist,
+};
 use libfuzzer_sys::fuzz_target;
 
 fn song(c: &Child) {
@@ -58,9 +60,14 @@ fuzz_target!(|data: &[u8]| {
     if let Some(c) = &r.song {
         song(c);
     }
-    for songs in [&r.random_songs, &r.songs_by_genre, &r.similar_songs2, &r.top_songs]
-        .into_iter()
-        .flatten()
+    for songs in [
+        &r.random_songs,
+        &r.songs_by_genre,
+        &r.similar_songs2,
+        &r.top_songs,
+    ]
+    .into_iter()
+    .flatten()
     {
         songs.song.iter().for_each(song);
     }

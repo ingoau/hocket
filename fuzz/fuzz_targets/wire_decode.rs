@@ -4,6 +4,8 @@
 //! itself, because a room relays what it receives.
 #![no_main]
 
+mod common;
+
 use hocket_core::connect::wire::WireMessage;
 use libfuzzer_sys::fuzz_target;
 
@@ -19,5 +21,8 @@ fuzz_target!(|data: &[u8]| {
     let _ = msg.msg.name();
     let again = msg.encode().expect("a decoded frame re-encodes");
     let back = WireMessage::decode(&again).expect("a re-encoded frame decodes");
-    assert_eq!(back, msg, "re-encoded frame decodes differently: {again}");
+    assert!(
+        common::same_modulo_float_parsing(&back, &msg),
+        "re-encoded frame decodes differently: {again}\n{back:?}\n{msg:?}"
+    );
 });

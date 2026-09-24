@@ -166,3 +166,34 @@ session needs a D-Bus session bus on Linux; without one it logs and continues.
   FakeCore and against the native core with a fake Navidrome HTTP server.
 - Android: JVM tests for the seam, page cache, selection and lyrics cursor;
   Robolectric Compose tests for setup, queue, now-playing sheet and layout.
+- Parsers that read untrusted input have `*_never_panics` proptest modules
+  (stable, part of `cargo test`) next to them: Connect frames and
+  `api::Command`/`Query` JSON (`connect/wire.rs`), Subsonic envelopes and the
+  `convert.rs` mapping (`subsonic/types.rs`), LRC, structured lyrics and the
+  lyrics cursor (`lyrics/lyrics_never_panics.rs`), config import
+  (`settings/config.rs`) and NSP import (`filters/nsp.rs`). Inputs the
+  fuzzers found live there as `fuzz_regression_*` tests.
+- `fuzz/` is a cargo-fuzz crate (its own workspace, never built by the root
+  one) with one libFuzzer target per entry point: `wire_decode`,
+  `subsonic_envelope`, `lyrics_lrc`, `lyrics_structured` (also checks the
+  actor's subsonic-types → `lyrics::raw` path agrees with the direct parse),
+  `lyrics_cursor`, `config_import`, `nsp_import` and `api_json`. Besides "no
+  panic", targets assert round trips (decode → encode → decode) and that the
+  incremental lyrics cursor agrees with a fresh lookup. Run one with nightly:
+
+  ```sh
+  cargo install cargo-fuzz
+  cd fuzz
+  cargo +nightly fuzz list
+  # new inputs go to work/ (ignored); corpus/ holds small committed seeds
+  cargo +nightly fuzz run lyrics_structured work/lyrics_structured corpus/lyrics_structured -- -max_total_time=600 -max_len=65536
+  # a crash lands in fuzz/artifacts/<target>/: minimise, then replay it
+  cargo +nightly fuzz tmin lyrics_structured artifacts/lyrics_structured/crash-…
+  cargo +nightly fuzz run lyrics_structured artifacts/lyrics_structured/minimized-…
+  ```
+
+  Fix the parser, add the minimised input as a `fuzz_regression_*` test, and
+  re-run the target. The build (ASan, `fuzz/target/`) needs about 2 GB of
+  disk; `--sanitizer none` roughly halves it. CI runs every target for five
+  minutes weekly and on manual dispatch (the `fuzz` job in
+  `.github/workflows/ci.yml`), uploading any crash as an artifact.

@@ -3,6 +3,8 @@
 //! re-import unchanged.
 #![no_main]
 
+mod common;
+
 use hocket_core::settings::config::{parse_document, to_json, CONFIG_VERSION};
 use libfuzzer_sys::fuzz_target;
 
@@ -16,5 +18,8 @@ fuzz_target!(|data: &[u8]| {
     assert_eq!(doc.version, CONFIG_VERSION);
     let json = to_json(&doc).expect("an imported document exports");
     let back = parse_document(&json).expect("an exported document imports");
-    assert_eq!(back, doc, "export → import changed the document");
+    assert!(
+        common::same_modulo_float_parsing(&back, &doc),
+        "export → import changed the document:\n{json}"
+    );
 });

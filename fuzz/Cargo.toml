@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 hocket-core = { path = "../crates/hocket-core", default-features = false }
+serde = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
 
 # Its own workspace, so the root workspace never builds it and it never

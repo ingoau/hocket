@@ -602,7 +602,9 @@ fn de_cue_lines<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CueLine>, 
     for (i, c) in lines.iter_mut().enumerate() {
         if c.index == CUE_INDEX_MISSING {
             c.index = if all_missing {
-                u32::try_from(i).unwrap_or(CUE_INDEX_NONE).min(CUE_INDEX_NONE)
+                u32::try_from(i)
+                    .unwrap_or(CUE_INDEX_NONE)
+                    .min(CUE_INDEX_NONE)
             } else {
                 CUE_INDEX_NONE
             };
@@ -902,14 +904,63 @@ mod envelope_never_panics {
     use proptest::prelude::*;
 
     const WORDS: &[&str] = &[
-        "subsonic-response", "status", "ok", "failed", "version", "error", "code", "message",
-        "song", "album", "artist", "albumList2", "randomSongs", "searchResult3", "playlists",
-        "playlist", "entry", "genres", "genre", "value", "songCount", "albumCount", "starred2",
-        "artists", "index", "id", "title", "name", "duration", "track", "discNumber", "year",
-        "bitRate", "size", "userRating", "starred", "played", "created", "changed", "updated",
-        "replayGain", "trackGain", "albumPeak", "bpm", "moods", "albumArtists", "owner",
-        "readonly", "lyricsList", "structuredLyrics", "cueLine", "cue", "byteStart", "byteEnd",
-        "2024-05-01T12:34:56.789Z", "2024-05-01T14:34:56+02:00", "0001-01-01T00:00:00Z",
+        "subsonic-response",
+        "status",
+        "ok",
+        "failed",
+        "version",
+        "error",
+        "code",
+        "message",
+        "song",
+        "album",
+        "artist",
+        "albumList2",
+        "randomSongs",
+        "searchResult3",
+        "playlists",
+        "playlist",
+        "entry",
+        "genres",
+        "genre",
+        "value",
+        "songCount",
+        "albumCount",
+        "starred2",
+        "artists",
+        "index",
+        "id",
+        "title",
+        "name",
+        "duration",
+        "track",
+        "discNumber",
+        "year",
+        "bitRate",
+        "size",
+        "userRating",
+        "starred",
+        "played",
+        "created",
+        "changed",
+        "updated",
+        "replayGain",
+        "trackGain",
+        "albumPeak",
+        "bpm",
+        "moods",
+        "albumArtists",
+        "owner",
+        "readonly",
+        "lyricsList",
+        "structuredLyrics",
+        "cueLine",
+        "cue",
+        "byteStart",
+        "byteEnd",
+        "2024-05-01T12:34:56.789Z",
+        "2024-05-01T14:34:56+02:00",
+        "0001-01-01T00:00:00Z",
         "9999-99-99T99:99:99.999999999-99:99",
     ];
 
@@ -938,9 +989,14 @@ mod envelope_never_panics {
         for c in r.song.iter().chain(r.album.iter().flat_map(|a| &a.song)) {
             song(c);
         }
-        for s in [&r.random_songs, &r.songs_by_genre, &r.similar_songs2, &r.top_songs]
-            .into_iter()
-            .flatten()
+        for s in [
+            &r.random_songs,
+            &r.songs_by_genre,
+            &r.similar_songs2,
+            &r.top_songs,
+        ]
+        .into_iter()
+        .flatten()
         {
             s.song.iter().for_each(song);
         }
@@ -1047,7 +1103,9 @@ mod envelope_never_panics {
         let raw = via_actor(body);
         let idx: Vec<_> = raw[0].cue_line.iter().map(|c| c.index).collect();
         assert_eq!(idx[..2], [Some(0), Some(0)]);
-        assert!(idx[2..].iter().all(|i| i.is_some_and(|i| i >= i64::from(CUE_INDEX_NONE))));
+        assert!(idx[2..]
+            .iter()
+            .all(|i| i.is_some_and(|i| i >= i64::from(CUE_INDEX_NONE))));
         assert_eq!(raw[0].cue_line[0].cue[0].byte_start, Some(-4));
         assert_eq!(raw[0].cue_line[1].cue[0].agent_id.as_deref(), Some("bg"));
         let src = crate::api::LyricsSource::Server;
@@ -1056,6 +1114,9 @@ mod envelope_never_panics {
         assert_eq!(l, crate::lyrics::adapt_list("t", direct.entries(), src));
         let l = l.unwrap();
         assert_eq!(l.lines.len(), 2);
-        assert!(l.lines[1].background, "per-cue agent marks the sub-voice line");
+        assert!(
+            l.lines[1].background,
+            "per-cue agent marks the sub-voice line"
+        );
     }
 }

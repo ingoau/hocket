@@ -1279,6 +1279,36 @@ pub(crate) mod arbitrary_json {
         })
     }
 
+    /// `a` and `b` serialise to the same JSON, except that floats may differ
+    /// in the last couple of bits: serde_json without `float_roundtrip`
+    /// (not enabled in this workspace) parses some floats one ulp off, e.g.
+    /// `1e42` or `215492859907334.66`.
+    pub(crate) fn same_modulo_float_parsing<T: serde::Serialize>(a: &T, b: &T) -> bool {
+        close(
+            &serde_json::to_value(a).unwrap(),
+            &serde_json::to_value(b).unwrap(),
+        )
+    }
+
+    fn close(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+                _ if x == y => true,
+                (Some(p), Some(q)) if x.is_f64() || y.is_f64() => {
+                    (p - q).abs() <= p.abs().max(q.abs()) * 4.0 * f64::EPSILON
+                }
+                _ => false,
+            },
+            (Value::Array(x), Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(p, q)| close(p, q))
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| close(v, w)))
+            }
+            _ => a == b,
+        }
+    }
+
     /// `seed` with a handful of byte edits (overwrite, insert, delete) and
     /// an optional truncation: mostly-valid documents with a local defect.
     pub(crate) fn mutated(seed: &'static str) -> impl Strategy<Value = String> {
@@ -1310,19 +1340,63 @@ pub(crate) mod arbitrary_json {
 
 #[cfg(test)]
 mod decode_never_panics {
-    use super::arbitrary_json::{json, mutated};
+    use super::arbitrary_json::{json, mutated, same_modulo_float_parsing};
     use super::*;
     use crate::api::Query;
     use proptest::prelude::*;
 
     const WORDS: &[&str] = &[
-        "protocolVersion", "msg", "type", "data", "device", "id", "name", "platform", "linux",
-        "appVersion", "playing", "ready", "lastSeen", "isSelf", "protocolMin", "protocolMax",
-        "scope", "credential", "sessionId", "sessionRevision", "heldEpoch", "base_revision", "op",
-        "device_id", "op_id", "epoch", "at", "position_ms", "document", "revision", "reason",
-        "sent_at", "t0", "queues", "settings", "key", "value", "updatedAt", "playTracks",
-        "server_id", "track_ids", "start_index", "label", "shuffle", "save_outgoing", "nonce",
-        "mac", "from", "command", "play", "seekTo",
+        "protocolVersion",
+        "msg",
+        "type",
+        "data",
+        "device",
+        "id",
+        "name",
+        "platform",
+        "linux",
+        "appVersion",
+        "playing",
+        "ready",
+        "lastSeen",
+        "isSelf",
+        "protocolMin",
+        "protocolMax",
+        "scope",
+        "credential",
+        "sessionId",
+        "sessionRevision",
+        "heldEpoch",
+        "base_revision",
+        "op",
+        "device_id",
+        "op_id",
+        "epoch",
+        "at",
+        "position_ms",
+        "document",
+        "revision",
+        "reason",
+        "sent_at",
+        "t0",
+        "queues",
+        "settings",
+        "key",
+        "value",
+        "updatedAt",
+        "playTracks",
+        "server_id",
+        "track_ids",
+        "start_index",
+        "label",
+        "shuffle",
+        "save_outgoing",
+        "nonce",
+        "mac",
+        "from",
+        "command",
+        "play",
+        "seekTo",
     ];
 
     const HELLO: &str = r#"{"protocolVersion":2,"msg":{"type":"hello","data":{"device":{"id":"a","name":"A","platform":"linux","appVersion":"0.1","playing":false,"ready":false,"lastSeen":0.0,"isSelf":false},"protocolMin":2,"protocolMax":2,"scope":"https://nd|me","credential":null,"sessionId":"s1","sessionRevision":3,"heldEpoch":1}}}"#;
@@ -1333,18 +1407,27 @@ mod decode_never_panics {
     fn check(text: &str) {
         if let Ok(m) = WireMessage::decode(text) {
             let again = m.encode().unwrap();
-            assert_eq!(WireMessage::decode(&again).unwrap(), m, "{again}");
+            assert!(
+                same_modulo_float_parsing(&WireMessage::decode(&again).unwrap(), &m),
+                "{again}"
+            );
         }
     }
 
     fn check_api(bytes: &[u8]) {
         if let Ok(c) = serde_json::from_slice::<Command>(bytes) {
             let s = serde_json::to_string(&c).unwrap();
-            assert_eq!(serde_json::from_str::<Command>(&s).unwrap(), c);
+            assert!(
+                same_modulo_float_parsing(&serde_json::from_str::<Command>(&s).unwrap(), &c),
+                "{s}"
+            );
         }
         if let Ok(q) = serde_json::from_slice::<Query>(bytes) {
             let s = serde_json::to_string(&q).unwrap();
-            assert_eq!(serde_json::from_str::<Query>(&s).unwrap(), q);
+            assert!(
+                same_modulo_float_parsing(&serde_json::from_str::<Query>(&s).unwrap(), &q),
+                "{s}"
+            );
         }
     }
 
@@ -1384,6 +1467,19 @@ mod decode_never_panics {
             check_api(v.to_string().as_bytes());
             check_api(s.as_bytes());
         }
+    }
+
+    #[test]
+    fn fuzz_regression_huge_number_in_unknown_field() {
+        // `wire_decode`: a 42-digit integer in a Hello's round-tripped
+        // `extra` map re-encoded as 9.999999999999999e41, not 1e42. serde_json
+        // without `float_roundtrip` parses some floats one ulp off (a real
+        // `f64` field such as an `EpochMs` can drift the same way); the
+        // decode is otherwise lossless.
+        let text = r#"{"protocolVersion":2,"msg":{"type":"hello","data":{"device":{"id":"a","name":"a","platform":"linux","appVersion":"","playing":false,"ready":false,"lastSeen":0,"isSelf":false},"protocol_min":2,"protocol_max":2,"scope":"ht","":[999999999999999999999999999999999999999999],"session_revision":1}}}"#;
+        let m = WireMessage::decode(text).unwrap();
+        assert!(matches!(&m.msg, Msg::Hello { extra, .. } if extra.contains_key("")));
+        check(text);
     }
 
     #[test]

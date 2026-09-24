@@ -21,7 +21,16 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(w[0].end_ms, w[1].start_ms);
         }
         let _ = apply_offset(&l);
-        for p in [f64::NEG_INFINITY, -1.0, 0.0, 1e3, 6e4, 4.3e9, f64::INFINITY, f64::NAN] {
+        for p in [
+            f64::NEG_INFINITY,
+            -1.0,
+            0.0,
+            1e3,
+            6e4,
+            4.3e9,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
             let c = locate(&l, p);
             assert!(c.line.is_none_or(|i| i < l.lines.len()));
         }

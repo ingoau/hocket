@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly fuzzing (the `fuzz` job below); also runnable by hand.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -69,3 +73,41 @@ jobs:
       - run: scripts/build-android-core.sh release
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
         working-directory: android
+
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    # Scheduled and manual runs only; never on pushes or PRs.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - wire_decode
+          - subsonic_envelope
+          - lyrics_lrc
+          - lyrics_structured
+          - lyrics_cursor
+          - config_import
+          - nsp_import
+          - api_json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - run: cargo install cargo-fuzz --locked
+      # New inputs go to a scratch corpus; the committed seeds stay read-only.
+      - run: |
+          mkdir -p work/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} work/${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time=300 -timeout=10 -rss_limit_mb=2048 -max_len=65536 -print_final_stats=1
+        working-directory: fuzz
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

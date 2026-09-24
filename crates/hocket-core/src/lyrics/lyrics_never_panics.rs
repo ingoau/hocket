@@ -9,11 +9,45 @@ use crate::api::{LyricLine, LyricSyllable, LyricsTier};
 use crate::connect::wire::arbitrary_json::{json, mutated};
 
 const WORDS: &[&str] = &[
-    "subsonic-response", "status", "ok", "lyricsList", "structuredLyrics", "kind", "main",
-    "translation", "pronunciation", "lang", "und", "xxx", "offset", "synced", "line", "start",
-    "end", "value", "agents", "id", "role", "bg", "voice", "group", "name", "cueLine", "index",
-    "agentId", "cue", "byteStart", "byteEnd", "displayArtist", "displayTitle", " ", "a ", "é",
-    "日本", "ti", "tle",
+    "subsonic-response",
+    "status",
+    "ok",
+    "lyricsList",
+    "structuredLyrics",
+    "kind",
+    "main",
+    "translation",
+    "pronunciation",
+    "lang",
+    "und",
+    "xxx",
+    "offset",
+    "synced",
+    "line",
+    "start",
+    "end",
+    "value",
+    "agents",
+    "id",
+    "role",
+    "bg",
+    "voice",
+    "group",
+    "name",
+    "cueLine",
+    "index",
+    "agentId",
+    "cue",
+    "byteStart",
+    "byteEnd",
+    "displayArtist",
+    "displayTitle",
+    " ",
+    "a ",
+    "é",
+    "日本",
+    "ti",
+    "tle",
 ];
 
 const ENHANCED: &str = r#"{"subsonic-response":{"status":"ok","lyricsList":{"structuredLyrics":[{"kind":"main","lang":"fr","synced":true,"offset":-250,
@@ -87,7 +121,10 @@ fn check_structured(text: &str) {
         }
     }
     if let Ok(env) = crate::subsonic::client::parse_envelope(text.as_bytes()) {
-        let entries = env.lyrics_list.map(|l| l.structured_lyrics).unwrap_or_default();
+        let entries = env
+            .lyrics_list
+            .map(|l| l.structured_lyrics)
+            .unwrap_or_default();
         let raw: Vec<StructuredLyrics> =
             serde_json::from_value(serde_json::to_value(&entries).unwrap()).unwrap();
         if let Ok(r) = &parsed {
@@ -133,7 +170,11 @@ fn arb_lyrics() -> impl Strategy<Value = Lyrics> {
         });
     (
         prop::collection::vec(line, 0..12),
-        prop::sample::select(vec![LyricsTier::Unsynced, LyricsTier::Line, LyricsTier::Syllable]),
+        prop::sample::select(vec![
+            LyricsTier::Unsynced,
+            LyricsTier::Line,
+            LyricsTier::Syllable,
+        ]),
         any::<i32>(),
     )
         .prop_map(|(lines, tier, offset_ms)| Lyrics {
@@ -220,7 +261,10 @@ fn fuzz_regression_lrc_long_fraction() {
 #[test]
 fn fuzz_regression_lrc_extreme_offset_tag() {
     // `-doc.offset_ms` overflowed for i64::MIN; `start + shift` for huge ones.
-    for tag in ["[offset:-9223372036854775808]", "[offset:9223372036854775807]"] {
+    for tag in [
+        "[offset:-9223372036854775808]",
+        "[offset:9223372036854775807]",
+    ] {
         let doc = parse_lrc(&format!("{tag}\n[00:01.00]a\n[00:02.00]b"));
         let l = lrc_to_lyrics("t", &doc, LyricsSource::External).unwrap();
         assert_eq!(l.lines.len(), 2);

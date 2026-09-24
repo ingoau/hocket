@@ -3,6 +3,8 @@
 //! re-import to the same filter.
 #![no_main]
 
+mod common;
+
 use hocket_core::filters::model::{validate_filter, FilterError, ServerCaps};
 use hocket_core::filters::{from_nsp, to_nsp};
 use libfuzzer_sys::fuzz_target;
@@ -26,5 +28,8 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut back = from_nsp(&exported, "other").expect("an exported filter imports");
     back.id = filter.id.clone();
-    assert_eq!(back, filter, "export → import changed the filter:\n{exported}");
+    assert!(
+        common::same_modulo_float_parsing(&back, &filter),
+        "export → import changed the filter:\n{exported}"
+    );
 });

@@ -32,7 +32,10 @@ fuzz_target!(|data: &[u8]| {
             common::check_cursor(&l, &pos);
 
             let json = to_cache_json(Some(&l));
-            assert_eq!(from_cache_json(&json).expect("cache json reads back"), Some(l.clone()));
+            assert_eq!(
+                from_cache_json(&json).expect("cache json reads back"),
+                Some(l.clone())
+            );
 
             for off in [i32::MIN, -1500, 1500, i32::MAX] {
                 let mut o = l.clone();
@@ -48,7 +51,10 @@ fuzz_target!(|data: &[u8]| {
     // The actor's path: the subsonic client's envelope types, re-read as
     // `lyrics::raw` through JSON (core/handlers/library.rs).
     if let Ok(r) = parse_envelope(data) {
-        let entries = r.lyrics_list.map(|l| l.structured_lyrics).unwrap_or_default();
+        let entries = r
+            .lyrics_list
+            .map(|l| l.structured_lyrics)
+            .unwrap_or_default();
         let v = serde_json::to_value(&entries).expect("subsonic lyrics serialise");
         let raw: Vec<raw::StructuredLyrics> =
             serde_json::from_value(v).expect("subsonic lyrics convert to lyrics::raw");

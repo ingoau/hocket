@@ -202,3 +202,101 @@ fn migrate_v0_to_v1(mut obj: Map<String, Value>) -> Result<Map<String, Value>, C
     obj.insert("version".into(), json!(1));
     Ok(obj)
 }
+
+#[cfg(test)]
+mod parse_document_never_panics {
+    use super::*;
+    use crate::connect::wire::arbitrary_json::{json, mutated, same_modulo_float_parsing};
+    use proptest::prelude::*;
+
+    const WORDS: &[&str] = &[
+        "version",
+        "exportedAt",
+        "settings",
+        "filters",
+        "shortcuts",
+        "servers",
+        "secrets",
+        "audio",
+        "autoplay",
+        "extra",
+        "key",
+        "value",
+        "scope",
+        "deviceLocal",
+        "accountSynced",
+        "updatedAt",
+        "actionId",
+        "shortcut",
+        "defaultShortcut",
+        "ui.theme",
+        "dark",
+        "id",
+        "url",
+        "username",
+        "name",
+        "root",
+        "sort",
+        "descending",
+        "limit",
+        "enabled",
+    ];
+
+    const V0: &str = r#"{"settings":{"ui.theme":"dark","playback.crossfade":3},"shortcuts":{"playPause":"Space"},"filters":[],"servers":[],"futureThing":{"a":1}}"#;
+
+    /// Never panics; an imported document exports and re-imports unchanged.
+    fn check(text: &str) {
+        if let Ok(doc) = parse_document(text) {
+            assert_eq!(doc.version, CONFIG_VERSION);
+            let back = parse_document(&to_json(&doc).unwrap()).unwrap();
+            assert!(same_modulo_float_parsing(&back, &doc));
+        }
+    }
+
+    fn v1() -> String {
+        to_json(&build_document(ConfigInputs::default(), true, 1.0)).unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn arbitrary_text(s in "\\PC{0,128}") {
+            check(&s);
+        }
+
+        #[test]
+        fn arbitrary_documents(v in json(WORDS), version in prop::option::of(any::<u64>())) {
+            check(&v.to_string());
+            if let (serde_json::Value::Object(mut m), Some(ver)) = (v, version) {
+                m.insert("version".into(), ver.into());
+                check(&serde_json::Value::Object(m).to_string());
+            }
+        }
+
+        #[test]
+        fn mutated_documents(i in 0..2usize, edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 0..6)) {
+            let mut b = if i == 0 { V0.to_string() } else { v1() }.into_bytes();
+            for (at, byte) in edits {
+                let n = b.len();
+                b[at.index(n)] = byte;
+            }
+            check(&String::from_utf8_lossy(&b));
+        }
+
+        #[test]
+        fn mutated_v0(s in mutated(V0)) {
+            check(&s);
+        }
+    }
+
+    #[test]
+    fn fuzz_regression_version_is_not_truncated() {
+        // `as u32` turned 2^32 + 1 into version 1 (and 2^32 into v0, which
+        // then ran the v0 migration over a far-future document).
+        for v in [4_294_967_296u64, 4_294_967_297, u64::MAX] {
+            let doc = format!(r#"{{"version":{v},"settings":[]}}"#);
+            assert_eq!(parse_document(&doc), Err(ConfigError::TooNew(u32::MAX)));
+        }
+    }
+}

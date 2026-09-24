@@ -500,3 +500,132 @@ fn coerce_number(v: &Value) -> Option<f64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod from_nsp_never_panics {
+    use super::*;
+    use crate::connect::wire::arbitrary_json::{json, mutated, same_modulo_float_parsing};
+    use proptest::prelude::*;
+
+    const WORDS: &[&str] = &[
+        "all",
+        "any",
+        "name",
+        "comment",
+        "sort",
+        "order",
+        "limit",
+        "asc",
+        "desc",
+        "is",
+        "isNot",
+        "gt",
+        "lt",
+        "contains",
+        "notContains",
+        "startsWith",
+        "endsWith",
+        "inTheRange",
+        "before",
+        "after",
+        "inTheLast",
+        "notInTheLast",
+        "inPlaylist",
+        "notInPlaylist",
+        "isMissing",
+        "isPresent",
+        "id",
+        "title",
+        "artist",
+        "album",
+        "genre",
+        "year",
+        "rating",
+        "playcount",
+        "loved",
+        "lyrics",
+        "compilation",
+        "dateadded",
+        "lastplayed",
+        "bpm",
+        "duration",
+        "random",
+        "-random",
+        "-year,title",
+        "2024-02-29",
+        "NaN",
+        "inf",
+        "-1e400",
+        "true",
+        "1",
+    ];
+
+    const DOC: &str = r#"{"name":"Nineties","all":[{"inTheRange":{"year":[1990,1999]}},{"contains":{"genre":"rock"}},{"gt":{"rating":3}},{"inTheLast":{"lastPlayed":30}},{"is":{"loved":true}},{"any":[{"startsWith":{"title":"A"}},{"before":{"dateAdded":"2020-01-01"}}]}],"sort":"-year,title","order":"desc","limit":50}"#;
+
+    /// Never panics; an imported filter is valid and (when the server can
+    /// evaluate it) exports and re-imports to the same filter.
+    fn check(text: &str) {
+        let Ok(f) = from_nsp(text, "fallback") else {
+            return;
+        };
+        validate_filter(&f).unwrap();
+        let caps = ServerCaps {
+            sonic_attributes: true,
+            native_api: true,
+        };
+        match to_nsp(&f, caps) {
+            Ok(out) => {
+                let mut back = from_nsp(&out, "other").unwrap();
+                back.id = f.id.clone();
+                assert!(same_modulo_float_parsing(&back, &f), "{out}");
+            }
+            Err(FilterError::NotServerExpressible(_)) => {}
+            Err(e) => panic!("imported filter does not export: {e:?}"),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn arbitrary_text(s in "\\PC{0,128}") {
+            check(&s);
+        }
+
+        #[test]
+        fn arbitrary_documents(v in json(WORDS)) {
+            check(&v.to_string());
+        }
+
+        #[test]
+        fn arbitrary_rules(
+            top in prop::sample::select(&["all", "any"][..]),
+            op in prop::sample::select(WORDS),
+            field in prop::sample::select(WORDS),
+            value in json(WORDS),
+            sort in prop::sample::select(WORDS),
+            order in prop::sample::select(WORDS),
+        ) {
+            let doc = serde_json::json!({ top: [{ op: { field: value } }], "sort": sort, "order": order });
+            check(&doc.to_string());
+        }
+
+        #[test]
+        fn mutated_documents(s in mutated(DOC)) {
+            check(&s);
+        }
+    }
+
+    #[test]
+    fn fuzz_regression_random_sort_has_no_direction() {
+        for doc in [
+            r#"{"all":[{"is":{"loved":true}}],"sort":"-random"}"#,
+            r#"{"all":[{"is":{"loved":true}}],"sort":"random","order":"desc"}"#,
+        ] {
+            let f = from_nsp(doc, "x").unwrap();
+            assert_eq!(f.sort, SortOrder::Random);
+            assert!(!f.descending, "a direction export would drop");
+            check(doc);
+        }
+    }
+}

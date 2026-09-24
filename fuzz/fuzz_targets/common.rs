@@ -8,7 +8,10 @@ use hocket_core::lyrics::{locate, CursorState, LyricsCursor};
 pub fn check_lyrics(l: &Lyrics) {
     for line in &l.lines {
         for s in &line.syllables {
-            assert!(s.end_ms >= s.start_ms, "syllable ends before it starts: {s:?}");
+            assert!(
+                s.end_ms >= s.start_ms,
+                "syllable ends before it starts: {s:?}"
+            );
         }
         if let Some(last) = line.syllables.last() {
             assert!(!last.joined, "a line's last syllable is never joined");
@@ -77,4 +80,40 @@ pub fn check_cursor(l: &Lyrics, positions: &[f64]) {
             assert!((0.0..=1.0).contains(&fresh.syllable_progress), "{fresh:?}");
         }
     }
+}
+
+/// JSON equality that lets floats differ in the last couple of bits.
+///
+/// serde_json without its `float_roundtrip` feature (the workspace does not
+/// enable it) parses some floats one ulp off, e.g. `1e42` or
+/// `215492859907334.66`, so an exact decode → encode → decode comparison
+/// would only rediscover that. Everything else must match exactly.
+pub fn json_close(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            _ if x == y => true,
+            (Some(p), Some(q)) if x.is_f64() || y.is_f64() => {
+                p == q || (p - q).abs() <= p.abs().max(q.abs()) * 4.0 * f64::EPSILON
+            }
+            _ => false,
+        },
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| json_close(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| json_close(v, w)))
+        }
+        _ => a == b,
+    }
+}
+
+/// `a` and `b` serialise to [`json_close`] JSON.
+pub fn same_modulo_float_parsing<T: serde::Serialize>(a: &T, b: &T) -> bool {
+    json_close(
+        &serde_json::to_value(a).expect("serialises"),
+        &serde_json::to_value(b).expect("serialises"),
+    )
 }
