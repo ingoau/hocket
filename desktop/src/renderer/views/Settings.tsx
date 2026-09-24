@@ -30,11 +30,11 @@ export function Settings({ section }: { section?: string }) {
       <div className="settings">
         <nav className="settings-nav" aria-label={t("settings.title")}>
           {SECTIONS.map((s) => (
-            <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}>{t(`settings.section.${s}` as never)}</a>
+            <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} aria-current={current === s ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}>{t(`settings.section.${s}` as never)}</a>
           ))}
         </nav>
         <div className="settings-body">
-          <h2>{t(`settings.section.${current}` as never)}</h2>
+          <h1 className="settings-heading" id="settings-heading">{t(`settings.section.${current}` as never)}</h1>
           {current === "general" ? <General /> : null}
           {current === "audio" ? <Audio /> : null}
           {current === "transcoding" ? <Transcoding /> : null}
@@ -56,7 +56,7 @@ export function Settings({ section }: { section?: string }) {
 function ScopeBadge({ settingKey }: { settingKey: string }) {
   const s = useApp((st) => st.settings[settingKey]);
   const scope = s?.scope ?? "deviceLocal";
-  return <span className={`badge ${scope === "accountSynced" ? "synced" : ""}`} title={scope}>{scope === "accountSynced" ? t("settings.scope.synced") : t("settings.scope.local")}</span>;
+  return <span className={`badge ${scope === "accountSynced" ? "synced" : ""}`}>{scope === "accountSynced" ? t("settings.scope.synced") : t("settings.scope.local")}</span>;
 }
 
 function Row({ title, desc, settingKey, children, stacked = false }: { title: string; desc?: string; settingKey?: string; children: React.ReactNode; stacked?: boolean }) {
@@ -92,7 +92,7 @@ function General() {
   const setPrefs = useApp((s) => s.setPrefs);
   return (
     <>
-      <div className="section-title">{t("settings.servers")}</div>
+      <h2 className="section-title">{t("settings.servers")}</h2>
       <CredentialWarning />
       {servers.map((s) => (
         <div key={s.id} className="setting-row" data-testid="server-row">
@@ -116,7 +116,7 @@ function General() {
         <span className="mono small" style={{ width: 24 }}>{cap}</span>
       </Row>
       <Row title={t("settings.ratingBridge")} settingKey={SK.ratingsLoveBridgeThreshold}>
-        <select className="select" value={bridgeOn ? threshold : 0} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
+        <select className="select" value={bridgeOn ? threshold : 0} aria-label={t("settings.ratingBridge")} onChange={(e) => { const n = Number(e.target.value); set(SK.ratingsLoveBridgeEnabled, n > 0); if (n > 0) set(SK.ratingsLoveBridgeThreshold, n); }} data-testid="setting-loveBridge">
           <option value={0}>{t("settings.ratingBridgeOff")}</option>
           {[3, 4, 5].map((n) => <option key={n} value={n}>{t("settings.ratingBridgeStars", { n })}</option>)}
         </select>
@@ -130,7 +130,7 @@ function QueueModeRow() {
   const mode = useApp((s) => s.queue.mode);
   return (
     <Row title={t("settings.queueMode")} settingKey={SK.queueMode}>
-      <select className="select" value={mode} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
+      <select className="select" value={mode} aria-label={t("settings.queueMode")} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
         <option value="apple">{t("queue.mode.apple")}</option>
         <option value="youTube">{t("queue.mode.youtube")}</option>
       </select>
@@ -150,7 +150,7 @@ function Audio() {
   return (
     <>
       <Row title={t("settings.replayGain")} settingKey="audio.replayGain">
-        <select className="select" value={audio.replayGain} onChange={(e) => update({ replayGain: e.target.value as ReplayGainMode })} data-testid="setting-replaygain">
+        <select className="select" value={audio.replayGain} aria-label={t("settings.replayGain")} onChange={(e) => update({ replayGain: e.target.value as ReplayGainMode })} data-testid="setting-replaygain">
           {(["off", "track", "album", "auto"] as ReplayGainMode[]).map((m) => <option key={m} value={m}>{t(`settings.replayGain.${m}` as never)}</option>)}
         </select>
       </Row>
@@ -161,7 +161,7 @@ function Audio() {
       <Row title={t("settings.normalisation")} settingKey="audio.replayGain"><input type="checkbox" checked={audio.normalisation} onChange={(e) => update({ normalisation: e.target.checked })} aria-label={t("settings.normalisation")} /></Row>
       <Row title={t("settings.gapless")} settingKey="audio.gapless"><input type="checkbox" checked={audio.gapless} onChange={(e) => update({ gapless: e.target.checked })} aria-label={t("settings.gapless")} /></Row>
       <Row title={t("settings.outputDevice")} settingKey="audio.outputDevice">
-        <select className="select" value={audio.outputDevice ?? ""} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
+        <select className="select" value={audio.outputDevice ?? ""} aria-label={t("settings.outputDevice")} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
           <option value="">{t("settings.outputDefault")}</option>
           {list.map((d) => <option key={d.id} value={d.id}>{d.isDefault ? t("settings.outputDeviceDefault", { name: d.name }) : d.name}</option>)}
         </select>
@@ -182,7 +182,16 @@ function Audio() {
             <button type="button" className="btn sm" onClick={() => setBands(bands.map((b) => ({ ...b, gainDb: 0 })), "flat")}>{t("settings.eqReset")}</button>
           </div>
           <EqCanvas bands={bands} onChange={(b) => setBands(b)} disabled={!audio.eq.enabled} />
-          <div className="bands">{bands.map((b) => <div key={b.frequencyHz}>{b.frequencyHz >= 1000 ? `${b.frequencyHz / 1000}k` : b.frequencyHz}<br /><span className="mono">{b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}</span></div>)}</div>
+          {/* The keyboard (and screen reader) way to set each band; the canvas is the pointer way. */}
+          <div className="bands">{bands.map((b, i) => (
+            <label key={b.frequencyHz} className="band">
+              <span aria-hidden="true">{b.frequencyHz >= 1000 ? `${b.frequencyHz / 1000}k` : b.frequencyHz}</span>
+              <input type="range" min={-15} max={15} step={0.5} value={b.gainDb} disabled={!audio.eq.enabled}
+                aria-label={t("a11y.eqBand", { freq: b.frequencyHz })} aria-valuetext={t("a11y.eqBandValue", { gain: `${b.gainDb > 0 ? "+" : ""}${b.gainDb.toFixed(1)}` })}
+                onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, gainDb: Number(e.target.value) } : x)))} data-testid={`eq-band-${i}`} />
+              <span className="mono" aria-hidden="true">{b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}</span>
+            </label>
+          ))}</div>
         </div>
       </Row>
     </>
@@ -312,12 +321,12 @@ function Transcoding() {
     <>
       <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.transcodingNetwork")}: {network?.networkId ?? network?.kind ?? "–"}</div>
       <Row title={t("settings.transcodingFormat")} settingKey="transcoding">
-        <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}><option value="">{t("settings.transcodingOriginal")}</option>{["opus", "mp3", "aac", "flac"].map((f) => <option key={f} value={f}>{f}</option>)}</select>
+        <select className="select" value={format} aria-label={t("settings.transcodingFormat")} onChange={(e) => setFormat(e.target.value)}><option value="">{t("settings.transcodingOriginal")}</option>{["opus", "mp3", "aac", "flac"].map((f) => <option key={f} value={f}>{f}</option>)}</select>
       </Row>
       <Row title={t("settings.transcodingBitrate")} settingKey="transcoding">
-        <select className="select" value={bitrate} onChange={(e) => setBitrate(Number(e.target.value))}><option value={0}>{t("settings.transcodingUnlimited")}</option>{[96, 128, 192, 256, 320].map((b) => <option key={b} value={b}>{b} kbps</option>)}</select>
+        <select className="select" value={bitrate} aria-label={t("settings.transcodingBitrate")} onChange={(e) => setBitrate(Number(e.target.value))}><option value={0}>{t("settings.transcodingUnlimited")}</option>{[96, 128, 192, 256, 320].map((b) => <option key={b} value={b}>{b} kbps</option>)}</select>
       </Row>
-      <Row title={t("settings.transcodingCannotDecode")} settingKey="transcoding"><input className="input" value={cannot} onChange={(e) => setCannot(e.target.value)} style={{ width: 240 }} /></Row>
+      <Row title={t("settings.transcodingCannotDecode")} settingKey="transcoding"><input className="input" value={cannot} aria-label={t("settings.transcodingCannotDecode")} onChange={(e) => setCannot(e.target.value)} style={{ width: 240 }} /></Row>
       <div className="row" style={{ marginTop: 10 }}><button type="button" className="btn primary" onClick={apply}>{t("dialog.ok")}</button></div>
     </>
   );
@@ -333,11 +342,11 @@ function Connect() {
     <>
       <Row title={t("settings.deviceName")} settingKey="device.name"><span className="muted">{meta?.deviceName}</span></Row>
       <Row title={t("settings.coordinatorUrl")} desc={connection.error ?? (connection.connected ? `${connection.tier} · ${connection.roundTripMs ?? "?"} ms` : undefined)} settingKey={SK.connectCoordinatorUrl}>
-        <input className="input" placeholder="wss://coordinator.example.org" value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } })} style={{ width: 260 }} />
+        <input className="input" placeholder="wss://coordinator.example.org" aria-label={t("settings.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } })} style={{ width: 260 }} />
         {connection.tier === "coordinator" && connection.connected ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })}>{t("settings.coordinatorDisconnect")}</button> : <button type="button" className="btn sm" onClick={() => { bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } }); bridge().dispatch({ type: "connectCoordinator" }); }} disabled={!url.trim()}>{t("settings.coordinatorConnect")}</button>}
       </Row>
       <Toggle settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} />
-      <div className="section-title">{t("connect.title")}</div>
+      <h2 className="section-title">{t("connect.title")}</h2>
       {devices.map((d) => <div key={d.id} className="setting-row"><div className="label"><div className="title">{d.name}{d.isSelf ? <span className="badge">{t("connect.thisDevice")}</span> : null}{d.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}</div><div className="desc">{d.platform} · {d.appVersion} · {fmtRelative(d.lastSeen)}</div></div><div className="control" /></div>)}
     </>
   );
@@ -352,7 +361,7 @@ function Storage() {
     <>
       <Row title={t("settings.storage")} settingKey="storage"><span className="muted small">{s ? t("downloads.usage", { downloads: fmtBytes(s.downloadsBytes), cache: fmtBytes(s.cacheBytes), images: fmtBytes(s.imagesBytes) }) : "–"}</span></Row>
       <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
-        <select className="select" value={warn ? Math.round(warn / 1024 ** 3) : 0} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * 1024 ** 3 : undefined } })}>
+        <select className="select" value={warn ? Math.round(warn / 1024 ** 3) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * 1024 ** 3 : undefined } })}>
           <option value={0}>–</option>
           {[2, 4, 5, 10, 20, 50, 100].map((g) => <option key={g} value={g}>{g} GB</option>)}
         </select>
@@ -380,10 +389,10 @@ function LyricsSettings() {
         <input type="checkbox" checked={external} onChange={(e) => bridge().dispatch({ type: "setExternalLyricsEnabled", data: { enabled: e.target.checked } })} aria-label={t("settings.externalLyrics")} data-testid="setting-external-lyrics" />
       </Row>
       <Row title="Lyrics frame rate cap" settingKey={SK.displayLyricsFps}>
-        <select className="select" value={fps} onChange={(e) => set(SK.displayLyricsFps, Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+        <select className="select" value={fps} aria-label="Lyrics frame rate cap" onChange={(e) => set(SK.displayLyricsFps, Number(e.target.value))}>{[30, 60, 120, 144].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
       </Row>
       <Row title="Lyrics frame rate in battery saver" settingKey={SK.batteryLyricsFps}>
-        <select className="select" value={batteryFps} onChange={(e) => set(SK.batteryLyricsFps, Number(e.target.value))}>{[15, 24, 30].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
+        <select className="select" value={batteryFps} aria-label="Lyrics frame rate in battery saver" onChange={(e) => set(SK.batteryLyricsFps, Number(e.target.value))}>{[15, 24, 30].map((f) => <option key={f} value={f}>{f} fps</option>)}</select>
       </Row>
     </>
   );
@@ -396,7 +405,7 @@ function Appearance() {
   return (
     <>
       <Row title={t("settings.theme")} settingKey={SK.displayTheme}>
-        <select className="select" value={theme} onChange={(e) => set(SK.displayTheme, e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</select>
+        <select className="select" value={theme} aria-label={t("settings.theme")} onChange={(e) => set(SK.displayTheme, e.target.value)} data-testid="setting-theme">{["system", "light", "dark"].map((v) => <option key={v} value={v}>{t(`settings.theme.${v}` as never)}</option>)}</select>
       </Row>
       <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
@@ -453,19 +462,19 @@ function OrderList({ surface, title }: { surface: string; title: string }) {
   };
   return (
     <div style={{ marginBottom: 20 }}>
-      <div className="section-title">{title}</div>
-      <div className="order-list" data-testid={`order-${surface}`}>
+      <h2 className="section-title" id={`order-${surface}-title`}>{title}</h2>
+      <ul className="order-list plain-list" aria-labelledby={`order-${surface}-title`} data-testid={`order-${surface}`}>
         {items.map((it, i) => (
-          <div key={it.a.id} className="order-item" draggable onDragStart={() => setDragIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== undefined && dragIdx !== i) move(dragIdx, i); setDragIdx(undefined); }}>
-            <span className="grip"><Icon name="grip" size={14} /></span>
+          <li key={it.a.id} className="order-item" draggable onDragStart={() => setDragIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== undefined && dragIdx !== i) move(dragIdx, i); setDragIdx(undefined); }}>
+            <span className="grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
             <input type="checkbox" checked={it.on} onChange={(e) => commit(items.map((x, j) => (j === i ? { ...x, on: e.target.checked } : x)))} aria-label={it.a.label} />
             <Icon name={it.a.icon} size={14} />
             <span className="grow">{it.a.label}</span>
-            <button type="button" className="btn icon sm" aria-label="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}><Icon name="chevronUp" size={12} /></button>
-            <button type="button" className="btn icon sm" aria-label="Move down" disabled={i === items.length - 1} onClick={() => move(i, i + 1)}><Icon name="chevronDown" size={12} /></button>
-          </div>
+            <button type="button" className="btn icon sm" aria-label={t("a11y.moveUp", { label: it.a.label })} disabled={i === 0} onClick={() => move(i, i - 1)}><Icon name="chevronUp" size={12} /></button>
+            <button type="button" className="btn icon sm" aria-label={t("a11y.moveDown", { label: it.a.label })} disabled={i === items.length - 1} onClick={() => move(i, i + 1)}><Icon name="chevronDown" size={12} /></button>
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -504,7 +513,7 @@ function Shortcuts() {
     <>
       <div className="row" style={{ marginBottom: 8 }}><span className="muted small grow">{t("settings.shortcutsHint")}</span><button type="button" className="btn sm" onClick={() => rows.forEach((r) => bridge().dispatch({ type: "setShortcut", data: { action_id: r.id, shortcut: r.def } }))}>{t("settings.shortcutResetAll")}</button></div>
       {rows.map((r) => {
-        const cat = r.category !== lastCat ? <div className="section-title" key={`c-${r.category}`}>{r.category}</div> : null;
+        const cat = r.category !== lastCat ? <h2 className="section-title" key={`c-${r.category}`}>{r.category}</h2> : null;
         lastCat = r.category;
         const chord = r.current ? parseChord(r.current) : undefined;
         const conf = conflicts.get(r.id);
@@ -560,7 +569,7 @@ function Diagnostics() {
     <>
       <Row title={t("settings.copyDiagnostics")} settingKey="diagnostics"><button type="button" className="btn" onClick={() => void executeAction("ui.copyDiagnostics")} data-testid="copy-diagnostics">{t("settings.copyDiagnostics")}</button></Row>
       <Row title={meta?.mediaSession === "attached" ? t("settings.mediaSessionState.attached") : t("settings.mediaSessionState.unavailable")} settingKey="diagnostics"><span className={`badge ${meta?.mediaSession === "attached" ? "ok" : "warn"}`}>{meta?.mediaSession}</span></Row>
-      <textarea className="textarea" readOnly value={data ?? ""} rows={16} style={{ width: "100%", marginTop: 12 }} aria-label="Diagnostics" />
+      <textarea className="textarea" readOnly value={data ?? ""} rows={16} style={{ width: "100%", marginTop: 12 }} aria-label={t("settings.section.diagnostics")} />
     </>
   );
 }

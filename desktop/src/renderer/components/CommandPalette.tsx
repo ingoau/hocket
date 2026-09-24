@@ -1,5 +1,5 @@
 // Ctrl/Cmd+K: library results and actions in one list, results first.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionDescriptor, SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -9,6 +9,7 @@ import { executeAction } from "../store/actions";
 import { formatChord, parseChord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
 import { Icon, hasIcon } from "./Icon";
+import { trapTab, useReturnFocus } from "../lib/focus";
 
 interface Item extends Rankable {
   icon?: string;
@@ -30,6 +31,7 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
+  useReturnFocus(open);
 
   useEffect(() => {
     if (!open) return;
@@ -70,34 +72,38 @@ export function CommandPalette() {
 
   const ranked = useMemo(() => rank(query, items, 40), [query, items]);
   useEffect(() => setActive(0), [ranked.length, query]);
+  useEffect(() => {
+    if (open) document.getElementById(`pal-opt-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
 
   if (!open) return null;
   const run = (i: Item) => {
     setOpen(false);
     i.run();
   };
-  const onKey = (e: React.KeyboardEvent) => {
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    if (e.key === "Escape") setOpen(false);
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
     else if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(ranked.length - 1, a + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
-    else if (e.key === "Enter") { const r = ranked[active]; if (r) run(r.item); }
+    else if (e.key === "Enter") { e.preventDefault(); const r = ranked[active]; if (r) run(r.item); }
+    else trapTab(e);
   };
   const firstAction = ranked.findIndex((r) => r.item.kind === "action");
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-      <div className="palette fade-in" role="dialog" aria-label={t("action.palette")} onKeyDown={onKey} data-testid="palette">
-        <input ref={input} className="input" placeholder={t("palette.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} aria-autocomplete="list" data-testid="palette-input" />
-        <div className="list" role="listbox">
-          {ranked.length === 0 ? <div className="group">{t("palette.empty")}</div> : null}
+      <div className="palette fade-in" role="dialog" aria-modal="true" aria-label={t("action.palette")} onKeyDown={onKey} data-testid="palette">
+        <input ref={input} className="input" placeholder={t("palette.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} role="combobox" aria-label={t("action.palette")} aria-autocomplete="list" aria-expanded={ranked.length > 0} aria-controls="palette-list" aria-activedescendant={ranked[active] ? `pal-opt-${active}` : undefined} data-testid="palette-input" />
+        {ranked.length === 0 ? <div className="group" role="status">{t("palette.empty")}</div> : null}
+        <div className="list" id="palette-list" role="listbox" aria-label={t("a11y.paletteResults")}>
           {ranked.map((r, i) => {
             const it = r.item;
             const chord = it.shortcut ? parseChord(it.shortcut) : undefined;
             return (
-              <div key={it.id}>
-                {i === 0 && it.kind !== "action" ? <div className="group">{t("palette.results")}</div> : null}
-                {i === firstAction ? <div className="group">{t("palette.actions")}</div> : null}
-                <div className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onClick={() => run(it)} data-testid="palette-item">
+              <Fragment key={it.id}>
+                {i === 0 && it.kind !== "action" ? <div className="group" role="presentation">{t("palette.results")}</div> : null}
+                {i === firstAction ? <div className="group" role="presentation">{t("palette.actions")}</div> : null}
+                <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onClick={() => run(it)} data-testid="palette-item">
                   {it.kind === "action" ? (hasIcon(it.icon ?? "") ? <Icon name={it.icon as string} size={16} /> : <Icon name="command" size={16} />) : <Artwork id={it.coverArt} size={64} className="art" />}
                   <div className="grow truncate">
                     <Highlight text={it.label} matches={r.matches} />
@@ -105,7 +111,7 @@ export function CommandPalette() {
                   </div>
                   {chord ? <span className="kbd">{formatChord(chord, platform)}</span> : null}
                 </div>
-              </div>
+              </Fragment>
             );
           })}
         </div>

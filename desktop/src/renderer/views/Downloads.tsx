@@ -36,12 +36,12 @@ export function Downloads() {
           <div key={JSON.stringify(p.target)} className="pin-row" data-testid="pin-row">
             <Artwork id={p.coverArt} size={64} className="art" />
             <div style={{ minWidth: 0 }}>
-              <div className="truncate" role="button" tabIndex={0} onClick={() => open(p)} onKeyDown={(e) => e.key === "Enter" && open(p)} style={{ cursor: "pointer" }}>{p.label}</div>
+              <button type="button" className="link-button truncate" onClick={() => open(p)}>{p.label}</button>
               <div className="small muted">{t("downloads.progress", { done: p.downloadedCount, total: p.trackCount })} · {fmtBytes(p.bytes)}{p.transcoded ? ` · ${t("downloads.transcoded")}` : ""}</div>
               {p.downloadedCount < p.trackCount ? <div className="progress" style={{ marginTop: 4 }}><div style={{ width: `${(p.downloadedCount / Math.max(1, p.trackCount)) * 100}%` }} /></div> : null}
             </div>
             <span className="badge">{p.target.type}</span>
-            <button type="button" className="btn icon" aria-label={t("downloads.remove")} title={t("downloads.remove")} onClick={() => remove(p)}><Icon name="trash" size={14} /></button>
+            <button type="button" className="btn icon" aria-label={`${t("downloads.remove")}: ${p.label}`} title={t("downloads.remove")} onClick={() => remove(p)}><Icon name="trash" size={14} /></button>
           </div>
         ))}
       </div>

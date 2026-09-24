@@ -3,10 +3,9 @@ import type { Album, TrackSummary } from "@core/api";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { Artwork } from "../components/Artwork";
 import { EmptyState } from "../components/EmptyState";
 import { openContextMenu } from "../components/ContextMenu";
-import { Icon } from "../components/Icon";
+import { Tile, TileList } from "../components/Tile";
 
 export function Home() {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -19,19 +18,10 @@ export function Home() {
   const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   const empty = !recent.loading && !(recent.data?.items.length);
   const albumTile = (a: Album) => (
-    <div key={a.id} className="tile" role="button" tabIndex={0} onDoubleClick={() => navigate({ view: "album", id: a.id })} onClick={() => navigate({ view: "album", id: a.id })} onKeyDown={(e) => e.key === "Enter" && navigate({ view: "album", id: a.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} data-testid="home-album">
-      <Artwork id={a.coverArt} size={300} />
-      <div className="t1">{a.name}</div>
-      <div className="t2">{a.artist}</div>
-      <button type="button" className="play" aria-label={t("album.play")} onClick={(e) => { e.stopPropagation(); playAlbum(a); }}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button>
-    </div>
+    <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playAlbum(a)} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="home-album" />
   );
   const trackTile = (tr: TrackSummary, i: number) => (
-    <div key={`${tr.id}-${i}`} className="tile" role="button" tabIndex={0} onDoubleClick={() => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } })} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } })}>
-      <Artwork id={tr.coverArt} size={300} />
-      <div className="t1">{tr.title}</div>
-      <div className="t2">{tr.artist}</div>
-    </div>
+    <Tile key={`${tr.id}-${i}`} title={tr.title} subtitle={tr.artist} coverArt={tr.coverArt} onActivate={() => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } })} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } })} testId="home-track" />
   );
   return (
     <div className="view" data-testid="view-home">
@@ -49,10 +39,11 @@ export function Home() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode[] }) {
   if (!children.length) return null;
+  const id = `home-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
-    <section className="home-section">
-      <h3>{title}</h3>
-      <div className="scroller">{children}</div>
+    <section className="home-section" aria-labelledby={id}>
+      <h2 className="section-heading" id={id}>{title}</h2>
+      <TileList label={title} className="scroller">{children}</TileList>
     </section>
   );
 }

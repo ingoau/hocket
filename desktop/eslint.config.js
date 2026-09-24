@@ -13,7 +13,10 @@ export default tseslint.config(
     plugins: { "react-hooks": reactHooks, "react-refresh": reactRefresh },
     languageOptions: { globals: { ...globals.browser } },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // eslint-plugin-react-hooks 6 keeps its rules under `configs["recommended-latest"]`;
+      // `configs.recommended.rules` is undefined there, which silently turned these off.
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
       "react-refresh/only-export-components": "off",
     },
   },

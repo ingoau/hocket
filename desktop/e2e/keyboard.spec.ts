@@ -34,9 +34,11 @@ test.describe("keyboard", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.getByTestId("nav-songs").click();
-    const table = page.getByTestId("songs-table").locator('[role="grid"]');
+    // The table is an ARIA grid with a roving tab stop on its rows.
+    const table = page.getByTestId("songs-table");
+    await expect(table).toHaveAttribute("role", "grid");
     await expect(page.getByTestId("track-row").first()).toBeVisible();
-    await table.focus();
+    await page.getByTestId("track-row").first().focus();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
     await expect(page.getByTestId("track-row").nth(2)).toHaveClass(/selected/);

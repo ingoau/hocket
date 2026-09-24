@@ -23,12 +23,12 @@ export function Filters() {
         {filters.map((f) => (
           <div key={f.id} className="pin-row" style={{ gridTemplateColumns: "auto 1fr auto auto" }} data-testid="filter-row">
             <Icon name="filter" size={18} />
-            <div role="button" tabIndex={0} onClick={() => navigate({ view: "filter", id: f.id })} onKeyDown={(e) => e.key === "Enter" && navigate({ view: "filter", id: f.id })} style={{ cursor: "pointer" }}>
-              <div>{f.name}</div>
-              <div className="small muted">{t("sort.label", { sort: t(`sort.${f.sort}` as never) })}{f.limit ? ` · ${t("filters.limit")} ${f.limit}` : ""}</div>
-            </div>
-            <button type="button" className="btn" onClick={() => play(f.id)}><Icon name="play" size={13} style={{ fill: "currentColor" }} /> {t("filters.play")}</button>
-            <button type="button" className="btn icon" aria-label={t("filters.delete")} onClick={() => bridge().dispatch({ type: "deleteFilter", data: { id: f.id } })}><Icon name="trash" size={14} /></button>
+            <button type="button" className="link-button" onClick={() => navigate({ view: "filter", id: f.id })}>
+              <span style={{ display: "block" }}>{f.name}</span>
+              <span className="small muted" style={{ display: "block" }}>{t("sort.label", { sort: t(`sort.${f.sort}` as never) })}{f.limit ? ` · ${t("filters.limit")} ${f.limit}` : ""}</span>
+            </button>
+            <button type="button" className="btn" aria-label={`${t("filters.play")}: ${f.name}`} onClick={() => play(f.id)}><Icon name="play" size={13} style={{ fill: "currentColor" }} /> {t("filters.play")}</button>
+            <button type="button" className="btn icon" aria-label={`${t("filters.delete")}: ${f.name}`} onClick={() => bridge().dispatch({ type: "deleteFilter", data: { id: f.id } })}><Icon name="trash" size={14} /></button>
           </div>
         ))}
       </div>

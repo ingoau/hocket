@@ -5,7 +5,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { TrackTable } from "../components/TrackTable";
 import { useQuery } from "../store/queries";
-import { Artwork } from "../components/Artwork";
+import { Tile, TileList } from "../components/Tile";
 
 export function SearchView({ query }: { query: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -23,15 +23,15 @@ export function SearchView({ query }: { query: string }) {
       <div className="view-header"><h1>{query}</h1><span className="muted">{list.length}</span></div>
       <div className="view-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {(local.data?.albums.length || server?.albums.length) ? (
-          <div className="home-section">
-            <h3>{t("search.albums")}</h3>
-            <div className="scroller">{[...(local.data?.albums ?? []), ...(server?.albums ?? [])].map((a) => (
-              <div key={a.id} className="tile" role="button" tabIndex={0} onClick={() => navigate({ view: "album", id: a.id })}><Artwork id={a.coverArt} size={300} /><div className="t1">{a.name}</div><div className="t2">{a.artist}</div></div>
-            ))}</div>
-          </div>
+          <section className="home-section" aria-labelledby="search-albums">
+            <h2 className="section-heading" id="search-albums">{t("search.albums")}</h2>
+            <TileList label={t("search.albums")} className="scroller">{[...(local.data?.albums ?? []), ...(server?.albums ?? [])].map((a) => (
+              <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} />
+            ))}</TileList>
+          </section>
         ) : null}
         <div style={{ flex: 1, minHeight: 300, display: "flex", flexDirection: "column" }}>
-          <TrackTable tracks={list} total={list.length} columns={["art", "title", "artist", "album", "rating", "duration"]} scope={`search:${query}`} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: list.map((x) => x.id), start_index: i, label: query, shuffle: false } })} emptyMessage={t("search.noResults", { query })} />
+          <TrackTable tracks={list} total={list.length} columns={["art", "title", "artist", "album", "rating", "duration"]} scope={`search:${query}`} label={t("search.tracks")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: list.map((x) => x.id), start_index: i, label: query, shuffle: false } })} emptyMessage={t("search.noResults", { query })} />
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { TrackTable } from "../components/TrackTable";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { Heart } from "../components/Stars";
+import { Tile, TileList } from "../components/Tile";
 import { openContextMenu } from "../components/ContextMenu";
 
 export function ArtistDetail({ id }: { id: string }) {
@@ -37,22 +38,18 @@ export function ArtistDetail({ id }: { id: string }) {
       <div className="view-body">
         {topList.length ? (
           <>
-            <h3 style={{ margin: "4px 0 6px" }}>{t("artist.topSongs")}</h3>
+            <h2 className="section-heading" style={{ margin: "4px 0 6px" }}>{t("artist.topSongs")}</h2>
             <div style={{ height: Math.min(topList.length, 10) * 30 + 30, display: "flex", flexDirection: "column" }}>
-              <TrackTable tracks={topList} total={topList.length} columns={["art", "title", "album", "rating", "plays", "duration"]} scope={`artist-top:${id}`} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topList.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } })} playingTrackId={playing} testId="artist-top" />
+              <TrackTable tracks={topList} total={topList.length} columns={["art", "title", "album", "rating", "plays", "duration"]} scope={`artist-top:${id}`} label={t("artist.topSongs")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topList.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } })} playingTrackId={playing} testId="artist-top" />
             </div>
           </>
         ) : null}
-        <h3 style={{ margin: "16px 0 8px" }}>{t("artist.albums")}</h3>
-        <div className="grid">
+        <h2 className="section-heading" style={{ margin: "16px 0 8px" }}>{t("artist.albums")}</h2>
+        <TileList label={t("artist.albums")} className="grid">
           {(albums.data?.items ?? []).map((al) => (
-            <div key={al.id} className="tile" role="button" tabIndex={0} onClick={() => navigate({ view: "album", id: al.id })} onKeyDown={(e) => e.key === "Enter" && navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} data-testid="artist-album">
-              <Artwork id={al.coverArt} size={300} />
-              <div className="t1">{al.name}</div>
-              <div className="t2">{al.year ?? ""}{al.year ? " · " : ""}{t("misc.tracks", { count: al.songCount })}</div>
-            </div>
+            <Tile key={al.id} title={al.name} subtitle={`${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} testId="artist-album" />
           ))}
-        </div>
+        </TileList>
       </div>
     </div>
   );

@@ -34,20 +34,20 @@ export function Setup() {
     bridge().dispatch({ type: "addServer", data: { url: u, username: username.trim(), password, name: name.trim() || undefined } });
   };
   return (
-    <div className="setup" data-testid="setup">
-      <form onSubmit={submit}>
-        <div className="brand">{t("app.name")}</div>
-        <h2>{t("setup.title")}</h2>
-        <div className="muted small">{t("setup.subtitle")}</div>
+    <main className="setup" data-testid="setup">
+      <form onSubmit={submit} aria-labelledby="setup-title" aria-describedby="setup-subtitle">
+        <div className="brand" aria-hidden="true">{t("app.name")}</div>
+        <h1 id="setup-title" className="setup-title">{t("setup.title")}</h1>
+        <div className="muted small" id="setup-subtitle">{t("setup.subtitle")}</div>
         <CredentialWarning />
-        <label>{t("setup.url")}<input className="input" type="url" placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /></label>
-        <label>{t("setup.username")}<input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
-        <label>{t("setup.password")}<input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" /></label>
-        <label>{t("setup.name")}<input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
-        {error ? <div className="error" role="alert" data-testid="setup-error">{error}</div> : null}
+        <label>{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={error ? "setup-error" : undefined} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /></label>
+        <label>{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
+        <label>{t("setup.password")}<input className="input" type="password" aria-required="true" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" /></label>
+        <label>{t("setup.name")}<input className="input" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        {error ? <div className="error" id="setup-error" role="alert" data-testid="setup-error">{error}</div> : null}
         <button type="submit" className="btn primary" disabled={busy} style={{ height: 34 }} data-testid="setup-connect">{busy ? t("setup.connecting") : t("setup.connect")}</button>
         <button type="button" className="btn" onClick={() => void bridge().config.import().catch((err: unknown) => console.error("config import failed", err))} data-testid="setup-import">{t("setup.import")}</button>
       </form>
-    </div>
+    </main>
   );
 }

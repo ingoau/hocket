@@ -116,7 +116,7 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   const tierLabel = lyrics.tier === "syllable" ? t("lyrics.tier.syllable") : lyrics.tier === "line" ? t("lyrics.tier.line") : t("lyrics.tier.unsynced");
   const sourceLabel = lyrics.source === "server" ? t("lyrics.source.server") : lyrics.source === "external" ? t("lyrics.source.external") : t("lyrics.source.embedded");
   return (
-    <div className="lyrics-pane" role="region" aria-label={t("lyrics.title")} data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
+    <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
       {animated ? (
         <>
           <div ref={host} className={`amll-host ${variant}`} style={{ "--lyrics-scale": LYRICS_SCALE[size] } as CSSProperties} aria-hidden="true" data-testid="amll-host" data-size={size} />

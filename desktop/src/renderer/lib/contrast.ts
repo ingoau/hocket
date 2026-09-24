@@ -35,6 +35,12 @@ export function parseColor(input: string): Rgb | undefined {
   return undefined;
 }
 
+/** Whole-number channels: what a hex token will actually be (checks run on this, not the float). */
+export function roundRgb(c: Rgb): Rgb {
+  const r = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return { r: r(c.r), g: r(c.g), b: r(c.b) };
+}
+
 export function toHex(c: Rgb): string {
   const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
   return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
@@ -88,7 +94,7 @@ function minContrast(c: Rgb, backgrounds: readonly Rgb[]): number {
  */
 export function ensureContrast(color: Rgb, backgrounds: readonly Rgb[], target: number, toward: Rgb): Rgb {
   for (let t = 0; t <= 1.0001; t += 0.02) {
-    const c = mix(color, toward, t);
+    const c = roundRgb(mix(color, toward, t));
     if (minContrast(c, backgrounds) >= target) return c;
   }
   return toward;
@@ -137,17 +143,19 @@ export function accentTokens(raw: string, theme: ThemeName): AccentTokens {
   // colour still reads at 4.5:1 on the strongest tint over every surface.
   let tint = accent;
   for (let t = 0; t <= 1.0001; t += 0.02) {
-    tint = mix(accent, bg, t);
-    if (minContrast(faint, themeSurfaces(theme, tint)) >= 4.5) break;
+    tint = roundRgb(mix(accent, bg, t));
+    // Checked against the tints as the browser will blend them, with a hair of margin for its rounding.
+    if (minContrast(faint, themeSurfaces(theme, tint).map(roundRgb)) >= 4.55) break;
   }
-  const surfaces = themeSurfaces(theme, tint);
+  const surfaces = themeSurfaces(theme, tint).map(roundRgb);
   return {
     accent: toHex(accent),
     accentFg: toHex(bestTextOn(accent)),
-    accentText: toHex(ensureContrast(accent, surfaces, 4.5, fg)),
-    accentInverse: toHex(ensureContrast(accent, [fg], 4.5, bg)),
+    // A hair above 4.5 / 3 so the browser's own rounding of the color-mix() tints can't tip it under.
+    accentText: toHex(ensureContrast(accent, surfaces, 4.55, fg)),
+    accentInverse: toHex(ensureContrast(accent, [fg], 4.55, bg)),
     accentTint: toHex(tint),
-    focusRing: toHex(ensureContrast(accent, plain, 3, fg)),
+    focusRing: toHex(ensureContrast(accent, plain, 3.05, fg)),
   };
 }
 

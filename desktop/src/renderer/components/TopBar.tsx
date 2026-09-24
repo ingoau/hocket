@@ -130,22 +130,23 @@ function SearchBox() {
     }
   };
   const renderRow = (r: Row, i: number) => (
-    <div key={r.key} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
+    <div key={r.key} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
       <Artwork id={r.cover} size={64} className="art" />
       <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}</div>
       <span className="kind">{r.kind}</span>
     </div>
   );
+  const expanded = open && !!q.trim();
   return (
-    <div className="search">
+    <div className="search" role="search">
       <Icon name="search" size={14} />
-      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => q && setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-expanded={open} data-testid="search-input" />
-      {open && q.trim() ? (
-        <div ref={pop} className="search-popover fade-in" role="listbox" style={{ minHeight }} data-testid="search-popover">
-          {local && !localRows.length && !serverRows.length ? <div className="search-divider">{t("search.noResults", { query: q })}</div> : null}
-          {localRows.length ? <div className="search-section">{localRows.map(renderRow)}</div> : null}
-          {local ? <div className="search-divider" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
-          {serverRows.length ? <div className="search-section" data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
+      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => q && setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
+      {expanded ? (
+        <div ref={pop} id="search-results" className="search-popover fade-in" role="listbox" aria-label={t("a11y.searchResults")} style={{ minHeight }} data-testid="search-popover">
+          {local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
+          {localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
+          {local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
+          {serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>
       ) : null}
     </div>
@@ -158,6 +159,7 @@ function JobsIndicator() {
   const sync = useApp((s) => s.syncProgress);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   const running = jobs.filter((j) => j.state === "running" || j.state === "queued" || j.state === "paused");
   const failed = jobs.some((j) => j.state === "failed") || problems.length > 0;
   useEffect(() => {
@@ -169,8 +171,8 @@ function JobsIndicator() {
   const cmd = (type: "cancelJob" | "retryJob" | "pauseJob" | "resumeJob", id: string) => bridge().dispatch({ type, data: { id } } as never);
   const label = problems.length ? t("jobs.problems", { count: problems.length }) : running.length ? t("jobs.running", { count: running.length }) : t("jobs.idle");
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <button type="button" className="btn icon jobs-btn" aria-label={`${t("jobs.title")}: ${label}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="jobs-button">
+    <div ref={ref} style={{ position: "relative" }} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
+      <button ref={button} type="button" className="btn icon jobs-btn" aria-label={`${t("jobs.title")}: ${label}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="jobs-button">
         <Icon name={running.length ? "spinner" : failed ? "warn" : "cloud"} className={running.length ? "spin" : ""} />
         {running.length || failed ? <span className={`dot ${failed ? "problem" : ""}`} /> : null}
       </button>

@@ -18,10 +18,10 @@ export function MiniApp() {
   const track = now?.track;
   const playing = transport.position.isPlaying;
   return (
-    <div className="mini" role="region" aria-label={t("mini.title")} data-testid="mini-player">
+    <main className="mini" aria-label={t("mini.title")} data-testid="mini-player">
       <div className="art-wrap"><Artwork id={track?.coverArt} size={300} className="art" /></div>
       <div className="body">
-        <div className="title">{track?.title ?? t("player.nothingPlaying")}</div>
+        <h1 className="title">{track?.title ?? t("player.nothingPlaying")}</h1>
         <div className="artist">{track?.artist ?? ""}</div>
         <SeekBar durationMs={track?.durationMs} compact />
         <div className="controls">
@@ -35,6 +35,6 @@ export function MiniApp() {
           <button type="button" className="btn icon sm" aria-label={t("misc.close")} onClick={() => bridge().window.close()}><Icon name="close" size={13} /></button>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

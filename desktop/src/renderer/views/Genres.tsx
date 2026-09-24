@@ -2,6 +2,7 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { EmptyState } from "../components/EmptyState";
+import { TileList } from "../components/Tile";
 
 export function Genres() {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -12,14 +13,16 @@ export function Genres() {
       <div className="view-header"><h1>{t("genres.title")}</h1><span className="muted">{data?.length ?? ""}</span></div>
       <div className="view-body">
         {!loading && !data?.length ? <EmptyState message={t("genres.empty")} /> : null}
-        <div className="grid" style={{ "--tile-w": "200px" } as React.CSSProperties}>
+        <TileList label={t("genres.title")} className="grid genre-grid">
           {(data ?? []).map((g) => (
-            <div key={g.name} className="genre-tile" role="button" tabIndex={0} onClick={() => navigate({ view: "genre", id: g.name })} onKeyDown={(e) => e.key === "Enter" && navigate({ view: "genre", id: g.name })} data-testid="genre-tile">
-              <div style={{ fontWeight: 600 }}>{g.name}</div>
-              <div className="small muted">{t("genres.count", { albums: g.albumCount, songs: g.songCount })}</div>
-            </div>
+            <li key={g.name}>
+              <button type="button" className="genre-tile" data-roving onClick={() => navigate({ view: "genre", id: g.name })} data-testid="genre-tile">
+                <span style={{ fontWeight: 600 }}>{g.name}</span>
+                <span className="small muted">{t("genres.count", { albums: g.albumCount, songs: g.songCount })}</span>
+              </button>
+            </li>
           ))}
-        </div>
+        </TileList>
       </div>
     </div>
   );

@@ -29,6 +29,13 @@ export async function openContextMenu(e: { clientX: number; clientY: number; pre
   useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, context, keyboard });
 }
 
+/** A "More" button's menu: under the button, first item active when opened from the keyboard. */
+export function openMenuFromButton(e: React.MouseEvent<HTMLElement>, target: ActionTarget, context?: ActionContext): void {
+  const r = e.currentTarget.getBoundingClientRect();
+  openedByKeyboard = e.detail === 0;
+  void openContextMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, target, context);
+}
+
 /**
  * The context-menu key / Shift+F10: fire `contextmenu` at the focused item (or
  * the option a listbox points at with aria-activedescendant). Returns whether

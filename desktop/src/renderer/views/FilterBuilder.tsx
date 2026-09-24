@@ -85,7 +85,7 @@ export function FilterBuilder({ id }: { id: string }) {
           <button type="button" className="btn primary" onClick={save} disabled={!valid} data-testid="filter-save">{t("filters.save")}</button>
         </div>
       </div>
-      <div className="view-body" style={{ display: "grid", gridTemplateColumns: "minmax(420px, 1fr) 300px", gap: 20 }}>
+      <div className="view-body filter-builder">
         <div className="stack">
           <label className="stack" style={{ gap: 4 }}><span className="small muted">{t("filters.name")}</span><input className="input" value={filter.name} onChange={(e) => setFilter({ ...filter, name: e.target.value })} data-testid="filter-name" /></label>
           <div className={`badge ${preview?.capability.serverExpressible ? "ok" : "warn"}`} style={{ alignSelf: "flex-start" }} data-testid="filter-capability">
