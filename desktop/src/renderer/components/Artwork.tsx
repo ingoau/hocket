@@ -38,6 +38,6 @@ export function useArtwork(id: string | undefined, size: number): string | undef
 export function Artwork({ id, size = ARTWORK_SIZES.grid, className = "art", alt = "", round = false }: { id: string | undefined; size?: number; className?: string; alt?: string; round?: boolean }) {
   const url = useArtwork(id, size);
   const cls = `${className}${round ? " round" : ""}`;
-  if (!url) return <div className={`${cls} empty`} aria-hidden="true" style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)" }}><Icon name="music" size={size > 100 ? 28 : 14} /></div>;
+  if (!url) return <div className={`${cls} placeholder`} aria-hidden="true"><Icon name="music" size={size > 100 ? 28 : 14} /></div>;
   return <img className={cls} src={url} alt={alt} loading="lazy" draggable={false} />;
 }

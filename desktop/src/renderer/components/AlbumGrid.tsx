@@ -106,7 +106,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
       {total === 0 ? <div className="empty">{emptyMessage}</div> : null}
       <div style={{ height: virt.getTotalSize(), position: "relative" }}>
         {vrows.map((vr) => (
-          <div key={vr.key} role="row" style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: "16px 14px", padding: "4px 0" }}>
+          <div key={vr.key} role="row" style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px 14px", padding: "4px 0" }}>
             {Array.from({ length: cols }, (_, c) => {
               const i = vr.index * cols + c;
               if (i >= total) return <div key={c} />;

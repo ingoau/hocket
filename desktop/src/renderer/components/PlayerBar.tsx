@@ -45,7 +45,7 @@ export function PlayerBar() {
       ) : remote ? <div className="notice"><Icon name="devices" size={12} /> {t("player.playingOn", { device: remote })}</div> : null}
 
       <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}>
-        {track ? <Artwork id={track.coverArt} size={64} className="art" /> : <div className="art empty"><Icon name="music" /></div>}
+        {track ? <Artwork id={track.coverArt} size={64} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
         <div className="text">
           {track ? (
             <>

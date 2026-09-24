@@ -125,8 +125,8 @@ test.describe("real server (manual)", () => {
       await page.getByTestId("lyrics-pane").screenshot({ path: join(shots, "desktop-lyrics-pane.png") });
 
       // Fullscreen lyrics.
-      await page.getByTestId("content").click();
-      await page.keyboard.press("f");
+      // (The button, not F: F in a focused album grid is type-ahead.)
+      await page.getByTestId("toggle-fullscreen").click();
       await expect(page.getByTestId("fullscreen-player")).toBeVisible();
       await page.getByTestId("fs-tab-lyrics").click();
       await page.waitForTimeout(4000);

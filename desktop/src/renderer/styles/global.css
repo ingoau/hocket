@@ -211,10 +211,10 @@ h3 { font-size: var(--fs-lg); }
 
 /* Grids */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-w, 160px), 1fr)); gap: 16px 14px; padding: 4px 0; }
-.tile { display: flex; flex-direction: column; gap: 6px; border-radius: var(--radius); padding: 6px; position: relative; }
+.tile { display: flex; flex-direction: column; gap: 6px; border-radius: var(--radius); padding: 6px; position: relative; min-width: 0; }
 .tile:hover { background: var(--bg-hover); }
 .tile.selected { background: var(--selection); }
-.tile .art { width: 100%; aspect-ratio: 1; border-radius: var(--radius-sm); background: var(--bg-sunken); object-fit: cover; }
+.tile .art { display: block; width: 100%; height: auto; min-width: 0; flex: 0 0 auto; aspect-ratio: 1; border-radius: var(--radius-sm); background: var(--bg-sunken); object-fit: cover; }
 .tile .art.round { border-radius: 50%; }
 .tile .t1 { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile-badge { display: inline-flex; align-items: center; padding: 3px; border-radius: 50%; color: var(--ok); background: var(--bg-elev); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
@@ -259,7 +259,7 @@ h3 { font-size: var(--fs-lg); }
 .player { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(360px, 2fr) minmax(200px, 1fr); align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border); background: var(--bg-elev); position: relative; }
 .player .now { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .player .now .art { width: 56px; height: 56px; border-radius: var(--radius-sm); background: var(--bg-sunken); object-fit: cover; flex: 0 0 auto; }
-.player .now .art.empty { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); }
+.art.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); background: var(--bg-sunken); }
 .player .now .text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .player .now .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .player .now .artist { color: var(--fg-muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

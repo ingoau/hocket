@@ -94,8 +94,11 @@ test.describe("window chrome", () => {
     // Narrow the window so the tiles are smaller than the 300 px artwork.
     await page.setViewportSize({ width: 1000, height: 760 });
     await page.waitForTimeout(300);
+    // Real libraries have long titles (the fake's are short): a nowrap title
+    // must truncate, not widen its column.
+    await tiles.first().locator(".t1").evaluate((el) => { el.textContent = "A Very Long Album Title (Deluxe Anniversary Bonus Track Edition)"; });
     const check = async () => {
-      const geo = await page.getByTestId("grid").evaluate((grid) => {
+      const geo = await page.locator("[role=grid]").filter({ has: tiles.first() }).evaluate((grid) => {
         const out = { overflow: grid.scrollWidth - grid.clientWidth, tiles: [] as { w: number; art: { x: number; y: number; w: number; h: number }; tile: { x: number; y: number; w: number; h: number } }[] };
         for (const t of Array.from(grid.querySelectorAll('[data-testid="grid-tile"]')).slice(0, 8)) {
           const a = t.querySelector(".art")!.getBoundingClientRect();
