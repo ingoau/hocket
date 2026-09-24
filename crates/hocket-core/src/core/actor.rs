@@ -1078,6 +1078,16 @@ impl Actor {
     }
 
     pub(crate) fn toast(&mut self, message: impl Into<String>, action: Option<(String, Command)>) {
+        self.toast_for(message, action, None);
+    }
+
+    /// A toast reporting on an undo entry (the "Undid …" / "Redid …" pair).
+    pub(crate) fn toast_for(
+        &mut self,
+        message: impl Into<String>,
+        action: Option<(String, Command)>,
+        undo_entry_id: Option<String>,
+    ) {
         let (action_label, action_command) = match action {
             Some((l, c)) => (Some(l), serde_json::to_string(&c).ok()),
             None => (None, None),
@@ -1089,6 +1099,7 @@ impl Actor {
                 action_label,
                 action_command,
                 duration_ms: 5_000,
+                undo_entry_id,
             },
         });
     }

@@ -67,6 +67,8 @@ interface UndoRecord {
   id: string;
   label: string;
   at: number;
+  /** Like the core's `replacesQueue`: the action threw the queue away. */
+  replacesQueue: boolean;
   undo: () => string | undefined;
   redo: () => void;
   selection?: ActionTarget;
@@ -341,7 +343,7 @@ export class FakeCore implements CoreHandle {
         this.withUndo("Clear queue", () => {
           this.session = { ...this.session, context: undefined, order: [], cursor: 0, current: undefined, insertions: [], history: [] };
           this.stop();
-        });
+        }, true);
         return;
       case "clearInsertions":
         this.withUndo("Clear playing next", () => {
@@ -766,7 +768,7 @@ export class FakeCore implements CoreHandle {
     if (!silent && username.toLowerCase() === "wrong") {
       // Like the core: a failed probe is Error + toast only; no ServersChanged, no job, no problem.
       this.later(600, () => {
-        this.toast("Couldn't reach the server: authentication failed: Wrong username or password", false);
+        this.toast("Couldn't reach the server: authentication failed: Wrong username or password");
         this.emit({ type: "error", data: { kind: "auth", message: "server probe failed", detail: "authentication failed: Wrong username or password" } });
       });
       return;
@@ -900,7 +902,7 @@ export class FakeCore implements CoreHandle {
       this.restoreSession(before);
       this.seek(outgoingPos);
       return undefined;
-    }, () => this.playContext(resolved, startIndex, shuffle, false));
+    }, () => this.playContext(resolved, startIndex, shuffle, false), undefined, true);
     this.emitAll();
   }
 
@@ -919,7 +921,6 @@ export class FakeCore implements CoreHandle {
         }
       }
     });
-    this.toast(next ? "Playing next" : "Added to queue", true);
   }
 
   private jumpTo(key: string): void {
@@ -1356,7 +1357,7 @@ export class FakeCore implements CoreHandle {
     this.pushUndo(`Restore ${q.label}`, () => {
       this.restoreSession(before);
       return undefined;
-    }, () => this.restoreSavedQueue(id));
+    }, () => this.restoreSavedQueue(id), undefined, true);
     this.emitAll();
   }
 
@@ -1384,7 +1385,7 @@ export class FakeCore implements CoreHandle {
     this.emitAll();
   }
 
-  private withUndo(label: string, mutate: () => void): void {
+  private withUndo(label: string, mutate: () => void, replacesQueue = false): void {
     const before = this.captureSession();
     const selection = clone(this.selection);
     mutate();
@@ -1393,19 +1394,19 @@ export class FakeCore implements CoreHandle {
     this.pushUndo(label, () => {
       this.restoreSession(before);
       return undefined;
-    }, () => this.restoreSession(after), selection);
+    }, () => this.restoreSession(after), selection, replacesQueue);
     this.emitAll();
   }
 
-  private pushUndo(label: string, undo: () => string | undefined, redo: () => void, selection?: ActionTarget): void {
+  private pushUndo(label: string, undo: () => string | undefined, redo: () => void, selection?: ActionTarget, replacesQueue = false): void {
     const now = Date.now();
     const top = this.undoStack[this.undoStack.length - 1];
     // Coalesce rapid repeats of the same label (dragging a rating, holding a key).
-    if (top && top.label === label && now - top.at < 800) {
+    if (top && top.label === label && top.replacesQueue === replacesQueue && now - top.at < 800) {
       top.redo = redo;
       top.at = now;
     } else {
-      this.undoStack.push({ id: newId("undo"), label, at: now, undo, redo, selection });
+      this.undoStack.push({ id: newId("undo"), label, at: now, replacesQueue, undo, redo, selection });
       if (this.undoStack.length > 200) this.undoStack.shift();
     }
     this.redoStack = [];
@@ -1419,7 +1420,7 @@ export class FakeCore implements CoreHandle {
     if (rec.selection) this.selection = rec.selection;
     this.redoStack.push(rec);
     this.emitUndo();
-    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: note ? `Undone: ${rec.label} (${note})` : `Undone: ${rec.label}`, actionLabel: "Redo", actionCommand: JSON.stringify({ type: "redo" } satisfies Command), durationMs: 5000 } } });
+    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: note ? `Undone: ${rec.label} (${note})` : `Undone: ${rec.label}`, actionLabel: "Redo", actionCommand: JSON.stringify({ type: "redo" } satisfies Command), durationMs: 5000, undoEntryId: rec.id } } });
   }
 
   private redo(): void {
@@ -1428,18 +1429,18 @@ export class FakeCore implements CoreHandle {
     rec.redo();
     this.undoStack.push(rec);
     this.emitUndo();
-    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: `Redone: ${rec.label}`, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" } satisfies Command), durationMs: 5000 } } });
+    this.emit({ type: "toast", data: { toast: { id: newId("toast"), message: `Redone: ${rec.label}`, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" } satisfies Command), durationMs: 5000, undoEntryId: rec.id } } });
   }
 
   private undoState(): UndoState {
     const top = this.undoStack[this.undoStack.length - 1];
     const rtop = this.redoStack[this.redoStack.length - 1];
-    const history: UndoEntry[] = [...this.undoStack].reverse().slice(0, 20).map((u) => ({ id: u.id, label: u.label, deviceId: this.config.deviceId, at: u.at, note: undefined }));
+    const history: UndoEntry[] = [...this.undoStack].reverse().slice(0, 20).map((u) => ({ id: u.id, label: u.label, deviceId: this.config.deviceId, at: u.at, note: undefined, replacesQueue: u.replacesQueue }));
     return { canUndo: !!top, undoLabel: top?.label, canRedo: !!rtop, redoLabel: rtop?.label, history };
   }
 
-  private toast(message: string, undoable: boolean): void {
-    const toast: Toast = { id: newId("toast"), message, actionLabel: undoable ? "Undo" : undefined, actionCommand: undoable ? JSON.stringify({ type: "undo" } satisfies Command) : undefined, durationMs: 4000 };
+  private toast(message: string): void {
+    const toast: Toast = { id: newId("toast"), message, actionLabel: undefined, actionCommand: undefined, durationMs: 4000 };
     this.emit({ type: "toast", data: { toast } });
   }
 
@@ -1538,7 +1539,7 @@ export class FakeCore implements CoreHandle {
       trackIds: [...trackIds],
     });
     this.libraryChanged("playlists", [id]);
-    this.toast(`Created playlist ${name}`, false);
+    this.toast(`Created playlist ${name}`);
   }
 
   private playlistAdd(playlistId: string, trackIds: string[], atIndex: number | undefined): void {
@@ -1880,7 +1881,7 @@ export class FakeCore implements CoreHandle {
       this.emit({ type: "filtersChanged", data: { filters: this.filters } });
       this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
       this.emit({ type: "audioSettingsChanged", data: { settings: this.audio } });
-      this.toast("Configuration imported", false);
+      this.toast("Configuration imported");
     } catch (err) {
       this.emit({ type: "error", data: { kind: "storage", message: "Couldn't import the configuration document", detail: String(err) } });
     }
@@ -1897,7 +1898,7 @@ export class FakeCore implements CoreHandle {
     this.emit({ type: "devicesChanged", data: { devices: this.devices } });
     this.emitTransport();
     this.emitMediaSession();
-    this.toast(`Playing on ${target.name}`, false);
+    this.toast(`Playing on ${target.name}`);
   }
 
   private resumeHere(): void {

@@ -101,10 +101,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     case "copyDiagnostics": {
       const r = await b.query({ type: "diagnostics" });
-      if (r.type === "text") {
-        b.clipboard.writeText(r.data);
-        app.applyEvent({ type: "toast", data: { toast: { id: `diag-${Date.now()}`, message: t("settings.diagnosticsCopied"), actionLabel: undefined, actionCommand: undefined, durationMs: 3000 } } });
-      }
+      if (r.type === "text") b.clipboard.writeText(r.data);
       return;
     }
     case "goToAlbum": {
