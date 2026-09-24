@@ -76,7 +76,7 @@ fun RecentQueuesList(modifier: Modifier = Modifier) {
     }
     val pinned = saved.filter { it.pinned }
     val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
-    LazyColumn(modifier, contentPadding = PaddingValues(bottom = 120.dp)) {
+    LazyColumn(modifier, contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
         if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
         if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
     }
@@ -120,7 +120,7 @@ fun UndoHistoryPanel(modifier: Modifier = Modifier) {
             TextButton(enabled = undo.canRedo, onClick = { client.dispatch(Command.Redo) }) { Text(undo.redoLabel?.let { stringResource(R.string.history_redo_label, it) } ?: stringResource(R.string.action_redo)) }
         }
         if (undo.history.isEmpty()) { EmptyState(stringResource(R.string.empty_history_title), stringResource(R.string.empty_history_body)); return }
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
             items(undo.history, key = { it.id }) { e ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -311,7 +311,9 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                 enableDismissFromStartToEnd = removable,
                                 enableDismissFromEndToStart = removable,
                                 backgroundContent = {
-                                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp), contentAlignment = if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
+                                    // Only while a swipe is under way: the rows are transparent at rest,
+                                    // so a resting background would show straight through them.
+                                    if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp), contentAlignment = if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
                                         // Decorative: the row's "Remove from queue" action is the accessible path.
                                         Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
                                     }
