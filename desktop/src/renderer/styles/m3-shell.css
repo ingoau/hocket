@@ -1,1 +1,236 @@
-/* m3-shell: Material 3 Expressive pass (loaded after global.css, before now-playing.css). */
+/* m3-shell: Material 3 Expressive pass (loaded after global.css, before now-playing.css).
+   The app shell: floating panes, the navigation drawer/rail, the top bar and
+   its search, the side panel, menus, the palette, dialogs, snackbars and the
+   page-enter transition. Page contents live in m3-library.css / m3-pages.css.
+
+   Colour rules: text only ever sits on --bg, --bg-elev, --bg-sunken or the
+   contrast-checked accent tints (--accent-soft, --surface-tonal, --selection,
+   --state-selected). Spatial motion uses the springs, fades the emphasised
+   easings; global.css's reduced-motion block switches all of it off. */
+
+:root { --topbar-h: 56px; --pane-gap: 8px; --pane-radius: var(--shape-xl); }
+
+/* ---- Floating panes ------------------------------------------------------
+   The window is the plain surface; the content and the side panel are
+   rounded surface-container panes floating on it with an 8px gutter. The
+   gutter left of the content belongs to the sidebar column, so the content
+   pane still starts exactly where the sidebar ends. */
+.app-body { padding: 0 var(--pane-gap) var(--pane-gap) 0; }
+.content {
+  background: var(--bg-elev); border-radius: var(--pane-radius);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* Each navigation mounts the new page (Router keys it), which rises into place
+   on a spring. Transform only: the page is never drawn part-transparent, so its
+   text has full contrast from the first frame. */
+.content > * { animation: page-enter var(--dur-spring-long) var(--spring-fast); }
+@keyframes page-enter { from { transform: translateY(14px); } to { transform: none; } }
+
+/* ---- Navigation drawer / rail -------------------------------------------- */
+.sidebar { background: transparent; border-right: 0; padding-right: var(--pane-gap); }
+.sidebar-scroll { padding: 2px 4px 12px 10px; }
+.sidebar-foot { border-top: 0; padding: 4px 4px 2px 10px; }
+.sidebar .section-title {
+  padding: 18px 16px 6px; font-size: var(--fs-md); font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--fg-muted);
+}
+.sidebar .sidebar-scroll > .section-title:first-child { padding-top: 6px; }
+/* Pill items; the current one is a filled tonal indicator that springs open
+   behind a filled icon. The pill is drawn by ::before so it can grow in. */
+.nav-item { height: 36px; padding: 0 16px; gap: 12px; position: relative; isolation: isolate; }
+.nav-item + .nav-item { margin-top: 2px; }
+.nav-item.active, .nav-item.active:hover, .nav-item.active:active { background: transparent; font-weight: 700; }
+.nav-item.active::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--selection);
+  animation: nav-indicator var(--dur-spring-long) var(--spring-bouncy); transform-origin: 30% 50%;
+  transition: background-color var(--dur-short) var(--ease-emphasized);
+}
+.nav-item.active:hover::before { background: var(--state-selected); }
+@keyframes nav-indicator { from { transform: scaleX(0.45); } to { transform: none; } }
+.nav-item .icon { opacity: 1; color: var(--fg-muted); transition: transform var(--dur-spring) var(--spring-bouncy), color var(--dur-short) var(--ease-emphasized); }
+.nav-item:hover .icon { color: var(--fg); }
+.nav-item.active .icon { color: var(--accent-text); transform: scale(1.08); }
+.nav-item:active .icon { transform: scale(0.9); }
+/* A slim scrollbar that only shows while the pointer is over the list. */
+.sidebar-scroll::-webkit-scrollbar { width: 8px; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
+.sidebar-scroll:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
+/* The splitter sits in the gutter between the drawer and the content pane. */
+.sidebar > .resize-handle { right: 1px; }
+
+/* ---- Top bar ------------------------------------------------------------ */
+.topbar { border-bottom: 0; background: var(--bg); padding: 0 8px 0 12px; gap: 6px; }
+.topbar > .grow { display: none; }
+.nav-buttons { gap: 4px; }
+.topbar .btn.icon { width: 36px; height: 36px; }
+/* A big filled pill search bar, centred between the history buttons and the
+   status/window controls. */
+.search { width: 480px; max-width: 46vw; margin: 0 auto; }
+.search .input {
+  height: 44px; padding-left: 48px; padding-right: 20px; font-size: var(--fs-lg); background: var(--bg-elev); border-color: transparent;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+  transition: box-shadow var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized);
+}
+.search .input:hover { box-shadow: var(--shadow-1); }
+.search .input:focus { border-color: transparent; box-shadow: var(--shadow-2); }
+.search .input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+/* Open results: the bar's bottom corners square off toward the sheet below. */
+.search .input[aria-expanded="true"] { border-radius: 22px 22px var(--shape-md) var(--shape-md); }
+.search > .icon { left: 18px; width: 20px; height: 20px; color: var(--fg-muted); }
+.search-popover {
+  top: calc(100% + 6px); left: 0; right: 0; width: auto; border: 0; border-radius: var(--shape-md) var(--shape-md) var(--pane-radius) var(--pane-radius);
+  box-shadow: var(--shadow-2), var(--shadow); padding: 8px; transform-origin: top center;
+}
+.search-popover.fade-in { animation: sheet-drop var(--dur-spring) var(--spring-fast); }
+@keyframes sheet-drop { from { opacity: 0; transform: translateY(-6px) scaleY(0.9); } to { opacity: 1; transform: none; } }
+.search-section { padding: 2px 0; }
+.result-row { height: 44px; gap: 12px; padding: 0 12px 0 6px; border-radius: var(--shape-full); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.result-row .art { width: 32px; height: 32px; border-radius: var(--shape-sm); }
+.result-row .kind { width: auto; min-width: 56px; }
+.search-divider { margin: 8px 12px; }
+
+/* Window controls: round state layers; close turns into a danger pill. */
+.window-controls { gap: 2px; margin-left: 6px; }
+.window-controls .btn { width: 40px; height: 32px; border-radius: var(--shape-full); }
+.window-controls .btn:active, .window-controls .btn.icon:active { border-radius: var(--shape-sm); }
+.window-controls .btn.close:hover { background: var(--danger); color: var(--danger-fg); }
+
+/* Jobs popover: a rounded surface sheet under its button. */
+.jobs-btn .dot { top: 7px; right: 7px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--bg); }
+.popover {
+  top: calc(100% + 8px); width: 400px; border: 0; border-radius: var(--pane-radius); padding: 12px 8px;
+  box-shadow: var(--shadow-2), var(--shadow);
+}
+.popover .section-title { font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.01em; text-transform: none; color: var(--fg); padding: 4px 12px 10px; }
+.popover .section-title.row { font-size: var(--fs-lg); padding-top: 14px; }
+.popover .item { padding: 10px 12px; gap: 6px; border-radius: var(--shape-lg); }
+.popover .item + .item { border-top: 0; box-shadow: 0 -1px 0 var(--border); }
+.popover .progress { height: 6px; }
+
+/* ---- Side panel ---------------------------------------------------------
+   Queue and lyrics are two stacked floating cards; the divider between them
+   is the gutter itself. */
+.right-panel { background: transparent; border-left: 0; margin-left: var(--pane-gap); }
+.right-panel .pane {
+  background: var(--bg-elev); border-radius: var(--pane-radius);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+}
+.right-panel .pane + .pane { margin-top: var(--pane-gap); }
+.right-panel .pane.collapsed { flex: 0 0 48px !important; }
+.right-panel > .resize-handle:not(.h) { left: -7px !important; }
+.right-panel .resize-handle.h { top: 0; height: var(--pane-gap); flex: 0 0 var(--pane-gap); }
+.right-panel .resize-handle.h::after { inset: 2px calc(50% - 24px); }
+.pane-head { height: 48px; padding: 0 8px 0 10px; border-bottom: 0; gap: 4px; }
+.right-panel .pane-head .btn.icon.sm { width: 32px; height: 32px; }
+.pane-title { font-size: var(--fs-lg); font-weight: 800; letter-spacing: -0.01em; padding-left: 6px; }
+/* Queue / Recent: a connected pill segment; the selected half fills tonally
+   and squares off slightly on the inside edge. */
+.pane-head .tabs { gap: 2px; padding: 3px; border-radius: var(--shape-full); background: var(--bg-sunken); }
+.pane-head .tab {
+  height: 30px; padding: 0 16px; font-size: var(--fs-md); font-weight: 600;
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
+}
+.pane-head .tab.active { background: var(--selection); color: var(--fg); font-weight: 700; }
+.pane-head .tab.active:hover { background: var(--selection); }
+.pane-head .tab.active:first-child { border-radius: var(--shape-full) var(--shape-sm) var(--shape-sm) var(--shape-full); }
+.pane-head .tab.active:last-child { border-radius: var(--shape-sm) var(--shape-full) var(--shape-full) var(--shape-sm); }
+/* Queue rows inside the side panel (the fullscreen player styles its own). */
+.right-panel .queue-section {
+  background: var(--bg-elev); color: var(--fg); font-size: var(--fs-md); font-weight: 800; letter-spacing: 0; text-transform: none; padding: 8px 16px 4px;
+}
+.right-panel .qrow { border-radius: var(--shape-md); margin: 0 8px; height: 44px; padding: 0 10px 0 6px; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.right-panel .qrow .art { width: 34px; height: 34px; border-radius: var(--shape-sm); background: var(--bg-sunken); }
+.right-panel .qrow.current { border-radius: var(--shape-lg); }
+.right-panel .qrow.current .t1 { font-weight: 700; }
+.sq-row { margin: 0 8px; padding: 8px 8px; border-radius: var(--shape-lg); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.sq-row .art { width: 44px; height: 44px; border-radius: var(--shape-md); background: var(--bg-sunken); }
+.right-panel .lyrics-static { padding: 8px 20px 16px; }
+
+/* ---- Menus -------------------------------------------------------------- */
+.menu { border: 0; border-radius: var(--shape-lg); padding: 8px; min-width: 220px; box-shadow: var(--shadow-2), var(--shadow); }
+.menu.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+@keyframes menu-in { from { opacity: 0; transform: scale(0.9, 0.8); } to { opacity: 1; transform: none; } }
+.menu .mi {
+  height: 32px; padding: 0 12px; gap: 12px; border-radius: var(--shape-sm);
+  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
+}
+.menu .mi:hover, .menu .mi.active { border-radius: var(--shape-full); }
+.menu .mi:active { border-radius: var(--shape-xs); }
+.menu .sep { margin: 6px 12px; }
+
+/* ---- Command palette ----------------------------------------------------- */
+.overlay { background: rgba(0, 0, 0, 0.4); }
+.palette { width: 640px; border: 0; border-radius: 32px; padding: 10px; box-shadow: var(--shadow-2), var(--shadow); }
+.palette.fade-in, .dialog.fade-in { animation: sheet-spring var(--dur-spring-long) var(--spring-fast); }
+@keyframes sheet-spring { from { opacity: 0; transform: translateY(-14px) scale(0.92); } 40% { opacity: 1; } to { opacity: 1; transform: none; } }
+.palette .input { height: 52px; font-size: 17px; padding: 0 22px; }
+.palette .list { padding-top: 8px; }
+.palette .group { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 700; color: var(--fg-muted); padding: 12px 16px 6px; }
+.palette .pi {
+  height: 42px; padding: 0 16px 0 12px; gap: 12px; border-radius: var(--shape-md);
+  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
+}
+.palette .pi.active { border-radius: var(--shape-full); }
+.palette .pi .art { width: 30px; height: 30px; border-radius: var(--shape-sm); }
+
+/* ---- Dialogs ------------------------------------------------------------- */
+.dialog { width: 460px; border: 0; border-radius: 32px; padding: 28px; gap: 16px; box-shadow: var(--shadow-2), var(--shadow); }
+.dialog-title { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+.dialog .row > .art { width: 64px; height: 64px; border-radius: var(--shape-lg); flex: 0 0 auto; }
+.dialog .list { border: 0; background: var(--bg-sunken); border-radius: var(--shape-lg); padding: 6px; }
+.dialog .list .li {
+  height: 40px; padding: 0 14px; border-radius: var(--shape-full);
+  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
+}
+.dialog .list .li:active { border-radius: var(--shape-sm); }
+.dialog .buttons { margin-top: 8px; }
+.dialog .buttons .btn { height: 40px; padding: 0 20px; }
+
+/* ---- Snackbars ----------------------------------------------------------- */
+.toasts { bottom: calc(var(--player-h) + 20px); }
+.toast { min-height: 48px; padding: 6px 6px 6px 20px; border-radius: var(--shape-lg); font-weight: 500; box-shadow: var(--shadow-2), var(--shadow); }
+.toast:not(:has(.btn)) { padding-right: 20px; }
+.toast.fade-in { animation: toast-in var(--dur-spring-long) var(--spring-bouncy); }
+.toast .btn { height: 36px; padding: 0 16px; }
+
+/* ---- Forced colours -------------------------------------------------------
+   Borders and fills above are dropped by the system palette; restore the
+   system-colour edges and the current item's Highlight. */
+@media (forced-colors: active) {
+  .content, .right-panel .pane { border: 1px solid CanvasText; }
+  .menu, .dialog, .palette, .popover, .search-popover, .toast { border: 1px solid CanvasText; }
+  .search .input { border: 1px solid ButtonText; }
+  .nav-item.active, .nav-item.active:hover { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .nav-item.active::before { display: none; }
+  .pane-head .tabs { border: 1px solid CanvasText; }
+  .pane-head .tab.active { outline: 2px solid Highlight; }
+}
+
+/* ---- Narrow windows and 200% zoom ---------------------------------------- */
+@media (max-width: 900px) {
+  :root { --pane-gap: 6px; --pane-radius: var(--shape-lg); }
+  .sidebar { padding-right: var(--pane-gap); }
+  .sidebar-scroll, .sidebar-foot { padding: 4px 2px 4px 4px; }
+  /* The rail is too narrow to give a scrollbar room; it still scrolls. */
+  .sidebar-scroll { scrollbar-width: none; }
+  .sidebar .nav-item { padding: 0; height: 36px; }
+  .sidebar .nav-item.active .icon { transform: none; }
+  .topbar { padding: 0 6px; gap: 4px; }
+  .topbar .btn.icon { width: 32px; height: 32px; }
+  .search { width: auto; max-width: none; margin: 0; }
+  .search .input { height: 40px; }
+  /* Results drop straight under the (now wide) field instead of a fixed sheet. */
+  .search-popover { position: absolute; top: calc(100% + 6px); left: 0; right: 0; width: auto; }
+  .popover { position: absolute; top: calc(100% + 8px); left: auto; right: 0; width: min(400px, calc(100vw - 16px)); }
+  .window-controls .btn { width: 32px; }
+  /* The drawer: the two cards on a plain sheet sliding over the content. */
+  .right-panel.drawer {
+    margin-left: 0; top: 0; right: var(--pane-gap); bottom: var(--pane-gap); background: var(--bg); padding: 6px;
+    border-radius: var(--shape-xl); box-shadow: var(--shadow-2), var(--shadow);
+    animation: drawer-in var(--dur-spring-long) var(--spring-fast);
+  }
+  /* A reveal from the right edge (clip-path, not a translate, so nothing ever overflows the window). */
+  @keyframes drawer-in { from { clip-path: inset(0 0 0 35% round var(--shape-xl)); } to { clip-path: inset(0 round var(--shape-xl)); } }
+  .dialog { padding: 20px; }
+  .dialog-title { font-size: 22px; }
+}
