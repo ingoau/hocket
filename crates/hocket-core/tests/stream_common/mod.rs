@@ -108,3 +108,73 @@ pub fn no_credentials(url: &str) -> bool {
         .any(|kv| ["t", "s", "p", "u", "apiKey"].contains(&kv.split('=').next().unwrap_or("")))
         && !url.contains("secret")
 }
+
+/// One stream-cache row as the database has it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    pub track_id: String,
+    pub profile: String,
+    pub complete: bool,
+    pub spans: String,
+    pub bytes: f64,
+    pub total: Option<f64>,
+    pub path: String,
+}
+
+/// The stream-cache index, ordered by track.
+pub fn cache_rows(t: &TestCore) -> Vec<Row> {
+    let db = t.open_db();
+    db.with_conn(|c| {
+        let mut st = c.prepare(
+            "SELECT track_id, profile, complete, spans, bytes, total_bytes, path FROM cache_entries ORDER BY track_id, profile",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(Row {
+                track_id: r.get(0)?,
+                profile: r.get(1)?,
+                complete: r.get::<_, i64>(2)? != 0,
+                spans: r.get(3)?,
+                bytes: r.get(4)?,
+                total: r.get(5)?,
+                path: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    })
+    .unwrap()
+}
+
+/// The row for one track (panics unless exactly one).
+pub fn row_of(t: &TestCore, id: &str) -> Row {
+    let rows: Vec<Row> = cache_rows(t)
+        .into_iter()
+        .filter(|r| r.track_id == id)
+        .collect();
+    assert_eq!(rows.len(), 1, "{id}: {rows:?}");
+    rows[0].clone()
+}
+
+/// Poll until the core has no reader handle open (a closed handle merges
+/// its spans as it goes).
+pub async fn wait_handles_closed(t: &TestCore) {
+    for _ in 0..400 {
+        t.core.settle().await;
+        if t.core.stream_open_handles() == 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("handles left open: {}", t.core.stream_open_handles());
+}
+
+/// Poll until `f` holds for the track's cache rows.
+pub async fn wait_rows(t: &TestCore, what: &str, mut f: impl FnMut(&[Row]) -> bool) {
+    for _ in 0..400 {
+        t.core.settle().await;
+        if f(&cache_rows(t)) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("{what}: {:?}", cache_rows(t));
+}

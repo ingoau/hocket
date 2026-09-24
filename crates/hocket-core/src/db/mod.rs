@@ -35,10 +35,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0002_outbox_server_ref",
         include_str!("migrations/0002_outbox_server_ref.sql"),
     ),
+    (
+        3,
+        "0003_stream_cache_spans",
+        include_str!("migrations/0003_stream_cache_spans.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[

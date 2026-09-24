@@ -586,6 +586,11 @@ impl Core {
             .unwrap_or(Err(stream_reader::StreamError::ShutDown))
     }
 
+    /// Open stream-reader handles (tests, diagnostics).
+    pub fn stream_open_handles(&self) -> usize {
+        self.reader().map_or(0, |r| r.open_handles())
+    }
+
     /// Deliver one tick to the actor (tests with `manual_tick`).
     pub fn tick(&self) -> Result<(), CoreError> {
         self.post_internal(Internal::Tick)

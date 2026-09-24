@@ -574,7 +574,7 @@ struct FakeUpstreamState {
 
 /// In-memory server side of the stream reader: serves registered media by
 /// the `id` query parameter (or 64 KiB of deterministic bytes), honours
-/// `Range`, counts requests, and can stall, fail or answer with an error
+/// `Range` (`bytes=a-` and `bytes=a-b`), counts requests, and can stall, fail or answer with an error
 /// envelope per track.
 #[derive(Default)]
 pub struct FakeUpstream {
@@ -667,14 +667,19 @@ impl StreamUpstream for FakeUpstream {
                 });
             }
             let len = media.len() as u64;
-            let start = request
+            let bounds = request
                 .range
                 .as_deref()
                 .and_then(|r| r.strip_prefix("bytes="))
-                .and_then(|r| r.split_once('-'))
-                .and_then(|(a, _)| a.parse::<u64>().ok());
+                .and_then(|r| r.split_once('-'));
+            let start = bounds.and_then(|(a, _)| a.parse::<u64>().ok());
+            let last = bounds
+                .and_then(|(_, b)| b.parse::<u64>().ok())
+                .map_or(len.saturating_sub(1), |b| b.min(len.saturating_sub(1)));
             let (status, from, content_range) = match start {
-                Some(s) if s < len => (206, s, Some(format!("bytes {s}-{}/{len}", len - 1))),
+                Some(s) if s < len && s <= last => {
+                    (206, s, Some(format!("bytes {s}-{last}/{len}")))
+                }
                 Some(_) => {
                     return Ok(UpstreamResponse {
                         status: 416,
@@ -686,7 +691,11 @@ impl StreamUpstream for FakeUpstream {
                 }
                 None => (200, 0, None),
             };
-            let slice = media.slice(from as usize..);
+            let slice = if status == 206 {
+                media.slice(from as usize..=last as usize)
+            } else {
+                media.slice(from as usize..)
+            };
             let content_length = Some(slice.len() as u64);
             let chunks: Vec<Result<bytes::Bytes, String>> = slice
                 .chunks(16 * 1024)
