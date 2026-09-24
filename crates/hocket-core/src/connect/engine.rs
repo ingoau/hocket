@@ -1329,10 +1329,7 @@ impl Engine {
             .deferred_scrobbles
             .iter()
             .any(|d| same(&d.track_id, d.started_at))
-            || self
-                .scrobble_queries
-                .values()
-                .any(|(t, s, _)| same(t, *s));
+            || self.scrobble_queries.values().any(|(t, s, _)| same(t, *s));
         if !own_pending {
             self.learn_scrobbled(track_id, started_at, device_id);
         }
@@ -5068,7 +5065,9 @@ mod tests {
         let (mut e, clock) = engine("m");
         e.handle(Input::LocalOp { op: play_op() });
         e.handle(Input::SetLanDiscovery(true));
-        clock.0.fetch_add(LAN_SETTLE_MS as u64 + 1, Ordering::SeqCst);
+        clock
+            .0
+            .fetch_add(LAN_SETTLE_MS as u64 + 1, Ordering::SeqCst);
         // an advert we never shared a room with (a rogue's, say) earns no
         // patience: we lead (higher revision) and judge at once
         e.handle(Input::PeerDiscovered(advert("y", 0)));
