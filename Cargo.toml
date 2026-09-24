@@ -16,7 +16,7 @@ repository = "https://github.com/ingoau/hocket"
 [workspace.dependencies]
 hocket-core = { path = "crates/hocket-core", default-features = false }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 typeshare = "1"
 thiserror = "2"
 anyhow = "1"

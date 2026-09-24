@@ -15,6 +15,8 @@ env:
 jobs:
   core:
     name: Rust core
+    # The weekly schedule exists for the fuzz job only.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +31,8 @@ jobs:
 
   desktop:
     name: Desktop
+    # The weekly schedule exists for the fuzz job only.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +59,8 @@ jobs:
 
   android:
     name: Android
+    # The weekly schedule exists for the fuzz job only.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

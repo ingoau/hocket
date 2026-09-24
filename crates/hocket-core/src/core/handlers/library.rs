@@ -1202,19 +1202,24 @@ impl Actor {
             if !server_negative {
                 match api.lyrics_by_song_id(&track_id).await {
                     Ok(entries) => {
-                        let raw: Vec<crate::lyrics::raw::StructuredLyrics> =
-                            serde_json::to_value(&entries)
-                                .ok()
-                                .and_then(|v| serde_json::from_value(v).ok())
-                                .unwrap_or_default();
-                        match crate::lyrics::adapt_list(&track_id, &raw, LyricsSource::Server) {
-                            Some(l) => {
-                                let _ = caches.lyrics_put(&sid, &track_id, &l);
-                                found = Some(l);
+                        // A conversion failure is our bug, not "no lyrics":
+                        // log it and do not negative-cache, or the track would
+                        // stay lyric-less after the bug is fixed.
+                        let raw: Result<Vec<crate::lyrics::raw::StructuredLyrics>, _> =
+                            serde_json::to_value(&entries).and_then(serde_json::from_value);
+                        match raw {
+                            Err(e) => {
+                                tracing::warn!(target: "hocket_core", error = %e, "server lyrics could not be adapted");
                             }
-                            None => {
-                                let _ = caches.lyrics_put_none(&sid, &track_id, LyricsSource::Server);
-                            }
+                            Ok(raw) => match crate::lyrics::adapt_list(&track_id, &raw, LyricsSource::Server) {
+                                Some(l) => {
+                                    let _ = caches.lyrics_put(&sid, &track_id, &l);
+                                    found = Some(l);
+                                }
+                                None => {
+                                    let _ = caches.lyrics_put_none(&sid, &track_id, LyricsSource::Server);
+                                }
+                            },
                         }
                     }
                     Err(e) => {

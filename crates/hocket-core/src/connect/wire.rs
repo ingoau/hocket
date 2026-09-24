@@ -1515,3 +1515,25 @@ mod decode_never_panics {
         assert!(WireMessage::decode(&many).is_err());
     }
 }
+
+#[cfg(test)]
+mod float_roundtrip_tests {
+    /// Connect relays f64 timestamps and LWW stamps; without serde_json's
+    /// `float_roundtrip` feature some values come back one ulp off, which can
+    /// flip last-writer-wins tie-breaks between devices (found by fuzzing).
+    #[test]
+    fn f64_values_survive_json_exactly() {
+        for x in [
+            1e42_f64,
+            215_492_859_907_334.66,
+            1_790_215_057_538.123,
+            0.1 + 0.2,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+        ] {
+            let json = serde_json::to_string(&x).unwrap();
+            let back: f64 = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.to_bits(), x.to_bits(), "{x} → {json} → {back}");
+        }
+    }
+}
