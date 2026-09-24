@@ -100,8 +100,13 @@ class CoreClient(
     val filters: StateFlow<List<Filter>> = _filters.asStateFlow()
     private val _outputDevices = MutableStateFlow<List<OutputDevice>>(emptyList())
     val outputDevices: StateFlow<List<OutputDevice>> = _outputDevices.asStateFlow()
-    private val _playerNotice = MutableStateFlow<String?>(null)
-    val playerNotice: StateFlow<String?> = _playerNotice.asStateFlow()
+    private val _playerNotice = MutableStateFlow<EventPlayerNoticeInner?>(null)
+    /**
+     * The player-bar notice: its stable [EventPlayerNoticeInner.code] (match on this; the UI has
+     * its own strings), [EventPlayerNoticeInner.detail] and the core's English message. Null when
+     * cleared.
+     */
+    val playerNotice: StateFlow<EventPlayerNoticeInner?> = _playerNotice.asStateFlow()
     private val _lyrics = MutableStateFlow<Map<TrackId, Lyrics?>>(emptyMap())
     /** Lyrics per track id as they arrive (`null` = fetched, none). */
     val lyrics: StateFlow<Map<TrackId, Lyrics?>> = _lyrics.asStateFlow()
@@ -326,10 +331,12 @@ class CoreClient(
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
-            is Event.PlayerNotice -> _playerNotice.value = event.data.message
+            is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }
             is Event.JobsChanged -> _jobs.value = event.data.jobs
             is Event.ProblemsChanged -> _problems.value = event.data.problems
             is Event.ConnectionChanged -> _connection.value = event.data.state
+            // The core announces every SetNetworkState change (and replays it on attach).
+            is Event.NetworkChanged -> _network.value = event.data.network
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer

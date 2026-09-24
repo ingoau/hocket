@@ -65,6 +65,7 @@ class SettingHandle(val key: String, val raw: String?, val scope: SettingScope?,
     fun setBool(v: Boolean) = set(v.toString())
     fun setInt(v: Int) = set(v.toString())
     fun setDouble(v: Double) = set(v.toString())
+    fun setNull() = set("null")
     fun setRaw(v: String) = set(v)
 }
 

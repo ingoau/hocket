@@ -124,6 +124,8 @@ class ShellNavigator(
     val goTo: (NavItem) -> Unit,
     val openAccount: () -> Unit,
     val openBarEditor: () -> Unit,
+    /** The "Available offline" list (from the offline indicator). */
+    val openAvailableOffline: () -> Unit = {},
 )
 
 val LocalShellNavigator = staticCompositionLocalOf<ShellNavigator?> { null }

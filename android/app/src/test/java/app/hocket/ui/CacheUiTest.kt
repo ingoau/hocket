@@ -10,9 +10,12 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -25,9 +28,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.Event
+import app.hocket.core.api.EventPlayerNoticeInner
 import app.hocket.core.api.NetworkKind
 import app.hocket.core.api.NetworkState
 import app.hocket.core.api.OfflineState
+import app.hocket.core.api.PlayerNoticeCode
 import app.hocket.core.toSummary
 import app.hocket.ui.components.TrackRow
 import app.hocket.ui.nav.AppRoot
@@ -183,14 +189,20 @@ class CacheUiTest {
         rowHas("storage.dataSaved", "2.70 GB")
         rowHas("storage.dataSaved", "3.10 GB played from this device · 5.20 GB fetched from the server")
 
-        // A custom size sets storage.cacheMaxBytes; Automatic resets it.
+        // Automatic is storage.cacheMaxBytes null; a custom size (2 GB included) sets it.
+        assertEquals("null", core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value)
         choice("4 GB").performScrollTo().performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == false }
         assertEquals(4e9, core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value.toDouble(), 1.0)
         rowHas("storage.cacheMaxBytes", "Custom: 4.00 GB")
         choice("Automatic").performScrollTo().performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == true }
+        assertEquals("null", core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value)
         rowHas("storage.cacheMaxBytes", "Automatic (currently 2.15 GB)")
+        choice("2 GB").performScrollTo().performClick()
+        compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == false }
+        assertEquals(2e9, core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value.toDouble(), 1.0)
+        rowHas("storage.cacheMaxBytes", "Custom: 2.00 GB")
 
         // Prefetch on mobile data: a device-local switch, off by default.
         val prefetch = compose.onNodeWithTag("setting.storage.prefetchOnMobileData")
@@ -253,10 +265,34 @@ class CacheUiTest {
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         awaitTag("navBar.home")
+        assertTrue("online: no offline indicator", compose.onAllNodesWithTag("offline.indicator").fetchSemanticsNodes().isEmpty())
         core.client.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
+        // Shown in the app's own words, matched on the notice's code.
         compose.waitUntil(5_000) {
             runCatching { compose.onNodeWithText("Offline: skipping songs that aren't downloaded or cached").assertExists() }.isSuccess ||
                 runCatching { compose.onNodeWithText("Nothing in the queue is available offline").assertExists() }.isSuccess
         }
+        // The core's NetworkChanged drives the offline indicator, which leads to what plays.
+        awaitTag("offline.indicator")
+        compose.onNodeWithContentDescription("Offline. Show what's available offline").assertExists()
+        compose.onNodeWithTag("offline.indicator").performClick()
+        awaitTag("availableOffline.screen")
+        core.client.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, false, null)))
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("offline.indicator").fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun aNoticeIsShownFromItsCodeInTheAppsWords() {
+        val core = TestCore()
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        awaitTag("navBar.home")
+        // The English message is not what shows: the code picks the app's string, the detail fills it in.
+        core.client.onEvent(Event.PlayerNotice(EventPlayerNoticeInner("core text", PlayerNoticeCode.CouldNotPlaySkipped, "Some Song")))
+        // The mini player speaks it as part of its one merged description.
+        val shown = hasContentDescription("Couldn't play Some Song, skipped", substring = true).or(hasText("Couldn't play Some Song, skipped", substring = true))
+        compose.waitUntil(5_000) { compose.onAllNodes(shown).fetchSemanticsNodes().isNotEmpty() }
+        val english = hasContentDescription("core text", substring = true).or(hasText("core text", substring = true))
+        assertTrue(compose.onAllNodes(english).fetchSemanticsNodes().isEmpty())
     }
 }

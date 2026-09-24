@@ -206,7 +206,7 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
 }
 
 /** Custom stream-cache budgets offered next to "Automatic" (decimal, as sizes are shown). */
-internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 4e9, 8e9, 16e9)
+internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 2e9, 4e9, 8e9, 16e9)
 
 /** "500 MB", "4 GB": round choice labels, like the warning threshold's. */
 private fun budgetChoiceLabel(bytes: Double): String = if (bytes < 1e9) "${(bytes / 1e6).toInt()} MB" else "${(bytes / 1e9).toInt()} GB"
@@ -241,14 +241,15 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         if (budget > 0) {
             LinearProgressIndicator(progress = { (storage.cacheBytes / budget).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp).clearAndSetSemantics { })
         }
-        // Budget: "Automatic" while storage.cacheMaxBytes is unset (reset); a custom size sets it.
-        val auto = storage.cacheBudgetAuto ?: (cacheMax.raw == null)
+        // Budget: "Automatic" while storage.cacheMaxBytes is null (its default); any size, 2 GB
+        // included, is the user's own.
+        val auto = storage.cacheBudgetAuto ?: (cacheMax.double == null)
         val autoLabel = stringResource(R.string.settings_cache_budget_auto, formatBytes(budget))
         SettingRow(stringResource(R.string.settings_cache_budget), if (auto) autoLabel else stringResource(R.string.settings_cache_budget_custom, formatBytes(budget)), cacheMax.scope, tag = "storage.cacheMaxBytes")
         ChoiceRow(
             listOf<Pair<Double?, String>>(null to stringResource(R.string.settings_cache_budget_auto_short)) + CACHE_BUDGET_CHOICES.map { it to budgetChoiceLabel(it) },
             isSelected = { b -> if (b == null) auto else !auto && kotlin.math.abs(budget - b) < 1e6 },
-            onSelect = { b -> if (b == null) client.dispatch(Commands.resetSetting(SettingKeys.STORAGE_CACHE_MAX_BYTES)) else cacheMax.setDouble(b) },
+            onSelect = { b -> if (b == null) cacheMax.setNull() else cacheMax.setDouble(b) },
             modifier = Modifier.padding(horizontal = 16.dp).testTag("storage.cacheMaxBytes.choices"),
         )
         Text(stringResource(R.string.settings_cache_budget_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))

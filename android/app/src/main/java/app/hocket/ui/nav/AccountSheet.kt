@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.core.api.NetworkKind
 import app.hocket.core.api.ServerInfo
 import app.hocket.ui.LocalCoreClient
 
@@ -65,6 +67,7 @@ private fun Avatar(server: ServerInfo?, size: Dp) {
 /**
  * The account button of the main destinations' top app bars: a round avatar with the user's
  * initial, spoken "Account and settings". Opens [AccountSheet]. Nothing outside the main shell.
+ * While the device is offline the [OfflineIndicator] stands just before it.
  */
 @Composable
 fun AccountButton(modifier: Modifier = Modifier) {
@@ -72,8 +75,26 @@ fun AccountButton(modifier: Modifier = Modifier) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val description = stringResource(R.string.account_button)
+    OfflineIndicator()
     IconButton(onClick = shell.openAccount, modifier = modifier.semantics { contentDescription = description }.testTag("account.button")) {
         Avatar(server, 32.dp)
+    }
+}
+
+/**
+ * Offline, as the core last reported it (`NetworkChanged`, fed by the platform's
+ * `SetNetworkState`): a cloud-off button, spoken "Offline. Show what's available offline", that
+ * opens the Available offline list. Nothing while online or outside the main shell.
+ */
+@Composable
+fun OfflineIndicator(modifier: Modifier = Modifier) {
+    val shell = LocalShellNavigator.current ?: return
+    val client = LocalCoreClient.current
+    val network by client.network.collectAsStateWithLifecycle()
+    if (network?.kind != NetworkKind.Offline) return
+    val description = stringResource(R.string.offline_indicator)
+    IconButton(onClick = shell.openAvailableOffline, modifier = modifier.semantics { contentDescription = description }.testTag("offline.indicator")) {
+        Icon(Icons.Outlined.CloudOff, contentDescription = null)
     }
 }
 

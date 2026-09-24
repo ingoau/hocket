@@ -48,7 +48,7 @@ sealed interface Route {
 enum class NavItem(val id: String, val canonicalActionId: String) {
     Home("home", "navigateHome"),
     Search("search", "findInList"),
-    Library("library", "navigateAlbums"),
+    Library("library", "navigateLibrary"),
     Playlists("playlists", "navigatePlaylists"),
     Artists("artists", "navigateArtists"),
     Albums("albums", "navigateAlbums"),

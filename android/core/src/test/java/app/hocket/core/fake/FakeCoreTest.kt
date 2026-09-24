@@ -249,6 +249,11 @@ class FakeCoreTest {
         assertEquals(4e9, storage().cacheBudgetBytes!!, 0.0)
         core.dispatchAndWait(Commands.resetSetting("storage.cacheMaxBytes"))
         assertEquals(true, storage().cacheBudgetAuto)
+        // Like the core: 2 GiB is a size of its own; null is automatic.
+        core.dispatchAndWait(Commands.setSetting("storage.cacheMaxBytes", "2147483648.0"))
+        assertEquals(false, storage().cacheBudgetAuto)
+        core.dispatchAndWait(Commands.setSetting("storage.cacheMaxBytes", "null"))
+        assertEquals(true, storage().cacheBudgetAuto)
         core.dispatchAndWait(Command.ClearStreamCache)
         assertEquals(0.0, storage().partialCacheBytes!!, 0.0)
     }
@@ -270,10 +275,26 @@ class FakeCoreTest {
         core.dispatchAndWait(Command.Start)
         val notice = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.PlayerNotice>().first { it.data.message != null } }
         core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
-        val msg = notice.await().data.message
-        assertTrue(msg == FakeCore.OFFLINE_SKIPPING || msg == FakeCore.OFFLINE_NOTHING)
+        val data = notice.await().data
+        assertTrue(data.code == PlayerNoticeCode.OfflineSkipping || data.code == PlayerNoticeCode.NothingAvailableOffline)
+        assertTrue(data.message == FakeCore.OFFLINE_SKIPPING || data.message == FakeCore.OFFLINE_NOTHING)
         val cleared = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.PlayerNotice>().first() }
         core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, false, null)))
         assertNull(cleared.await().data.message)
+        assertNull(cleared.await().data.code)
+    }
+
+    @Test
+    fun networkChangesAreAnnouncedOnceAndReplayed() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        val offline = NetworkState(NetworkKind.Offline, false, null)
+        val first = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.NetworkChanged>().first() }
+        core.dispatchAndWait(Commands.setNetworkState(offline))
+        assertEquals(offline, first.await().data.network)
+        // A snapshot request replays the current network.
+        val replay = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.NetworkChanged>().first() }
+        core.dispatchAndWait(Command.RequestSnapshot)
+        assertEquals(offline, replay.await().data.network)
     }
 }

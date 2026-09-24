@@ -91,7 +91,7 @@ object ActionIds {
 
     /** Ids the platform performs itself (`ActionDef::ui_handled`). */
     val UI_HANDLED = setOf(ADD_TO_PLAYLIST, RATE, GO_TO_ALBUM, GO_TO_ARTIST, SLEEP_TIMER, TOGGLE_LYRICS, COPY_DIAGNOSTICS,
-        "navigateHome", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres",
+        "navigateHome", "navigateLibrary", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres",
         "navigateRecent", "navigateFilters", "navigateDownloads", "navigateStats", "navigateSettings")
 
     /** The registry's default context-menu order (surface `contextMenu`). */

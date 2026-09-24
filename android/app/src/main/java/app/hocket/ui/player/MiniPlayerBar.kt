@@ -76,7 +76,8 @@ fun MiniPlayerBar(onExpand: () -> Unit) {
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
     val position by client.position.collectAsStateWithLifecycle()
-    val notice by client.playerNotice.collectAsStateWithLifecycle()
+    val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
+    val notice = playerNoticeText(playerNotice)
     val resume by client.resumeOffer.collectAsStateWithLifecycle()
     val track = entry?.track
     val scope = rememberCoroutineScope()
@@ -88,7 +89,7 @@ fun MiniPlayerBar(onExpand: () -> Unit) {
     val artist = track?.artist ?: stringResource(R.string.unknown_artist)
     val nowPlayingDesc = stringResource(R.string.player_mini_a11y, title, artist)
     val sub = when {
-        notice != null -> notice!!
+        notice != null -> notice
         resume != null -> stringResource(R.string.player_resume_offer, resume!!.deviceName, resume!!.track.title)
         else -> artist
     }

@@ -52,6 +52,27 @@ class CoreClientTest {
     }
 
     @Test
+    fun networkAndCodedNoticesFollowTheirEvents() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        // NetworkChanged keeps `network` current (the snapshot alone would go stale).
+        client.onEvent(Event.NetworkChanged(EventNetworkChangedInner(NetworkState(NetworkKind.Cellular, true, null))))
+        assertEquals(NetworkKind.Cellular, client.network.value?.kind)
+        client.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
+        runCurrent()
+        assertEquals(NetworkKind.Offline, client.network.value?.kind)
+        // A notice carries its stable code; an all-null one clears it.
+        client.onEvent(Event.PlayerNotice(EventPlayerNoticeInner("Couldn't play X, skipped", PlayerNoticeCode.CouldNotPlaySkipped, "X")))
+        assertEquals(PlayerNoticeCode.CouldNotPlaySkipped, client.playerNotice.value?.code)
+        assertEquals("X", client.playerNotice.value?.detail)
+        client.onEvent(Event.PlayerNotice(EventPlayerNoticeInner()))
+        assertEquals(null, client.playerNotice.value)
+    }
+
+    @Test
     fun positionExtrapolatesFromStamp() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })

@@ -97,7 +97,8 @@ class FakeCore(
     private val devices = ArrayList<DeviceInfo>()
     private var pickerOpen = false
     private var resumeOffer: ResumeOffer? = null
-    private var playerNotice: String? = null
+    /** The current player notice (code, detail and the core's English message); null when cleared. */
+    private var playerNotice: EventPlayerNoticeInner? = null
     private var selection: ActionTarget = ActionTarget.None
     private val actionOrders = HashMap<String, List<String>>()
     private val lyricsOffsets = HashMap<TrackId, Int>()
@@ -151,7 +152,8 @@ class FakeCore(
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
-        def(SettingKeys.STORAGE_CACHE_MAX_BYTES, "2147483648.0", SettingScope.DeviceLocal)
+        // null: an automatic budget; any number (2 GiB included) is the user's.
+        def(SettingKeys.STORAGE_CACHE_MAX_BYTES, "null", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_TRANSCODE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_WIFI_ONLY, "true", SettingScope.DeviceLocal)
@@ -547,27 +549,31 @@ class FakeCore(
                 emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
                 emit(Event.StorageChanged(EventStorageChangedInner(storage)))
                 emit(Event.FiltersChanged(EventFiltersChangedInner(filters.toList())))
-                emit(Event.PlayerNotice(EventPlayerNoticeInner(playerNotice)))
+                emit(Event.PlayerNotice(playerNotice ?: EventPlayerNoticeInner()))
+                emit(Event.NetworkChanged(EventNetworkChangedInner(network)))
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(pickerOpen, devices.filter { !it.isSelf })))
             }
             Command.Shutdown -> advanceJob?.cancel()
             is Command.SetNetworkState -> {
                 val wasOffline = network?.kind == NetworkKind.Offline
+                val changed = network != c.data.state
                 network = c.data.state
+                // Like the core: every change is announced (and replayed on attach).
+                if (changed) emit(Event.NetworkChanged(EventNetworkChangedInner(network)))
                 val offline = c.data.state.kind == NetworkKind.Offline
                 // Like the core: offline, only downloads and complete cache entries play; say so.
                 if (offline && !wasOffline && current != null) {
                     val queued = (listOfNotNull(current) + insertions + queueView().upcoming.map { it.item }).mapNotNull { library.track(it.trackId) }
                     val playable = queued.count { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
                     playerNotice = when {
-                        playable == 0 -> OFFLINE_NOTHING
-                        playable < queued.size -> OFFLINE_SKIPPING
+                        playable == 0 -> EventPlayerNoticeInner(OFFLINE_NOTHING, PlayerNoticeCode.NothingAvailableOffline)
+                        playable < queued.size -> EventPlayerNoticeInner(OFFLINE_SKIPPING, PlayerNoticeCode.OfflineSkipping)
                         else -> null
                     }
-                    if (playerNotice != null) emit(Event.PlayerNotice(EventPlayerNoticeInner(playerNotice)))
+                    playerNotice?.let { emit(Event.PlayerNotice(it)) }
                 } else if (!offline && wasOffline && playerNotice != null) {
                     playerNotice = null
-                    emit(Event.PlayerNotice(EventPlayerNoticeInner(null)))
+                    emit(Event.PlayerNotice(EventPlayerNoticeInner()))
                 }
             }
             is Command.SetVisibility -> Unit
@@ -667,8 +673,8 @@ class FakeCore(
             is Command.SetQueueMode -> { mode = c.data.mode; emitQueue() }
             is Command.SkipUnavailable -> {
                 val t = currentTrack()
-                playerNotice = t?.let { "Couldn't play ${it.title} here, skipped" }
-                emit(Event.PlayerNotice(EventPlayerNoticeInner(playerNotice)))
+                playerNotice = t?.let { EventPlayerNoticeInner("Couldn't play ${it.title}, skipped", PlayerNoticeCode.CouldNotPlaySkipped, it.title) }
+                emit(Event.PlayerNotice(playerNotice ?: EventPlayerNoticeInner()))
                 advance(false); emitQueue(); emitTransport()
             }
 
@@ -1114,9 +1120,9 @@ class FakeCore(
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
         if (key == SettingKeys.STORAGE_CACHE_MAX_BYTES) {
-            // Unset or at the default: the automatic budget.
-            val bytes = value.toDoubleOrNull()
-            val auto = bytes == null || value == defaults[key]
+            // null (the default): the automatic budget; any size is the user's.
+            val bytes = value.toDoubleOrNull()?.takeIf { it > 0 }
+            val auto = bytes == null
             storage = storage.copy(cacheBudgetAuto = auto, cacheBudgetBytes = if (auto) AUTO_CACHE_BUDGET else bytes)
             emit(Event.StorageChanged(EventStorageChangedInner(storage)))
         }
@@ -1124,7 +1130,7 @@ class FakeCore(
 
     private fun lyricsFor(id: TrackId): Lyrics? = library.lyricsByTrack[id]?.let { it.copy(offsetMs = lyricsOffsets[id] ?: 0) }
 
-    private fun configDocument(secrets: Boolean) = HocketJson.json.encodeToString(ConfigDocument.serializer(), ConfigDocument(1u, now(), settings.values.toList(), filters.toList(), emptyList(), servers.toList(),
+    private fun configDocument(secrets: Boolean) = HocketJson.json.encodeToString(ConfigDocument.serializer(), ConfigDocument(2u, now(), settings.values.toList(), filters.toList(), emptyList(), servers.toList(),
         if (secrets) hashMapOf("fake-server.password" to "••••") else null, audio, autoplaySettings, null))
 
     private fun runAction(actionId: String, target: ActionTarget) {
@@ -1329,7 +1335,7 @@ class FakeCore(
         /** The core's automatic stream-cache budget on a roomy volume: min(2 GiB, 10% of the space). */
         const val AUTO_CACHE_BUDGET = 2.0 * 1024 * 1024 * 1024
         const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
-        /** The core's offline PlayerNotice texts (core/handlers/cache.rs). */
+        /** The core's English texts for the offline PlayerNotices (core/handlers/cache.rs); platforms match on the code. */
         const val OFFLINE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
         const val OFFLINE_NOTHING = "Nothing in the queue is available offline"
         fun defaultBands() = listOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0).map { EqBand(it, 0.0, 1.0) }

@@ -30,6 +30,7 @@ import app.hocket.ui.a11y.performCustomAction
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.nav.LocalNavBarPrefs
 import app.hocket.ui.nav.NavItem
+import app.hocket.core.SettingKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -108,6 +109,9 @@ class NavBarCustomisationTest {
         assertEquals(NavItem.DEFAULT, NavItem.fromIds(listOf("nonsense", "settings")))
         assertEquals("duplicates collapse", listOf(NavItem.Home, NavItem.Search), NavItem.fromIds(listOf("home", "home", "search")))
         assertEquals("capped at five", 5, NavItem.fromIds(listOf("home", "search", "library", "albums", "songs", "genres")).size)
+        // Every place has its own registry action; Library no longer borrows navigateAlbums.
+        assertEquals("navigateLibrary", NavItem.Library.canonicalActionId)
+        assertEquals(NavItem.entries.size, NavItem.entries.map { it.canonicalActionId }.distinct().size)
         // And in the app: an old stored order with Settings in it.
         start(InMemoryNavBarPrefs(listOf("downloads", "settings", "home", "filters")))
         compose.waitUntil(5_000) { bar() == listOf("downloads", "home", "filters") }
@@ -137,6 +141,10 @@ class NavBarCustomisationTest {
         compose.waitUntil(5_000) { bar() == listOf("home", "albums", "library") }
         val key = stringPreferencesKey("navItems")
         compose.waitUntil(5_000) { runBlocking { store1.data.first()[key] } == "home,albums,library" }
+        // The core's sidebar surface follows, Library as its own action (not a second Albums).
+        compose.waitUntil(5_000) {
+            core.client.settings.value[SettingKeys.ACTIONS_ORDER_SIDEBAR]?.value == """["navigateHome","navigateAlbums","navigateLibrary"]"""
+        }
 
         // Recreate: a fresh DataStore over the same file, a fresh composition.
         scope1.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()

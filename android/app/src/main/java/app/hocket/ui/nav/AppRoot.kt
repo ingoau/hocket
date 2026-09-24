@@ -93,6 +93,7 @@ import app.hocket.core.HocketJson
 import app.hocket.playback.CoreHost
 import kotlinx.coroutines.flow.StateFlow
 import app.hocket.core.api.ErrorKind
+import app.hocket.core.api.PlayerNoticeCode
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalWideLayout
@@ -217,10 +218,6 @@ fun LoadingScreen() {
     }
 }
 
-/** The core's offline PlayerNotice texts (hocket-core core/handlers/cache.rs), shown localised as snackbars. */
-internal const val OFFLINE_NOTICE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
-internal const val OFFLINE_NOTICE_NOTHING = "Nothing in the queue is available offline"
-
 /**
  * Event.Toast -> snackbar with its single action dispatching `action_command`; Event.Error ->
  * snackbar; the offline PlayerNotices -> snackbar.
@@ -237,9 +234,10 @@ private fun ToastCollector(host: SnackbarHostState) {
         // player's notice line is easy to miss when the queue silently skips.
         launch {
             client.playerNotice.collect { notice ->
-                val text = when (notice) {
-                    OFFLINE_NOTICE_SKIPPING -> offlineSkipping
-                    OFFLINE_NOTICE_NOTHING -> offlineNothing
+                // Matched on the core's stable code, shown in this app's words.
+                val text = when (notice?.code) {
+                    PlayerNoticeCode.OfflineSkipping -> offlineSkipping
+                    PlayerNoticeCode.NothingAvailableOffline -> offlineNothing
                     else -> null
                 } ?: return@collect
                 host.showSnackbar(text, duration = SnackbarDuration.Long)
@@ -293,7 +291,7 @@ private fun MainShell() {
             val covered by remember(sheet) { derivedStateOf { sheet.progress >= 0.6f } }
             val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
             fun go(item: NavItem) { rootEntryId = nav.goToPlace(item) }
-            val shell = remember(items, nav) { ShellNavigator(items, goTo = { rootEntryId = nav.goToPlace(it) }, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }) }
+            val shell = remember(items, nav) { ShellNavigator(items, goTo = { rootEntryId = nav.goToPlace(it) }, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
             val editLabel = stringResource(R.string.bottom_bar_edit)
             val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
             CompositionLocalProvider(LocalShellNavigator provides shell) {
