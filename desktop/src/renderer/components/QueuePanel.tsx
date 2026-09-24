@@ -4,7 +4,7 @@
 // Keyboard: a listbox with aria-activedescendant (one Tab stop); arrows move,
 // Enter plays from the item, Delete removes, Alt+Up/Down reorders (the
 // keyboard equivalent of dragging), Shift+F10 opens the item's menu.
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -34,6 +34,15 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const all = useMemo(() => [...queue.history, ...(queue.current ? [queue.current] : []), ...queue.playingNext, ...queue.upcoming], [queue]);
   const keys = useMemo(() => all.map((e) => e.item.key), [all]);
   const reorderable = useMemo(() => [...queue.playingNext, ...queue.upcoming].map((e) => e.item.key), [queue]);
+  // After a keyboard move, the cursor follows the item to its new place (even if the queue re-keys it).
+  const movedTo = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const to = movedTo.current;
+    if (to === undefined) return;
+    movedTo.current = undefined;
+    const k = reorderable[to];
+    if (k) setFocusKey(k);
+  }, [reorderable]);
 
   const publish = useCallback((sel: typeof selection) => {
     setSelection(sel, SCOPE);
@@ -59,7 +68,10 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
       e.stopPropagation();
       const from = reorderable.indexOf(focusKey);
       const to = from + (e.key === "ArrowDown" ? 1 : -1);
-      if (from >= 0 && to >= 0 && to < reorderable.length) d({ type: "moveQueueItem", data: { key: focusKey, to_index: to } });
+      if (from >= 0 && to >= 0 && to < reorderable.length) {
+        movedTo.current = to;
+        d({ type: "moveQueueItem", data: { key: focusKey, to_index: to } });
+      }
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {

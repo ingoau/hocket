@@ -145,7 +145,8 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
               const selected = isSelected(selection, it.id);
               return (
                 <div
-                  key={it.id}
+                  // Keyed by column, like the placeholder it replaces, so a tile that loads while focused keeps focus.
+                  key={c}
                   className={`tile ${selected ? "selected" : ""} ${focusIdx === i ? "focused" : ""}`}
                   role="gridcell"
                   aria-selected={selected}

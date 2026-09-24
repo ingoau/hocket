@@ -164,7 +164,7 @@ export function ContextMenu() {
               className={`mi ${a.enabled ? "" : "disabled"} ${a.destructive ? "destructive" : ""} ${active === i ? "active" : ""}`}
               role="menuitem"
               aria-disabled={!a.enabled || undefined}
-              onMouseEnter={() => setActive(i)}
+              onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }}
               onClick={() => run(a)}
               data-action={a.id}
             >

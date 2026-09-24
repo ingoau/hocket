@@ -103,7 +103,7 @@ export function CommandPalette() {
               <Fragment key={it.id}>
                 {i === 0 && it.kind !== "action" ? <div className="group" role="presentation">{t("palette.results")}</div> : null}
                 {i === firstAction ? <div className="group" role="presentation">{t("palette.actions")}</div> : null}
-                <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onClick={() => run(it)} data-testid="palette-item">
+                <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onClick={() => run(it)} data-testid="palette-item">
                   {it.kind === "action" ? (hasIcon(it.icon ?? "") ? <Icon name={it.icon as string} size={16} /> : <Icon name="command" size={16} />) : <Artwork id={it.coverArt} size={64} className="art" />}
                   <div className="grow truncate">
                     <Highlight text={it.label} matches={r.matches} />

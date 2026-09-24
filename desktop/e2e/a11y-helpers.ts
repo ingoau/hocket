@@ -97,7 +97,7 @@ export interface FocusInfo {
   outlineStyle: string;
   outlineWidth: number;
   outlineColor: string;
-  /** Landmark the element sits in: banner, navigation, main, complementary, player, dialog, other. */
+  /** Landmark the element sits in: banner, navigation, main, complementary, player, toasts, dialog, other. */
   region: string;
   visible: boolean;
 }
@@ -107,7 +107,7 @@ export async function focused(page: Page): Promise<FocusInfo | undefined> {
     const el = document.activeElement as HTMLElement | null;
     if (!el || el === document.body) return undefined;
     const cs = getComputedStyle(el);
-    const region = el.closest("header") ? "banner" : el.closest("nav.sidebar") ? "navigation" : el.closest("main") ? "main" : el.closest("aside") ? "complementary" : el.closest('[data-testid="player-bar"]') ? "player" : el.closest("[role=dialog],[role=alertdialog]") ? "dialog" : "other";
+    const region = el.closest("header") ? "banner" : el.closest("nav.sidebar") ? "navigation" : el.closest("main") ? "main" : el.closest("aside") ? "complementary" : el.closest('[data-testid="player-bar"]') ? "player" : el.closest('[data-testid="toasts"]') ? "toasts" : el.closest("[role=dialog],[role=alertdialog]") ? "dialog" : "other";
     const r = el.getBoundingClientRect();
     return {
       testId: el.getAttribute("data-testid"),

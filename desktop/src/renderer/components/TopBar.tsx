@@ -130,7 +130,7 @@ function SearchBox() {
     }
   };
   const renderRow = (r: Row, i: number) => (
-    <div key={r.key} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseEnter={() => setActive(i)} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
+    <div key={r.key} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
       <Artwork id={r.cover} size={64} className="art" />
       <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}</div>
       <span className="kind">{r.kind}</span>
