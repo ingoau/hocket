@@ -22,7 +22,7 @@ use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
     WireMessage,
 };
-use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, SessionOp, LOOPBACK};
+use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, LOOPBACK};
 use crate::util::Clock;
 
 /// A member that has sent nothing for this long is dropped. Clients ping
@@ -1369,6 +1369,7 @@ mod tests {
     use crate::api::{Platform, PositionStamp};
     use crate::connect::session_adapter::RealReducer;
     use crate::connect::wire::Msg;
+    use crate::connect::SessionOp;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     pub struct TestClock(pub AtomicU64);
