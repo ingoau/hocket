@@ -48,11 +48,12 @@ export function App() {
         <Sidebar />
         <main className="content" data-testid="content">
           <Router />
-          {fullscreen ? <FullscreenPlayer /> : null}
         </main>
         <RightPanel />
       </div>
       <PlayerBar />
+      {/* Covers the whole window (sidebar, panels and player bar included). */}
+      {fullscreen ? <FullscreenPlayer /> : null}
       <ContextMenu />
       <CommandPalette />
       <Dialogs />

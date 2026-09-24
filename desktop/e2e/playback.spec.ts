@@ -34,7 +34,15 @@ test.describe("playback and queue", () => {
     await playFirstAlbum(page);
     await page.getByTestId("content").click();
     await page.keyboard.press("f");
-    await expect(page.getByTestId("fullscreen-player")).toBeVisible();
+    const fs = page.getByTestId("fullscreen-player");
+    await expect(fs).toBeVisible();
+    // It covers the whole window, sidebar and player bar included.
+    const box = (await fs.boundingBox())!;
+    const win = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    expect([Math.round(box.x), Math.round(box.y), Math.round(box.width), Math.round(box.height)]).toEqual([0, 0, win.w, win.h]);
+    // The play/pause glyph is visible against its round button.
+    const colours = await fs.getByTestId("fs-play-pause").evaluate((el) => { const cs = getComputedStyle(el); return [cs.color, cs.backgroundColor]; });
+    expect(colours[0]).not.toBe(colours[1]);
     await page.getByTestId("fs-tab-related").click();
     await expect(page.getByTestId("related-list")).toBeVisible();
     await page.getByTestId("fs-tab-upNext").click();

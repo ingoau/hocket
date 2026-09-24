@@ -63,8 +63,10 @@ export function Sidebar() {
             <span>{p.name}</span>
           </a>
         ))}
-        <div className="divider" />
-        <a href="#" className={`nav-item ${route.view === "settings" ? "active" : ""}`} onClick={(e) => { e.preventDefault(); navigate({ view: "settings" }); }} data-testid="nav-settings">
+      </div>
+      {/* Pinned below the scrolling list, like a native source list's footer. */}
+      <div className="sidebar-foot">
+        <a href="#" className={`nav-item ${route.view === "settings" ? "active" : ""}`} aria-current={route.view === "settings" ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings" }); }} data-testid="nav-settings">
           <Icon name="settings" size={15} />
           <span>{t("nav.settings")}</span>
         </a>

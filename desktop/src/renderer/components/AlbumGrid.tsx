@@ -35,6 +35,7 @@ export interface AlbumGridProps {
 export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onNeedRange, tileWidth = 160, emptyMessage, testId }: AlbumGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
+  const [colW, setColW] = useState(tileWidth);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const [focusIdx, setFocusIdx] = useState(0);
@@ -43,14 +44,23 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setCols(Math.max(1, Math.floor((el.clientWidth - 40) / (tileWidth + 14)))));
+    const ro = new ResizeObserver(() => {
+      const cs = getComputedStyle(el);
+      const inner = el.clientWidth - (Number.parseFloat(cs.paddingLeft) || 0) - (Number.parseFloat(cs.paddingRight) || 0);
+      const n = Math.max(1, Math.floor((el.clientWidth - 40) / (tileWidth + 14)));
+      setCols(n);
+      // Tiles stretch to fill the row, so the row height follows the real column width.
+      setColW(Math.max(tileWidth, Math.floor((inner - (n - 1) * 14) / n)));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [tileWidth]);
 
   const rowCount = Math.ceil(total / cols);
-  const rowH = tileWidth + 58;
+  // Tile: 6px padding, square art, 6px gap, title, 6px gap, subtitle, 6px padding; plus the row's 4px padding and breathing room.
+  const rowH = colW + 70;
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => parentRef.current, estimateSize: () => rowH, overscan: 3 });
+  useEffect(() => virt.measure(), [rowH, virt]);
   const vrows = virt.getVirtualItems();
   useEffect(() => {
     if (!onNeedRange || !vrows.length) return;

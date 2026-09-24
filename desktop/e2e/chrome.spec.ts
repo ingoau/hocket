@@ -105,8 +105,15 @@ test.describe("window chrome", () => {
           const r = t.getBoundingClientRect();
           out.tiles.push({ w: Math.round(r.width), art: { x: a.x, y: a.y, w: a.width, h: a.height }, tile: { x: r.x, y: r.y, w: r.width, h: r.height } });
         }
-        return out;
+        // Rows never overlap: the next row starts below the whole first tile (subtitle included).
+        const all = Array.from(grid.querySelectorAll('[data-testid="grid-tile"]')).map((t) => t.getBoundingClientRect());
+        const first = all[0]!;
+        const below = all.find((r) => r.top > first.top + 10);
+        const sub = grid.querySelector('[data-testid="grid-tile"] .t2')?.getBoundingClientRect();
+        return { ...out, rowGap: below ? below.top - first.bottom : 0, subInside: sub ? sub.bottom <= first.bottom + 0.5 : true };
       });
+      expect(geo.rowGap).toBeGreaterThanOrEqual(0);
+      expect(geo.subInside).toBe(true);
       expect(geo.overflow).toBeLessThanOrEqual(0);
       expect(geo.tiles.length).toBeGreaterThan(3);
       const w0 = geo.tiles[0]!.w;
@@ -119,6 +126,12 @@ test.describe("window chrome", () => {
       }
     };
     await check();
+    // Wide window: tiles stretch well past their nominal width; rows grow with them.
+    await page.setViewportSize({ width: 1500, height: 900 });
+    await page.waitForTimeout(300);
+    await check();
+    await page.setViewportSize({ width: 1000, height: 760 });
+    await page.waitForTimeout(300);
     // Still true after the sidebar is dragged wider.
     const h = (await page.getByTestId("sidebar-resize").boundingBox())!;
     await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
@@ -127,5 +140,27 @@ test.describe("window chrome", () => {
     await page.mouse.up();
     await page.waitForTimeout(200);
     await check();
+  });
+
+  test("settings stays pinned below the sidebar list, and a long server row never scrolls the settings page sideways", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    const sidebar = (await page.getByTestId("sidebar").boundingBox())!;
+    const settings = page.getByTestId("nav-settings");
+    const sb = (await settings.boundingBox())!;
+    expect(sidebar.y + sidebar.height - (sb.y + sb.height)).toBeLessThan(12);
+    await settings.click();
+    await expect(page.getByTestId("view-settings")).toBeVisible();
+    // Opening settings never scrolls the sidebar list.
+    expect(await page.locator(".sidebar-scroll").evaluate((el) => el.scrollTop)).toBe(0);
+    const row = page.getByTestId("server-row").first();
+    await row.locator(".title .muted").evaluate((el) => { el.textContent = "https://a-rather-long-host-name.music.example.org/navidrome/with/a/path · somebody-with-a-long-user-name"; });
+    const body = page.locator(".settings-body");
+    expect(await body.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+    const rowBox = (await row.boundingBox())!;
+    for (const b of await row.locator("button").all()) {
+      const bb = (await b.boundingBox())!;
+      expect(bb.x + bb.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
+    }
   });
 });
