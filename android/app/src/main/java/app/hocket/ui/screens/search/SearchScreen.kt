@@ -52,7 +52,7 @@ import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ActionSheet
-import app.hocket.ui.components.AlbumCard
+import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.PlaylistRow
@@ -127,9 +127,7 @@ fun SearchScreen(nav: NavHostController) {
                 }
                 if (results.albums.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_albums)) }
-                    items(results.albums, key = { "a" + it.id }) { a ->
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) { Box(Modifier.fillMaxWidth(0.4f)) { AlbumCard(a, onClick = { nav.navigate(Route.Album(a.id)) }) } }
-                    }
+                    item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> nav.navigate(Route.Album(a.id)) } }
                 }
                 if (results.artists.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_artists)) }
@@ -150,7 +148,7 @@ fun SearchScreen(nav: NavHostController) {
                 }
                 remote?.let { r ->
                     items(r.tracks, key = { "rt" + it.id }) { t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { sheetFor = t }) }
-                    items(r.albums, key = { "ra" + it.id }) { a -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) { Box(Modifier.fillMaxWidth(0.4f)) { AlbumCard(a, onClick = { nav.navigate(Route.Album(a.id)) }) } } }
+                    if (r.albums.isNotEmpty()) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
                     items(r.artists, key = { "rar" + it.id }) { ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }) }
                 }
             }

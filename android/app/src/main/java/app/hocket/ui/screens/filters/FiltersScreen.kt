@@ -56,7 +56,7 @@ fun FiltersScreen(nav: NavHostController) {
         floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = 72.dp)) { Icon(Icons.Filled.Add, stringResource(R.string.filters_new)) } },
     ) { padding ->
         if (filters.isEmpty()) {
-            EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(padding), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
+            EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
             return@Scaffold
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
