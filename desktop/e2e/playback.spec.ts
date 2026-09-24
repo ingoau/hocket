@@ -43,6 +43,9 @@ test.describe("playback and queue", () => {
     // The play/pause glyph is visible against its round button.
     const colours = await fs.getByTestId("fs-play-pause").evaluate((el) => { const cs = getComputedStyle(el); return [cs.color, cs.backgroundColor]; });
     expect(colours[0]).not.toBe(colours[1]);
+    // The fluid background is fed the cover art, not the fallback gradient.
+    const bg = fs.getByTestId("fluid-bg");
+    await expect(bg).toHaveAttribute("data-source", "artwork");
     await page.getByTestId("fs-tab-related").click();
     await expect(page.getByTestId("related-list")).toBeVisible();
     await page.getByTestId("fs-tab-upNext").click();

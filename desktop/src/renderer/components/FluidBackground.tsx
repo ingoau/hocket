@@ -1,8 +1,8 @@
-// Kawarp fluid background fed from the cached artwork via loadBlob. Tint and
+// Kawarp fluid background fed from the cached artwork via a CORS-clean <img>. Tint and
 // saturation tuned to sit behind AMLL's white lyric styling. Honours the
 // performance budget: stopped when hidden, ~24 fps unfocused, static blurred
 // still in battery saver or when the animated background is switched off.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Kawarp } from "@kawarp/core";
 import { useApp, useSetting } from "../store/app";
 import { useArtwork } from "./Artwork";
@@ -16,6 +16,7 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);
   const animated = animatedSetting && !batterySaver;
+  const [source, setSource] = useState<"none" | "artwork" | "gradient">("none");
 
   useEffect(() => {
     if (!animated || !canvas.current) return;
@@ -51,13 +52,28 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     if (!k || !animated) return;
     if (!url) {
       k.loadGradient(["#1c1c28", "#2a2540"], 30);
+      setSource("gradient");
       return;
     }
+    // Through an <img> (CORS-clean, like the accent picker), not fetch():
+    // the CSP deliberately keeps hocket-art: out of connect-src.
     let alive = true;
-    fetch(url)
-      .then((r) => r.blob())
-      .then((b) => { if (alive) return k.loadBlob(b); })
-      .catch(() => alive && k.loadGradient(["#1c1c28", "#2a2540"], 30));
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.decoding = "async";
+    img.src = url;
+    img
+      .decode()
+      .then(() => {
+        if (!alive) return;
+        k.loadImageElement(img);
+        setSource("artwork");
+      })
+      .catch(() => {
+        if (!alive) return;
+        k.loadGradient(["#1c1c28", "#2a2540"], 30);
+        setSource("gradient");
+      });
     return () => {
       alive = false;
     };
@@ -82,5 +98,5 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
   }, [perf, animated]);
 
   if (!animated) return url ? <img className="bg-still" src={url} alt="" /> : <div className="bg-still" style={{ background: "#1c1c28" }} />;
-  return <canvas ref={canvas} className="bg" data-testid="fluid-bg" />;
+  return <canvas ref={canvas} className="bg" data-testid="fluid-bg" data-source={source} />;
 }
