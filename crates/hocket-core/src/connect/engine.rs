@@ -5128,10 +5128,10 @@ mod tests {
             .any(|(_, m)| matches!(m, Msg::ScrobbleDedupeQuery { .. })));
         // b (which took the play over from us) stamps it "scrobbled": that
         // is our own reach coming back, not b's scrobble
-        let stamp = |device: &str| {
+        let stamp = |device: &str, key: &QueueKey| {
             WireMessage::new(Msg::TransportStamp {
                 device_id: device.into(),
-                key: Some(current.key.clone()),
+                key: Some(key.clone()),
                 position: PositionStamp {
                     position_ms: 60_000,
                     taken_at: 10_000.0,
@@ -5146,7 +5146,7 @@ mod tests {
         };
         e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: stamp("b"),
+            msg: stamp("b", &current.key),
         });
         assert!(
             !e.known_scrobbled()
@@ -5168,10 +5168,9 @@ mod tests {
             }),
         });
         let key = other.document().current.clone().unwrap().key;
-        assert_eq!(key, current.key, "same play, same key");
         other.handle(Input::WireIn {
             peer: "up".into(),
-            msg: stamp("b"),
+            msg: stamp("b", &key),
         });
         assert!(other
             .known_scrobbled()

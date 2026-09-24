@@ -563,6 +563,28 @@ mod tests {
         std::fs::write(root.join("json-fixtures.json"), text + "\n").expect("write fixtures");
     }
 
+    /// Navidrome's real `enhanced=true` answer for "Tally" run through the core's adapter, for the
+    /// Kotlin parity test: the fake core's port of the adapter (`EnhancedLyrics`) must turn the same
+    /// raw document into exactly this `Lyrics`.
+    #[test]
+    fn write_enhanced_lyrics_fixture() {
+        const RAW: &str =
+            include_str!("../../hocket-core/src/subsonic/fixtures/lyrics_enhanced.json");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../android/core/src/test/resources");
+        if !root.parent().map(|p| p.exists()).unwrap_or(false) {
+            eprintln!("android tree not present, skipping fixture write");
+            return;
+        }
+        let response = hocket_core::lyrics::raw::LyricsListResponse::parse(RAW).expect("fixture");
+        let lyrics = hocket_core::lyrics::adapt_response("tally", &response).expect("lyrics");
+        assert_eq!(lyrics.tier, LyricsTier::Syllable);
+        std::fs::create_dir_all(&root).expect("create fixtures dir");
+        let text = serde_json::to_string_pretty(&json!(lyrics)).expect("serialise lyrics");
+        std::fs::write(root.join("lyrics-enhanced-adapted.json"), text + "\n")
+            .expect("write fixture");
+    }
+
     /// The Kotlin side depends on these three wire conventions.
     #[test]
     fn wire_conventions() {
