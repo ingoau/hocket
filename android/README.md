@@ -53,7 +53,7 @@ fixture so serde/kotlinx drift fails a JVM test.
 
 ## Service and backend bridge
 
-`PlaybackService` (a Media3 `MediaSessionService`, `foregroundServiceType="mediaPlayback"`) owns
+`PlaybackService` (a Media3 `MediaLibraryService`, `foregroundServiceType="mediaPlayback"`) owns
 the one core for the process through `CoreHost`:
 
 - `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item media
@@ -89,6 +89,30 @@ the one core for the process through `CoreHost`:
   Media3; the service `addSession`s the session in `onCreate` (the UI is not a Media3 controller, so
   `onGetSession` alone would never register it and no notification or foreground promotion would
   happen).
+- Queue: `CoreSessionPlayer`'s playlist is the core's `QueueView` (`Event.QueueChanged`): the last 25
+  history entries, the current one, playing next and upcoming, media ids `queue/<key>`, so Auto's
+  queue view, Wear and the legacy `MediaSession.setQueue` show it. Picking an entry is
+  `JumpToQueueItem`; moving an upcoming entry is `MoveQueueItem` (index into playing next + upcoming);
+  removing is `RemoveQueueItems` (never the current entry); next/previous stay the core's. When the
+  queue's current entry is not the session's track yet, the playlist is that one track.
+- Library browsing: the session is a `MediaLibrarySession`, so Android Auto (the app declares
+  `automotive_app_desc.xml`), Wear, Assistant and any `MediaBrowser` can browse and search the first
+  server's library. `LibraryBrowser` answers from core queries: the root has Albums, Artists,
+  Playlists and Genres (Auto's tabs, with grid/list content-style hints); an album or playlist lists
+  its tracks, an artist or genre its albums; pages map to `Page`. Search is local only
+  (`includeServer = false`). Ids (`MediaIds.kt`) are self-contained and URL-encoded
+  (`album/<server>/<id>/<index>` and so on), so an id kept from an earlier connection still plays.
+  Playing one sends what the UI would send: an album, artist, playlist or genre plays as that context
+  (from the tapped track's index for a track inside one), a search result track via `PlayTracks`.
+  Adding items is `PlayNext` (right after the current entry) or `PlayLater`; artists and genres are
+  too broad to enqueue. Voice "play …" requests (`onAddMediaItems` with a search query) resolve to the
+  best match, honouring `EXTRA_MEDIA_FOCUS`; an empty query resumes. Subscribed browsers hear about
+  library changes (debounced 2 s). The "recent" root is refused, as resumption is.
+- Artwork for controllers: they cannot read the core's cache files, so browse and queue items carry
+  `content://<package>.artwork/<size>/<coverArt>` URIs served by `ArtworkProvider`, which resolves
+  them with `Query.Artwork` and opens the cached file read-only. It is exported (the controller opens
+  the URI with its own identity) but only serves this app and packages the session accepted in
+  `onConnect`.
 - Remote output: while another Connect device plays, `CoreSessionPlayer` reports
   `DeviceInfo(PLAYBACK_TYPE_REMOTE, routingControllerId = "hocket-connect")` (fixed volume: Connect
   volume is per device) and `ConnectRouteProvider` (a `MediaRoute2ProviderService`, API 30+) keeps a

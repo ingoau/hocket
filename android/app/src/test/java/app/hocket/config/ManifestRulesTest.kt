@@ -63,4 +63,28 @@ class ManifestRulesTest {
             assertEquals("$path declares no broadcast receiver", 0, receivers.length)
         }
     }
+
+    @Test
+    fun theLibraryIsPublishedToMediaBrowsersAndAndroidAuto() {
+        val service = parse("android/playback/src/main/AndroidManifest.xml").getElementsByTagName("service").let { list ->
+            (0 until list.length).map { list.item(it) as Element }.single { it.getAttribute("android:name") == "app.hocket.playback.PlaybackService" }
+        }
+        val actions = service.getElementsByTagName("action").let { list -> (0 until list.length).map { (list.item(it) as Element).getAttribute("android:name") } }
+        assertTrue(actions.containsAll(listOf("androidx.media3.session.MediaLibraryService", "android.media.browse.MediaBrowserService")))
+        val meta = parse("android/app/src/main/AndroidManifest.xml").getElementsByTagName("meta-data").let { list -> (0 until list.length).map { list.item(it) as Element } }
+        assertEquals("@xml/automotive_app_desc", meta.single { it.getAttribute("android:name") == "com.google.android.gms.car.application" }.getAttribute("android:resource"))
+        val uses = parse("android/app/src/main/res/xml/automotive_app_desc.xml").documentElement.children("uses").map { it.getAttribute("name") }
+        assertEquals(listOf("media"), uses)
+    }
+
+    @Test
+    fun theArtworkProviderIsTheOnlyProviderAndCannotBeWrittenOrGranted() {
+        // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
+        val providers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")
+            .flatMap { path -> parse(path).getElementsByTagName("provider").let { list -> (0 until list.length).map { list.item(it) as Element } } }
+        val provider = providers.single()
+        assertEquals("app.hocket.playback.ArtworkProvider", provider.getAttribute("android:name"))
+        assertFalse(provider.hasAttribute("android:grantUriPermissions"))
+        assertFalse(provider.hasAttribute("android:writePermission"))
+    }
 }

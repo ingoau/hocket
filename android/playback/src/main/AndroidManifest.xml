@@ -19,6 +19,7 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
@@ -34,6 +35,13 @@
                 <action android:name="android.media.MediaRoute2ProviderService" />
             </intent-filter>
         </service>
+        <!-- Cover art for the apps browsing the library (Auto, Wear, MediaBrowsers): they cannot read
+             the core's cache files. Exported because a controller opens the URI itself, but
+             ArtworkProvider only serves callers the session accepted as controllers, read-only. -->
+        <provider
+            android:name="app.hocket.playback.ArtworkProvider"
+            android:authorities="${applicationId}.artwork"
+            android:exported="true" />
         <!-- Media buttons: Media3 declares its own androidx.media3.session.MediaButtonReceiver (it
              FGS-starts the service only for a PLAY key while nothing plays). The legacy
              androidx.media.session.MediaButtonReceiver must not be declared as well: exported with a

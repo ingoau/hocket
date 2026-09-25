@@ -4,29 +4,46 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import androidx.media3.common.MediaItem
 import androidx.media3.session.CommandButton
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
+import app.hocket.core.api.QueueView
 import app.hocket.core.api.RepeatMode
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
- * Builds the Media3 [MediaSession] over a [CoreSessionPlayer] and keeps its custom button layout in
- * step with the core's customised action list (`MediaSessionState.actions`): love, shuffle, repeat
- * and rate as media button preferences, so they appear on the notification and on Wear/Auto surfaces
- * that honour them. Transport buttons come from the player's available commands.
+ * Builds the Media3 [MediaLibrarySession] over a [CoreSessionPlayer] and keeps its custom button
+ * layout in step with the core's customised action list (`MediaSessionState.actions`): love,
+ * shuffle, repeat and rate as media button preferences, so they appear on the notification and on
+ * Wear/Auto surfaces that honour them. Transport buttons come from the player's available commands.
+ *
+ * The library side ([browser]) answers other apps' browsing and search (Android Auto, Wear,
+ * Assistant, any `MediaBrowser`); a "play …" search request (voice, Auto's search) is resolved to one
+ * library item here, before the player dispatches it. Every connected controller may open artwork
+ * URIs ([ArtworkProvider.allow]). The "recent" root (system playback resumption) is refused, as
+ * resumption is.
  */
 class MediaSessionBridge(
     context: Context,
     val player: CoreSessionPlayer,
     private val dispatch: (Command) -> Unit,
     launchIntent: Intent?,
+    private val browser: LibraryBrowser,
+    private val scope: CoroutineScope,
 ) {
     companion object {
         const val CMD_LOVE = "app.hocket.LOVE"
@@ -38,10 +55,16 @@ class MediaSessionBridge(
 
     private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE).map { SessionCommand(it, Bundle.EMPTY) }
 
-    val session: MediaSession = MediaSession.Builder(context, player)
-        .setId("hocket")
-        .setCallback(object : MediaSession.Callback {
+    /** Runs a browse request on [scope] and completes the future with its result. */
+    private fun <T> async(block: suspend () -> T): ListenableFuture<T> {
+        val future = SettableFuture.create<T>()
+        scope.launch { runCatching { block() }.fold({ future.set(it) }, { future.setException(it) }) }
+        return future
+    }
+
+    val session: MediaLibraryService.MediaLibrarySession = MediaLibraryService.MediaLibrarySession.Builder(context, player, object : MediaLibraryService.MediaLibrarySession.Callback {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+                ArtworkProvider.allow(controller.packageName)
                 val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().apply { customCommands.forEach { add(it) } }.build()
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                     .setAvailableSessionCommands(commands)
@@ -65,13 +88,66 @@ class MediaSessionBridge(
                 // have so the notification can stay; the core decides whether anything plays.
                 return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L))
             }
+
+            override fun onGetLibraryRoot(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
+                if (params?.isRecent == true) return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
+                return Futures.immediateFuture(LibraryResult.ofItem(this@MediaSessionBridge.browser.root(), MediaLibraryService.LibraryParams.Builder().setExtras(LibraryBrowser.rootExtras()).build()))
+            }
+
+            override fun onGetChildren(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = async {
+                val children = this@MediaSessionBridge.browser.children(parentId, page, pageSize)
+                if (children == null) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItemList(children, params)
+            }
+
+            override fun onGetItem(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> = async {
+                this@MediaSessionBridge.browser.item(mediaId)?.let { LibraryResult.ofItem(it, null) } ?: LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            }
+
+            override fun onSearch(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<Void>> {
+                scope.launch {
+                    val count = runCatching { this@MediaSessionBridge.browser.search(query).size }.getOrDefault(0)
+                    session.notifySearchResultChanged(browser, query, count, params)
+                }
+                return Futures.immediateFuture(LibraryResult.ofVoid())
+            }
+
+            override fun onGetSearchResult(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = async {
+                val all = this@MediaSessionBridge.browser.search(query)
+                val from = (page.toLong() * pageSize).coerceIn(0, all.size.toLong()).toInt()
+                LibraryResult.ofItemList(all.subList(from, (from + pageSize.coerceAtLeast(0)).coerceAtMost(all.size)), params)
+            }
+
+            override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> = async {
+                // Library ids pass through to the player; a search request ("play X") becomes the item
+                // it names. Anything unresolvable is dropped (the player then does nothing).
+                mediaItems.mapNotNull { item ->
+                    val search = item.requestMetadata.searchQuery
+                    when {
+                        search != null -> this@MediaSessionBridge.browser.resolveSearch(search, item.requestMetadata.extras)
+                        item.mediaId.isNotEmpty() -> item
+                        else -> null
+                    }
+                }.toMutableList()
+            }
         })
+        .setId("hocket")
         .apply {
             launchIntent?.let {
                 setSessionActivity(PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             }
         }
         .build()
+
+    /** Push a new queue view to the player (its playlist). Main thread. */
+    fun applyQueue(queue: QueueView) = player.applyQueue(queue)
+
+    /**
+     * The library changed: browsers subscribed to a section refetch it. The count is Media3's
+     * "unknown" (`Int.MAX_VALUE`): knowing it would take a query per section.
+     */
+    fun libraryChanged() {
+        for (section in LibrarySection.entries) session.notifyChildrenChanged(section.id, Int.MAX_VALUE, null)
+    }
 
     /** Push a new state to the player and refresh the custom layout. Main thread. */
     fun apply(state: MediaSessionState, clockOffsetMs: Double, remote: Boolean = player.isRemote) {

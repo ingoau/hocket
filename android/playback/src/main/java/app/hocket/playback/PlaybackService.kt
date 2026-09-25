@@ -8,7 +8,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaLibraryService
 import app.hocket.core.CoreHandle
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
@@ -24,10 +24,13 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /**
- * The Media3 [MediaSessionService] that owns the process's core.
+ * The Media3 [MediaLibraryService] that owns the process's core.
  *
  * - Creates the core (or the fake) through [CoreHost] and forwards its events:
- *   `Event.Backend` -> [ExoBackend], `Event.MediaSession` -> [MediaSessionBridge].
+ *   `Event.Backend` -> [ExoBackend], `Event.MediaSession` and `Event.QueueChanged` ->
+ *   [MediaSessionBridge] (the session's state and its queue timeline).
+ * - Publishes the library to other apps (Android Auto, Wear, Assistant, `MediaBrowser`s) through
+ *   [LibraryBrowser] on the first server, telling subscribed browsers when it changes.
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
  * - Feeds [ConnectRoutes] (devices, lease owner, session state) so that while another device plays
  *   the session reports remote playback and [ConnectRouteProvider] names that device as the output;
@@ -44,12 +47,14 @@ import kotlinx.coroutines.launch
  *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
  *   carries [CoreHost.bindToken], which no other process can know.
  */
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
     companion object {
         private const val TAG = "PlaybackService"
         const val IDLE_TIMEOUT_MS = 5 * 60_000L
         const val ACTION_BIND_CORE = "app.hocket.playback.BIND_CORE"
         const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
+        /** Library changes arrive in bursts (a sync); browsers hear about them once they settle. */
+        const val LIBRARY_NOTIFY_DEBOUNCE_MS = 2_000L
 
         /**
          * True for this process's own core bind. `onBind` runs outside a binder transaction, so
@@ -79,13 +84,17 @@ class PlaybackService : MediaSessionService() {
     private var boundClients = 0
     private var clockOffsetMs = 0.0
     private var routeDiscovery: Any? = null
+    private var serverId: String? = null
+    private var libraryNotify: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         core = CoreHost.acquire(this)
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
-        bridge = MediaSessionBridge(this, CoreSessionPlayer(Looper.getMainLooper(), ::dispatch), ::dispatch, launch)
+        val browser = LibraryBrowser(this, { core }, { serverId }, scope)
+        val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
+        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope)
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch)
         battery = BatterySaverMonitor(this, ::dispatch)
@@ -119,6 +128,9 @@ class PlaybackService : MediaSessionService() {
                 ConnectRoutes.onOwner(event.data.transport.lease.owner)
                 if (ConnectRoutes.state.value.remote != wasRemote) applySession(bridge.player.state)
             }
+            is Event.QueueChanged -> bridge.applyQueue(event.data.queue)
+            is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
+            is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
@@ -130,6 +142,8 @@ class PlaybackService : MediaSessionService() {
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
     private fun applySnapshot(snapshot: app.hocket.core.api.Snapshot) {
         clockOffsetMs = snapshot.connection.clockOffsetMs
+        serverId = snapshot.servers.firstOrNull()?.id
+        bridge.applyQueue(snapshot.queue)
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onOwner(snapshot.transport.lease.owner)
         applySession(snapshot.mediaSession)
@@ -140,6 +154,14 @@ class PlaybackService : MediaSessionService() {
     private fun applySession(state: app.hocket.core.api.MediaSessionState) {
         ConnectRoutes.onMediaSession(state)
         bridge.apply(state, clockOffsetMs, remote = ConnectRoutes.state.value.remote != null)
+    }
+
+    private fun scheduleLibraryNotify() {
+        libraryNotify?.cancel()
+        libraryNotify = scope.launch {
+            delay(LIBRARY_NOTIFY_DEBOUNCE_MS)
+            bridge.libraryChanged()
+        }
     }
 
     private fun scheduleIdleStop() {
@@ -153,7 +175,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = bridge.session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = bridge.session
 
     override fun onBind(intent: Intent?): IBinder? {
         if (isLocalBind(intent)) {

@@ -21,6 +21,11 @@
              ExoPlayer never follows an https->http redirect (ExoBackend), and the core only attempts
              the native-API password login over https or loopback. See android/README.md. -->
 
+        <!-- Android Auto lists media apps that declare this; the browse tree is PlaybackService's. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <activity
             android:name="app.hocket.MainActivity"
             android:exported="true"
