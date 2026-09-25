@@ -23,6 +23,7 @@ pub const TEXTS: &[SettingText] = &[
     t("lyrics.showTranslations", "Show translations", "Show translated lines under the original when the server provides them."),
     t("ratings.loveBridge.enabled", "Love highly rated tracks", "When you rate a track at or above the threshold, also mark it loved. One-way; lowering a rating never unloves."),
     t("ratings.loveBridge.threshold", "Love threshold", "Star rating at or above which a track is marked loved."),
+    t("media.externalControl", "Allow control by other apps", "Let other apps such as Android Auto, Wear and media browsers browse your library, see the queue and control playback. The system's own media controls always work."),
     t("battery.autoEngage", "Battery saver on battery", "Engage battery saver automatically when running on battery."),
     t("battery.lyricsFps", "Battery saver lyrics frame rate", "Frame rate cap for lyric animations while battery saver is engaged."),
     t("battery.smallArtwork", "Battery saver small artwork", "Use the smaller artwork size while battery saver is engaged."),

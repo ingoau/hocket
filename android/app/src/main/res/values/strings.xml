@@ -244,6 +244,8 @@
     <string name="sleep_off">Off</string>
     <string name="sleep_minutes">%1$d min</string>
     <string name="sleep_end_of_track">Stop at end of track</string>
+    <string name="settings_external_control">Allow control by other apps</string>
+    <string name="settings_external_control_summary">Let apps like Android Auto, Wear and media browsers browse your library, see the queue and control playback. Notification, lock screen and Bluetooth controls always work.</string>
     <string name="sleep_active">Stops in %1$s</string>
     <string name="sleep_active_end_of_track">Stops at end of track</string>
     <string name="sleep_start">Start</string>
