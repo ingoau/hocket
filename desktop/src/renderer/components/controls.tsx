@@ -14,6 +14,7 @@
 import { Children, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
+import { usePresence } from "../lib/presence";
 
 // ---- Slider ---------------------------------------------------------------------------------
 
@@ -122,6 +123,8 @@ export function Select({ value, onChange, children, disabled, className, style, 
   const typed = useRef({ text: "", at: 0 });
   const listId = useId();
   const optId = (i: number) => `${listId}-o${i}`;
+  // The closed menu stays mounted, inert, while its exit plays.
+  const menu = usePresence(open || undefined, list);
 
   const place = () => {
     const r = button.current?.getBoundingClientRect();
@@ -234,8 +237,8 @@ export function Select({ value, onChange, children, disabled, className, style, 
         <span className="m3-select-value">{current?.label ?? ""}</span>
         <Icon name="chevronDown" size={20} className="m3-select-chevron" />
       </button>
-      {open && pos ? createPortal(
-        <div ref={list} id={listId} role="listbox" className="m3-menu m3-select-menu" aria-label={aria["aria-label"]} aria-labelledby={aria["aria-labelledby"]} style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.minWidth, maxHeight: pos.maxHeight }} data-testid={aria["data-testid"] ? `${aria["data-testid"]}-menu` : undefined}
+      {menu.value && pos ? createPortal(
+        <div {...menu.exitProps} id={listId} role="listbox" className={`m3-menu m3-select-menu ${menu.closing ? "closing" : ""}`} aria-label={aria["aria-label"]} aria-labelledby={aria["aria-labelledby"]} style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.minWidth, maxHeight: pos.maxHeight }} data-testid={aria["data-testid"] ? `${aria["data-testid"]}-menu` : undefined}
           onMouseDown={(e) => e.preventDefault()}>
           {options.map((o, i) => (
             <div key={o.value} id={optId(i)} role="option" aria-selected={o.value === String(value)} aria-disabled={o.disabled || undefined} className={`m3-option ${i === active ? "active" : ""} ${o.value === String(value) ? "selected" : ""}`} data-value={o.value}

@@ -12,6 +12,7 @@ import { useApp } from "../store/app";
 import { executeAction, type ActionContext } from "../store/actions";
 import { Icon, hasIcon } from "./Icon";
 import { handOnFocus } from "../lib/focus";
+import { usePresence } from "../lib/presence";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
@@ -54,31 +55,34 @@ export function openContextMenuFromKeyboard(): boolean {
 }
 
 export function ContextMenu() {
-  const menu = useApp((s) => s.contextMenu);
+  const live = useApp((s) => s.contextMenu);
   const close = useApp((s) => s.closeContextMenu);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const ref = useRef<HTMLDivElement>(null);
+  // The closed menu stays mounted, inert, while its exit plays. Everything
+  // below that positions, focuses or listens is keyed on the live state.
+  const { value: menu, motion, exitProps } = usePresence(live, ref);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [active, setActive] = useState(-1);
   const actions = menu?.actions ?? [];
 
   useLayoutEffect(() => {
-    if (!menu || !ref.current) return;
+    if (!live || !ref.current) return;
     // Layout size, not getBoundingClientRect(): the menu opens scaled down by its entrance animation.
     const r = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };
-    const x = Math.min(menu.x, window.innerWidth - r.width - 6);
-    const y = Math.min(menu.y, window.innerHeight - r.height - 6);
+    const x = Math.min(live.x, window.innerWidth - r.width - 6);
+    const y = Math.min(live.y, window.innerHeight - r.height - 6);
     setPos({ x: Math.max(4, x), y: Math.max(4, y) });
     // Keyboard-opened menus start on the first enabled item, like native menus.
-    setActive(menu.keyboard ? menu.actions.findIndex((a) => a.enabled) : -1);
+    setActive(live.keyboard ? live.actions.findIndex((a) => a.enabled) : -1);
     ref.current.focus();
-  }, [menu]);
+  }, [live]);
 
   // Focus goes back to the trigger when the menu closes (unless an action moved it on purpose).
   const wasOpen = useRef(false);
   useEffect(() => {
-    if (menu) { wasOpen.current = true; return; }
+    if (live) { wasOpen.current = true; return; }
     if (!wasOpen.current) return;
     wasOpen.current = false;
     const el = returnFocus;
@@ -89,10 +93,10 @@ export function ContextMenu() {
     if (useApp.getState().dialog || useApp.getState().paletteOpen) return;
     handOnFocus(null);
     if (el && el.isConnected && focusLost) el.focus({ preventScroll: true });
-  }, [menu]);
+  }, [live]);
 
   useEffect(() => {
-    if (!menu) return;
+    if (!live) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) close();
     };
@@ -105,7 +109,7 @@ export function ContextMenu() {
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("resize", onBlur);
     };
-  }, [menu, close]);
+  }, [live, close]);
 
   if (!menu) return null;
   const run = (a: ActionDescriptor) => {
@@ -152,7 +156,7 @@ export function ContextMenu() {
   };
   let lastCategory: string | undefined;
   return (
-    <div ref={ref} className="menu fade-in" role="menu" aria-activedescendant={active >= 0 ? `cm-item-${active}` : undefined} tabIndex={-1} style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} data-testid="context-menu">
+    <div {...exitProps} className={`menu ${motion}`} role="menu" aria-activedescendant={active >= 0 ? `cm-item-${active}` : undefined} tabIndex={-1} style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} data-testid="context-menu">
       {actions.map((a, i) => {
         const sep = lastCategory !== undefined && lastCategory !== a.category;
         lastCategory = a.category;

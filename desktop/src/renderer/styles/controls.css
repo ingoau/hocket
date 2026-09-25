@@ -94,6 +94,8 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; }
 .m3-select.open .m3-select-chevron { transform: rotate(180deg); color: var(--accent-text); }
 .m3-menu { position: fixed; z-index: 120; overflow-y: auto; padding: 6px; background: var(--bg-elev); color: var(--fg); border-radius: var(--shape-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px; transform-origin: top center; animation: m3-menu-in var(--dur-spring) var(--spring-fast); }
 @keyframes m3-menu-in { from { transform: scaleY(0.85); } }
+.m3-menu.closing { animation: m3-menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
+@keyframes m3-menu-out { to { opacity: 0; transform: scaleY(0.9); } }
 .m3-option { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 16px 0 8px; border-radius: var(--shape-md); cursor: pointer; white-space: nowrap; transition: border-radius var(--dur-spring) var(--spring-fast); }
 .m3-option-check { display: inline-flex; width: 18px; flex: 0 0 auto; color: var(--accent-text); }
 .m3-option.active { background: var(--bg-hover); }

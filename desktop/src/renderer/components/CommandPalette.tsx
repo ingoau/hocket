@@ -10,6 +10,7 @@ import { formatChord, parseChord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
 import { Icon, hasIcon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { usePresence } from "../lib/presence";
 
 interface Item extends Rankable {
   icon?: string;
@@ -31,6 +32,8 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
+  // The closed palette stays mounted, inert, while its exit plays.
+  const { value: shown, closing, motion, exitProps } = usePresence<true, HTMLDivElement>(open || undefined);
   useReturnFocus(open);
 
   useEffect(() => {
@@ -76,7 +79,7 @@ export function CommandPalette() {
     if (open) document.getElementById(`pal-opt-${active}`)?.scrollIntoView({ block: "nearest" });
   }, [active, open]);
 
-  if (!open) return null;
+  if (!shown) return null;
   const run = (i: Item) => {
     setOpen(false);
     i.run();
@@ -91,8 +94,8 @@ export function CommandPalette() {
   };
   const firstAction = ranked.findIndex((r) => r.item.kind === "action");
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-      <div className="palette fade-in" role="dialog" aria-modal="true" aria-label={t("action.palette")} onKeyDown={onKey} data-testid="palette">
+    <div className={`overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+      <div {...exitProps} className={`palette ${motion}`} role="dialog" aria-modal="true" aria-label={t("action.palette")} onKeyDown={onKey} data-testid="palette">
         <input ref={input} className="input" placeholder={t("palette.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} role="combobox" aria-label={t("action.palette")} aria-autocomplete="list" aria-expanded={ranked.length > 0} aria-controls="palette-list" aria-activedescendant={ranked[active] ? `pal-opt-${active}` : undefined} data-testid="palette-input" />
         {ranked.length === 0 ? <div className="group" role="status">{t("palette.empty")}</div> : null}
         <div className="list" id="palette-list" role="listbox" aria-label={t("a11y.paletteResults")}>

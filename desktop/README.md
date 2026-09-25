@@ -24,7 +24,9 @@ pnpm test:e2e       # Playwright Electron e2e (needs a display: `xvfb-run -a pnp
                     # headless Linux box; run `pnpm build` first). e2e/*.spec.ts except native.spec.ts
                     # run against the FakeCore (a11y.spec: axe over every view in both themes;
                     # keyboard-a11y.spec: keyboard-only walkthrough; motion-contrast.spec: reduced
-                    # motion, measured contrast, forced colours, 200% zoom);
+                    # motion, measured contrast, forced colours, 200% zoom; exit-motion.spec:
+                    # closed dialogs, menus, popovers, toasts and the fullscreen player animate
+                    # out, inert, before they unmount, and go at once under reduced motion);
                     # e2e/native.spec.ts runs the REAL core (native addon,
                     # skipped when native/ isn't built) against e2e/fake-navidrome.ts, a small
                     # Subsonic JSON server: setup → sync → play → queue → rate → undo → lyrics →

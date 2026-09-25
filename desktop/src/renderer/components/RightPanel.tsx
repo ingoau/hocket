@@ -12,6 +12,7 @@ import { Tabs, tabPanelProps } from "./Tabs";
 import { bridge } from "../core/bridge";
 import { SK } from "@shared/settings-keys";
 import { NARROW, useMediaQuery } from "../lib/media";
+import { usePresence } from "../lib/presence";
 
 export function RightPanel() {
   const panels = useApp((s) => s.panels);
@@ -46,13 +47,17 @@ export function RightPanel() {
   const narrow = useMediaQuery(NARROW);
   const drawerOpen = useApp((s) => s.drawerOpen);
   const setDrawerOpen = useApp((s) => s.setDrawerOpen);
-  if (narrow ? !drawerOpen : !panels.rightOpen) return null;
+  // The drawer withdraws before it unmounts; the docked panel is part of the
+  // layout (the content pane widens the moment it closes), so it just goes.
+  const open = narrow ? drawerOpen : panels.rightOpen;
+  const presence = usePresence(open || undefined, ref, { instant: !narrow });
+  if (!presence.value) return null;
   const qc = panels.queueCollapsed;
   const lc = panels.lyricsCollapsed;
   const queueFlex = qc ? "0 0 32px" : lc ? "1 1 auto" : `${panels.splitRatio} 1 0`;
   const lyricsFlex = lc ? "0 0 32px" : qc ? "1 1 auto" : `${1 - panels.splitRatio} 1 0`;
   return (
-    <aside ref={ref} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""}`} aria-label={t("a11y.sidePanel")} data-testid="right-panel"
+    <aside {...presence.exitProps} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""} ${presence.closing ? "closing" : ""}`} aria-label={t("a11y.sidePanel")} data-testid="right-panel"
       onKeyDown={narrow ? (e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setDrawerOpen(false); document.querySelector<HTMLElement>('[data-testid="toggle-side-panel"]')?.focus(); } } : undefined}>
       <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={260} aria-valuemax={560} tabIndex={0}
         onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ rightWidth: Math.max(260, Math.min(560, panels.rightWidth + d)) }); }} />

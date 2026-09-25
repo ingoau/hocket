@@ -9,6 +9,7 @@ import { bridge } from "../core/bridge";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { fmtRelative } from "../lib/format";
+import { usePresence } from "../lib/presence";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -137,12 +138,15 @@ function SearchBox() {
     </div>
   );
   const expanded = open && !!q.trim();
+  // The sheet lifts away on Escape, an outside click or a pick; when the query
+  // is cleared there is nothing left to show, so it goes at once.
+  const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() });
   return (
     <div className="search" role="search">
       <Icon name="search" size={14} />
       <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => q && setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
-      {expanded ? (
-        <div ref={pop} id="search-results" className="search-popover fade-in" role="listbox" aria-label={t("a11y.searchResults")} style={{ minHeight }} data-testid="search-popover">
+      {sheet.value ? (
+        <div {...sheet.exitProps} id="search-results" className={`search-popover ${sheet.motion}`} role="listbox" aria-label={t("a11y.searchResults")} style={{ minHeight }} data-testid="search-popover">
           {local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
           {localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
           {local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
@@ -162,6 +166,7 @@ function JobsIndicator() {
   const button = useRef<HTMLButtonElement>(null);
   const running = jobs.filter((j) => j.state === "running" || j.state === "queued" || j.state === "paused");
   const failed = jobs.some((j) => j.state === "failed") || problems.length > 0;
+  const popover = usePresence<true, HTMLDivElement>(open || undefined);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
@@ -176,8 +181,8 @@ function JobsIndicator() {
         <Icon name={running.length ? "spinner" : failed ? "warn" : "cloud"} className={running.length ? "spin" : ""} />
         {running.length || failed ? <span className={`dot ${failed ? "problem" : ""}`} /> : null}
       </button>
-      {open ? (
-        <div className="popover fade-in" role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
+      {popover.value ? (
+        <div {...popover.exitProps} className={`popover ${popover.motion}`} role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
           <div className="section-title">{t("jobs.jobsHeading")}</div>
           {!jobs.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
           {sync && !sync.finished ? <div className="item muted small">{t("sync.syncing", { phase: sync.phase })}</div> : null}

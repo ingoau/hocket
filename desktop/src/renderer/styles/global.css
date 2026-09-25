@@ -42,6 +42,11 @@
   --dur-short: 150ms;
   --dur-spring: 350ms;
   --dur-spring-long: 500ms;
+  /* Exits are quicker than entrances and accelerate away (Material 3's
+     emphasised-accelerate): sheets take --dur-exit, menus and snackbars
+     --dur-short. lib/presence.ts keeps a closed surface mounted, with the
+     `closing` class in place of `fade-in`, until its exit animation ends. */
+  --dur-exit: 200ms;
   /* Tonal surfaces. A 5% accent wash over any theme surface keeps every text
      colour at 4.5:1 plain and hovered (checked across the contrast.test accent
      sweep), but not under --bg-active; so items on a tonal surface use the
@@ -346,7 +351,7 @@ h3 { font-size: var(--fs-lg); }
 .popover .item { padding: 6px 12px; display: flex; flex-direction: column; gap: 4px; }
 .popover .item + .item { border-top: 1px solid var(--border); }
 .progress { height: 4px; border-radius: var(--shape-full); background: var(--bg-active); overflow: hidden; }
-.progress > div { height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.25s var(--ease); }
+.progress > div { height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--dur-spring) var(--ease-emphasized); }
 .progress.failed > div { background: var(--warn); }
 
 /* Content */
@@ -466,7 +471,7 @@ h3 { font-size: var(--fs-lg); }
 .seek .bar { position: relative; flex: 1; height: 14px; display: flex; align-items: center; cursor: default; }
 .seek .bar .track { position: relative; width: 100%; height: 4px; border-radius: 2px; background: var(--bg-active); overflow: visible; }
 .seek .bar .fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: var(--accent); }
-.seek .bar .knob { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); transform: translate(-50%, -50%); opacity: 0; transition: opacity 0.1s; }
+.seek .bar .knob { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); transform: translate(-50%, -50%); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
 .seek .bar:hover .knob, .seek .bar.dragging .knob { opacity: 1; }
 .seek .bar .hover-time { position: absolute; bottom: 14px; transform: translateX(-50%); background: var(--bg-elev); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-size: var(--fs-xs); pointer-events: none; white-space: nowrap; }
 .player .right { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
@@ -528,7 +533,7 @@ button.qrow { width: 100%; }
 /* Background vocals: smaller, never fainter than the other lines (no opacity: that would cut contrast). */
 .lyrics-static .bg { font-size: 0.7em; }
 .lyrics-static .duet { text-align: right; }
-.lyrics-tools { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 4px; align-items: center; background: color-mix(in srgb, var(--bg-elev) 85%, transparent); border: 1px solid var(--border); border-radius: var(--shape-full); padding: 2px 8px; font-size: var(--fs-xs); color: var(--fg-muted); opacity: 0; transition: opacity 0.15s; }
+.lyrics-tools { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 4px; align-items: center; background: color-mix(in srgb, var(--bg-elev) 85%, transparent); border: 1px solid var(--border); border-radius: var(--shape-full); padding: 2px 8px; font-size: var(--fs-xs); color: var(--fg-muted); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
 .lyrics-pane:hover .lyrics-tools, .lyrics-tools:focus-within { opacity: 1; }
 /* AMLL sizes itself from --amll-lp-font-size (its own default is 5vh, far too big
    for a side pane). The in-window view scales with the viewport and the
@@ -560,9 +565,18 @@ button.qrow { width: 100%; }
 .menu .mi:hover .kbd, .menu .mi.active .kbd { background: transparent; }
 .menu .sep { height: 1px; background: var(--border); margin: 4px 10px; }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+/* Exits (see --dur-exit). `forwards` holds the end state until React unmounts
+   the surface, so it never flashes back to full opacity in between. A closing
+   surface is inert as well as untouchable. */
+.closing { pointer-events: none; }
+.menu.closing, .popover.closing, .search-popover.closing { animation: pop-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
+@keyframes pop-out { to { opacity: 0; transform: scale(0.95); } }
 
 .overlay { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.35); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; animation: scrim-in var(--dur-short) var(--ease-emphasized); }
 @keyframes scrim-in { from { background: transparent; } }
+/* The scrim lifts over the same time as the sheet on it. */
+.overlay.closing { animation: scrim-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
+@keyframes scrim-out { to { background: transparent; } }
 /* The palette: an extra-rounded tonal sheet with a pill search field. */
 .palette { width: 620px; max-width: 90vw; background: var(--surface-tonal); border: 1px solid var(--border); border-radius: var(--shape-xl); box-shadow: var(--shadow); overflow: hidden; padding: 8px; transform-origin: top center; }
 .palette.fade-in { animation: sheet-in var(--dur-spring-long) var(--spring-fast); }
@@ -578,6 +592,8 @@ button.qrow { width: 100%; }
 .palette .pi mark { background: transparent; color: var(--accent-text); font-weight: 600; }
 .palette .pi .kbd { margin-left: auto; }
 @keyframes sheet-in { from { opacity: 0; transform: translateY(-8px) scale(0.96); } to { opacity: 1; transform: none; } }
+.palette.closing, .dialog.closing { animation: sheet-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
+@keyframes sheet-out { to { opacity: 0; transform: translateY(-8px) scale(0.96); } }
 
 /* Dialogs: extra-large corners, a spring in. The surface stays --bg-elev (not
    tonal) because the buttons, lists and fields inside use the pressed overlay. */
@@ -598,6 +614,9 @@ button.qrow { width: 100%; }
 .toast.fade-in { animation: toast-in var(--dur-spring-long) var(--spring-fast); }
 /* Transform only: a toast is never drawn part-transparent, so its text keeps full contrast from the first frame. */
 @keyframes toast-in { from { transform: translateY(16px) scale(0.94); } to { transform: none; } }
+/* On the way out it sinks and fades: the text is leaving, not being read. */
+.toast.closing { animation: toast-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
+@keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.94); } }
 .toast:not(:has(.btn)) { padding-right: 18px; }
 .toast .btn { background: transparent; color: var(--accent-inverse); border-color: transparent; font-weight: 600; }
 /* The action is --accent-inverse at 4.5:1 on the toast itself; a lighter hover layer would drop it below that, so hover draws a ring in the text colour instead. */
@@ -719,6 +738,10 @@ button.qrow { width: 100%; }
 
 .fade-in { animation: fade var(--dur-short) var(--ease-emphasized-decel); }
 @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+/* The fullscreen player settles back down over the shell (which is live again
+   from the first frame: its inert follows the store, not this animation). */
+.fullscreen.closing { animation: fade-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
+@keyframes fade-out { to { opacity: 0; transform: translateY(6px); } }
 .popover.fade-in, .search-popover.fade-in { animation: pop-in var(--dur-spring) var(--spring-fast); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -784,6 +807,9 @@ button.qrow { width: 100%; }
   .sidebar .nav-item { height: 32px; }
   .sidebar .nav-item:active { border-radius: var(--shape-sm); }
   .right-panel.drawer > .resize-handle { display: none; }
+  /* The drawer withdraws to the right edge (a clip, so nothing overflows the window). */
+  .right-panel.drawer.closing { animation: drawer-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
+  @keyframes drawer-out { to { clip-path: inset(0 0 0 100%); } }
   .topbar { gap: 4px; padding: 0 6px; }
   .search { width: auto; flex: 1 1 120px; max-width: none; min-width: 0; }
   .search-popover, .popover { position: fixed; top: 44px; left: 8px; right: 8px; width: auto; }
