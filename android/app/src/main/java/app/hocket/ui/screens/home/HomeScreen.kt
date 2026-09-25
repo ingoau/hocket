@@ -122,7 +122,9 @@ fun HomeScreen(nav: NavHostController) {
                 if (recentList.isNotEmpty()) {
                     val ids = recentList.map { it.track.id }.distinct()
                     item(key = "h.continue", contentType = "header") { SectionHeader(stringResource(R.string.home_continue), Modifier.animateItem()) }
-                    items(recentList.take(5), key = { "r" + it.playedAt + it.track.id }, contentType = { "track" }) { entry ->
+                    // One row per play (start + track is its identity, and a lazy list throws on a
+                    // repeated key): older databases can hold the same play twice.
+                    items(recentList.distinctBy { it.playedAt to it.track.id }.take(5), key = { "r" + it.playedAt + it.track.id }, contentType = { "track" }) { entry ->
                         TrackRow(entry.track, onClick = { client.dispatch(Commands.playTracks(serverId, ids, ids.indexOf(entry.track.id), continueLabel)) },
                             modifier = Modifier.animateItem(),
                             trailing = { Text(entryAgo(entry), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp)) })

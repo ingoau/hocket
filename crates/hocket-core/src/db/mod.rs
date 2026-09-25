@@ -40,10 +40,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0003_stream_cache_spans",
         include_str!("migrations/0003_stream_cache_spans.sql"),
     ),
+    (
+        4,
+        "0004_play_history_unique",
+        include_str!("migrations/0004_play_history_unique.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -505,6 +510,67 @@ mod tests {
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v as u32, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_4_drops_duplicate_plays() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hocket.db");
+        {
+            // A version 3 database holding one play recorded twice.
+            let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+            db.with_conn(|c| {
+                c.execute_batch(
+                    "DROP INDEX idx_play_history_play;
+                     DELETE FROM schema_version WHERE version = 4;
+                     INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
+                     INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
+                         ('s', 't', 1790294961606.5, 126260, 0, 'd'),
+                         ('s', 't', 1790294961606.5, 132388, 1, 'd'),
+                         ('s', 't', 1790294000000.0, 126260, 0, 'd'),
+                         ('s', 'u', 1790294961606.5, 126260, 0, 'd');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        let rows: Vec<(String, f64, i64, i64)> = db
+            .with_conn(|c| {
+                let mut st = c.prepare(
+                    "SELECT track_id, played_at, played_ms, scrobbled FROM play_history ORDER BY id",
+                )?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("t".into(), 1790294961606.5, 126260, 1),
+                ("t".into(), 1790294000000.0, 126260, 0),
+                ("u".into(), 1790294961606.5, 126260, 0),
+            ]
+        );
+        let counts: Vec<i64> = db
+            .with_conn(|c| {
+                let mut st = c.prepare("SELECT local_play_count FROM tracks ORDER BY id")?;
+                let rows = st.query_map([], |r| r.get(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .unwrap();
+        assert_eq!(counts, vec![2, 1]);
+        // The index refuses a copy from now on.
+        assert!(db
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES ('s', 'u', 1790294961606.5, 1, 0, 'd')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .is_err());
     }
 
     #[test]
