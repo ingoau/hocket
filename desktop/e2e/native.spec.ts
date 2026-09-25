@@ -95,7 +95,11 @@ test.describe("real core against a fake Navidrome", () => {
       await expect.poll(() => server.callsTo("setRating").length, { timeout: 15_000 }).toBeGreaterThan(0);
       // Rating leaves the queue alone, so no toast: undo from the keyboard.
       await expect(page.getByTestId("toast")).toHaveCount(0);
-      await page.getByTestId("content").click();
+      // Focus the content pane rather than clicking its centre (that lands on whatever the layout
+      // puts there, e.g. the album's own rating), and move the pointer off the stars so the row
+      // shows its value, not the hover preview.
+      await page.mouse.move(0, 0);
+      await page.getByTestId("content").focus();
       await page.keyboard.press("Control+z");
       await expect(row.locator(".stars .star.on")).toHaveCount(0, { timeout: 10_000 });
 
