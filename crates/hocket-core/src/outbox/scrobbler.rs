@@ -336,6 +336,10 @@ impl ScrobbleRecorder {
         also: impl FnOnce(&rusqlite::Transaction) -> DbResult<()>,
     ) -> DbResult<()> {
         self.db.with_tx(|tx| {
+            // Asked again about a play already recorded here (it came back
+            // after a handoff): one row, and at most one submission.
+            let recorded =
+                crate::db::queries::recorded_play_in(tx, server_id, track_id, played_at)?.is_some();
             let history_id = crate::db::queries::record_play_in(
                 tx,
                 server_id,
@@ -345,7 +349,7 @@ impl ScrobbleRecorder {
                 verdict == Verdict::ScrobbledElsewhere,
                 &self.device_id,
             )?;
-            if verdict == Verdict::Submit {
+            if verdict == Verdict::Submit && !recorded {
                 self.outbox.enqueue_in(
                     tx,
                     server_id,
@@ -711,6 +715,81 @@ mod tests {
             })
             .unwrap();
         assert_eq!((lpc, llp), (1, Some(4_000.0)));
+    }
+
+    #[test]
+    fn a_play_asked_about_again_is_recorded_and_submitted_once() {
+        // The play came back to this device after a handoff and reached its
+        // threshold here again: same track, same start, more time played.
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_tracks(
+            &[crate::api::Track {
+                id: "t".into(),
+                server_id: "srv".into(),
+                title: "T".into(),
+                ..Default::default()
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
+        let clock = Arc::new(TestClock(Mutex::new(5_000.0)));
+        let outbox = Outbox::new(db.clone(), clock.clone());
+        let rec = ScrobbleRecorder::new(db.clone(), outbox.clone(), "dev");
+        let started_at = 1_790_294_961_606.5;
+        rec.record_verdict("srv", "t", started_at, 126_260, Verdict::Submit, |_| Ok(()))
+            .unwrap();
+        rec.record_verdict("srv", "t", started_at, 132_388, Verdict::Submit, |_| Ok(()))
+            .unwrap();
+        rec.record_verdict(
+            "srv",
+            "t",
+            started_at,
+            140_000,
+            Verdict::ScrobbledElsewhere,
+            |_| Ok(()),
+        )
+        .unwrap();
+        let h = db.recently_played(5).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].played_ms, 126_260);
+        assert!(h[0].scrobbled);
+        let submissions = outbox
+            .pending()
+            .unwrap()
+            .into_iter()
+            .filter(|p| {
+                matches!(
+                    p.mutation,
+                    Mutation::Scrobble {
+                        submission: true,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(submissions, 1);
+        let lpc: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT local_play_count FROM tracks WHERE id='t'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(lpc, 1);
+        // A later play of the same track is a play of its own.
+        rec.record_verdict(
+            "srv",
+            "t",
+            started_at + 300_000.0,
+            126_260,
+            Verdict::Submit,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(db.recently_played(5).unwrap().len(), 2);
     }
 
     mod props {

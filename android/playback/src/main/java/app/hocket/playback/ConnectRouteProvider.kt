@@ -48,6 +48,12 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
     private var state = ConnectRoutes.State()
     /** The device a switcher pick asked for, and when, until the core's state shows it playing. */
     private var pending: Pair<String, Long>? = null
+    /**
+     * When "Stop casting" asked for playback back here, until the core's state shows it here. The
+     * session stays released meanwhile: recreating it while the other device still reports playing
+     * would bring the chip back mid-handoff, and each further tap would start another handoff.
+     */
+    private var returningSince: Long? = null
     private var sessionRoute: String? = null
 
     override fun onCreate() {
@@ -67,6 +73,10 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
 
     /** The device the session should show as selected: the core's, or a pick still in flight. */
     private fun target(): DeviceInfo? {
+        returningSince?.let { since ->
+            if (state.remote == null || SystemClock.elapsedRealtime() - since > PENDING_MS) returningSince = null
+            else return null
+        }
         state.remote?.let { remote -> if (pending?.first == remote.id) pending = null; return remote }
         val (id, at) = pending ?: return null
         if (SystemClock.elapsedRealtime() - at > PENDING_MS) { pending = null; return null }
@@ -115,6 +125,7 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
     }
 
     private fun handoffTo(deviceId: String) {
+        returningSince = null
         pending = deviceId to SystemClock.elapsedRealtime()
         dispatch(Commands.handoffTo(deviceId))
     }
@@ -138,7 +149,10 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
         sessionRoute = null
         notifySessionReleased(sessionId)
         val self = state.selfId
-        if (state.remote != null && self != null) dispatch(Commands.handoffTo(self))
+        if (state.remote != null && self != null) {
+            returningSince = SystemClock.elapsedRealtime()
+            dispatch(Commands.handoffTo(self))
+        }
     }
 
     override fun onTransferToRoute(requestId: Long, sessionId: String, routeId: String) {
