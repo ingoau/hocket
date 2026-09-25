@@ -23,7 +23,7 @@ export function AlbumDetail({ id }: { id: string }) {
   // play button primes that track. Once per visit (a remount is a new visit).
   useAlbumDwellPrime(a?.id);
   const primer = usePlayIntent(`album:${id}`);
-  const play = (start = 0, shuffle = false) => a && bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-album">
       <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })}>
@@ -36,15 +36,15 @@ export function AlbumDetail({ id }: { id: string }) {
             <span className="muted"> · {a?.year ?? ""}{a?.genre ? ` · ${a.genre}` : ""} · {t("album.tracks", { count: a?.songCount ?? 0, duration: fmtDuration(a?.durationMs ?? 0) })}</span>
           </div>
           <div className="actions">
-            <button type="button" className="btn primary" onClick={() => play()} {...primer.bind(list[0]?.id)} data-testid="album-play"><Icon name="play" size={14} style={{ fill: "currentColor" }} /> {t("album.play")}</button>
-            <button type="button" className="btn" onClick={() => play(0, true)}><Icon name="shuffle" size={14} /> {t("album.shuffle")}</button>
+            <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(list[0]?.id)} data-testid="album-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
+            <button type="button" className="btn tonal" onClick={() => play(0, true)}><Icon name="shuffle" size={20} /> {t("album.shuffle")}</button>
             {a ? <Heart on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
             {a ? <Stars value={a.rating} label={t("a11y.ratingOf", { title: a.name })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "album", data: { id: a.id } }], rating: r } })} /> : null}
             <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } })} data-testid="album-more"><Icon name="more" /></button>
           </div>
         </div>
       </div>
-      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 8px" }}>
+      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={list} total={list.length} columns={["index", "title", "artist", "rating", "love", "plays", "duration", "offline"]} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
       </div>
     </div>

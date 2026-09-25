@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { completeSetup, expect, launchFake, stubDialogs, test } from "./fixtures";
+import { completeSetup, expect, launchFake, stubDialogs, test, chooseOption } from "./fixtures";
 
 test.describe("config backup", () => {
   test("export with server passwords → import on a fresh install signs in and restores settings", async () => {
@@ -18,7 +18,7 @@ test.describe("config backup", () => {
         await completeSetup(page);
         await page.getByTestId("nav-settings").click();
         await page.getByTestId("settings-nav-appearance").click();
-        await page.getByTestId("setting-theme").selectOption("dark");
+        await chooseOption(page.getByTestId("setting-theme"), "dark");
         await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
         await page.getByTestId("settings-nav-backup").click();
         await stubDialogs(app, file);

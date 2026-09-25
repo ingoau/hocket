@@ -57,6 +57,7 @@ test.describe("motion, contrast and zoom", () => {
     await expect(fs).toBeVisible();
     await expect(fs.getByTestId("fs-still")).toBeVisible();
     await expect(fs.getByTestId("fluid-bg")).toHaveCount(0);
+    await fs.getByTestId("fs-mode-lyrics").click();
     await expect(fs.getByTestId("lyrics-view")).toHaveAttribute("data-mode", "plain");
     await page.waitForTimeout(500);
     expect(await runningAnimations(page)).toBe(0);
@@ -125,7 +126,7 @@ test.describe("motion, contrast and zoom", () => {
         await page.waitForTimeout(600);
         const texts = await page.evaluate(() => {
           const out: { what: string; rect: { x: number; y: number; w: number; h: number }; color: string }[] = [];
-          for (const sel of [".fullscreen .info .t1", ".fullscreen .info .t2", ".fullscreen .seek > span", ".fullscreen .side .tab"]) {
+          for (const sel of [".np-text .t1", ".np-text .t2", ".np-seek .time", ".np-kicker", ".np-source-name", ".np-mode:not(.on)"]) {
             for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
               const r = el.getBoundingClientRect();
               if (r.width && r.height && el.textContent?.trim()) out.push({ what: `${sel} "${el.textContent.trim().slice(0, 20)}"`, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, color: getComputedStyle(el).color });
@@ -135,7 +136,7 @@ test.describe("motion, contrast and zoom", () => {
         });
         expect(texts.length).toBeGreaterThan(5);
         // Photograph the background alone: hide everything drawn over it.
-        await page.addStyleTag({ content: ".fullscreen .left, .fullscreen .side, .fullscreen .close { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => (el as Element).setAttribute("data-e2e-hide", "")));
+        await page.addStyleTag({ content: ".np-stage, .toasts { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => (el as Element).setAttribute("data-e2e-hide", "")));
         const png = (await page.screenshot()).toString("base64");
         await page.evaluate(() => document.querySelector("[data-e2e-hide]")?.remove());
         const worst = await page.evaluate(async ({ png, texts }) => {

@@ -6,6 +6,7 @@ import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
 import { openContextMenu } from "../components/ContextMenu";
 import { Tile, TileList } from "../components/Tile";
+import { Icon } from "../components/Icon";
 import { usePlayIntent } from "../lib/use-prime";
 
 export function Home() {
@@ -29,22 +30,22 @@ export function Home() {
     <div className="view" data-testid="view-home">
       <div className="view-header"><h1>{t("home.title")}</h1>{sync && !sync.finished ? <span className="badge">{t("sync.syncing", { phase: sync.phase })}</span> : null}</div>
       <div className="view-body">
-        {empty ? <EmptyState message={t("home.empty")} /> : null}
-        <Section title={t("home.recentlyPlayed")}>{(played.data ?? []).map((h, i) => trackTile(h.track, i))}</Section>
-        <Section title={t("home.recentlyAdded")}>{(recent.data?.items ?? []).map(albumTile)}</Section>
-        <Section title={t("home.mostPlayed")}>{(most.data?.items ?? []).filter((a) => a.playCount > 0).map(albumTile)}</Section>
-        <Section title={t("home.random")}>{(random.data?.items ?? []).map(albumTile)}</Section>
+        {empty ? <EmptyState message={t("home.empty")} icon="library" /> : null}
+        <Section title={t("home.recentlyPlayed")} icon="restore">{(played.data ?? []).map((h, i) => trackTile(h.track, i))}</Section>
+        <Section title={t("home.recentlyAdded")} icon="album">{(recent.data?.items ?? []).map(albumTile)}</Section>
+        <Section title={t("home.mostPlayed")} icon="stats">{(most.data?.items ?? []).filter((a) => a.playCount > 0).map(albumTile)}</Section>
+        <Section title={t("home.random")} icon="shuffle">{(random.data?.items ?? []).map(albumTile)}</Section>
       </div>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode[] }) {
+function Section({ title, icon, children }: { title: string; icon: string; children: React.ReactNode[] }) {
   if (!children.length) return null;
   const id = `home-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section className="home-section" aria-labelledby={id}>
-      <h2 className="section-heading" id={id}>{title}</h2>
+      <h2 className="section-heading" id={id}><span className="section-icon" aria-hidden="true"><Icon name={icon} size={18} /></span>{title}</h2>
       <TileList label={title} className="scroller">{children}</TileList>
     </section>
   );

@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { FakeNavidrome } from "./fake-navidrome";
+import { chooseOption } from "./fixtures";
 
 const root = resolve(__dirname, "..");
 const addonBuilt = existsSync(join(root, "native", "index.js"));
@@ -71,7 +72,7 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("album-play").click();
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
       await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
-      await expect(page.getByTestId("queue-timeline")).toContainText("Continuing from");
+      await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
       const firstTitle = await page.getByTestId("queue-row-current").locator(".t1").textContent();
 
       // Position extrapolates from TransportChanged stamps while playing.
@@ -94,7 +95,11 @@ test.describe("real core against a fake Navidrome", () => {
       await expect.poll(() => server.callsTo("setRating").length, { timeout: 15_000 }).toBeGreaterThan(0);
       // Rating leaves the queue alone, so no toast: undo from the keyboard.
       await expect(page.getByTestId("toast")).toHaveCount(0);
-      await page.getByTestId("content").click();
+      // Focus the content pane rather than clicking its centre (that lands on whatever the layout
+      // puts there, e.g. the album's own rating), and move the pointer off the stars so the row
+      // shows its value, not the hover preview.
+      await page.mouse.move(0, 0);
+      await page.getByTestId("content").focus();
       await page.keyboard.press("Control+z");
       await expect(row.locator(".stars .star.on")).toHaveCount(0, { timeout: 10_000 });
 
@@ -106,7 +111,7 @@ test.describe("real core against a fake Navidrome", () => {
       // Change a registry setting: theme → dark.
       await page.getByTestId("nav-settings").click();
       await page.getByTestId("settings-nav-appearance").click();
-      await page.getByTestId("setting-theme").selectOption("dark");
+      await chooseOption(page.getByTestId("setting-theme"), "dark");
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
       // No settling delay: quitting waits for the core's flush (before-quit → Core::shutdown).
     } finally {

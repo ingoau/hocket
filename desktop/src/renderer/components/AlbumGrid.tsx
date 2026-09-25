@@ -138,7 +138,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
 
   return (
     <div ref={parentRef} className="view-body" role="grid" aria-label={label} aria-multiselectable="true" aria-rowcount={rowCount} aria-colcount={cols} onKeyDown={onKey} data-testid={testId ?? "grid"} style={{ "--tile-w": `${tileWidth}px` } as React.CSSProperties}>
-      {total === 0 ? <div className="empty" role="row"><div role="gridcell">{emptyMessage}</div></div> : null}
+      {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name={targetKind === "albums" ? "album" : targetKind === "artists" ? "artist" : "playlist"} size={32} /></span>{emptyMessage}</div></div> : null}
       <div style={{ height: virt.getTotalSize(), position: "relative" }}>
         {vrows.map((vr) => (
           <div key={vr.key} role="row" aria-rowindex={vr.index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px 14px", padding: "4px 0" }}>
@@ -171,7 +171,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
                   {it.subtitle ? <div className="t2" title={it.subtitle}>{it.subtitle}</div> : null}
                   {it.badge ? <span className="badge tile-badge" style={{ position: "absolute", top: 10, left: 10 }}><Icon name={it.badge} size={11} title={t("a11y.downloaded")} /></span> : null}
                   {/* Not a Tab stop: Enter opens, Shift+F10 has Play; the pointer gets the shortcut button. */}
-                  {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button> : null}
+                  {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={22} filled /></button> : null}
                 </div>
               );
             })}

@@ -1,5 +1,5 @@
 // Every icon the action registry can emit (Material Symbols names in
-// crates/hocket-core/src/actions/defs.rs) must map to a lucide glyph, and the
+// crates/hocket-core/src/actions/defs.rs) must map to a Material Symbols glyph, and the
 // renderer's own names must all resolve; nothing falls through to the
 // placeholder silently.
 import { readFileSync } from "node:fs";

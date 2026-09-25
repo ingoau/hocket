@@ -106,14 +106,18 @@ test.describe("axe: no violations anywhere", () => {
     await populate(page);
     for (const theme of THEMES) {
       await setTheme(page, theme);
-      // Fullscreen player, each tab.
+      // Fullscreen player: the artwork, then each pane.
       await page.getByTestId("toggle-fullscreen").click();
       await expect(page.getByTestId("fullscreen-player")).toBeVisible();
-      for (const tab of ["lyrics", "upNext", "related"]) {
-        await page.getByTestId(`fs-tab-${tab}`).click();
-        await page.waitForTimeout(300);
-        await expectNoViolations(page, `${theme} fullscreen/${tab}`);
+      await page.waitForTimeout(700);
+      await expectNoViolations(page, `${theme} fullscreen/artwork`);
+      for (const mode of ["lyrics", "queue", "about"]) {
+        await page.getByTestId(`fs-mode-${mode}`).click();
+        await page.waitForTimeout(700);
+        await expectNoViolations(page, `${theme} fullscreen/${mode}`);
       }
+      // Back to the artwork for the next theme.
+      await page.getByTestId("fs-mode-about").click();
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
       // Command palette with results and actions.

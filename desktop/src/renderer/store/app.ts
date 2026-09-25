@@ -21,6 +21,10 @@ export interface Route {
   param?: string;
 }
 
+/** What the fullscreen player's stage shows: the big artwork, or one of its panes (the artwork shrinks next to the title). */
+export type NowPlayingMode = "art" | "lyrics" | "queue" | "about";
+const NOW_PLAYING_MODES: readonly NowPlayingMode[] = ["art", "lyrics", "queue", "about"];
+
 export interface PanelState {
   rightOpen: boolean;
   queueCollapsed: boolean;
@@ -71,6 +75,8 @@ export interface UiState {
   /** Renderer performance mode derived from visibility/focus/battery. */
   perf: "full" | "background" | "stopped";
   queueTab: "queue" | "recent";
+  /** Remembered on this device across closing and reopening the player. */
+  nowPlayingMode: NowPlayingMode;
   prefs: AppPrefs;
   /** Narrow windows (and 200% zoom) show the side panel as a drawer, closed until asked for. */
   drawerOpen: boolean;
@@ -100,6 +106,7 @@ export interface AppStore extends CoreState, UiState {
   setWindowState(state: WindowState): void;
   setPageVisible(visible: boolean): void;
   setQueueTab(tab: "queue" | "recent"): void;
+  setNowPlayingMode(mode: NowPlayingMode): void;
   setPrefs(patch: Partial<AppPrefs>): void;
   setDrawerOpen(open: boolean): void;
   setting<T>(key: string, fallback: T): T;
@@ -129,6 +136,7 @@ export const useApp = create<AppStore>((set, get) => ({
   pageVisible: true,
   perf: "full",
   queueTab: "queue",
+  nowPlayingMode: loadNowPlayingMode(),
   prefs: { closeToTray: true },
   drawerOpen: false,
 
@@ -216,6 +224,10 @@ export const useApp = create<AppStore>((set, get) => ({
   setQueueTab(queueTab) {
     set({ queueTab });
   },
+  setNowPlayingMode(nowPlayingMode) {
+    saveLocal("nowPlayingMode", nowPlayingMode);
+    set({ nowPlayingMode });
+  },
   setPrefs(patch) {
     void bridge().prefs.set(patch).then((prefs) => set({ prefs }));
   },
@@ -236,6 +248,11 @@ export const useApp = create<AppStore>((set, get) => ({
     bridge().dispatch({ type: "runAction", data: { action_id: actionId, target } });
   },
 }));
+
+function loadNowPlayingMode(): NowPlayingMode {
+  const v = loadLocal<string>("nowPlayingMode", "art");
+  return (NOW_PLAYING_MODES as readonly string[]).includes(v) ? (v as NowPlayingMode) : "art";
+}
 
 /** Whether the window is in the narrow layout (lib/media.ts NARROW). */
 export function isNarrow(): boolean {

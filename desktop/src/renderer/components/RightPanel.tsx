@@ -84,8 +84,8 @@ export function LyricsPane({ variant = "compact" }: { variant?: "compact" | "lar
   const now = useApp((s) => s.nowPlaying);
   const lyrics = useApp((s) => s.lyrics);
   const external = useApp((s) => s.settings[SK.lyricsExternalEnabled]?.value === "true");
-  if (!now) return <EmptyState message={t("lyrics.nothingPlaying")} />;
+  if (!now) return <EmptyState message={t("lyrics.nothingPlaying")} icon="lyrics" />;
   const current = lyrics && lyrics.trackId === now.track.id ? lyrics.lyrics : undefined;
-  if (!current) return <EmptyState message={t("lyrics.none")} action={!external ? <span className="small faint">{t("lyrics.noneHint")}</span> : undefined} testId="lyrics-empty" />;
+  if (!current) return <EmptyState message={t("lyrics.none")} icon="lyrics" action={!external ? <span className="small faint">{t("lyrics.noneHint")}</span> : undefined} testId="lyrics-empty" />;
   return <LyricsView lyrics={current} variant={variant} />;
 }

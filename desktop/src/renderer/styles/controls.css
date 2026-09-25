@@ -1,0 +1,137 @@
+/* Material 3 Expressive form controls (components/controls.tsx): slider,
+   switch, select menu; plus number and colour inputs. One look everywhere;
+   contexts (the fullscreen player, the player bar) only swap the colours.
+   Loaded after the m3-* sheets, before now-playing.css. */
+
+/* ---- Slider ------------------------------------------------------------------
+   Geometry: the handle (--hw wide) is centred at --x; the active track runs
+   from the start to --gap before it, the inactive track from --gap after it
+   to the end, with a stop dot. The transparent native input on top has a
+   thumb exactly --hw wide, so pointer positions map to the same values. */
+.m3-slider {
+  --hw: 4px; --gap: 6px; --track: 14px; --handle-h: 30px; --r-out: 7px; --r-in: 3px;
+  --active: var(--accent); --inactive: var(--state-selected); --handle: var(--accent); --stop: var(--accent);
+  --x: calc(var(--hw) / 2 + (100% - var(--hw)) * var(--f, 0));
+  position: relative; display: inline-flex; align-items: center; flex: 1 1 140px; min-width: 96px; height: var(--handle-h);
+}
+.m3-slider.sm { --hw: 3px; --gap: 4px; --track: 6px; --handle-h: 18px; --r-out: 3px; --r-in: 1.5px; }
+.m3-slider-active, .m3-slider-inactive { position: absolute; top: 50%; height: var(--track); transform: translateY(-50%); pointer-events: none; }
+.m3-slider-active { left: 0; width: max(0px, calc(var(--x) - var(--hw) / 2 - var(--gap))); background: var(--active); border-radius: var(--r-out) var(--r-in) var(--r-in) var(--r-out); }
+.m3-slider-inactive { left: min(100%, calc(var(--x) + var(--hw) / 2 + var(--gap))); right: 0; background: var(--inactive); border-radius: var(--r-in) var(--r-out) var(--r-out) var(--r-in); }
+/* The stop indicator: a dot at the end of the inactive track. */
+.m3-slider-inactive::after { content: ""; position: absolute; right: calc((var(--track) - 4px) / 2); top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--stop); transform: translateY(-50%); }
+.m3-slider.sm .m3-slider-inactive::after { display: none; }
+.m3-slider-handle { position: absolute; top: 50%; left: var(--x); width: var(--hw); height: var(--handle-h); border-radius: var(--hw); background: var(--handle); transform: translate(-50%, -50%); pointer-events: none; transition: width var(--dur-short) var(--ease-emphasized), height var(--dur-spring) var(--spring-fast); }
+.m3-slider:hover .m3-slider-handle { height: calc(var(--handle-h) + 4px); }
+.m3-slider:has(.m3-slider-input:active) .m3-slider-handle { width: max(2px, calc(var(--hw) - 2px)); }
+.m3-slider > .m3-slider-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none; background: none; }
+.m3-slider-input::-webkit-slider-runnable-track { height: 100%; background: none; border: 0; }
+.m3-slider-input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: var(--hw); height: var(--handle-h); background: none; border: 0; }
+.m3-slider:has(.m3-slider-input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 4px; border-radius: var(--shape-sm); }
+.m3-slider.disabled { opacity: 0.38; }
+.m3-slider.disabled .m3-slider-input { cursor: default; }
+/* The value indicator: a filled pill popping up over the handle. */
+.m3-slider-bubble { position: absolute; bottom: calc(100% + 8px); left: 50%; min-width: 36px; padding: 6px 10px; border-radius: var(--shape-full); background: var(--fg); color: var(--bg); font-size: var(--fs-sm); font-weight: 600; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; transform: translateX(-50%) scale(0); transform-origin: 50% 100%; transition: transform var(--dur-spring) var(--spring-fast); }
+.m3-slider:has(.m3-slider-input:active) .m3-slider-bubble, .m3-slider:has(.m3-slider-input:focus-visible) .m3-slider-bubble { transform: translateX(-50%) scale(1); }
+/* Vertical: the same parts along the y axis, growing upwards (the native
+   input runs bottom-to-top via its writing mode). */
+.m3-slider.vertical { --y: calc(var(--hw) / 2 + (100% - var(--hw)) * var(--f, 0)); flex: 0 0 auto; width: var(--handle-h); height: 132px; min-width: 0; }
+.m3-slider.vertical .m3-slider-active, .m3-slider.vertical .m3-slider-inactive { top: auto; left: 50%; width: var(--track); height: auto; transform: translateX(-50%); }
+.m3-slider.vertical .m3-slider-active { bottom: 0; height: max(0px, calc(var(--y) - var(--hw) / 2 - var(--gap))); border-radius: var(--r-in) var(--r-in) var(--r-out) var(--r-out); }
+.m3-slider.vertical .m3-slider-inactive { bottom: min(100%, calc(var(--y) + var(--hw) / 2 + var(--gap))); top: 0; right: auto; border-radius: var(--r-out) var(--r-out) var(--r-in) var(--r-in); }
+.m3-slider.vertical .m3-slider-inactive::after { right: auto; top: calc((var(--track) - 4px) / 2); left: 50%; transform: translateX(-50%); }
+.m3-slider.vertical .m3-slider-handle { top: auto; left: 50%; bottom: var(--y); width: var(--handle-h); height: var(--hw); transform: translate(-50%, 50%); transition: height var(--dur-short) var(--ease-emphasized), width var(--dur-spring) var(--spring-fast); }
+.m3-slider.vertical:hover .m3-slider-handle { width: calc(var(--handle-h) + 4px); height: var(--hw); }
+.m3-slider.vertical:has(.m3-slider-input:active) .m3-slider-handle { height: max(2px, calc(var(--hw) - 2px)); }
+.m3-slider.vertical > .m3-slider-input { writing-mode: vertical-lr; direction: rtl; }
+.m3-slider.vertical > .m3-slider-input::-webkit-slider-thumb { width: var(--handle-h); height: var(--hw); }
+.m3-slider.vertical .m3-slider-bubble { bottom: calc(100% + 10px); }
+
+/* In the player bar and on the fullscreen player's artwork-coloured background. */
+.player .m3-slider { --active: var(--fg); --handle: var(--fg); --inactive: var(--bg-active); flex: 0 0 auto; width: 88px; min-width: 0; }
+.fullscreen .m3-slider { --active: #fff; --handle: #fff; --stop: #fff; --inactive: rgba(255, 255, 255, 0.28); }
+.fullscreen .m3-slider-bubble { background: #fff; color: #121214; }
+
+/* ---- Switch ------------------------------------------------------------------
+   Off: an outlined track with a small handle. On: a filled track with a
+   white handle carrying a check. The handle grows while pressed. */
+.m3-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 52px; height: 32px; vertical-align: middle; }
+.m3-switch > .m3-switch-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.m3-switch-track { position: absolute; inset: 0; border-radius: var(--shape-full); background: var(--bg-sunken); box-shadow: inset 0 0 0 2px var(--fg-muted); transition: background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized); }
+.m3-switch-handle { position: absolute; top: 50%; left: 16px; width: 16px; height: 16px; border-radius: 50%; background: var(--fg-muted); display: grid; place-items: center; color: var(--accent-text); transform: translate(-50%, -50%); transition: left var(--dur-spring) var(--spring-fast), width var(--dur-spring) var(--spring-fast), height var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
+.m3-switch-handle .icon { width: 16px; height: 16px; }
+.m3-switch.on .m3-switch-track { background: var(--accent); box-shadow: none; }
+.m3-switch.on .m3-switch-handle { left: 36px; width: 24px; height: 24px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); }
+.m3-switch:hover .m3-switch-handle { box-shadow: 0 0 0 8px var(--bg-hover); }
+.m3-switch.on:hover .m3-switch-handle { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent); }
+.m3-switch:has(.m3-switch-input:active) .m3-switch-handle { width: 28px; height: 28px; }
+.m3-switch:has(.m3-switch-input:focus-visible) .m3-switch-track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.m3-switch.disabled { opacity: 0.38; }
+.m3-switch.disabled .m3-switch-input { cursor: default; }
+.m3-switch.sm { width: 40px; height: 24px; }
+.m3-switch.sm .m3-switch-handle { left: 12px; width: 12px; height: 12px; }
+.m3-switch.sm.on .m3-switch-handle { left: 28px; width: 18px; height: 18px; }
+.m3-switch.sm .m3-switch-handle .icon { width: 12px; height: 12px; }
+label.switch { display: inline-flex; align-items: center; gap: 10px; }
+
+/* ---- Select ------------------------------------------------------------------
+   The field: a filled pill with the value and a chevron that turns when open.
+   The menu: an M3 menu on the elevated surface; the chosen item carries a
+   check and a tonal fill, the active one a state layer. */
+.m3-select {
+  -webkit-appearance: none; appearance: none; font: inherit; color: var(--fg);
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; max-width: 100%;
+  height: var(--field-h); padding: 0 8px 0 16px; border: 0; border-radius: var(--shape-full);
+  background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border); cursor: pointer; text-align: left;
+  transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized);
+}
+.m3-select:hover { box-shadow: inset 0 0 0 1px var(--border-strong); background: color-mix(in srgb, var(--fg) 4%, var(--bg-sunken)); }
+.m3-select.open { border-radius: var(--shape-md); box-shadow: inset 0 0 0 2px var(--accent); }
+.m3-select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.m3-select:disabled { opacity: 0.38; cursor: default; }
+.m3-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m3-select-chevron { flex: 0 0 auto; color: var(--fg-muted); transition: transform var(--dur-spring) var(--spring-fast); }
+.m3-select.open .m3-select-chevron { transform: rotate(180deg); color: var(--accent-text); }
+.m3-menu { position: fixed; z-index: 120; overflow-y: auto; padding: 6px; background: var(--bg-elev); color: var(--fg); border-radius: var(--shape-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px; transform-origin: top center; animation: m3-menu-in var(--dur-spring) var(--spring-fast); }
+@keyframes m3-menu-in { from { transform: scaleY(0.85); } }
+.m3-option { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 16px 0 8px; border-radius: var(--shape-md); cursor: pointer; white-space: nowrap; transition: border-radius var(--dur-spring) var(--spring-fast); }
+.m3-option-check { display: inline-flex; width: 18px; flex: 0 0 auto; color: var(--accent-text); }
+.m3-option.active { background: var(--bg-hover); }
+.m3-option.selected { background: var(--state-selected); font-weight: 600; border-radius: var(--shape-full); }
+.m3-option[aria-disabled="true"] { opacity: 0.38; cursor: default; }
+
+/* ---- Number and colour inputs --------------------------------------------- */
+input.input[type="number"] { -moz-appearance: textfield; font-variant-numeric: tabular-nums; }
+input.input[type="number"]::-webkit-inner-spin-button, input.input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input.input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: pointer; border-radius: var(--shape-xs); }
+input.input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+input[type="color"] { -webkit-appearance: none; appearance: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--border-strong); transition: border-radius var(--dur-spring) var(--spring-fast); }
+input[type="color"]:hover { border-radius: var(--shape-md); }
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: 0; border-radius: inherit; }
+input[type="color"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 6px; }
+
+/* ---- Forced colours ------------------------------------------------------- */
+@media (forced-colors: active) {
+  .m3-slider { forced-color-adjust: none; --active: Highlight; --handle: CanvasText; --stop: CanvasText; --inactive: GrayText; }
+  .m3-slider-bubble { background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+  .m3-switch { forced-color-adjust: none; }
+  .m3-switch-track { background: Canvas; box-shadow: inset 0 0 0 2px CanvasText; }
+  .m3-switch-handle { background: CanvasText; color: Canvas; }
+  .m3-switch.on .m3-switch-track { background: Highlight; box-shadow: none; }
+  .m3-switch.on .m3-switch-handle { background: HighlightText; color: Highlight; }
+  .m3-select { border: 1px solid ButtonText; }
+  .m3-menu { border: 1px solid CanvasText; }
+  .m3-option.active { outline: 1px solid Highlight; }
+  .m3-option.selected { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  input[type="color"] { border: 1px solid ButtonText; }
+}
+
+/* ---- Placement ------------------------------------------------------------ */
+.setting-row .control .m3-slider:not(.vertical) { flex: 0 0 auto; width: 220px; }
+.eq .m3-slider:not(.vertical) { flex: 0 0 auto; width: 180px; }
+.eq .bands .m3-slider { --track: 12px; --handle-h: 28px; --r-out: 6px; }
+.eq .bands .band { gap: 8px; }
+.eq label.row { white-space: nowrap; }
+/* Open, the menu's outline says where focus is; no second ring. */
+.m3-select.open:focus-visible { outline: none; }

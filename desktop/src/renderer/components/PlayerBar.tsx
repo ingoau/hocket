@@ -16,6 +16,7 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { isOfflineNotice, noticeText } from "../lib/notice";
 import { Heart, Stars } from "./Stars";
+import { Slider } from "./controls";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
@@ -76,9 +77,9 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
       <div className="center">
         <div className="transport">
           <button type="button" className={`btn icon ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="shuffle"><Icon name="shuffle" size={15} /></button>
-          <button type="button" className="btn icon" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="previous"><Icon name="previous" size={16} style={{ fill: "currentColor" }} /></button>
-          <button type="button" className="btn icon play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{transport.buffering ? <Icon name="spinner" className="spin" size={18} /> : <Icon name={playing ? "pause" : "play"} size={18} style={{ fill: "currentColor" }} />}</button>
-          <button type="button" className="btn icon" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="next"><Icon name="next" size={16} style={{ fill: "currentColor" }} /></button>
+          <button type="button" className="btn icon" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="previous"><Icon name="previous" size={16} filled /></button>
+          <button type="button" className="btn icon play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{transport.buffering ? <Icon name="spinner" className="spin" size={18} /> : <Icon name={playing ? "pause" : "play"} size={18} filled />}</button>
+          <button type="button" className="btn icon" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="next"><Icon name="next" size={16} filled /></button>
           <RepeatButton mode={queue.repeat} />
           <button type="button" className={`btn icon ${queue.autoplay ? "on" : ""}`} aria-pressed={queue.autoplay} aria-label={t("player.autoplay")} title={t("player.autoplay")} onClick={() => d({ type: "setAutoplay", data: { enabled: !queue.autoplay } })}><Icon name="autoplay" size={15} /></button>
         </div>
@@ -185,7 +186,7 @@ function Volume() {
   return (
     <div className="volume">
       <button type="button" className="btn icon sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="mute"><Icon name={volume === 0 ? "mute" : "volume"} size={14} /></button>
-      <input type="range" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(e) => { setMuted(undefined); set(Number(e.target.value)); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
+      <Slider size="sm" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(v) => { setMuted(undefined); set(v); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
     </div>
   );
 }

@@ -46,7 +46,7 @@ export function Sidebar() {
         <div className="section-title">{t("nav.library")}</div>
         {items.map((it) => (
           <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
-            <Icon name={it.icon} size={15} />
+            <Icon name={it.icon} size={18} filled={isActive(it.view)} />
             <span>{it.label}</span>
           </a>
         ))}
@@ -58,7 +58,7 @@ export function Sidebar() {
           const name = filterName(f);
           return (
             <a key={f.id} href="#" className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={name} onClick={(e) => { e.preventDefault(); navigate(offline ? { view: "downloads", param: "offline" } : { view: "filter", id: f.id }); }} data-testid={offline ? "nav-available-offline" : undefined}>
-              <Icon name={offline ? "cached" : "filter"} size={15} />
+              <Icon name={offline ? "cached" : "filter"} size={18} filled={active} />
               <span>{name}</span>
             </a>
           );
@@ -66,7 +66,7 @@ export function Sidebar() {
         {(playlists ?? []).length ? <div className="section-title">{t("nav.playlistsSection")}</div> : null}
         {(playlists ?? []).map((p) => (
           <a key={p.id} href="#" className={`nav-item ${route.view === "playlist" && route.id === p.id ? "active" : ""}`} aria-current={route.view === "playlist" && route.id === p.id ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "playlist", id: p.id }); }} onContextMenu={(e) => void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} title={p.isSmart ? `${p.name} · ${t("playlists.smart")}` : p.name}>
-            <Icon name={p.isSmart ? "filter" : "playlist"} size={15} />
+            <Icon name={p.isSmart ? "filter" : "playlist"} size={18} filled={route.view === "playlist" && route.id === p.id} />
             <span>{p.name}</span>
           </a>
         ))}
@@ -74,7 +74,7 @@ export function Sidebar() {
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">
         <a href="#" className={`nav-item ${route.view === "settings" ? "active" : ""}`} aria-current={route.view === "settings" ? "page" : undefined} title={t("nav.settings")} onClick={(e) => { e.preventDefault(); navigate({ view: "settings" }); }} data-testid="nav-settings">
-          <Icon name="settings" size={15} />
+          <Icon name="settings" size={18} filled={route.view === "settings"} />
           <span>{t("nav.settings")}</span>
         </a>
       </div>

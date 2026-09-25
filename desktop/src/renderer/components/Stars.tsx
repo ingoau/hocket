@@ -18,7 +18,7 @@ export function Stars({ value, onChange, size = 14, label, tabbable = true }: { 
   if (!onChange) {
     return (
       <span className="stars" role="img" aria-label={`${name}: ${ratingText(value)}`}>
-        {[1, 2, 3, 4, 5].map((n) => <span key={n} className={`star ${n <= value ? "on" : ""}`}><Icon name="star" size={size} style={{ fill: n <= value ? "currentColor" : "none" }} /></span>)}
+        {[1, 2, 3, 4, 5].map((n) => <span key={n} className={`star ${n <= value ? "on" : ""}`}><Icon name="star" size={size} filled={n <= value} /></span>)}
       </span>
     );
   }
@@ -58,7 +58,7 @@ export function Stars({ value, onChange, size = 14, label, tabbable = true }: { 
           onKeyDown={(e) => onKey(e, n)}
           onClick={(e) => { e.stopPropagation(); onChange(n === value ? 0 : n); }}
         >
-          <Icon name="star" size={size} style={{ fill: n <= shown ? "currentColor" : "none" }} />
+          <Icon name="star" size={size} filled={n <= shown} />
         </button>
       ))}
     </span>
@@ -68,7 +68,7 @@ export function Stars({ value, onChange, size = 14, label, tabbable = true }: { 
 export function Heart({ on, onToggle, size = 16, tabbable = true }: { on: boolean; onToggle?: () => void; size?: number; tabbable?: boolean }) {
   return (
     <button type="button" className={`btn icon sm heart ${on ? "on" : ""}`} aria-pressed={on} aria-label={t("player.love")} tabIndex={tabbable ? undefined : -1} onClick={(e) => { e.stopPropagation(); onToggle?.(); }} title={on ? t("player.unlove") : t("player.love")}>
-      <Icon name="heart" size={size} style={{ fill: on ? "currentColor" : "none" }} />
+      <Icon name="heart" size={size} filled={on} />
     </button>
   );
 }

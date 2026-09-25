@@ -131,11 +131,17 @@ export interface Binding {
 
 export class Keymap {
   private byChord = new Map<string, string[]>();
-  constructor(bindings: { actionId: string; shortcut: string | undefined }[]) {
+  /**
+   * Off macOS, Ctrl *is* the platform modifier: chordFromEvent reports it as
+   * `mod`, so a binding written "Ctrl+Z" (how the core spells its defaults
+   * there) is folded into "Mod+Z" to match.
+   */
+  constructor(bindings: { actionId: string; shortcut: string | undefined }[], platform: "macOs" | "linux" | "windows" = "linux") {
     for (const b of bindings) {
       if (!b.shortcut) continue;
-      const c = parseChord(b.shortcut);
-      if (!c) continue;
+      const parsed = parseChord(b.shortcut);
+      if (!parsed) continue;
+      const c = platform !== "macOs" && parsed.ctrl ? { ...parsed, ctrl: false, mod: true } : parsed;
       const k = chordToString(c).toLowerCase();
       this.byChord.set(k, [...(this.byChord.get(k) ?? []), b.actionId]);
     }

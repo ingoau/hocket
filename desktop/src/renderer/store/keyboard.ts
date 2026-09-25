@@ -10,12 +10,13 @@ import { openContextMenuFromKeyboard } from "../components/ContextMenu";
 
 export function useKeymap(): Keymap {
   const shortcuts = useApp((s) => s.shortcuts);
+  const platform = useApp((s) => s.meta?.platform ?? "linux");
   return useMemo(() => {
     const merged = new Map<string, string | undefined>();
     for (const d of DEFAULT_KEYMAP) merged.set(d.actionId, d.shortcut);
     for (const s of shortcuts) merged.set(canonicalActionId(s.actionId), s.shortcut ?? undefined);
-    return new Keymap([...merged.entries()].map(([actionId, shortcut]) => ({ actionId, shortcut })));
-  }, [shortcuts]);
+    return new Keymap([...merged.entries()].map(([actionId, shortcut]) => ({ actionId, shortcut })), platform);
+  }, [shortcuts, platform]);
 }
 
 /**

@@ -25,8 +25,8 @@ export function Songs() {
   };
   return (
     <div className="view" data-testid="view-songs">
-      <div className="view-header"><h1>{t("songs.title")}</h1><span className="muted">{total}</span></div>
-      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 8px" }}>
+      <div className="view-header"><h1>{t("songs.title")}</h1><span className="muted count-chip">{total}</span></div>
+      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={rows} total={total} columns={["art", "title", "artist", "album", "year", "genre", "rating", "love", "plays", "bpm", "duration", "offline"]} scope="songs" sort={sort} descending={desc} onSort={(s, d) => { setSort(s); setDesc(d); saveLocal("songs.sort", s); saveLocal("songs.desc", d); }} onNeedRange={onNeedRange} onPlay={onPlay} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="songs-table" />
       </div>
     </div>

@@ -49,7 +49,7 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
         <span className="t1" title={title}>{title}</span>
         {subtitle ? <span className="t2" title={subtitle}>{subtitle}</span> : null}
       </button>
-      {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title })} onClick={(e) => { e.stopPropagation(); onPlay(); }} {...playIntent}><Icon name="play" size={16} style={{ fill: "currentColor" }} /></button> : null}
+      {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title })} onClick={(e) => { e.stopPropagation(); onPlay(); }} {...playIntent}><Icon name="play" size={22} filled /></button> : null}
     </li>
   );
 }
