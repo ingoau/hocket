@@ -83,6 +83,9 @@ class ExoBackend(
     /** The running core's stream reader, read on each open (a restarted service has a new core). */
     private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
 ) {
+    /** What a player that stopped playing while it still has an item is reporting. */
+    internal enum class Stall { Paused, Buffering, Nothing }
+
     internal companion object {
         private const val TAG = "ExoBackend"
         private const val POSITION_INTERVAL_MS = 750L
@@ -123,9 +126,6 @@ class ExoBackend(
             }
             return false
         }
-
-        /** What a player that stopped playing while it still has an item is reporting. */
-        internal enum class Stall { Paused, Buffering, Nothing }
 
         /**
          * [Player.Listener.onIsPlayingChanged] `false`: [Stall.Paused] when the player no longer
