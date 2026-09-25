@@ -1274,9 +1274,31 @@ impl From<Vec<Value>> for WhereClause {
 #[allow(dead_code)]
 fn _assert_tosql(_: &dyn ToSql) {}
 
+/// The `play_history` row already recorded for the play of `track_id`
+/// that started at `played_at` (a play's identity), if any.
+pub fn recorded_play_in(
+    tx: &Connection,
+    server_id: &str,
+    track_id: &str,
+    played_at: f64,
+) -> DbResult<Option<i64>> {
+    Ok(tx
+        .query_row(
+            "SELECT id FROM play_history WHERE server_id = ?1 AND track_id = ?2 AND played_at = ?3",
+            params![server_id, track_id, played_at],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// [`Db::record_play`] inside the caller's transaction: a `play_history`
 /// row (returning its id) and the track's `local_play_count` /
 /// `local_last_played` bump. The one place these rows are written.
+///
+/// A play is recorded once: when this play (track and start) already has a
+/// row (it came back to this device after a handoff and reached its
+/// threshold here again), that row's id is returned and nothing is counted
+/// twice; it is only marked `scrobbled` if this verdict says so.
 pub fn record_play_in(
     tx: &Connection,
     server_id: &str,
@@ -1286,6 +1308,12 @@ pub fn record_play_in(
     scrobbled: bool,
     device_id: &str,
 ) -> DbResult<i64> {
+    if let Some(id) = recorded_play_in(tx, server_id, track_id, played_at)? {
+        if scrobbled {
+            tx.execute("UPDATE play_history SET scrobbled = 1 WHERE id = ?1", [id])?;
+        }
+        return Ok(id);
+    }
     tx.execute(
         "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![server_id, track_id, played_at, played_ms, scrobbled as i64, device_id],
