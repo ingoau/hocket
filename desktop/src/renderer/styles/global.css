@@ -600,7 +600,8 @@ button.qrow { width: 100%; }
 @keyframes toast-in { from { transform: translateY(16px) scale(0.94); } to { transform: none; } }
 .toast:not(:has(.btn)) { padding-right: 18px; }
 .toast .btn { background: transparent; color: var(--accent-inverse); border-color: transparent; font-weight: 600; }
-.toast .btn:hover { background: color-mix(in srgb, var(--bg) 14%, transparent); }
+/* The action is --accent-inverse at 4.5:1 on the toast itself; a lighter hover layer would drop it below that, so hover draws a ring in the text colour instead. */
+.toast .btn:hover, .toast .btn:active { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, currentColor 60%, transparent); }
 .toast .btn:focus-visible { outline-color: var(--bg); }
 
 /* Setup */
