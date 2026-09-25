@@ -108,6 +108,15 @@ the one core for the process through `CoreHost`:
   too broad to enqueue. Voice "play …" requests (`onAddMediaItems` with a search query) resolve to the
   best match, honouring `EXTRA_MEDIA_FOCUS`; an empty query resumes. Subscribed browsers hear about
   library changes (debounced 2 s). The "recent" root is refused, as resumption is.
+- "Allow control by other apps" (`media.externalControl`, device-local, off by default; Settings >
+  Playback) gates all of the above: while off, `onConnect` accepts only the system's own controls
+  (`ExternalControl`: this app, Media3's notification controller, and uids holding the privileged
+  `MEDIA_CONTENT_CONTROL`: SystemUI, Bluetooth; before API 28 the platform's anonymous legacy
+  controller too, since it cannot be identified), and every browse/search/add/custom request is
+  checked again. Turning it off strips already-connected apps of all commands and revokes their
+  artwork access. `PlaybackService` mirrors the value in SharedPreferences (`hocket-media-control`,
+  excluded from backups) so a controller connecting before the core's snapshot is judged by the
+  last choice, not the default.
 - Artwork for controllers: they cannot read the core's cache files, so browse and queue items carry
   `content://<package>.artwork/<size>/<coverArt>` URIs served by `ArtworkProvider`, which resolves
   them with `Query.Artwork` and opens the cached file read-only. It is exported (the controller opens

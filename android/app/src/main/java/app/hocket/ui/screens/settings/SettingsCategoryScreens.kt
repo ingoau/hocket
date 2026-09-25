@@ -167,7 +167,10 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
     }
 }
 
-/** Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults. */
+/**
+ * Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults, and
+ * whether other apps (Android Auto, Wear, media browsers) may browse and control playback.
+ */
 @Composable
 fun PlaybackSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
@@ -176,6 +179,7 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     val mode = setting(SettingKeys.QUEUE_MODE)
     val sleepMinutes = setting(SettingKeys.SLEEP_DEFAULT_MINUTES)
     val sleepEnd = setting(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK)
+    val externalControl = setting(SettingKeys.MEDIA_EXTERNAL_CONTROL)
     SubScreen(nav, stringResource(R.string.settings_category_playback)) {
         val current = queue.mode
         val appleLabel = stringResource(R.string.queue_mode_apple)
@@ -202,6 +206,8 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         ChoiceRow(listOf(15, 30, 45, 60, 90).map { it to it.toString() }, isSelected = { minutes == it }, onSelect = { sleepMinutes.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp),
             describe = { m -> minuteResources.getQuantityString(R.plurals.a11y_minutes, m, m) })
         SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
+        SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
+            subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
     }
 }
 

@@ -5,7 +5,9 @@
          downloads and stream cache, the device id (must be unique per install: Connect leases and
          elections; a fresh one is generated when the prefs file is missing) and the keystore
          ciphertext plus names (the key never leaves the device, so the ciphertext is useless elsewhere
-         and the plaintext keys would leak the server address and username). -->
+         and the plaintext keys would leak the server address and username), and the mirror of
+         "allow control by other apps" (a device-local choice: restoring it must not let other apps
+         in on a new device). -->
     <exclude domain="file" path="hocket/cache" />
     <exclude domain="file" path="hocket/downloads" />
     <exclude domain="file" path="hocket/hocket.sqlite" />
@@ -16,4 +18,5 @@
     <exclude domain="sharedpref" path="hocket-core.xml" />
     <exclude domain="sharedpref" path="hocket-credentials.xml" />
     <exclude domain="sharedpref" path="hocket-credential-names.xml" />
+    <exclude domain="sharedpref" path="hocket-media-control.xml" />
 </full-backup-content>

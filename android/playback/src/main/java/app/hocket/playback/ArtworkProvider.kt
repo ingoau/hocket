@@ -36,12 +36,13 @@ class ArtworkProvider : ContentProvider() {
         fun uri(context: Context, coverArt: String, size: Int = ArtworkSizes.GRID): Uri =
             Uri.Builder().scheme("content").authority(authority(context)).appendPath(size.toString()).appendPath(coverArt).build()
 
-        /** Lets [packageName] (a connected media controller) open artwork URIs for this process's life. */
+        /** Lets [packageName] (a connected media controller) open artwork URIs until [revokeAll]. */
         fun allow(packageName: String) { allowed += packageName }
 
         internal fun isAllowed(packageName: String?, own: String): Boolean = packageName != null && (packageName == own || packageName in allowed)
 
-        internal fun resetForTests() = allowed.clear()
+        /** Nobody but this app may open artwork again until controllers reconnect. */
+        fun revokeAll() = allowed.clear()
     }
 
     override fun onCreate(): Boolean = true

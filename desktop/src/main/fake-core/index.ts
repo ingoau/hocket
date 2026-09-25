@@ -1789,6 +1789,7 @@ export class FakeCore implements CoreHandle {
       ["ratings.loveBridge.enabled", false, "accountSynced"],
       ["ratings.loveBridge.threshold", 4, "accountSynced"],
       ["battery.autoEngage", true, "deviceLocal"],
+      ["media.externalControl", false, "deviceLocal"],
       ["battery.lyricsFps", 30, "deviceLocal"],
       ["battery.smallArtwork", true, "deviceLocal"],
       ["battery.pausePrefetch", true, "deviceLocal"],

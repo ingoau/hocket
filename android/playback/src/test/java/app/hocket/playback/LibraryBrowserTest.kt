@@ -152,7 +152,7 @@ class LibraryBrowserTest {
 
     @Test
     fun artworkIsOnlyForThisAppAndConnectedControllers() {
-        ArtworkProvider.resetForTests()
+        ArtworkProvider.revokeAll()
         assertTrue(ArtworkProvider.isAllowed(app.packageName, app.packageName))
         assertFalse(ArtworkProvider.isAllowed("com.example.snoop", app.packageName))
         assertFalse(ArtworkProvider.isAllowed(null, app.packageName))

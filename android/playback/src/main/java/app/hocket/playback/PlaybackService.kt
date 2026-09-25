@@ -30,7 +30,8 @@ import kotlinx.coroutines.launch
  *   `Event.Backend` -> [ExoBackend], `Event.MediaSession` and `Event.QueueChanged` ->
  *   [MediaSessionBridge] (the session's state and its queue timeline).
  * - Publishes the library to other apps (Android Auto, Wear, Assistant, `MediaBrowser`s) through
- *   [LibraryBrowser] on the first server, telling subscribed browsers when it changes.
+ *   [LibraryBrowser] on the first server, telling subscribed browsers when it changes, only while
+ *   "Allow control by other apps" (`media.externalControl`, [ExternalControl]) is on.
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
  * - Feeds [ConnectRoutes] (devices, lease owner, session state) so that while another device plays
  *   the session reports remote playback and [ConnectRouteProvider] names that device as the output;
@@ -94,7 +95,7 @@ class PlaybackService : MediaLibraryService() {
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val browser = LibraryBrowser(this, { core }, { serverId }, scope)
         val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
-        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope)
+        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this))
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch)
         battery = BatterySaverMonitor(this, ::dispatch)
@@ -134,7 +135,10 @@ class PlaybackService : MediaLibraryService() {
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
-            is Event.SettingChanged -> if (event.data.setting.key == SettingKeys.BATTERY_AUTO_ENGAGE) battery.automatic = event.data.setting.value.trim() != "false"
+            is Event.SettingChanged -> when (event.data.setting.key) {
+                SettingKeys.BATTERY_AUTO_ENGAGE -> battery.automatic = event.data.setting.value.trim() != "false"
+                SettingKeys.MEDIA_EXTERNAL_CONTROL -> bridge.setExternalControl(event.data.setting.value.trim() == "true")
+            }
             else -> Unit
         }
     }
@@ -148,6 +152,7 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.onOwner(snapshot.transport.lease.owner)
         applySession(snapshot.mediaSession)
         battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
+        bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
     }
 
     /** Session state to the bridge, remote when another Connect device plays it. */

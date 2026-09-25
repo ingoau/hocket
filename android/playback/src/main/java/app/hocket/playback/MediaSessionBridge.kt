@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.hocket.core.Commands
@@ -36,6 +38,10 @@ import kotlinx.coroutines.launch
  * library item here, before the player dispatches it. Every connected controller may open artwork
  * URIs ([ArtworkProvider.allow]). The "recent" root (system playback resumption) is refused, as
  * resumption is.
+ *
+ * Who may connect is [control]'s ("Allow control by other apps"): with it off, only the system's own
+ * controls and Media3's notification controller are accepted, and every request is checked again,
+ * so turning it off also cuts off controllers that are already connected ([setExternalControl]).
  */
 class MediaSessionBridge(
     context: Context,
@@ -44,6 +50,7 @@ class MediaSessionBridge(
     launchIntent: Intent?,
     private val browser: LibraryBrowser,
     private val scope: CoroutineScope,
+    private val control: ExternalControl,
 ) {
     companion object {
         const val CMD_LOVE = "app.hocket.LOVE"
@@ -54,6 +61,13 @@ class MediaSessionBridge(
     }
 
     private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE).map { SessionCommand(it, Bundle.EMPTY) }
+    /** Library commands too: without them a browser's root and children requests are refused. */
+    private val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply { customCommands.forEach { add(it) } }.build()
+
+    private fun permitted(session: MediaSession, controller: MediaSession.ControllerInfo): Boolean =
+        session.isMediaNotificationController(controller) || control.permits(controller.packageName, controller.uid)
+
+    private fun <T : Any> refused(): ListenableFuture<LibraryResult<T>> = Futures.immediateFuture(LibraryResult.ofError<T>(SessionError.ERROR_PERMISSION_DENIED))
 
     /** Runs a browse request on [scope] and completes the future with its result. */
     private fun <T> async(block: suspend () -> T): ListenableFuture<T> {
@@ -64,15 +78,16 @@ class MediaSessionBridge(
 
     val session: MediaLibraryService.MediaLibrarySession = MediaLibraryService.MediaLibrarySession.Builder(context, player, object : MediaLibraryService.MediaLibrarySession.Callback {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+                if (!permitted(session, controller)) return MediaSession.ConnectionResult.reject()
                 ArtworkProvider.allow(controller.packageName)
-                val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().apply { customCommands.forEach { add(it) } }.build()
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                    .setAvailableSessionCommands(commands)
+                    .setAvailableSessionCommands(sessionCommands)
                     .setMediaButtonPreferences(buttons(player.state))
                     .build()
             }
 
             override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
+                if (!permitted(session, controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
                 when (customCommand.customAction) {
                     CMD_LOVE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Love))
                     CMD_SHUFFLE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Shuffle))
@@ -90,20 +105,26 @@ class MediaSessionBridge(
             }
 
             override fun onGetLibraryRoot(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
+                if (!permitted(session, browser)) return refused()
                 if (params?.isRecent == true) return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
                 return Futures.immediateFuture(LibraryResult.ofItem(this@MediaSessionBridge.browser.root(), MediaLibraryService.LibraryParams.Builder().setExtras(LibraryBrowser.rootExtras()).build()))
             }
 
-            override fun onGetChildren(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = async {
+            override fun onGetChildren(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                if (!permitted(session, browser)) return refused()
+                return async {
                 val children = this@MediaSessionBridge.browser.children(parentId, page, pageSize)
                 if (children == null) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItemList(children, params)
+                }
             }
 
-            override fun onGetItem(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> = async {
-                this@MediaSessionBridge.browser.item(mediaId)?.let { LibraryResult.ofItem(it, null) } ?: LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            override fun onGetItem(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> {
+                if (!permitted(session, browser)) return refused()
+                return async { this@MediaSessionBridge.browser.item(mediaId)?.let { LibraryResult.ofItem(it, null) } ?: LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) }
             }
 
             override fun onSearch(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<Void>> {
+                if (!permitted(session, browser)) return refused()
                 scope.launch {
                     val count = runCatching { this@MediaSessionBridge.browser.search(query).size }.getOrDefault(0)
                     session.notifySearchResultChanged(browser, query, count, params)
@@ -111,13 +132,18 @@ class MediaSessionBridge(
                 return Futures.immediateFuture(LibraryResult.ofVoid())
             }
 
-            override fun onGetSearchResult(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = async {
+            override fun onGetSearchResult(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                if (!permitted(session, browser)) return refused()
+                return async {
                 val all = this@MediaSessionBridge.browser.search(query)
                 val from = (page.toLong() * pageSize).coerceIn(0, all.size.toLong()).toInt()
                 LibraryResult.ofItemList(all.subList(from, (from + pageSize.coerceAtLeast(0)).coerceAtMost(all.size)), params)
+                }
             }
 
-            override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> = async {
+            override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> {
+                if (!permitted(mediaSession, controller)) return Futures.immediateFailedFuture(SecurityException("control by other apps is off"))
+                return async {
                 // Library ids pass through to the player; a search request ("play X") becomes the item
                 // it names. Anything unresolvable is dropped (the player then does nothing).
                 mediaItems.mapNotNull { item ->
@@ -128,6 +154,7 @@ class MediaSessionBridge(
                         else -> null
                     }
                 }.toMutableList()
+                }
             }
         })
         .setId("hocket")
@@ -137,6 +164,27 @@ class MediaSessionBridge(
             }
         }
         .build()
+
+    /**
+     * The core's "Allow control by other apps" value. Turning it off revokes artwork access and
+     * strips every connected controller that is not the system's of all commands; turning it on
+     * gives those controllers their commands back. Main thread.
+     */
+    fun setExternalControl(allowed: Boolean) {
+        if (!control.update(allowed)) return
+        if (!allowed) ArtworkProvider.revokeAll()
+        for (controller in session.connectedControllers) {
+            val system = session.isMediaNotificationController(controller) || control.isSystem(controller.packageName, controller.uid)
+            when {
+                system -> ArtworkProvider.allow(controller.packageName)
+                allowed -> {
+                    ArtworkProvider.allow(controller.packageName)
+                    session.setAvailableCommands(controller, sessionCommands, MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
+                }
+                else -> session.setAvailableCommands(controller, SessionCommands.EMPTY, Player.Commands.EMPTY)
+            }
+        }
+    }
 
     /** Push a new queue view to the player (its playlist). Main thread. */
     fun applyQueue(queue: QueueView) = player.applyQueue(queue)

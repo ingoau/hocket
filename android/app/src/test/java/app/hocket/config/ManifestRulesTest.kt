@@ -28,11 +28,13 @@ class ManifestRulesTest {
         (0 until childNodes.length).map { childNodes.item(it) }.filterIsInstance<Element>().filter { it.tagName == tag }
 
     /** Everything the device must keep to itself: the library mirror and its backups (large, and a
-     * cache), the Connect device id (must be unique per install) and the keystore ciphertext and names. */
+     * cache), the Connect device id (must be unique per install), the keystore ciphertext and names, and
+     * the "allow control by other apps" mirror (device-local). */
     private val mustExclude = setOf(
         "file:hocket/hocket.sqlite", "file:hocket/hocket.sqlite-wal", "file:hocket/hocket.sqlite-shm", "file:hocket/backups",
         "file:hocket/downloads", "file:hocket/cache",
         "sharedpref:hocket-core.xml", "sharedpref:hocket-credentials.xml", "sharedpref:hocket-credential-names.xml",
+        "sharedpref:hocket-media-control.xml",
     )
 
     private fun excludes(section: Element): Set<String> = section.children("exclude").map { it.getAttribute("domain") + ":" + it.getAttribute("path") }.toSet()

@@ -138,6 +138,7 @@ class FakeCore(
         def(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD, "4", SettingScope.AccountSynced)
         def(SettingKeys.BATTERY_AUTO_ENGAGE, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.MEDIA_EXTERNAL_CONTROL, "false", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_SMALL_ARTWORK, "true", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_PAUSE_PREFETCH, "true", SettingScope.DeviceLocal)

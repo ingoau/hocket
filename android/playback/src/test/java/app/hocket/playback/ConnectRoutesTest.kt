@@ -70,7 +70,7 @@ class ConnectRoutesTest {
         val player = CoreSessionPlayer(Looper.getMainLooper(), {})
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
-        val bridge = MediaSessionBridge(context, player, {}, null, LibraryBrowser(context, { error("unused") }, { null }, scope), scope)
+        val bridge = MediaSessionBridge(context, player, {}, null, LibraryBrowser(context, { error("unused") }, { null }, scope), scope, ExternalControl(context))
         try {
             bridge.apply(state(owns = false), 0.0, remote = true)
             shadowOf(Looper.getMainLooper()).idle()
