@@ -19,6 +19,8 @@ object SettingKeys {
     const val RATINGS_LOVE_BRIDGE_ENABLED = "ratings.loveBridge.enabled"
     const val RATINGS_LOVE_BRIDGE_THRESHOLD = "ratings.loveBridge.threshold"
     const val BATTERY_AUTO_ENGAGE = "battery.autoEngage"
+    /** Other apps (Auto, Wear, media browsers) may browse and control playback. Off by default. */
+    const val MEDIA_EXTERNAL_CONTROL = "media.externalControl"
     const val BATTERY_LYRICS_FPS = "battery.lyricsFps"
     const val BATTERY_SMALL_ARTWORK = "battery.smallArtwork"
     const val BATTERY_PAUSE_PREFETCH = "battery.pausePrefetch"

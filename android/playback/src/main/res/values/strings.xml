@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The library as other apps browse it (Android Auto tabs, a media browser's folders). -->
+    <string name="browse_root">Hocket</string>
+    <string name="browse_albums">Albums</string>
+    <string name="browse_artists">Artists</string>
+    <string name="browse_playlists">Playlists</string>
+    <string name="browse_genres">Genres</string>
+</resources>

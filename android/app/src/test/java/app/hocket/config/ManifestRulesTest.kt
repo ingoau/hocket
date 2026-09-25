@@ -28,11 +28,13 @@ class ManifestRulesTest {
         (0 until childNodes.length).map { childNodes.item(it) }.filterIsInstance<Element>().filter { it.tagName == tag }
 
     /** Everything the device must keep to itself: the library mirror and its backups (large, and a
-     * cache), the Connect device id (must be unique per install) and the keystore ciphertext and names. */
+     * cache), the Connect device id (must be unique per install), the keystore ciphertext and names, and
+     * the "allow control by other apps" mirror (device-local). */
     private val mustExclude = setOf(
         "file:hocket/hocket.sqlite", "file:hocket/hocket.sqlite-wal", "file:hocket/hocket.sqlite-shm", "file:hocket/backups",
         "file:hocket/downloads", "file:hocket/cache",
         "sharedpref:hocket-core.xml", "sharedpref:hocket-credentials.xml", "sharedpref:hocket-credential-names.xml",
+        "sharedpref:hocket-media-control.xml",
     )
 
     private fun excludes(section: Element): Set<String> = section.children("exclude").map { it.getAttribute("domain") + ":" + it.getAttribute("path") }.toSet()
@@ -62,5 +64,29 @@ class ManifestRulesTest {
             val receivers = parse(path).getElementsByTagName("receiver")
             assertEquals("$path declares no broadcast receiver", 0, receivers.length)
         }
+    }
+
+    @Test
+    fun theLibraryIsPublishedToMediaBrowsersAndAndroidAuto() {
+        val service = parse("android/playback/src/main/AndroidManifest.xml").getElementsByTagName("service").let { list ->
+            (0 until list.length).map { list.item(it) as Element }.single { it.getAttribute("android:name") == "app.hocket.playback.PlaybackService" }
+        }
+        val actions = service.getElementsByTagName("action").let { list -> (0 until list.length).map { (list.item(it) as Element).getAttribute("android:name") } }
+        assertTrue(actions.containsAll(listOf("androidx.media3.session.MediaLibraryService", "android.media.browse.MediaBrowserService")))
+        val meta = parse("android/app/src/main/AndroidManifest.xml").getElementsByTagName("meta-data").let { list -> (0 until list.length).map { list.item(it) as Element } }
+        assertEquals("@xml/automotive_app_desc", meta.single { it.getAttribute("android:name") == "com.google.android.gms.car.application" }.getAttribute("android:resource"))
+        val uses = parse("android/app/src/main/res/xml/automotive_app_desc.xml").documentElement.children("uses").map { it.getAttribute("name") }
+        assertEquals(listOf("media"), uses)
+    }
+
+    @Test
+    fun theArtworkProviderIsTheOnlyProviderAndCannotBeWrittenOrGranted() {
+        // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
+        val providers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")
+            .flatMap { path -> parse(path).getElementsByTagName("provider").let { list -> (0 until list.length).map { list.item(it) as Element } } }
+        val provider = providers.single()
+        assertEquals("app.hocket.playback.ArtworkProvider", provider.getAttribute("android:name"))
+        assertFalse(provider.hasAttribute("android:grantUriPermissions"))
+        assertFalse(provider.hasAttribute("android:writePermission"))
     }
 }

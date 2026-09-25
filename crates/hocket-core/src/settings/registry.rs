@@ -63,6 +63,9 @@ pub mod keys {
     pub const RATINGS_LOVE_BRIDGE_ENABLED: &str = "ratings.loveBridge.enabled";
     pub const RATINGS_LOVE_BRIDGE_THRESHOLD: &str = "ratings.loveBridge.threshold";
     pub const BATTERY_AUTO_ENGAGE: &str = "battery.autoEngage";
+    /// Whether other apps (Android Auto, Wear, media browsers) may browse the library and control
+    /// playback. The system's own controls (notification, lock screen, Bluetooth) always work.
+    pub const MEDIA_EXTERNAL_CONTROL: &str = "media.externalControl";
     pub const BATTERY_LYRICS_FPS: &str = "battery.lyricsFps";
     pub const BATTERY_SMALL_ARTWORK: &str = "battery.smallArtwork";
     pub const BATTERY_PAUSE_PREFETCH: &str = "battery.pausePrefetch";
@@ -334,6 +337,10 @@ pub static REGISTRY: &[SettingDef] = &[
     ),
     def(BATTERY_AUTO_ENGAGE, Local, SettingKind::Bool, || {
         json!(true)
+    }),
+    // Device-local: letting other apps in is a decision about this device, never synced.
+    def(MEDIA_EXTERNAL_CONTROL, Local, SettingKind::Bool, || {
+        json!(false)
     }),
     def(
         BATTERY_LYRICS_FPS,
