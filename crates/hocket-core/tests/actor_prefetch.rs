@@ -300,3 +300,52 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     a.core.shutdown().await;
     b.core.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_prefetch_is_tried_again_after_a_backoff() {
+    let t = started("retry", seeded_server(4, 100.0)).await;
+    t.upstream
+        .set_behaviour("t1", UpstreamBehaviour::ErrorEnvelope);
+    play_album(&t, 4, 0).await;
+    // t1 fails, t2 is fetched anyway.
+    wait_cached(&t, "t2").await;
+    run_real(&t, 3000.0).await;
+    assert_eq!(offline(&t, "t1").await, OfflineState::None);
+    assert_eq!(t.upstream.stream_requests("t1"), 1, "one failed attempt");
+    // The server recovers: nothing before the first backoff has elapsed...
+    t.upstream.set_behaviour("t1", UpstreamBehaviour::Serve);
+    run_real(&t, 5_000.0).await;
+    assert_eq!(
+        t.upstream.stream_requests("t1"),
+        1,
+        "not before the backoff"
+    );
+    // ...then the retry lands and the track is cached.
+    wait_cached(&t, "t1").await;
+    assert_eq!(t.upstream.stream_requests("t1"), 2);
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_network_coming_back_retries_a_failed_prefetch_at_once() {
+    let t = started("netretry", seeded_server(4, 100.0)).await;
+    t.upstream
+        .set_behaviour("t1", UpstreamBehaviour::ErrorEnvelope);
+    play_album(&t, 4, 0).await;
+    wait_cached(&t, "t2").await;
+    run_real(&t, 3000.0).await;
+    assert_eq!(t.upstream.stream_requests("t1"), 1);
+    t.upstream.set_behaviour("t1", UpstreamBehaviour::Serve);
+    // A network change (Wi-Fi again, another id) makes the failed fetch due now.
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: false,
+            network_id: Some("home".into()),
+        },
+    })
+    .await;
+    wait_cached(&t, "t1").await;
+    assert_eq!(t.upstream.stream_requests("t1"), 2);
+    t.core.shutdown().await;
+}

@@ -704,6 +704,8 @@ impl Actor {
         }
         self.mark_prefetch_check();
         if state.kind != NetworkKind::Offline && (was_offline || self.network.is_some()) {
+            // Prefetches that failed on the old network are due now.
+            self.prefetch_retry_now();
             self.last_outbox_retry = self.now();
             self.schedule_flush();
             self.maybe_start_sync(false, false);

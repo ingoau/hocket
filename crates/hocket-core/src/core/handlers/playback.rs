@@ -7,7 +7,8 @@ use crate::audio::sleep::SleepAction;
 use crate::connect::engine::Input;
 use crate::connect::wire::{SessionOp, TransportCommand};
 use crate::core::actor::{
-    Actor, LOAD_RETRIES, MAX_CONSECUTIVE_SKIPS, MEDIA_SESSION_ART, MEDIA_SESSION_ART_SMALL,
+    Actor, ADOPTION_TIMEOUT_MS, LOAD_RETRIES, MAX_CONSECUTIVE_SKIPS, MEDIA_SESSION_ART,
+    MEDIA_SESSION_ART_SMALL,
 };
 use crate::core::state::{pending_scrobbles_key, PendingScrobble};
 use crate::core::Internal;
@@ -219,6 +220,7 @@ impl Actor {
             self.playback.next = None;
             self.playback.next_doc_key = None;
             self.playback.awaiting_transition = false;
+            self.playback.adopted_at = Some(now);
             self.playback.loaded = true;
         } else {
             let Some(source) = self.media_source_for(&item.key, &track) else {
@@ -238,6 +240,7 @@ impl Actor {
             self.playback.position_ms = position_ms;
             self.playback.position_at = now;
             self.playback.awaiting_transition = false;
+            self.playback.adopted_at = None;
             self.playback.loaded = true;
             self.playback.next = None;
             self.playback.next_doc_key = None;
@@ -542,6 +545,36 @@ impl Actor {
         self.playback.next = None;
         self.playback.next_doc_key = None;
         self.playback.awaiting_transition = false;
+        self.playback.adopted_at = None;
+    }
+
+    /// Every tick: an item adopted at a gapless boundary that the backend
+    /// never confirmed is loaded explicitly (see `Playback::adopted_at`).
+    pub(crate) fn playback_tick(&mut self, now: f64) {
+        let Some(at) = self.playback.adopted_at else {
+            return;
+        };
+        if now - at < ADOPTION_TIMEOUT_MS {
+            return;
+        }
+        self.playback.adopted_at = None;
+        if !self.playback.loaded || !self.owns_transport() {
+            return;
+        }
+        let Some(item) = self.doc().and_then(|d| d.current.clone()) else {
+            return;
+        };
+        if self.playback.doc_key.as_ref() != Some(&item.key) {
+            return;
+        }
+        self.log(
+            "info",
+            "the backend did not move on to the preloaded item; loading it",
+        );
+        let play = self.playback.want_playing || self.playback.playing;
+        self.playback.next = None;
+        self.playback.next_doc_key = None;
+        self.load_item(&item, 0, play, None);
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
@@ -768,6 +801,7 @@ impl Actor {
                 // in `load_item`. Late arrival means the doc did not follow
                 // (repeat one, queue edited): reload what the document says.
                 if self.playback.backend_key.as_ref() == Some(&key) {
+                    self.playback.adopted_at = None;
                     self.playback.playing = true;
                     self.playback.position_ms = 0;
                     self.playback.position_at = self.now();
@@ -804,9 +838,17 @@ impl Actor {
                     return;
                 }
                 if is_next && !current(&key, self) {
-                    // The preloaded item failed to start after the current one ended.
-                    self.playback.awaiting_transition = false;
+                    // The preloaded follow-up failed. Forget it: it is resolved
+                    // afresh (with the usual retry and skip) when it comes up.
                     self.playback.next = None;
+                    self.playback.next_doc_key = None;
+                    if !self.playback.awaiting_transition {
+                        // The current item is still playing: leave it alone.
+                        return;
+                    }
+                    // The current one ended and the follow-up never started:
+                    // move on explicitly.
+                    self.playback.awaiting_transition = false;
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         if self.playback.doc_key.as_ref() == Some(&item.key) {
                             self.playback.load_failures += 1;

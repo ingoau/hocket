@@ -73,6 +73,12 @@ pub const MAX_HANDLES: usize = 32;
 pub const HANDLE_IDLE_MS: f64 = 10.0 * 60.0 * 1000.0;
 /// Largest chunk one read returns.
 pub const MAX_READ: usize = 256 * 1024;
+/// How long a read waits for the server's next bytes (or a fetch for its
+/// response) before the handle fails with a network error. Counted only
+/// while a read is waiting: a player that has filled its buffer and stops
+/// reading for minutes (Media3 loads in bursts) must not find the stream
+/// timed out behind its back, which the HTTP client's own read timeout did.
+pub const UPSTREAM_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StreamError {
@@ -144,7 +150,9 @@ pub trait StreamUpstream: Send + Sync + 'static {
 
 /// Production upstream: reqwest + rustls, no redirects (a redirect would
 /// carry the auth query elsewhere), no overall timeout (a track streams for
-/// as long as it plays) but connect and read timeouts.
+/// as long as it plays) and no read timeout either: the reader applies
+/// [`UPSTREAM_WAIT`] only while it is actually waiting for bytes, whereas
+/// the client's read timeout also ran while nobody read the body.
 pub struct ReqwestUpstream {
     client: reqwest::Client,
 }
@@ -154,7 +162,6 @@ impl ReqwestUpstream {
         let client = reqwest::Client::builder()
             .user_agent(concat!("hocket/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(std::time::Duration::from_secs(15))
-            .read_timeout(std::time::Duration::from_secs(60))
             .redirect(reqwest::redirect::Policy::none())
             .use_rustls_tls()
             .build()
@@ -924,7 +931,10 @@ impl CacheSource {
                         self.seg = Some(seg);
                         return Err(StreamError::Closed);
                     }
-                    c = seg.body.next() => c,
+                    c = tokio::time::timeout(UPSTREAM_WAIT, seg.body.next()) => match c {
+                        Ok(c) => c,
+                        Err(_) => Some(Err("no data from the server for 60s".into())),
+                    },
                 };
                 match next {
                     Some(Ok(chunk)) => {
@@ -1064,10 +1074,12 @@ impl CacheSource {
         let fetch = self.sh.upstream.fetch(UpstreamRequest { url, range });
         let up = tokio::select! {
             _ = cancel.cancelled() => return Err(StreamError::Closed),
-            r = fetch => r.map_err(|e| {
-                tracing::warn!(target: "hocket_core", error = %e, track = %self.token.track_id, "stream upstream");
-                StreamError::Network(e)
-            })?,
+            r = tokio::time::timeout(UPSTREAM_WAIT, fetch) => r
+                .unwrap_or_else(|_| Err("no response from the server for 60s".into()))
+                .map_err(|e| {
+                    tracing::warn!(target: "hocket_core", error = %e, track = %self.token.track_id, "stream upstream");
+                    StreamError::Network(e)
+                })?,
         };
         if up.status == 416 {
             return Err(StreamError::RangeNotSatisfiable);

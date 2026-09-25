@@ -46,6 +46,9 @@ pub(crate) const ENGINE_TICK_MS: f64 = 1_000.0;
 pub(crate) const AUTOPLAY_BATCH: u32 = 10;
 /// Fatal load failures of one item before it is marked unavailable.
 pub(crate) const LOAD_RETRIES: u32 = 1;
+/// How long an item adopted at a gapless boundary waits for the backend's
+/// `TransitionedToNext` before it is loaded explicitly.
+pub(crate) const ADOPTION_TIMEOUT_MS: f64 = 2_000.0;
 /// Consecutive unavailable items before playback stops trying.
 pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 3;
 /// Artwork size for the media session (small in battery saver).
@@ -856,6 +859,7 @@ impl Actor {
             self.engine_input(Input::Tick);
         }
         self.prefetch_tick(now);
+        self.playback_tick(now);
         self.prime_next();
         self.cache_tick(now);
         // Sleep timer.
