@@ -61,8 +61,15 @@ the one core for the process through `CoreHost`:
   own headers) plus the gapless follow-up as a second playlist item; `SetNext` replaces everything after the current item; the transition is
   detected from `onMediaItemTransition(AUTO)`, reported as `Ended` (played item) then
   `TransitionedToNext`, and the played item removed. The player holds `C.WAKE_MODE_NETWORK` (wake +
-  Wi-Fi lock) so streams keep going with the screen off. Network errors (connection failed/timeout)
-  are retried with `prepare()` on a ~1 min backoff and reported non-fatal; only then fatal. `PreBuffer` prepares a
+  Wi-Fi lock) so streams keep going with the screen off. Errors a later `prepare()` can fix (the
+  connection, a timeout, a 5xx from the server, a stuck player, a core stream handle that went away
+  under the player) are retried with `prepare()` on a ~1 min backoff and reported non-fatal; while
+  the device is offline the retry waits instead of spending attempts, and the network coming back
+  (`NetworkMonitor` -> `ExoBackend.onConnectivityChanged`) retries at once; only when the attempts run
+  out is the error fatal and the core's own retry/skip takes over. `Paused` is reported only when the
+  player no longer means to play (`playWhenReady` false); a stall with it still set is `Buffering`,
+  and the service never stops itself under a player that is buffering or recovering
+  (`ExoBackend.isBusy`). `PreBuffer` prepares a
   second silent ExoPlayer at the requested position (`PreBufferReady` when READY); `DiscardPreBuffer`
   releases it. `gain_db` is applied as `10^(gain/20) * masterVolume` clamped to 1.0 — Media3 has no
   gain stage, so positive gain is an approximation (documented in `ExoBackend`).
@@ -74,7 +81,9 @@ the one core for the process through `CoreHost`:
   loader threads): a seek is a new open at the position; the core fetches from the server, caches a
   whole read and serves later plays and seeks from disk. An unknown/expired token is
   `ERROR_CODE_IO_FILE_NOT_FOUND`, never retried (`CoreStreamLoadErrorPolicy`), so the backend reports
-  a fatal error and the core resolves a fresh token. The factory routes the `hocket-stream` scheme to
+  a fatal error and the core resolves a fresh token; a handle the core closed under the player (idle
+  while the buffer was full) is retried with a fresh open at the same position, which the cache
+  serves. The factory routes the `hocket-stream` scheme to
   it and everything else (`file:`, a direct server URL for the fake core) to `DefaultDataSource`; there
   is no `CacheDataSource` (the core caches). `NativeCore` implements the `CoreStreams` seam.
 - Reports back: `Ready`, `Playing`, `Paused`, `Buffering`, `Position` every 750 ms while playing and

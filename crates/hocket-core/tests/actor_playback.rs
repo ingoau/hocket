@@ -506,3 +506,68 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
     );
     assert!(!t.backend.is_playing());
 }
+
+/// A backend that ends an item without moving on to the follow-up it was
+/// given (a `SetNext` it had not applied yet, a preload it lost): the
+/// session still adopts the follow-up at the boundary, and when no
+/// `TransitionedToNext` confirms it, the core loads it explicitly instead of
+/// sitting on an item nothing plays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
+    let t = synced_core("i").await;
+    t.backend.set_drop_next(true);
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    t.backend.clear_log();
+
+    // t0 (200 s) ends; the backend reports `Ended` and nothing after it.
+    t.run_for(200_500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    assert!(
+        !t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Load { .. })),
+        "adopted first, not reloaded at once"
+    );
+    assert!(!t.backend.is_playing(), "the backend has nothing loaded");
+
+    // After the adoption timeout the core loads what the document says.
+    t.run_for(3_000.0).await;
+    // The explicit load carries the document's key for t1 (the preload was
+    // keyed before the item was materialised).
+    let t1_keys: Vec<QueueKey> = t
+        .sources
+        .lock()
+        .iter()
+        .filter(|s| s.track.id == "t1")
+        .map(|s| s.key.clone())
+        .collect();
+    assert!(!t1_keys.is_empty(), "t1 was resolved");
+    assert!(
+        t.backend.log().iter().any(
+            |c| matches!(c, ScriptedCall::Load { key, play: true, .. } if t1_keys.contains(key))
+        ),
+        "{:?}",
+        t.backend.log()
+    );
+    assert!(t.backend.is_playing());
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    let snap = t.snapshot().await;
+    assert!(snap.transport.position.is_playing);
+    assert!(snap.transport.position.position_ms < 5_000);
+
+    // And playback carries on the same way through the next boundary.
+    t.run_for(205_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert!(t.backend.is_playing());
+}

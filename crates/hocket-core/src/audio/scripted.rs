@@ -108,6 +108,9 @@ struct State {
     /// Report a gapless boundary the way Media3 does: `TransitionedToNext`
     /// alone, with no `Ended` for the item that finished.
     transition_only: bool,
+    /// Lose the preloaded follow-up at the boundary: `Ended` and nothing
+    /// after it (a `SetNext` the player had not applied yet).
+    drop_next: bool,
 }
 
 /// See the module docs.
@@ -161,6 +164,12 @@ impl ScriptedBackend {
     /// platform does not synthesise the `Ended`).
     pub fn set_transition_only(&self, on: bool) {
         self.state.lock().transition_only = on;
+    }
+
+    /// At the next boundary, end without moving on to the follow-up that
+    /// was set (as a player does when it had already run out of items).
+    pub fn set_drop_next(&self, on: bool) {
+        self.state.lock().drop_next = on;
     }
 
     /// The device list [`PlaybackBackend::output_devices`] returns.
@@ -269,6 +278,9 @@ impl ScriptedBackend {
             });
             if !(st.transition_only && has_next) {
                 out.push(BackendReport::Ended { key: ended_key });
+            }
+            if st.drop_next {
+                st.next = None;
             }
             match st.next.take() {
                 Some(next)

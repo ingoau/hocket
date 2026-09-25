@@ -23,7 +23,12 @@ import java.security.MessageDigest
  * network id so transcoding profiles can vary per network. The id is a hash of the SSID when it is
  * readable (needs location permission on 8.1+), otherwise the transport type.
  */
-class NetworkMonitor(private val context: Context, private val dispatch: (Command) -> Unit) {
+class NetworkMonitor(
+    private val context: Context,
+    private val dispatch: (Command) -> Unit,
+    /** Called with whether there is any connectivity, on every change of that (and once at start). */
+    private val onConnectivity: (online: Boolean) -> Unit = {},
+) {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var last: NetworkState? = null
 
@@ -78,9 +83,12 @@ class NetworkMonitor(private val context: Context, private val dispatch: (Comman
 
     private fun publish() {
         val state = current()
-        if (state != last) {
+        val was = last
+        if (state != was) {
             last = state
             dispatch(Commands.setNetworkState(state))
+            val online = state.kind != NetworkKind.Offline
+            if (was == null || (was.kind != NetworkKind.Offline) != online) onConnectivity(online)
         }
     }
 }

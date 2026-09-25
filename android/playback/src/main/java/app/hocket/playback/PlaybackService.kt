@@ -43,7 +43,8 @@ import kotlinx.coroutines.launch
  *   explicitly in [onCreate]. Without that there was no notification, no lock-screen or quick-settings
  *   controls, and no foreground promotion, so a backgrounded process could be killed mid-song.
  *   When nothing has played for
- *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself.
+ *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself; a player that is still buffering
+ *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says.
  * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
  *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
  *   carries [CoreHost.bindToken], which no other process can know.
@@ -97,7 +98,7 @@ class PlaybackService : MediaLibraryService() {
         val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
         bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this))
         addSession(bridge.session)
-        network = NetworkMonitor(this, ::dispatch)
+        network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
         battery = BatterySaverMonitor(this, ::dispatch)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
@@ -173,9 +174,12 @@ class PlaybackService : MediaLibraryService() {
         idleJob?.cancel()
         idleJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
-            if (!bridge.player.state.isPlaying && boundClients == 0) {
+            if (!bridge.player.state.isPlaying && boundClients == 0 && !backend.isBusy()) {
                 Log.i(TAG, "Idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
                 pauseAllPlayersAndStopSelf()
+            } else if (boundClients == 0) {
+                // Still playing, buffering or recovering: look again later.
+                scheduleIdleStop()
             }
         }
     }
@@ -207,7 +211,8 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The UI unbinds shortly after (ForegroundBinder); with nothing playing the service then goes.
-        if (!bridge.player.state.isPlaying) pauseAllPlayersAndStopSelf()
+        // A player that is still buffering or recovering from a network error is not "nothing".
+        if (!bridge.player.state.isPlaying && !backend.isBusy()) pauseAllPlayersAndStopSelf()
     }
 
     override fun onDestroy() {

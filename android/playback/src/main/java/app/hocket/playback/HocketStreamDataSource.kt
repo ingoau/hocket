@@ -200,8 +200,10 @@ class CoreStreamDataSourceFactory(
 /**
  * `DefaultLoadErrorHandlingPolicy`, except that core stream failures a retry cannot fix fail at once:
  * an unknown/expired token (the core must resolve a fresh one), an offset past the end, and a core
- * that has shut down or closed the handle. Media3's default retries everything but
- * `FileNotFoundException`-typed errors, which would re-open an expired token three times.
+ * that has shut down. Media3's default retries everything but `FileNotFoundException`-typed errors,
+ * which would re-open an expired token three times. A handle the core closed under the player
+ * (idle for ten minutes while the player's buffer was full, or reaped) is retried: the retry opens a
+ * fresh handle at the same position, which the cache serves.
  */
 class CoreStreamLoadErrorPolicy : DefaultLoadErrorHandlingPolicy() {
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
@@ -214,7 +216,6 @@ class CoreStreamLoadErrorPolicy : DefaultLoadErrorHandlingPolicy() {
             CoreStreamException.Kind.UnknownToken,
             CoreStreamException.Kind.RangeNotSatisfiable,
             CoreStreamException.Kind.ShutDown,
-            CoreStreamException.Kind.Closed,
         )
 
         fun coreStreamFailure(e: Throwable?): CoreStreamException? {

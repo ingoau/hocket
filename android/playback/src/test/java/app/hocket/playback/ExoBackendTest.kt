@@ -17,6 +17,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
 import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DataSourceException
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.ExoPlaybackException
+import app.hocket.core.CoreStreamException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,6 +86,61 @@ class ExoBackendTest {
         assertEquals(BackendReport.TransitionedToNext(app.hocket.core.api.BackendReportTransitionedToNextInner("b")), reports[1])
         assertEquals("the played item is dropped: current(+next)", 1, backend.player.mediaItemCount)
         assertEquals("b", backend.player.currentMediaItem?.mediaId)
+    }
+
+    private fun sourceError(cause: Throwable, code: Int): PlaybackException =
+        ExoPlaybackException.createForSource(java.io.IOException(cause), code)
+
+    @Test
+    fun errorsALaterPrepareCanFixAreRecoverableTheRestAreNot() {
+        fun core(kind: CoreStreamException.Kind, status: Int? = null, code: Int = PlaybackException.ERROR_CODE_IO_UNSPECIFIED) =
+            sourceError(DataSourceException(CoreStreamException(kind, status), code), code)
+        // The connection, a stalled server, a handle the core closed: retried.
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.Network, code = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)))
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.Status, 503, PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)))
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.Closed)))
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.UnknownHandle)))
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.TooManyHandles)))
+        assertTrue(ExoBackend.isRecoverable(core(CoreStreamException.Kind.NoServer)))
+        assertTrue("a stuck player is re-prepared", ExoBackend.isRecoverable(PlaybackException.ERROR_CODE_TIMEOUT))
+        val http5xx = HttpDataSource.InvalidResponseCodeException(502, "Bad Gateway", null, emptyMap(), DataSpec(android.net.Uri.parse("https://music.example/s")), ByteArray(0))
+        assertTrue(ExoBackend.isRecoverable(sourceError(http5xx, PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)))
+        // The media, the token, a 4xx, a core that is gone: fatal, the core decides.
+        assertFalse(ExoBackend.isRecoverable(core(CoreStreamException.Kind.Status, 404, PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)))
+        assertFalse(ExoBackend.isRecoverable(core(CoreStreamException.Kind.UnknownToken, code = PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)))
+        assertFalse(ExoBackend.isRecoverable(core(CoreStreamException.Kind.ShutDown)))
+        assertFalse(ExoBackend.isRecoverable(core(CoreStreamException.Kind.ErrorEnvelope, code = PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)))
+        assertFalse(ExoBackend.isRecoverable(ExoPlaybackException.createForUnexpected(RuntimeException("decoder"), PlaybackException.ERROR_CODE_DECODING_FAILED)))
+    }
+
+    @Test
+    fun aStallIsPausedOnlyWhenThePlayerNoLongerMeansToPlay() {
+        // Rebuffering, a load being retried, an error being recovered from: still buffering.
+        assertEquals(ExoBackend.Stall.Buffering, ExoBackend.stall(true, androidx.media3.common.Player.STATE_BUFFERING))
+        assertEquals(ExoBackend.Stall.Nothing, ExoBackend.stall(true, androidx.media3.common.Player.STATE_IDLE))
+        assertEquals(ExoBackend.Stall.Nothing, ExoBackend.stall(true, androidx.media3.common.Player.STATE_ENDED))
+        assertEquals(ExoBackend.Stall.Nothing, ExoBackend.stall(true, androidx.media3.common.Player.STATE_READY))
+        // A pause, becoming noisy, a lasting focus loss.
+        assertEquals(ExoBackend.Stall.Paused, ExoBackend.stall(false, androidx.media3.common.Player.STATE_READY))
+        assertEquals(ExoBackend.Stall.Paused, ExoBackend.stall(false, androidx.media3.common.Player.STATE_BUFFERING))
+        assertEquals(ExoBackend.Stall.Nothing, ExoBackend.stall(false, androidx.media3.common.Player.STATE_ENDED))
+        assertEquals(ExoBackend.Stall.Nothing, ExoBackend.stall(false, androidx.media3.common.Player.STATE_IDLE))
+    }
+
+    @Test
+    fun thePlayerIsBusyWhileItStillMeansToPlayAndIdleAfterStop() {
+        assertFalse(backend.isBusy())
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), null, 0u, true)))
+        assertTrue("loading with play: the service must not stop it", backend.isBusy())
+        backend.handle(BackendCommand.Pause)
+        assertFalse("paused: idle as far as the service is concerned", backend.isBusy())
+        backend.handle(BackendCommand.Play)
+        assertTrue(backend.isBusy())
+        backend.handle(BackendCommand.Stop)
+        assertFalse(backend.isBusy())
+        backend.onConnectivityChanged(false)
+        backend.onConnectivityChanged(true)
+        assertFalse("connectivity with no pending recovery changes nothing", backend.isBusy())
     }
 
     @Test

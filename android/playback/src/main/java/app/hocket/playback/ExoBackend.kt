@@ -8,11 +8,13 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import app.hocket.core.Commands
+import app.hocket.core.CoreStreamException
 import app.hocket.core.CoreStreams
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
@@ -62,9 +64,17 @@ import kotlin.math.pow
  *   then resumes by itself when focus returns and reports `Playing`).
  * - The player holds a wake lock and a Wi-Fi lock while playing ([C.WAKE_MODE_NETWORK]): without
  *   them a stream stalls once the screen is off and the CPU or Wi-Fi radio sleeps.
- * - Network failures leave ExoPlayer idle with an error, so they are retried here with backoff
- *   ([recoveryDelayMs]; `prepare()` resumes at the same position) and reported as non-fatal; only when
- *   the retries run out is the error fatal and the core's own retry/skip takes over.
+ * - `Paused` is reported only when the player no longer means to play (`playWhenReady` false: a
+ *   pause, becoming noisy, a lasting focus loss). A stall with `playWhenReady` still set (an empty
+ *   buffer, a load being retried, an error being recovered from) is `Buffering`, never `Paused`: the
+ *   core would otherwise show the item paused, and the service would count the player as idle and
+ *   could stop itself under a playback that was only rebuffering.
+ * - Errors a later `prepare()` can fix ([isRecoverable]: the connection, a timeout, a 5xx from the
+ *   server, a stream handle the core closed, a stuck player) leave ExoPlayer idle with an error, so
+ *   they are retried here with backoff ([recoveryDelayMs]; `prepare()` resumes at the same position)
+ *   and reported as non-fatal. While the device is offline ([onConnectivityChanged]) no attempt is
+ *   spent: the retry waits, and the network coming back retries at once with a fresh schedule. Only
+ *   when the attempts run out is the error fatal and the core's own retry/skip takes over.
  */
 class ExoBackend(
     private val context: Context,
@@ -73,6 +83,9 @@ class ExoBackend(
     /** The running core's stream reader, read on each open (a restarted service has a new core). */
     private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
 ) {
+    /** What a player that stopped playing while it still has an item is reporting. */
+    internal enum class Stall { Paused, Buffering, Nothing }
+
     internal companion object {
         private const val TAG = "ExoBackend"
         private const val POSITION_INTERVAL_MS = 750L
@@ -81,10 +94,49 @@ class ExoBackend(
         /** Backoff before recovery attempt [attempt] (0-based) of a network error, or null when out of attempts. */
         internal fun recoveryDelayMs(attempt: Int): Long? = RECOVERY_DELAYS_MS.getOrNull(attempt)
 
-        /** Errors a later `prepare()` can fix: the connection, not the media. */
+        /** Errors a later `prepare()` can fix by their code alone: the connection, not the media. */
         internal fun isRecoverable(errorCode: Int): Boolean =
             errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-                errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+                errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                errorCode == PlaybackException.ERROR_CODE_TIMEOUT
+
+        /**
+         * Whether a later `prepare()` can fix [error]: a network failure or timeout, a stuck player
+         * (`ERROR_CODE_TIMEOUT`), a 5xx from the server (the core's stream status or a direct HTTP
+         * source), or a core stream handle that went away under the player (closed as idle, too many
+         * open, unknown): a re-open serves it again. A 4xx, an unknown token (the core re-resolves), a
+         * core that shut down, and anything about the media itself are not.
+         */
+        internal fun isRecoverable(error: PlaybackException): Boolean {
+            if (isRecoverable(error.errorCode)) return true
+            var t: Throwable? = error
+            while (t != null) {
+                when (t) {
+                    is CoreStreamException -> return when (t.kind) {
+                        CoreStreamException.Kind.Network, CoreStreamException.Kind.Closed, CoreStreamException.Kind.UnknownHandle,
+                        CoreStreamException.Kind.TooManyHandles, CoreStreamException.Kind.NoServer -> true
+                        CoreStreamException.Kind.Status -> (t.httpStatus ?: 0) >= 500
+                        else -> false
+                    }
+                    is HttpDataSource.InvalidResponseCodeException -> return t.responseCode >= 500
+                    is HttpDataSource.CleartextNotPermittedException -> return false
+                    is HttpDataSource.HttpDataSourceException -> return true
+                }
+                t = t.cause
+            }
+            return false
+        }
+
+        /**
+         * [Player.Listener.onIsPlayingChanged] `false`: [Stall.Paused] when the player no longer
+         * means to play, [Stall.Buffering] while it does but has nothing to play yet; idle (an error,
+         * a stop) and ended are reported by their own callbacks.
+         */
+        internal fun stall(playWhenReady: Boolean, playbackState: Int): Stall = when {
+            !playWhenReady -> if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) Stall.Nothing else Stall.Paused
+            playbackState == Player.STATE_BUFFERING -> Stall.Buffering
+            else -> Stall.Nothing
+        }
     }
 
     val player: ExoPlayer = ExoPlayer.Builder(context)
@@ -103,6 +155,11 @@ class ExoBackend(
     private var recoveryJob: Job? = null
     /** Recovery attempts for the current error streak; reset once the player is ready again. */
     private var recoveryAttempts = 0
+    /** The key a pending recovery is for. */
+    private var recoveryKey: String? = null
+    /** Connectivity as the service last reported it; a retry waits while this is false. */
+    @Volatile
+    private var online = true
     /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
     private var lastLoadedKey: String? = null
     /** Keys by media id, so reports name the queue key the core gave us. */
@@ -117,7 +174,7 @@ class ExoBackend(
                 val key = currentKey() ?: return
                 when (playbackState) {
                     Player.STATE_READY -> {
-                        recoveryAttempts = 0
+                        cancelRecovery()
                         val duration = player.duration.takeIf { it != C.TIME_UNSET }?.toUInt()
                         report(BackendReport.Ready(BackendReportReadyInner(key, duration)))
                         report(BackendReport.Buffering(BackendReportBufferingInner(key, false)))
@@ -140,17 +197,22 @@ class ExoBackend(
                     startPositionLoop()
                 } else {
                     stopPositionLoop()
-                    if (player.playbackState != Player.STATE_ENDED && !player.isLoading) {
-                        report(BackendReport.Paused(BackendReportPausedInner(key, position())))
+                    when (stall(player.playWhenReady, player.playbackState)) {
+                        Stall.Paused -> report(BackendReport.Paused(BackendReportPausedInner(key, position())))
+                        Stall.Buffering -> report(BackendReport.Buffering(BackendReportBufferingInner(key, true)))
+                        Stall.Nothing -> Unit
                     }
                 }
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
+                if (playWhenReady) return
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = false)))
                 }
-                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) {
+                // The player stopped meaning to play, whoever asked (a pause while buffering never
+                // reaches onIsPlayingChanged, so this is the only place that sees it).
+                if (player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_READY) {
                     currentKey()?.let { report(BackendReport.Paused(BackendReportPausedInner(it, position()))) }
                 }
             }
@@ -176,26 +238,71 @@ class ExoBackend(
                 val key = errorKey() ?: return
                 val message = error.errorCodeName + ": " + (error.message ?: "")
                 // Any player error leaves ExoPlayer idle: "non-fatal" only holds if we bring it back.
-                val delayMs = if (isRecoverable(error.errorCode)) recoveryDelayMs(recoveryAttempts) else null
+                val delayMs = if (isRecoverable(error)) recoveryDelayMs(recoveryAttempts) else null
                 if (delayMs == null) {
-                    recoveryAttempts = 0
+                    cancelRecovery()
                     report(BackendReport.Error(BackendReportErrorInner(key, message, true)))
                     return
                 }
                 recoveryAttempts++
+                Log.w(TAG, "playback error on $key: ${error.errorCodeName}; retrying in ${delayMs}ms (attempt $recoveryAttempts)")
                 report(BackendReport.Error(BackendReportErrorInner(key, message, false)))
                 report(BackendReport.Buffering(BackendReportBufferingInner(key, true)))
-                recoveryJob?.cancel()
-                recoveryJob = scope.launch {
-                    delay(delayMs)
-                    if (player.playerError != null && currentKey() == key) {
-                        Log.i(TAG, "retrying $key after ${error.errorCodeName} (attempt $recoveryAttempts)")
-                        player.prepare()
-                    }
-                }
+                scheduleRecovery(key, delayMs)
             }
         })
     }
+
+    private fun scheduleRecovery(key: String, delayMs: Long) {
+        recoveryJob?.cancel()
+        recoveryKey = key
+        recoveryJob = scope.launch {
+            delay(delayMs)
+            attemptRecovery(key)
+        }
+    }
+
+    /**
+     * Re-prepare after a recoverable error, if the error still stands and the item is still the one
+     * that failed. Offline, the attempt is not spent: it waits for [onConnectivityChanged], with the
+     * longest delay as a safety net should that never come.
+     */
+    private fun attemptRecovery(key: String) {
+        if (player.playerError == null || currentKey() != key) {
+            recoveryKey = null
+            return
+        }
+        if (!online) {
+            Log.i(TAG, "offline; waiting for connectivity before retrying $key")
+            scheduleRecovery(key, RECOVERY_DELAYS_MS.last())
+            return
+        }
+        Log.i(TAG, "retrying $key (attempt $recoveryAttempts)")
+        player.prepare()
+    }
+
+    /**
+     * Connectivity as the service sees it. Coming back online while a recovery is pending retries at
+     * once, with the attempts reset (the failures so far were the old network's).
+     */
+    fun onConnectivityChanged(online: Boolean) {
+        this.online = online
+        if (!online) return
+        val key = recoveryKey ?: return
+        if (recoveryJob?.isActive != true) return
+        recoveryJob?.cancel()
+        recoveryAttempts = 0
+        attemptRecovery(key)
+    }
+
+    /**
+     * True while the player still means to play something: playing, buffering, or recovering from
+     * an error. The service must not stop itself (releasing the player) on such a player, whatever
+     * the media session says about it.
+     */
+    fun isBusy(): Boolean =
+        recoveryJob?.isActive == true ||
+            (player.playWhenReady && (player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_READY))
 
     fun handle(command: BackendCommand) {
         when (command) {
@@ -281,6 +388,7 @@ class ExoBackend(
     private fun cancelRecovery() {
         recoveryJob?.cancel()
         recoveryJob = null
+        recoveryKey = null
         recoveryAttempts = 0
     }
 

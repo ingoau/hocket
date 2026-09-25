@@ -158,6 +158,16 @@ class HocketStreamDataSourceTest {
             HocketStreamDataSource.toDataSourceException(CoreStreamException(CoreStreamException.Kind.Network, detail = "reset")), 1,
         )
         assertTrue("a network hiccup is retried", policy.getRetryDelayMsFor(network) != C.TIME_UNSET)
+        for (kind in listOf(CoreStreamException.Kind.Closed, CoreStreamException.Kind.UnknownHandle, CoreStreamException.Kind.TooManyHandles)) {
+            val gone = androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo(
+                info.loadEventInfo, info.mediaLoadData, HocketStreamDataSource.toDataSourceException(CoreStreamException(kind)), 1,
+            )
+            assertTrue("a handle the core closed is re-opened by a retry ($kind)", policy.getRetryDelayMsFor(gone) != C.TIME_UNSET)
+        }
+        val dead = androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo(
+            info.loadEventInfo, info.mediaLoadData, HocketStreamDataSource.toDataSourceException(CoreStreamException(CoreStreamException.Kind.ShutDown)), 1,
+        )
+        assertEquals("a core that shut down is not retried", C.TIME_UNSET, policy.getRetryDelayMsFor(dead))
         source.close() // nothing opened: no close call, no transfer end
         assertFalse(streams.calls.any { it.startsWith("close") })
     }

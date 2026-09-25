@@ -22,10 +22,14 @@
 //!   a playback stream is pulling from the server). A queue change is
 //!   debounced ([`PREFETCH_DEBOUNCE_MS`]); a fetch no longer among the next
 //!   two is cancelled (its temp file removed) and the new ones start.
+//! - A fetch that fails (or completes without leaving a cache entry: no
+//!   room, a write error) is tried again after a growing backoff
+//!   ([`PREFETCH_RETRY_MS`]) while the track stays wanted, and at once when
+//!   the network comes back; a queue change clears the bookkeeping.
 //!
 //! [`Actor::start_prefetch`] is the reusable entry point for one track.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +47,23 @@ pub const PREFETCH_AHEAD: usize = 2;
 pub const PREFETCH_DEBOUNCE_MS: f64 = 2_000.0;
 /// Share of the cache budget prefetch may fill.
 pub const PREFETCH_BUDGET_SHARE: f64 = 0.25;
+/// Backoff before a failed prefetch of a track is tried again, per attempt
+/// (the last one repeats).
+pub const PREFETCH_RETRY_MS: [f64; 5] = [15_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0];
+
+/// A track whose fetch failed while it stayed wanted.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PrefetchFailure {
+    pub attempts: u32,
+    /// When it may be tried again (infinite while a retry runs).
+    pub retry_at: f64,
+}
+
+impl PrefetchFailure {
+    fn backoff_ms(attempts: u32) -> f64 {
+        PREFETCH_RETRY_MS[(attempts as usize).min(PREFETCH_RETRY_MS.len() - 1)]
+    }
+}
 
 /// How one prefetch ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,9 +92,9 @@ pub(crate) struct PrefetchState {
     pub targets: Vec<TrackKey>,
     pub running: Option<PrefetchRunning>,
     pub generation: u64,
-    /// Tracks whose fetch failed while they stayed wanted (not retried
-    /// until the wanted set changes).
-    pub failed: HashSet<String>,
+    /// Tracks whose fetch failed while they stayed wanted, with their
+    /// retry schedule (cleared when the wanted set changes).
+    pub failed: HashMap<String, PrefetchFailure>,
 }
 
 impl Actor {
@@ -103,6 +124,24 @@ impl Actor {
             if now - at >= PREFETCH_DEBOUNCE_MS {
                 self.prefetch.changed_at = None;
                 self.apply_prefetch();
+            }
+        }
+        // A failed fetch whose backoff has elapsed.
+        if self.prefetch.running.is_none()
+            && self.prefetch.changed_at.is_none()
+            && self.prefetch.failed.values().any(|f| f.retry_at <= now)
+        {
+            self.apply_prefetch();
+        }
+    }
+
+    /// The network is back (or changed): failed fetches are due again now
+    /// rather than after their backoff.
+    pub(crate) fn prefetch_retry_now(&mut self) {
+        let now = self.now();
+        for f in self.prefetch.failed.values_mut() {
+            if f.retry_at.is_finite() {
+                f.retry_at = now;
             }
         }
     }
@@ -232,9 +271,13 @@ impl Actor {
     /// Act on the wanted set: protect it, cancel a fetch that left it,
     /// start the next one needed.
     pub(crate) fn apply_prefetch(&mut self) {
+        let now = self.now();
         let targets = self.prefetch.wanted.clone();
         self.prefetch.targets = targets.clone();
         self.protect_loaded_tracks();
+        self.prefetch
+            .failed
+            .retain(|id, _| targets.iter().any(|(_, t)| t == id));
         if let Some(r) = &self.prefetch.running {
             if !targets.contains(&r.key) {
                 r.cancel.cancel();
@@ -245,18 +288,28 @@ impl Actor {
             return;
         }
         for (_, id) in targets {
-            if self.prefetch.failed.contains(&id) {
+            if self
+                .prefetch
+                .failed
+                .get(&id)
+                .is_some_and(|f| f.retry_at > now)
+            {
                 continue;
             }
             let Some(track) = self.track_or_bare(&id) else {
                 continue;
             };
             if !self.prefetch_needed(&track) {
+                self.prefetch.failed.remove(&id);
                 continue;
             }
             if self.start_prefetch(&track, None) {
+                if let Some(f) = self.prefetch.failed.get_mut(&id) {
+                    f.retry_at = f64::INFINITY;
+                }
                 return;
             }
+            self.prefetch.failed.remove(&id);
         }
     }
 
@@ -328,12 +381,47 @@ impl Actor {
             return;
         }
         self.prefetch.running = None;
-        if outcome == PrefetchOutcome::Failed {
-            self.log("debug", format!("prefetch of {track_id} failed"));
-            self.prefetch.failed.insert(track_id);
+        // A read that reached the end without completing the entry (no
+        // room, a write error, a stream the cache refused) would otherwise
+        // start over at once, for as long as the track stays wanted.
+        let uncached = outcome == PrefetchOutcome::Done
+            && self
+                .track_or_bare(&track_id)
+                .is_some_and(|t| self.prefetch_needed(&t));
+        match outcome {
+            PrefetchOutcome::Failed => self.note_prefetch_failure(&track_id, "failed"),
+            PrefetchOutcome::Done if uncached => {
+                self.note_prefetch_failure(&track_id, "left no cache entry")
+            }
+            PrefetchOutcome::Done => {
+                self.prefetch.failed.remove(&track_id);
+            }
+            PrefetchOutcome::Cancelled => {}
         }
         self.apply_prefetch();
         self.prime_next();
+    }
+
+    fn note_prefetch_failure(&mut self, track_id: &str, what: &str) {
+        let now = self.now();
+        let f = self
+            .prefetch
+            .failed
+            .entry(track_id.to_string())
+            .or_insert(PrefetchFailure {
+                attempts: 0,
+                retry_at: now,
+            });
+        let delay = PrefetchFailure::backoff_ms(f.attempts);
+        f.attempts += 1;
+        f.retry_at = now + delay;
+        self.log(
+            "debug",
+            format!(
+                "prefetch of {track_id} {what}; trying again in {}s",
+                delay / 1000.0
+            ),
+        );
     }
 
     /// Stop any prefetch (shutdown).

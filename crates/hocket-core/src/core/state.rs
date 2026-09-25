@@ -80,6 +80,14 @@ pub(crate) struct Playback {
     pub fade_gain: Option<f64>,
     /// Waiting for a gapless `TransitionedToNext` for this doc key.
     pub awaiting_transition: bool,
+    /// When the document's current item was adopted as the backend's
+    /// preloaded follow-up without a `Load` (a gapless boundary), until
+    /// the backend confirms with `TransitionedToNext`. Past
+    /// [`crate::core::actor::ADOPTION_TIMEOUT_MS`] the item is loaded
+    /// explicitly: a backend that ended without a follow-up in place (a
+    /// `SetNext` still in flight, a preload it dropped) would otherwise
+    /// leave the session on an item nothing plays.
+    pub adopted_at: Option<EpochMs>,
     /// Silenced by a transient audio-focus loss: the backend still means to
     /// play and resumes on its own (reporting `Playing`) when focus returns.
     pub focus_suspended: bool,
