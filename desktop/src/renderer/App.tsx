@@ -32,7 +32,6 @@ export function App() {
   const ready = useApp((s) => s.ready);
   // The core probes before installing: ServersChanged only arrives once a server is real.
   const hasServer = useApp((s) => s.servers.length > 0);
-  const fullscreen = useApp((s) => s.fullscreen);
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
@@ -68,7 +67,7 @@ export function App() {
       <PlayerBar inert={modal} />
       <NowPlayingAnnouncer />
       {/* Covers the whole window (sidebar, panels and player bar included). */}
-      {fullscreen ? <FullscreenPlayer /> : null}
+      <FullscreenPlayer />
       <ContextMenu />
       <CommandPalette />
       <Dialogs />

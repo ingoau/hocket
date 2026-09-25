@@ -11,7 +11,9 @@
 // artwork flies in from the player bar's.
 //
 // A modal dialog: focus moves in on open (the collapse button), Tab stays
-// inside, Escape closes, and focus returns to what opened it.
+// inside, Escape closes, and focus returns to what opened it. On close it
+// stays mounted, inert, while it fades (lib/presence.ts); focus goes back and
+// the window leaves fullscreen as the fade starts.
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
@@ -30,6 +32,7 @@ import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { usePresence, type Presence } from "../lib/presence";
 import { usePrefersReducedMotion } from "../lib/media";
 import { volumeValueText } from "../lib/a11y";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
@@ -71,6 +74,15 @@ function flyFrom(el: HTMLElement, from: DOMRect, fromRadius: number, toRadius: n
 }
 
 export function FullscreenPlayer() {
+  const fullscreen = useApp((s) => s.fullscreen);
+  const { value, closing, motion, exitProps } = usePresence<true, HTMLDivElement>(fullscreen || undefined);
+  if (!value) return null;
+  return <Player closing={closing} motion={motion} exitProps={exitProps} />;
+}
+
+type PlayerProps = Pick<Presence<true, HTMLDivElement>, "closing" | "motion" | "exitProps">;
+
+function Player({ closing, motion, exitProps }: PlayerProps) {
   const now = useApp((s) => s.nowPlaying);
   const transport = useApp((s) => s.transport);
   const queue = useApp((s) => s.queue);
@@ -91,7 +103,7 @@ export function FullscreenPlayer() {
   const controlsAt = useRef<{ rect: DOMRect; mode: NowPlayingMode } | undefined>(undefined);
   /** Where the visible artwork last came to rest, and in which mode. */
   const flight = useRef<{ rect: DOMRect; radius: number; mode: NowPlayingMode } | undefined>(undefined);
-  useReturnFocus(true);
+  useReturnFocus(!closing);
   useEffect(() => closeRef.current?.focus({ preventScroll: true }), []);
   const d = bridge().dispatch;
   const track = now?.track;
@@ -101,9 +113,10 @@ export function FullscreenPlayer() {
   const source = queue.contextLabel ?? track?.album;
 
   useEffect(() => {
+    if (closing) return;
     bridge().window.openFullscreen(true);
     return () => bridge().window.openFullscreen(false);
-  }, []);
+  }, [closing]);
 
   const visibleArt = (): HTMLElement | null => (mode === "art" ? bigArt.current : thumbArt.current);
   const choose = (next: NowPlayingMode) => setMode(next);
@@ -161,7 +174,7 @@ export function FullscreenPlayer() {
   const art = track ? <Artwork id={track.coverArt} size={1000} className="np-art-img" /> : <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>;
 
   return (
-    <div className="fullscreen np fade-in" data-mode={mode} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered} onKeyDown={onKey} data-testid="fullscreen-player">
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={track?.coverArt} />
       <div className="np-fade" aria-hidden="true" />
       <div className="np-stage">

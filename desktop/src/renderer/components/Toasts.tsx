@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import type { Command } from "@core/api";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
+import { usePresenceList } from "../lib/presence";
 
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);
   const dismiss = useApp((s) => s.dismissToast);
   // Hovering or focusing a toast holds every toast (WCAG 2.2.1): an Undo must stay reachable.
   const [held, setHeld] = useState(false);
+  // A dismissed toast stays mounted, inert, while it sinks away.
+  const entries = usePresenceList(toasts, (t) => t.id);
   useEffect(() => {
     if (held) return;
     const timers = toasts.map((t) => setTimeout(() => dismiss(t.id), Math.max(1500, t.durationMs)));
@@ -16,8 +19,8 @@ export function Toasts() {
   // Always mounted: a live region must exist before its content changes to be announced.
   return (
     <div className="toasts" role="status" aria-live="polite" data-testid="toasts" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHeld(false); }}>
-      {toasts.map((t) => (
-        <div key={t.id} className="toast fade-in" data-testid="toast">
+      {entries.map(({ item: t, key, motion, exitProps }) => (
+        <div key={key} {...exitProps} className={`toast ${motion}`} data-testid="toast">
           <span>{t.message}</span>
           {t.actionLabel && t.actionCommand ? (
             <button

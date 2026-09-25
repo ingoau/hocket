@@ -9,21 +9,25 @@ import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { usePresence } from "../lib/presence";
 
 export function Dialogs() {
-  const dialog = useApp((s) => s.dialog);
+  const live = useApp((s) => s.dialog);
   const close = useApp((s) => s.closeDialog);
   const ref = useRef<HTMLDivElement>(null);
-  useReturnFocus(!!dialog);
+  // The closed dialog stays mounted, inert, while its exit plays; focus goes
+  // back and the Connect picker closes on the live state, not the animation.
+  const { value: dialog, closing, motion, exitProps } = usePresence(live, ref);
+  useReturnFocus(!!live);
   useEffect(() => {
-    if (!dialog) return;
+    if (!live) return;
     // Initial focus: the field, else the safe (non-destructive) button, else the first control.
     const root = ref.current;
     const first = root?.querySelector<HTMLElement>("input, textarea, select") ?? root?.querySelector<HTMLElement>("[data-autofocus]") ?? root?.querySelector<HTMLElement>("button, [tabindex='0']");
     first?.focus();
-    if (dialog.kind === "connect") return () => bridge().dispatch({ type: "closeHandoffPicker" });
+    if (live.kind === "connect") return () => bridge().dispatch({ type: "closeHandoffPicker" });
     return undefined;
-  }, [dialog]);
+  }, [live]);
   if (!dialog) return null;
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
@@ -35,8 +39,8 @@ export function Dialogs() {
     trapTab(e);
   };
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={ref} className="dialog fade-in" role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
+    <div className={`overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div {...exitProps} className={`dialog ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
         {dialog.kind === "addToPlaylist" ? <AddToPlaylist trackIds={dialog.trackIds} /> : null}
