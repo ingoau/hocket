@@ -87,6 +87,7 @@ pub mod keys {
     pub const STORAGE_WARN_THRESHOLD_BYTES: &str = "storage.warnThresholdBytes";
     pub const STORAGE_CACHE_MAX_BYTES: &str = "storage.cacheMaxBytes";
     pub const STORAGE_PREFETCH_ON_MOBILE_DATA: &str = "storage.prefetchOnMobileData";
+    pub const STORAGE_PREFETCH_PLAYING_ELSEWHERE: &str = "storage.prefetchPlayingElsewhere";
     pub const DOWNLOADS_TRANSCODE: &str = "downloads.transcode";
     pub const DOWNLOADS_WIFI_ONLY: &str = "downloads.wifiOnly";
     pub const SLEEP_DEFAULT_MINUTES: &str = "sleep.defaultMinutes";
@@ -459,6 +460,12 @@ pub static REGISTRY: &[SettingDef] = &[
     ),
     def(
         STORAGE_PREFETCH_ON_MOBILE_DATA,
+        Local,
+        SettingKind::Bool,
+        || json!(false),
+    ),
+    def(
+        STORAGE_PREFETCH_PLAYING_ELSEWHERE,
         Local,
         SettingKind::Bool,
         || json!(false),

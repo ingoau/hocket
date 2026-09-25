@@ -1809,6 +1809,7 @@ export class FakeCore implements CoreHandle {
       // null: an automatic budget; any number (2 GiB included) is the user's.
       ["storage.cacheMaxBytes", null, "deviceLocal"],
       ["storage.prefetchOnMobileData", false, "deviceLocal"],
+      ["storage.prefetchPlayingElsewhere", false, "deviceLocal"],
       ["downloads.transcode", false, "deviceLocal"],
       ["downloads.wifiOnly", true, "deviceLocal"],
       ["sleep.defaultMinutes", 30, "accountSynced"],

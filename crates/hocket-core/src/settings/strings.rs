@@ -48,6 +48,7 @@ pub const TEXTS: &[SettingText] = &[
     t("storage.warnThresholdBytes", "Storage warning", "Warn when downloads and cache exceed this size."),
     t("storage.cacheMaxBytes", "Stream cache size", "Maximum size of the evictable stream cache."),
     t("storage.prefetchOnMobileData", "Prefetch on mobile data", "Also cache the next two queue items in the background on metered or cellular connections."),
+    t("storage.prefetchPlayingElsewhere", "Cache what other devices play", "While another device plays, cache its current song here too, so moving playback to this device starts from disk. Downloads every song played elsewhere."),
     t("downloads.transcode", "Transcode downloads", "Download using the transcoding profile instead of the original file."),
     t("downloads.wifiOnly", "Download on Wi-Fi only", "Pause downloads on metered connections."),
     t("sleep.defaultMinutes", "Sleep timer default", "Default duration when starting the sleep timer."),

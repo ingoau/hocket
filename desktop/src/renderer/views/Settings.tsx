@@ -382,6 +382,7 @@ function Storage() {
         </div>
       </Row>
       <Toggle settingKey={SK.storagePrefetchOnMobileData} title={t("settings.prefetchMobile")} desc={t("settings.prefetchMobileDesc")} />
+      <Toggle settingKey={SK.storagePrefetchPlayingElsewhere} title={t("settings.prefetchElsewhere")} desc={t("settings.prefetchElsewhereDesc")} />
       <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
         <select className="select" value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>

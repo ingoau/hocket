@@ -222,6 +222,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
     val wifiOnly = setting(SettingKeys.DOWNLOADS_WIFI_ONLY)
     val cacheMax = setting(SettingKeys.STORAGE_CACHE_MAX_BYTES)
     val prefetchMobile = setting(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA)
+    val prefetchElsewhere = setting(SettingKeys.STORAGE_PREFETCH_PLAYING_ELSEWHERE)
     val dot = stringResource(R.string.dot_separator)
     SubScreen(nav, stringResource(R.string.settings_category_downloads)) {
         SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + dot + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }, tag = "open.downloads") { Chevron() }
@@ -254,6 +255,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         )
         Text(stringResource(R.string.settings_cache_budget_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, stringResource(R.string.settings_prefetch_mobile_body), prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
+        SwitchRow(stringResource(R.string.settings_prefetch_elsewhere), prefetchElsewhere.bool ?: false, { prefetchElsewhere.setBool(it) }, stringResource(R.string.settings_prefetch_elsewhere_body), prefetchElsewhere.scope, tag = "storage.prefetchPlayingElsewhere")
         SettingRow(stringResource(R.string.settings_data_saved), stringResource(R.string.settings_data_saved_body, formatBytes(storage.servedFromDiskBytes ?: 0.0), formatBytes(storage.fetchedBytes ?: 0.0)), tag = "storage.dataSaved") {
             Text(formatBytes(storage.dataSavedBytes ?: 0.0), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }

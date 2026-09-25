@@ -98,7 +98,9 @@ impl Actor {
                 self.apply_transcoding_settings();
                 self.mark_prefetch_check();
             }
-            keys::BATTERY_PAUSE_PREFETCH | keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+            keys::BATTERY_PAUSE_PREFETCH
+            | keys::STORAGE_PREFETCH_ON_MOBILE_DATA
+            | keys::STORAGE_PREFETCH_PLAYING_ELSEWHERE => {
                 self.mark_prefetch_check();
             }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {

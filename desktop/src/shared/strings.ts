@@ -335,6 +335,8 @@ const STRINGS = {
   "settings.dataSavedDetail": "{served} played from this device · {fetched} fetched from the server",
   "settings.prefetchMobile": "Prefetch upcoming songs on mobile data",
   "settings.prefetchMobileDesc": "Also cache the next two songs in the queue on metered or cellular connections.",
+  "settings.prefetchElsewhere": "Cache what other devices play",
+  "settings.prefetchElsewhereDesc": "While another device plays, cache its current song here too, so moving playback to this device starts faster. Downloads every song played elsewhere.",
   "settings.savedQueueCap": "Keep up to {n} recent queues",
   "settings.batterySaver": "Battery saver mode",
   "settings.batterySaverAuto": "Engage automatically on battery",

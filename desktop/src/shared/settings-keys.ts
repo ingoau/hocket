@@ -22,6 +22,7 @@ export const SK = {
   /** Unset (or at its default) = automatic budget, min(2 GiB, 10% of the cache volume). */
   storageCacheMaxBytes: "storage.cacheMaxBytes",
   storagePrefetchOnMobileData: "storage.prefetchOnMobileData",
+  storagePrefetchPlayingElsewhere: "storage.prefetchPlayingElsewhere",
   sleepDefaultMinutes: "sleep.defaultMinutes",
   scrobbleEnabled: "scrobble.enabled",
   searchIncludeServer: "search.includeServer",

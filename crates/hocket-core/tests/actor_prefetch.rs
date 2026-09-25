@@ -1,6 +1,7 @@
 //! Background prefetch into the stream cache: the next two queue items on
-//! the transport owner, the current item on devices watching another play,
-//! gated by battery, network and budget, and following queue changes.
+//! the transport owner, the current item on devices watching another play
+//! (opt-in), gated by battery, network and budget, and following queue
+//! changes.
 
 #![cfg(feature = "sim")]
 
@@ -253,6 +254,14 @@ async fn pair(name: &str) -> (TestCore, TestCore) {
     (a, b)
 }
 
+async fn cache_playing_elsewhere(t: &TestCore) {
+    t.run(Command::SetSetting {
+        key: "storage.prefetchPlayingElsewhere".into(),
+        value: "true".into(),
+    })
+    .await;
+}
+
 /// Run both cores until `done` holds (real time for the cache writes).
 async fn run_pair_until(a: &TestCore, b: &TestCore, done: impl AsyncFn() -> bool) -> bool {
     for _ in 0..160 {
@@ -268,6 +277,8 @@ async fn run_pair_until(a: &TestCore, b: &TestCore, done: impl AsyncFn() -> bool
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owner_prefetches_what_is_next_and_watchers_the_current_item() {
     let (a, b) = pair("roles").await;
+    cache_playing_elsewhere(&a).await;
+    cache_playing_elsewhere(&b).await;
     // b's second prefetch stalls, so it is in flight at the handoff.
     b.upstream
         .set_behaviour("t2", UpstreamBehaviour::StallAfter(20_000));
@@ -333,6 +344,7 @@ async fn the_owner_prefetches_what_is_next_and_watchers_the_current_item() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_watcher_prefetches_only_while_another_device_plays() {
     let (a, b) = pair("watch").await;
+    cache_playing_elsewhere(&a).await;
     // a's fetch of the current item stalls, so it is in flight at the pause.
     a.upstream
         .set_behaviour("t0", UpstreamBehaviour::StallAfter(20_000));
@@ -365,6 +377,36 @@ async fn a_watcher_prefetches_only_while_another_device_plays() {
     .await;
     assert!(cached, "a: {:?}", a.upstream.calls());
     assert_eq!(a.upstream.stream_requests("t1"), 0);
+    a.core.shutdown().await;
+    b.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watchers_prefetch_nothing_unless_opted_in() {
+    let (a, b) = pair("optin").await;
+    b.run(Command::PlayTracks {
+        server_id: b.server_id.clone(),
+        track_ids: (0..6).map(|i| format!("t{i}")).collect(),
+        start_index: 0,
+        label: "Album".into(),
+        shuffle: false,
+    })
+    .await;
+    let owner_busy = run_pair_until(&a, &b, async || {
+        offline(&b, "t1").await == OfflineState::Cached
+    })
+    .await;
+    assert!(owner_busy, "b: {:?}", b.upstream.calls());
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(a.upstream.calls().is_empty(), "a: {:?}", a.upstream.calls());
+
+    // Opting in takes effect while b plays.
+    cache_playing_elsewhere(&a).await;
+    let cached = run_pair_until(&a, &b, async || {
+        offline(&a, "t0").await == OfflineState::Cached
+    })
+    .await;
+    assert!(cached, "a: {:?}", a.upstream.calls());
     a.core.shutdown().await;
     b.core.shutdown().await;
 }

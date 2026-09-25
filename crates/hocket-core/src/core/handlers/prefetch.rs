@@ -8,9 +8,10 @@
 //! - Which, on the device that owns playback: the first two playable items
 //!   after the current one in derived play order (playing-next insertions,
 //!   then upcoming; shuffle and repeat as the reducer derives them).
-//! - Which, on every other device while another device is playing: the
-//!   current item, so a handoff to it (or pulling playback to it) starts
-//!   from disk instead of waiting on the server. Nothing while paused.
+//! - Which, on every other device while another device is playing and
+//!   `storage.prefetchPlayingElsewhere` is on (off by default): the current
+//!   item, so a handoff to it (or pulling playback to it) starts from disk
+//!   instead of waiting on the server. Nothing while paused.
 //! - Items are resolved with the transcoding profile playback would use on
 //!   the current network. Items already pinned or fully cached count toward
 //!   the set but need no fetch.
@@ -147,9 +148,9 @@ impl Actor {
                 .is_some_and(|o| o != engine.device_id())
     }
 
-    /// The owner's next [`PREFETCH_AHEAD`] playable items, or a watching
-    /// device's current item while another device plays it, trimmed to the
-    /// budget share; empty when prefetch is not allowed.
+    /// The owner's next [`PREFETCH_AHEAD`] playable items, or (opted in) a
+    /// watching device's current item while another device plays it,
+    /// trimmed to the budget share; empty when prefetch is not allowed.
     fn prefetch_wanted(&self) -> Vec<TrackKey> {
         if !self.prefetch_allowed() {
             return vec![];
@@ -170,7 +171,11 @@ impl Actor {
                 .map(|i| i.track_id)
                 .take(PREFETCH_AHEAD)
                 .collect()
-        } else if self.remote_playing() {
+        } else if self
+            .settings
+            .get_bool(keys::STORAGE_PREFETCH_PLAYING_ELSEWHERE)
+            && self.remote_playing()
+        {
             doc.current
                 .iter()
                 .filter(|i| !i.unavailable)

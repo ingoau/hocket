@@ -37,6 +37,7 @@ object SettingKeys {
     /** Unset (or at its default) = automatic: min(2 GiB, 10% of the cache volume). */
     const val STORAGE_CACHE_MAX_BYTES = "storage.cacheMaxBytes"
     const val STORAGE_PREFETCH_ON_MOBILE_DATA = "storage.prefetchOnMobileData"
+    const val STORAGE_PREFETCH_PLAYING_ELSEWHERE = "storage.prefetchPlayingElsewhere"
     const val DOWNLOADS_TRANSCODE = "downloads.transcode"
     const val DOWNLOADS_WIFI_ONLY = "downloads.wifiOnly"
     const val SLEEP_DEFAULT_MINUTES = "sleep.defaultMinutes"

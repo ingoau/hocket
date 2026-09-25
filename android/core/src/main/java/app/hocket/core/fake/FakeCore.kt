@@ -156,6 +156,7 @@ class FakeCore(
         // null: an automatic budget; any number (2 GiB included) is the user's.
         def(SettingKeys.STORAGE_CACHE_MAX_BYTES, "null", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA, "false", SettingScope.DeviceLocal)
+        def(SettingKeys.STORAGE_PREFETCH_PLAYING_ELSEWHERE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_TRANSCODE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.DOWNLOADS_WIFI_ONLY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.SLEEP_DEFAULT_MINUTES, "30", SettingScope.AccountSynced)

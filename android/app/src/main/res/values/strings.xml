@@ -581,6 +581,8 @@
     <string name="settings_data_saved_body">%1$s played from this device · %2$s fetched from the server</string>
     <string name="settings_prefetch_mobile">Prefetch upcoming songs on mobile data</string>
     <string name="settings_prefetch_mobile_body">Caches the next songs in the queue on metered or cellular connections too.</string>
+    <string name="settings_prefetch_elsewhere">Cache what other devices play</string>
+    <string name="settings_prefetch_elsewhere_body">While another device plays, caches its current song here too, so moving playback to this device starts faster. Downloads every song played elsewhere.</string>
     <string name="settings_available_offline_body">Downloads and fully cached songs</string>
     <string name="available_offline">Available offline</string>
     <string name="available_offline_empty_title">Nothing available offline</string>
