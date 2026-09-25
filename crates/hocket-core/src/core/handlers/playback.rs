@@ -327,11 +327,11 @@ impl Actor {
     // -- transport ownership ------------------------------------------------------
 
     pub(crate) fn on_lease_changed(&mut self, owns: bool, detached: bool, lease: TransportLease) {
-        // Only the owner prefetches audio; a lost lease cancels at once.
+        // The owner prefetches what comes next, everyone else the current
+        // item: a fetch the new role no longer wants stops at once.
         self.mark_prefetch_check();
-        if !owns {
-            self.prefetch_tick(self.now());
-        }
+        self.prefetch_tick(self.now());
+        self.drop_unwanted_prefetch();
         if owns {
             self.playback.consecutive_skips = 0;
             // Taking over from a device that skipped tracks while offline:

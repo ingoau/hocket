@@ -386,6 +386,8 @@ impl Actor {
             }
             Output::TransportChanged { transport } => {
                 self.last_transport = transport;
+                // Play/pause elsewhere starts or stops the watcher's prefetch.
+                self.mark_prefetch_check();
                 self.emit_transport();
             }
             Output::LeaseChanged {

@@ -285,8 +285,9 @@ async fn the_device_that_owns_playback_primes_with_its_own_state() {
         }
     }
     assert!(primed, "b: {:?}", b.upstream.calls());
+    // a only fetches what b is playing (the watcher's prefetch).
     assert!(
-        a.upstream.calls().is_empty(),
+        a.upstream.calls().iter().all(|c| c.track_id == "t0"),
         "a does not prime: {:?}",
         a.upstream.calls()
     );

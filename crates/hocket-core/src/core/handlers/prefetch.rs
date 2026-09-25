@@ -1,17 +1,22 @@
-//! Background audio prefetch: the device that owns playback reads the next
-//! two upcoming queue items through the in-process stream reader, from
-//! byte 0 to the end, so the reader's normal write-through path completes
-//! their stream-cache entries before they come up (no separate download
-//! code, and they play from disk with zero server requests; bytes an
-//! earlier read or the album primer left are not fetched again).
+//! Background audio prefetch: tracks are read through the in-process
+//! stream reader, from byte 0 to the end, so the reader's normal
+//! write-through path completes their stream-cache entries before they are
+//! needed (no separate download code, and they play from disk with zero
+//! server requests; bytes an earlier read or the album primer left are not
+//! fetched again).
 //!
-//! - Which: the first two playable items after the current one in derived
-//!   play order (playing-next insertions, then upcoming; shuffle and repeat
-//!   as the reducer derives them), resolved with the transcoding profile
-//!   playback would use on the current network. Items already pinned or
-//!   fully cached count toward the two but need no fetch.
-//! - Who: only the transport owner, with its own battery/network state.
-//!   Losing ownership cancels at once; gaining it starts after the debounce.
+//! - Which, on the device that owns playback: the first two playable items
+//!   after the current one in derived play order (playing-next insertions,
+//!   then upcoming; shuffle and repeat as the reducer derives them).
+//! - Which, on every other device while another device is playing: the
+//!   current item, so a handoff to it (or pulling playback to it) starts
+//!   from disk instead of waiting on the server. Nothing while paused.
+//! - Items are resolved with the transcoding profile playback would use on
+//!   the current network. Items already pinned or fully cached count toward
+//!   the set but need no fetch.
+//! - Who decides: each device, with its own battery/network state. A change
+//!   of role (gaining or losing the lease) cancels a fetch the new role
+//!   does not want at once and starts the new ones after the debounce.
 //! - Gating: off on the coordinator; paused offline, with battery saver on
 //!   and `battery.pausePrefetch`, and on metered/cellular networks unless
 //!   `storage.prefetchOnMobileData`.
@@ -112,7 +117,6 @@ impl Actor {
         if self.cfg.platform == Platform::Coordinator
             || self.stream_reader.is_none()
             || self.api().is_none()
-            || !self.owns_transport()
             || self.shutting_down
         {
             return false;
@@ -130,8 +134,22 @@ impl Actor {
         }
     }
 
-    /// The next [`PREFETCH_AHEAD`] playable items, trimmed to the budget
-    /// share; empty when prefetch is not allowed.
+    /// Another device holds the transport lease and is playing.
+    fn remote_playing(&self) -> bool {
+        let Some(engine) = &self.engine else {
+            return false;
+        };
+        let t = engine.transport();
+        t.position.is_playing
+            && t.lease
+                .owner
+                .as_deref()
+                .is_some_and(|o| o != engine.device_id())
+    }
+
+    /// The owner's next [`PREFETCH_AHEAD`] playable items, or a watching
+    /// device's current item while another device plays it, trimmed to the
+    /// budget share; empty when prefetch is not allowed.
     fn prefetch_wanted(&self) -> Vec<TrackKey> {
         if !self.prefetch_allowed() {
             return vec![];
@@ -139,19 +157,28 @@ impl Actor {
         let Some(doc) = self.doc() else {
             return vec![];
         };
-        if doc.repeat == RepeatMode::One {
-            return vec![];
-        }
         let current = doc.current.as_ref().map(|i| i.track_id.clone());
-        let d = derive(doc);
-        let items: Vec<TrackId> = d
-            .playing_next
-            .into_iter()
-            .chain(d.upcoming)
-            .filter(|i| !i.unavailable && Some(&i.track_id) != current.as_ref())
-            .map(|i| i.track_id)
-            .take(PREFETCH_AHEAD)
-            .collect();
+        let items: Vec<TrackId> = if self.owns_transport() {
+            if doc.repeat == RepeatMode::One {
+                return vec![];
+            }
+            let d = derive(doc);
+            d.playing_next
+                .into_iter()
+                .chain(d.upcoming)
+                .filter(|i| !i.unavailable && Some(&i.track_id) != current.as_ref())
+                .map(|i| i.track_id)
+                .take(PREFETCH_AHEAD)
+                .collect()
+        } else if self.remote_playing() {
+            doc.current
+                .iter()
+                .filter(|i| !i.unavailable)
+                .map(|i| i.track_id.clone())
+                .collect()
+        } else {
+            return vec![];
+        };
         let share = self.downloads.cache_budget() * PREFETCH_BUDGET_SHARE;
         let mut used = 0.0;
         let mut out = vec![];
@@ -334,6 +361,15 @@ impl Actor {
         }
         self.apply_prefetch();
         self.prime_next();
+    }
+
+    /// Cancel a running fetch outside the wanted set without waiting for
+    /// the debounce (a change of role, not a queue edit).
+    pub(crate) fn drop_unwanted_prefetch(&mut self) {
+        let wanted = &self.prefetch.wanted;
+        if let Some(r) = self.prefetch.running.take_if(|r| !wanted.contains(&r.key)) {
+            r.cancel.cancel();
+        }
     }
 
     /// Stop any prefetch (shutdown).

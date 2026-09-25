@@ -1,6 +1,6 @@
-//! Background prefetch of the next two queue items into the stream cache,
-//! on the transport owner only, gated by battery, network and budget, and
-//! following queue changes.
+//! Background prefetch into the stream cache: the next two queue items on
+//! the transport owner, the current item on devices watching another play,
+//! gated by battery, network and budget, and following queue changes.
 
 #![cfg(feature = "sim")]
 
@@ -232,18 +232,42 @@ async fn prefetch_stays_within_a_quarter_of_the_budget() {
     t.core.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
+async fn pair(name: &str) -> (TestCore, TestCore) {
     let server = seeded_server(6, 200.0);
     let net = MemoryNet::new();
     let clock = SimTime::new(1_700_000_000_000.0);
-    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
-    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    let a = TestCore::start_on(
+        &format!("{name}-a"),
+        server.clone(),
+        Some(net.clone()),
+        1,
+        clock.clone(),
+    )
+    .await;
+    let b = TestCore::start_on(&format!("{name}-b"), server, Some(net), 2, clock).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     for c in [&a, &b] {
         c.run(Command::SetBackendCapabilities { core_stream: true })
             .await;
     }
+    (a, b)
+}
+
+/// Run both cores until `done` holds (real time for the cache writes).
+async fn run_pair_until(a: &TestCore, b: &TestCore, done: impl AsyncFn() -> bool) -> bool {
+    for _ in 0..160 {
+        TestCore::run_all_for(&[a, b], 250.0).await;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        if done().await {
+            return true;
+        }
+    }
+    false
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_owner_prefetches_what_is_next_and_watchers_the_current_item() {
+    let (a, b) = pair("roles").await;
     // b's second prefetch stalls, so it is in flight at the handoff.
     b.upstream
         .set_behaviour("t2", UpstreamBehaviour::StallAfter(20_000));
@@ -255,21 +279,23 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
         shuffle: false,
     })
     .await;
-    let mut in_flight = false;
-    for _ in 0..80 {
-        TestCore::run_all_for(&[&a, &b], 250.0).await;
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        if offline(&b, "t1").await == OfflineState::Cached
+    let ready = run_pair_until(&a, &b, async || {
+        offline(&b, "t1").await == OfflineState::Cached
             && b.upstream.stream_requests("t2") > 0
             && b.core.stream_open_handles() > 0
-        {
-            in_flight = true;
-            break;
-        }
-    }
-    assert!(in_flight, "b prefetches: {:?}", b.upstream.calls());
+            && offline(&a, "t0").await == OfflineState::Cached
+    })
+    .await;
+    assert!(
+        ready,
+        "b: {:?} a: {:?}",
+        b.upstream.calls(),
+        a.upstream.calls()
+    );
     assert!(b.backend.is_playing());
-    assert!(a.upstream.calls().is_empty(), "a only watches");
+    // The watcher holds only what is playing, ready for a handoff.
+    assert_eq!(a.upstream.stream_requests("t1"), 0);
+    assert_eq!(a.upstream.stream_requests("t2"), 0);
 
     b.run(Command::OpenHandoffPicker).await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -277,26 +303,68 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
         device_id: a.device_id.clone(),
     })
     .await;
-    let mut moved = false;
-    for _ in 0..120 {
-        TestCore::run_all_for(&[&a, &b], 250.0).await;
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        if a.upstream.stream_requests("t2") > 0 && b.core.stream_open_handles() == 0 {
-            moved = true;
-            break;
-        }
-    }
+    let moved = run_pair_until(&a, &b, async || {
+        a.upstream.stream_requests("t2") > 0
+            && b.core.stream_open_handles() == 0
+            && offline(&b, "t0").await == OfflineState::Cached
+    })
+    .await;
     assert!(a.backend.is_playing(), "a took over");
     assert!(
         moved,
-        "a: {:?} b handles: {}",
+        "a: {:?} b: {:?} b handles: {}",
         a.upstream.calls(),
+        b.upstream.calls(),
         b.core.stream_open_handles()
     );
+    // b's stale fetch of t2 was dropped; it now only holds the current item.
     assert_eq!(offline(&b, "t2").await, OfflineState::None);
     let b_calls = b.upstream.calls().len();
     TestCore::run_all_for(&[&a, &b], 5_000.0).await;
-    assert_eq!(b.upstream.calls().len(), b_calls, "b stopped prefetching");
+    assert_eq!(
+        b.upstream.calls().len(),
+        b_calls,
+        "b has nothing more to fetch"
+    );
+    a.core.shutdown().await;
+    b.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watcher_prefetches_only_while_another_device_plays() {
+    let (a, b) = pair("watch").await;
+    // a's fetch of the current item stalls, so it is in flight at the pause.
+    a.upstream
+        .set_behaviour("t0", UpstreamBehaviour::StallAfter(20_000));
+    b.run(Command::PlayTracks {
+        server_id: b.server_id.clone(),
+        track_ids: (0..6).map(|i| format!("t{i}")).collect(),
+        start_index: 0,
+        label: "Album".into(),
+        shuffle: false,
+    })
+    .await;
+    let in_flight = run_pair_until(&a, &b, async || {
+        a.upstream.stream_requests("t0") > 0 && a.core.stream_open_handles() > 0
+    })
+    .await;
+    assert!(in_flight, "a: {:?}", a.upstream.calls());
+
+    b.run(Command::Pause).await;
+    let stopped = run_pair_until(&a, &b, async || a.core.stream_open_handles() == 0).await;
+    assert!(stopped, "a stops fetching while nothing plays");
+    let a_calls = a.upstream.calls().len();
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert_eq!(a.upstream.calls().len(), a_calls);
+
+    a.upstream.set_behaviour("t0", UpstreamBehaviour::Serve);
+    b.run(Command::Play).await;
+    let cached = run_pair_until(&a, &b, async || {
+        offline(&a, "t0").await == OfflineState::Cached
+    })
+    .await;
+    assert!(cached, "a: {:?}", a.upstream.calls());
+    assert_eq!(a.upstream.stream_requests("t1"), 0);
     a.core.shutdown().await;
     b.core.shutdown().await;
 }
