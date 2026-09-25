@@ -81,6 +81,11 @@ import kotlinx.serialization.builtins.serializer
 import sh.calvin.reorderable.ReorderableColumn
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import app.hocket.core.SwipeOptions
+import app.hocket.ui.components.SwipeSurface
+import app.hocket.ui.components.swipeActionIds
 import app.hocket.ui.nav.BottomBarEditor
 
 /** ReplayGain, preamp, normalisation, gapless, EQ with draggable bands, output device. */
@@ -248,6 +253,33 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         val allMedia = ActionIds.MEDIA_SESSION
         val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMedia
         ChooseAndOrder(allMedia, mediaIds, minEnabled = 0, label = { actionLabel(it) }, tag = "customise.mediaSession") { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
+        SettingsSection(stringResource(R.string.settings_swipe_actions))
+        Text(stringResource(R.string.settings_swipe_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        SwipeChoices(stringResource(R.string.settings_swipe_queue), SwipeOptions.QUEUE, SwipeSurface.Queue)
+        SwipeChoices(stringResource(R.string.settings_swipe_lists), SwipeOptions.LIST, SwipeSurface.List)
+    }
+}
+
+/**
+ * One surface's two swipe settings (core registry keys, synced): a choice of action per direction.
+ * The directions are named as the finger moves on screen, so right-to-left layouts swap them.
+ */
+@Composable
+private fun SwipeChoices(title: String, options: List<String>, surface: SwipeSurface) {
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val (startToEnd, endToStart) = swipeActionIds(surface)
+    val none = stringResource(R.string.settings_swipe_none)
+    Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
+    for ((key, current) in listOf(surface.startToEndKey to startToEnd, surface.endToStartKey to endToStart)) {
+        val handle = setting(key)
+        val right = (key == surface.startToEndKey) != rtl
+        Text(stringResource(if (right) R.string.settings_swipe_right else R.string.settings_swipe_left), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp))
+        ChoiceRow(
+            options.map { id -> id to if (id == SwipeOptions.NONE) none else actionLabel(id) },
+            isSelected = { it == current },
+            onSelect = { handle.setString(it) },
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("customise.$key"),
+        )
     }
 }
 

@@ -28,9 +28,9 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, Ms, PlayContextArgs, PositionStamp,
-    QueueKey, QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
-    TrackId, TransportLease, UndoEntry,
+    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms,
+    PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
+    SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -497,6 +497,22 @@ impl SessionOp {
     }
 }
 
+/// One playlist in a [`Msg::LibraryEdited`]: its row and order as the
+/// sender's mirror holds them now. `playlist: None` means it was deleted;
+/// `trackIds: None` means only its details changed (a rename), so the
+/// receiver keeps its own order. `playlist.serverId` is the sender's and is
+/// replaced by the receiver's own.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEdit {
+    pub playlist_id: PlaylistId,
+    #[serde(default)]
+    pub playlist: Option<Playlist>,
+    #[serde(default)]
+    pub track_ids: Option<Vec<TrackId>>,
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -772,6 +788,22 @@ pub enum Msg {
         before: Option<SessionDocument>,
     },
 
+    // -- library --------------------------------------------------------
+    /// → room, relayed to everyone else. The sender changed ratings, loves
+    /// or playlists (and queued the change for the server in its outbox):
+    /// absolute values as its mirror holds them now, so receivers overwrite
+    /// their mirror and tell their UIs. The server stays the source of
+    /// truth; a device that misses this picks the change up on its next
+    /// sync. The room fills in `deviceId` with the sender. Peers that do not
+    /// know it ignore it.
+    LibraryEdited {
+        device_id: DeviceId,
+        #[serde(default)]
+        items: Vec<LibraryItemState>,
+        #[serde(default)]
+        playlists: Vec<PlaylistEdit>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -816,6 +848,7 @@ impl Msg {
         "savedQueuesSync",
         "settingsSync",
         "undoEntryShared",
+        "libraryEdited",
         "unknown",
     ];
 
@@ -862,6 +895,7 @@ impl Msg {
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
+            Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::Unknown => "unknown",
         }
     }
@@ -999,6 +1033,42 @@ mod tests {
         );
     }
 
+    /// `libraryEdited` round-trips, a build without it ignores it, and a
+    /// newer sender's extra fields (or a minimal one's missing lists) still decode.
+    #[test]
+    fn library_edited_round_trips_and_is_unknown_to_older_builds() {
+        use crate::api::{LibraryItemKind, LibraryItemState};
+        let msg = Msg::LibraryEdited {
+            device_id: "a".into(),
+            items: vec![LibraryItemState {
+                kind: LibraryItemKind::Track,
+                id: "t1".into(),
+                rating: 4,
+                loved: true,
+            }],
+            playlists: vec![PlaylistEdit {
+                playlist_id: "p1".into(),
+                playlist: None,
+                track_ids: None,
+            }],
+        };
+        let text = WireMessage::new(msg.clone()).encode().unwrap();
+        assert!(text.contains(r#""type":"libraryEdited""#), "{text}");
+        assert!(text.contains(r#""kind":"track""#), "{text}");
+        assert_eq!(WireMessage::decode(&text).unwrap().msg, msg);
+        let old = text.replace("libraryEdited", "somethingNewer");
+        assert_eq!(WireMessage::decode(&old).unwrap().msg, Msg::Unknown);
+        let minimal = r#"{"protocolVersion":2,"msg":{"type":"libraryEdited","data":{"device_id":"b","future":1}}}"#;
+        assert_eq!(
+            WireMessage::decode(minimal).unwrap().msg,
+            Msg::LibraryEdited {
+                device_id: "b".into(),
+                items: vec![],
+                playlists: vec![],
+            }
+        );
+    }
+
     #[test]
     fn unknown_message_type_decodes_to_unknown() {
         let text = r#"{"protocolVersion":7,"msg":{"type":"teleport","data":{"where":"there"}}}"#;
@@ -1032,6 +1102,11 @@ mod tests {
             },
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
+            Msg::LibraryEdited {
+                device_id: "a".into(),
+                items: vec![],
+                playlists: vec![],
+            },
             Msg::Unknown,
         ];
         for m in samples {

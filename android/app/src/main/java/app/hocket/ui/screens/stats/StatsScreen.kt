@@ -47,6 +47,11 @@ import app.hocket.core.api.ListeningStats
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.SectionHeaderSkeleton
+import app.hocket.ui.components.ShimmerHost
+import app.hocket.ui.components.TrackRowSkeleton
+import app.hocket.ui.components.skeleton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.TrackRow
 import app.hocket.ui.components.formatDurationWords
@@ -73,7 +78,19 @@ fun StatsScreen(nav: NavHostController) {
                     app.hocket.ui.components.ChoiceRow(periods, isSelected = { period == it }, onSelect = { period = it })
                 }
             }
-            if (s == null) return@LazyColumn
+            if (s == null) {
+                item(key = "skeleton") {
+                    ShimmerHost {
+                        Column {
+                            SectionHeaderSkeleton()
+                            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(120.dp).skeleton(RoundedCornerShape(12.dp)))
+                            SectionHeaderSkeleton()
+                            repeat(5) { TrackRowSkeleton() }
+                        }
+                    }
+                }
+                return@LazyColumn
+            }
             if (s.totalPlays == 0u) { item { EmptyState(stringResource(R.string.empty_stats_title), stringResource(R.string.empty_stats_body)) }; return@LazyColumn }
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {

@@ -638,10 +638,7 @@ function Backup() {
     setPending(undefined);
     // Main resolves the keystore references (with a plain-text warning) and
     // writes the file to a path the user picks; the page never sees a path.
-    void bridge().config.export(doc).then((path) => {
-      if (!path) return;
-      useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `cfg-${Date.now()}`, message: t("settings.configExported"), actionLabel: undefined, actionCommand: undefined, durationMs: 3000 } } });
-    }).catch((err: unknown) => console.error("config export failed", err));
+    void bridge().config.export(doc).catch((err: unknown) => console.error("config export failed", err));
   }, [exported, pending]);
   // Main picks the file, confirms, adds any servers whose passwords the file carries, then imports.
   const doImport = () => bridge().config.import().catch((err: unknown) => console.error("config import failed", err));

@@ -1348,6 +1348,19 @@ impl Room {
                     Some(peer),
                 );
             }
+            Msg::LibraryEdited {
+                items, playlists, ..
+            } => {
+                // Relayed, never stored: the server holds the library.
+                self.broadcast(
+                    Msg::LibraryEdited {
+                        device_id,
+                        items,
+                        playlists,
+                    },
+                    Some(peer),
+                );
+            }
         }
     }
 

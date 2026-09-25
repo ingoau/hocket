@@ -267,11 +267,17 @@ class CacheUiTest {
         awaitTag("navBar.home")
         assertTrue("online: no offline indicator", compose.onAllNodesWithTag("offline.indicator").fetchSemanticsNodes().isEmpty())
         core.client.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
-        // Shown in the app's own words, matched on the notice's code.
-        compose.waitUntil(5_000) {
+        // Shown in the app's own words, matched on the notice's code. The clock is stepped by hand:
+        // with the player's endless animations running, an auto-advancing clock can race through
+        // the snackbar's whole lifetime between two checks.
+        compose.mainClock.autoAdvance = false
+        val shown = (1..100).any {
+            compose.mainClock.advanceTimeByFrame()
             runCatching { compose.onNodeWithText("Offline: skipping songs that aren't downloaded or cached").assertExists() }.isSuccess ||
                 runCatching { compose.onNodeWithText("Nothing in the queue is available offline").assertExists() }.isSuccess
         }
+        assertTrue("the offline notice shows as a snackbar", shown)
+        compose.mainClock.autoAdvance = true
         // The core's NetworkChanged drives the offline indicator, which leads to what plays.
         awaitTag("offline.indicator")
         compose.onNodeWithContentDescription("Offline. Show what's available offline").assertExists()

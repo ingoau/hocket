@@ -1279,6 +1279,10 @@ pub struct UndoEntry {
     pub at: EpochMs,
     /// e.g. "undid 487 of 500, 13 changed elsewhere"
     pub note: Option<String>,
+    /// The action threw away the queue (played a new context, cleared it,
+    /// restored a saved queue), so undoing it is worth offering loudly.
+    #[serde(default)]
+    pub replaces_queue: bool,
 }
 
 #[typeshare]
@@ -1292,6 +1296,9 @@ pub struct Toast {
     /// Command to dispatch when the button is pressed, JSON-encoded [`Command`].
     pub action_command: Option<String>,
     pub duration_ms: Ms,
+    /// Set on "Undid …" / "Redid …" toasts: the [`UndoEntry`] they report on.
+    #[serde(default)]
+    pub undo_entry_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,6 +1422,30 @@ fn default_true() -> bool {
 pub enum RatingTarget {
     Track { id: TrackId },
     Album { id: AlbumId },
+}
+
+/// What a [`LibraryItemState`] describes.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum LibraryItemKind {
+    Track,
+    Album,
+    Artist,
+}
+
+/// A library item's rating and love as the mirror holds them now (see
+/// [`Event::LibraryItemsChanged`]). Absolute values, so applying one twice
+/// is harmless.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryItemState {
+    pub kind: LibraryItemKind,
+    pub id: String,
+    /// 0 = unrated. Always 0 for artists (Subsonic does not rate them).
+    pub rating: u32,
+    pub loved: bool,
 }
 
 /// A secret supplied by the platform (a server password). Serialises as a
@@ -2217,6 +2248,33 @@ pub enum Event {
     },
     SearchResults {
         results: SearchResults,
+    },
+    /// Ratings or loves changed: set here (including undo and the rating →
+    /// love bridge) or, with `from_device`, on another signed-in device and
+    /// relayed through Connect. The mirror already holds these values, so
+    /// UIs patch every copy of the item they show (rows, detail headers,
+    /// search results, menus) in place. Followed by a `LibraryChanged` for
+    /// list refetches and, when the item is queued, by `NowPlayingChanged` /
+    /// `QueueChanged` / `MediaSession`. A library sync that picks up changes
+    /// made elsewhere reports them with `LibraryChanged` only.
+    LibraryItemsChanged {
+        server_id: ServerId,
+        items: Vec<LibraryItemState>,
+        /// The device the change came from; `None` for this one.
+        #[serde(default)]
+        from_device: Option<DeviceId>,
+    },
+    /// A playlist changed (tracks added, removed or moved, renamed, created
+    /// or deleted), here or, with `from_device`, on another signed-in device.
+    /// `playlist` is the mirror's row now; `None` when it was deleted.
+    /// Screens showing it (its detail page, playlist lists and pickers)
+    /// refetch its tracks. Followed by a `LibraryChanged`.
+    PlaylistChanged {
+        server_id: ServerId,
+        playlist_id: PlaylistId,
+        playlist: Option<Playlist>,
+        #[serde(default)]
+        from_device: Option<DeviceId>,
     },
 
     SessionChanged {

@@ -640,7 +640,8 @@
         "message": "Removed 3 tracks",
         "actionLabel": "Undo",
         "actionCommand": "{\"type\":\"undo\"}",
-        "durationMs": 5000
+        "durationMs": 5000,
+        "undoEntryId": null
       }
     }
   },

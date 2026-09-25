@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -39,7 +41,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,9 +62,12 @@ import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.formatAgo
 
-/** Saved queues: pinned first, then recent; restore / pin / delete / save as playlist. */
+/**
+ * Saved queues: pinned first, then recent; restore / pin / delete / save as playlist. [onRestore]
+ * runs after a queue is restored (the player's queue switcher closes itself).
+ */
 @Composable
-fun RecentQueuesList(modifier: Modifier = Modifier) {
+fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset), onRestore: () -> Unit = {}) {
     val client = LocalCoreClient.current
     val saved by client.savedQueues.collectAsStateWithLifecycle()
     val connection by client.connection.collectAsStateWithLifecycle()
@@ -71,9 +79,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier) {
     }
     val pinned = saved.filter { it.pinned }
     val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
-    LazyColumn(modifier, contentPadding = PaddingValues(bottom = 120.dp)) {
-        if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
-        if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }) } }
+    LazyColumn(modifier, contentPadding = contentPadding) {
+        if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
+        if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
     }
     deleting?.let { sq -> ConfirmDialog(stringResource(R.string.playlist_delete_confirm, sq.label), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.deleteSavedQueue(sq.id)) }, onDismiss = { deleting = null }) }
     naming?.let { sq ->
@@ -86,9 +94,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> Unit) {
+private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> Unit, onRestore: () -> Unit) {
     val client = LocalCoreClient.current
-    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)); onRestore() }.testTag("savedQueue.${sq.id}").padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Artwork(sq.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -115,7 +123,7 @@ fun UndoHistoryPanel(modifier: Modifier = Modifier) {
             TextButton(enabled = undo.canRedo, onClick = { client.dispatch(Command.Redo) }) { Text(undo.redoLabel?.let { stringResource(R.string.history_redo_label, it) } ?: stringResource(R.string.action_redo)) }
         }
         if (undo.history.isEmpty()) { EmptyState(stringResource(R.string.empty_history_title), stringResource(R.string.empty_history_body)); return }
-        LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
             items(undo.history, key = { it.id }) { e ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -131,11 +139,30 @@ fun UndoHistoryPanel(modifier: Modifier = Modifier) {
     }
 }
 
-/** Full-screen route for saved queues (from Home "see all"). */
+/**
+ * Full-screen route for saved queues (Home "see all", Library "Recent queues"): pinned and recent
+ * queues, plus the undo history in a sheet (both used to be tabs of the player's queue).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SavedQueuesScreen(nav: NavHostController) {
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.home_saved_queues)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }) }) { padding ->
+    var undoHistory by remember { mutableStateOf(false) }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(stringResource(R.string.home_saved_queues)) },
+            actions = {
+                IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(Icons.Filled.History, stringResource(R.string.queue_undo_history)) }
+                AccountButton()
+            },
+            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+        )
+    }) { padding ->
         RecentQueuesList(Modifier.fillMaxSize().padding(padding))
+    }
+    if (undoHistory) {
+        ModalBottomSheet(onDismissRequest = { undoHistory = false }) {
+            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
+            UndoHistoryPanel(Modifier.fillMaxWidth().heightIn(min = 240.dp))
+        }
     }
 }

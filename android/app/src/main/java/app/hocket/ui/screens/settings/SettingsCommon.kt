@@ -186,6 +186,7 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(bottom = BottomContentInset)) { content() }
+        // Top only: the shell already keeps content clear of the navigation bar.
+        Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(rememberScrollState()).padding(bottom = BottomContentInset)) { content() }
     }
 }

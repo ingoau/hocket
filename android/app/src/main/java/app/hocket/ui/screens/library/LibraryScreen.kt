@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -96,6 +97,11 @@ import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.PlaylistRow
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.AlbumCardSkeleton
+import app.hocket.ui.components.ShimmerHost
+import app.hocket.ui.components.TrackRowSkeleton
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.Dp
 import app.hocket.ui.nav.Route
 import app.hocket.ui.screens.detail.DetailPane
 import kotlinx.coroutines.launch
@@ -183,18 +189,23 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
             }
         },
     ) { padding ->
-        Row(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
+        // The lists scroll under the bar: its height goes in as content padding, not as a layout
+        // offset, so collapsing it does not shift the page (design: lists).
+        val top = padding.calculateTopPadding()
+        Row(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxSize()) {
-                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
-                    when (page) {
-                        0 -> AlbumsTab(serverId, sort, descending, ::open)
-                        1 -> ArtistsTab(serverId, ::open)
-                        2 -> PlaylistsTab(serverId, ::open)
-                        3 -> SongsTab(serverId, sort, descending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it })
-                        else -> GenresTab(serverId, ::open)
+                ShimmerHost {
+                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
+                        when (page) {
+                            0 -> AlbumsTab(serverId, sort, descending, ::open, top)
+                            1 -> ArtistsTab(serverId, ::open, top)
+                            2 -> PlaylistsTab(serverId, ::open, top)
+                            3 -> SongsTab(serverId, sort, descending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top)
+                            else -> GenresTab(serverId, ::open, top)
+                        }
                     }
                 }
-                SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp), onSelectAll = {
+                SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), onSelectAll = {
                     scope.launch {
                         when (pager.currentPage) {
                             0 -> (client.query(Queries.albumCount(serverId)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Albums, it.toInt()) }
@@ -205,7 +216,7 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                 })
             }
             if (wide) {
-                Box(Modifier.weight(1.3f).fillMaxSize()) {
+                Box(Modifier.weight(1.3f).fillMaxSize().padding(top = top)) {
                     DetailPane(nav, detail)
                 }
             }
@@ -219,8 +230,26 @@ private val detailSaver = androidx.compose.runtime.saveable.Saver<DetailTarget?,
     restore = { l -> when (l.getOrNull(0)) { "album" -> DetailTarget.Album(l[1]); "artist" -> DetailTarget.Artist(l[1]); "playlist" -> DetailTarget.Playlist(l[1]); "genre" -> DetailTarget.Genre(l[1]); else -> null } },
 )
 
+/** How many skeleton rows a paged list shows before its total is known. */
+private const val SKELETON_COUNT = 12
+
+/**
+ * Album grids: two columns on phones, 150 dp cells (as many as fit) on wider panes, like Navic.
+ */
+internal val AlbumGridCells: GridCells = object : GridCells {
+    private val adaptive = GridCells.Adaptive(150.dp)
+    override fun androidx.compose.ui.unit.Density.calculateCrossAxisCellSizes(availableSize: Int, spacing: Int): List<Int> {
+        if (availableSize.toDp() >= 480.dp) return with(adaptive) { calculateCrossAxisCellSizes(availableSize, spacing) }
+        val cell = (availableSize - spacing) / 2
+        return listOf(cell, availableSize - spacing - cell)
+    }
+}
+
+/** Grid padding: 10 dp at the edges plus each card's 6 dp inner padding is Navic's 16 dp margin; 12 dp between covers. */
+internal fun albumGridPadding(top: Dp, bottom: Dp) = PaddingValues(start = 10.dp, end = 10.dp, top = top + 8.dp, bottom = bottom)
+
 @Composable
-internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, open: (DetailTarget) -> Unit) {
+internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
     val key = remember(serverId, sort, descending) { AlbumListKey(serverId, sort, descending) }
     val state by client.albumPages.state(key).collectAsStateWithLifecycle()
@@ -230,15 +259,18 @@ internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, o
     var sheetFor by remember { mutableStateOf<app.hocket.core.api.Album?>(null) }
     LaunchedEffect(key, state.generation) { client.albumPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Albums) client.setSelectionTotal(state.total) }
-    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
+    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
     val grid = rememberLazyGridState()
-    LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), state = grid, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        val count = if (state.known) state.total else 0
-        items(count, key = { i -> state.item(i, client.albumPages.pageSize)?.id ?: "ph$i" }) { i ->
+    ScrollToTopOnReselect(grid)
+    LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize()) {
+        // Until the total is known, a screenful of skeletons; items are keyed by position so a
+        // skeleton turns into its card in place (no remove and insert as pages arrive).
+        val count = if (state.known) state.total else SKELETON_COUNT
+        items(count, contentType = { i -> if (state.item(i, client.albumPages.pageSize) == null) "skeleton" else "album" }) { i ->
             val album = state.item(i, client.albumPages.pageSize)
-            LaunchedEffect(i, state.generation) { client.albumPages.ensure(key, i) }
+            if (state.known) LaunchedEffect(i, state.generation) { client.albumPages.ensure(key, i) }
             if (album == null) {
-                app.hocket.ui.components.ArtworkPlaceholder(null, Modifier.fillMaxWidth().padding(6.dp).aspectRatio(1f))
+                AlbumCardSkeleton()
             } else {
                 AlbumCard(album, onClick = { open(DetailTarget.Album(album.id)) }, modifier = Modifier.testTag("library.album"), selected = selecting && selection.contains(album.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Albums, album.id) })
@@ -249,7 +281,7 @@ internal fun AlbumsTab(serverId: String, sort: SortOrder, descending: Boolean, o
 }
 
 @Composable
-internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
     val key = remember(serverId) { ArtistListKey(serverId) }
     val state by client.artistPages.state(key).collectAsStateWithLifecycle()
@@ -257,32 +289,37 @@ internal fun ArtistsTab(serverId: String, open: (DetailTarget) -> Unit) {
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Artists
     LaunchedEffect(key, state.generation) { client.artistPages.ensure(key, 0) }
-    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        val count = if (state.known) state.total else 0
-        items(count, key = { i -> state.item(i, client.artistPages.pageSize)?.id ?: "ph$i" }) { i ->
+    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+        val count = if (state.known) state.total else SKELETON_COUNT
+        items(count, contentType = { i -> if (state.item(i, client.artistPages.pageSize) == null) "skeleton" else "artist" }) { i ->
             val artist = state.item(i, client.artistPages.pageSize)
-            LaunchedEffect(i, state.generation) { client.artistPages.ensure(key, i) }
+            if (state.known) LaunchedEffect(i, state.generation) { client.artistPages.ensure(key, i) }
             if (artist != null) ArtistRow(artist, onClick = { open(DetailTarget.Artist(artist.id)) }, selected = selecting && selection.contains(artist.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Artists, artist.id) })
-            else Box(Modifier.fillMaxWidth().padding(vertical = 32.dp))
+            else TrackRowSkeleton(artShape = CircleShape)
         }
     }
 }
 
 @Composable
-internal fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun PlaylistsTab(serverId: String, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var playlists by remember { mutableStateOf<List<Playlist>?>(null) }
-    LaunchedEffect(serverId, libraryGen) { playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data }
+    LaunchedEffect(serverId, libraryGen) { playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data ?: playlists ?: emptyList() }
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Playlists
-    val list = playlists ?: return
-    if (list.isEmpty()) { EmptyState(stringResource(R.string.empty_playlists_title), stringResource(R.string.empty_playlists_body)); return }
-    LazyColumn(contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        items(list, key = { it.id }) { p ->
-            PlaylistRow(p, onClick = { open(DetailTarget.Playlist(p.id)) }, selected = selecting && selection.contains(p.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Playlists, p.id) })
+    val list = playlists
+    if (list != null && list.isEmpty()) { EmptyState(stringResource(R.string.empty_playlists_title), stringResource(R.string.empty_playlists_body), Modifier.padding(top = topPadding)); return }
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+        if (list == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton() }
+        else items(list, key = { it.id }, contentType = { "playlist" }) { p ->
+            PlaylistRow(p, onClick = { open(DetailTarget.Playlist(p.id)) }, modifier = Modifier.animateItem(), selected = selecting && selection.contains(p.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Playlists, p.id) })
         }
     }
 }
@@ -298,7 +335,7 @@ const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
  * offline" filter; with [onOfflineOnlyChange] the list starts with the chip that toggles it.
  */
 @Composable
-internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, nav: NavHostController, offlineOnly: Boolean = false, onOfflineOnlyChange: ((Boolean) -> Unit)? = null) {
+internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, nav: NavHostController, offlineOnly: Boolean = false, onOfflineOnlyChange: ((Boolean) -> Unit)? = null, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
     val filters by client.filters.collectAsStateWithLifecycle()
     val effectiveSort = if (sort == SortOrder.Default) SortOrder.Title else sort
@@ -310,17 +347,19 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
-    var sheetFor by remember { mutableStateOf<app.hocket.core.api.Track?>(null) }
+    val songMenu = app.hocket.ui.components.rememberSongMenu()
     val listLabel = stringResource(if (offlineOnly) R.string.available_offline else R.string.library_songs)
     LaunchedEffect(key, state.generation) { client.trackPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Tracks) client.setSelectionTotal(state.total) }
     val empty = state.known && state.total == 0
     if (empty && onOfflineOnlyChange == null) {
-        if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
-        else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
+        if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body), Modifier.padding(top = topPadding))
+        else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding))
         return
     }
-    LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
         if (onOfflineOnlyChange != null) item(key = "chips") {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 FilterChip(
@@ -335,36 +374,35 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
             if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
             else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
         }
-        val count = if (state.known) state.total else 0
-        items(count, key = { i -> state.item(i, client.trackPages.pageSize)?.id ?: "ph$i" }) { i ->
+        val count = if (state.known) state.total else SKELETON_COUNT
+        items(count, contentType = { i -> if (state.item(i, client.trackPages.pageSize) == null) "skeleton" else "track" }) { i ->
             val track = state.item(i, client.trackPages.pageSize)
-            LaunchedEffect(i, state.generation) { client.trackPages.ensure(key, i) }
+            if (state.known) LaunchedEffect(i, state.generation) { client.trackPages.ensure(key, i) }
             if (track != null) {
                 TrackRow(track.toSummary(), onClick = {
                     // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
                     val ctx = Commands.adHocContext(serverId, listLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
                     client.dispatch(Commands.playContext(ctx, startIndex = state.pages.toSortedMap().values.flatten().indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
-                }, onMore = { sheetFor = track }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
+                }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
-            } else Box(Modifier.fillMaxWidth().padding(vertical = 32.dp))
+            } else TrackRowSkeleton()
         }
-    }
-    sheetFor?.let { t ->
-        ActionSheet(Commands.tracks(listOf(t.id)), t.title, t.artist, onDismiss = { sheetFor = null },
-            onGoToAlbum = t.albumId?.let { id -> { nav.navigate(Route.Album(id)) } }, onGoToArtist = t.artistId?.let { id -> { nav.navigate(Route.Artist(id)) } })
     }
 }
 
 @Composable
-internal fun GenresTab(serverId: String, open: (DetailTarget) -> Unit) {
+internal fun GenresTab(serverId: String, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryChanged.collectAsStateWithLifecycle(initialValue = null)
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var genres by remember { mutableStateOf<List<Genre>?>(null) }
-    LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data }
-    val list = genres ?: return
-    if (list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)); return }
-    LazyColumn(contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        items(list, key = { it.name }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }) }
+    LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList() }
+    val list = genres
+    if (list != null && list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
+    val listState = rememberLazyListState()
+    ScrollToTopOnReselect(listState)
+    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+        if (list == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton(showArtwork = false) }
+        else items(list, key = { it.name }, contentType = { "genre" }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }, modifier = Modifier.animateItem()) }
     }
 }
 
@@ -397,18 +435,21 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
             )
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
-            when (list) {
-                LibraryList.Albums -> AlbumsTab(serverId, SortOrder.Default, false, ::open)
-                LibraryList.Artists -> ArtistsTab(serverId, ::open)
-                LibraryList.Playlists -> PlaylistsTab(serverId, ::open)
-                LibraryList.Songs -> {
-                    var offlineOnly by rememberSaveable { mutableStateOf(false) }
-                    SongsTab(serverId, SortOrder.Default, false, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it })
+        val top = padding.calculateTopPadding()
+        Box(Modifier.fillMaxSize()) {
+            ShimmerHost {
+                when (list) {
+                    LibraryList.Albums -> AlbumsTab(serverId, SortOrder.Default, false, ::open, top)
+                    LibraryList.Artists -> ArtistsTab(serverId, ::open, top)
+                    LibraryList.Playlists -> PlaylistsTab(serverId, ::open, top)
+                    LibraryList.Songs -> {
+                        var offlineOnly by rememberSaveable { mutableStateOf(false) }
+                        SongsTab(serverId, SortOrder.Default, false, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top)
+                    }
+                    LibraryList.Genres -> GenresTab(serverId, ::open, top)
                 }
-                LibraryList.Genres -> GenresTab(serverId, ::open)
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
         }
     }
 }

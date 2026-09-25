@@ -5,6 +5,7 @@ import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
 import app.hocket.core.HocketJson
 import app.hocket.core.SettingKeys
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.*
 import app.hocket.core.toSummary
 import kotlinx.coroutines.CoroutineDispatcher
@@ -164,6 +165,7 @@ class FakeCore(
         def(SettingKeys.LIBRARY_SYNC_INTERVAL_MINUTES, "60", SettingScope.DeviceLocal)
         def(SettingKeys.LIBRARY_FULL_RECONCILE_DAYS, "7", SettingScope.DeviceLocal)
         def(SettingKeys.SEARCH_INCLUDE_SERVER, "true", SettingScope.AccountSynced)
+        SwipeOptions.DEFAULTS.forEach { (key, id) -> def(key, "\"$id\"", SettingScope.AccountSynced) }
         settings.forEach { (k, v) -> defaults[k] = v.value }
         filters += Filter("f-loved", "Loved, not played lately", FilterNode.All(listOf(
             FilterNode.Rule(FilterRule(FilterField.Loved, FilterOp.IsTrue, FilterValue.Bool(true))),
@@ -989,10 +991,10 @@ class FakeCore(
         pushUndo(label) {
             var changed = 0
             prior.forEach { (t, r) -> when (t) { is RatingTarget.Track -> library.updateTrack(t.data.id) { tr -> if (tr.rating.toInt() == rating) tr.copy(rating = r.toUInt()) else { changed++; tr } }; is RatingTarget.Album -> library.updateAlbum(t.data.id) { al -> al.copy(rating = r.toUInt()) } } }
-            emitLibrary(prior.keys.map { idOf(it) }); emitQueue()
+            emitItems(prior.keys.toList()); emitLibrary(prior.keys.map { idOf(it) }); emitQueue()
         }
         if (targets.size > 20) startJob(JobKind.BulkRating, "Rating ${targets.size} tracks", targets.size)
-        emitLibrary(targets.map { idOf(it) }); emitQueue()
+        emitItems(targets); emitLibrary(targets.map { idOf(it) }); emitQueue()
         if (targets.size > 1) toast("Rated ${targets.size} items", "Undo", Command.Undo)
     }
 
@@ -1006,13 +1008,23 @@ class FakeCore(
                 is RatingTarget.Track -> library.updateTrack(t.data.id) { it.copy(loved = !loved) }
                 is RatingTarget.Album -> library.updateAlbum(t.data.id) { it.copy(loved = !loved) }
             }
-            emitLibrary(targets.map { idOf(it) }); emitQueue()
+            emitItems(targets); emitLibrary(targets.map { idOf(it) }); emitQueue()
         }
         if (targets.size > 20) startJob(JobKind.BulkLove, "${if (loved) "Loving" else "Unloving"} ${targets.size} tracks", targets.size)
-        emitLibrary(targets.map { idOf(it) }); emitQueue()
+        emitItems(targets); emitLibrary(targets.map { idOf(it) }); emitQueue()
     }
 
     private fun idOf(t: RatingTarget) = when (t) { is RatingTarget.Track -> t.data.id; is RatingTarget.Album -> t.data.id }
+    /** What the core emits ahead of `LibraryChanged` for a rating or love: the values as they stand now. */
+    private fun emitItems(targets: List<RatingTarget>) {
+        val items = targets.mapNotNull { t ->
+            when (t) {
+                is RatingTarget.Track -> library.track(t.data.id)?.let { LibraryItemState(LibraryItemKind.Track, it.id, it.rating, it.loved) }
+                is RatingTarget.Album -> library.album(t.data.id)?.let { LibraryItemState(LibraryItemKind.Album, it.id, it.rating, it.loved) }
+            }
+        }
+        if (items.isNotEmpty()) emit(Event.LibraryItemsChanged(EventLibraryItemsChangedInner(serverId, items, null)))
+    }
 
     private fun createPlaylist(name: String, ids: List<TrackId>, smart: Boolean = false) {
         val id = newId("pl")

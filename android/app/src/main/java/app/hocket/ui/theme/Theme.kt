@@ -1,6 +1,9 @@
 package app.hocket.ui.theme
 
 import android.os.Build
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -62,13 +65,78 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     val reducedMotion = rememberReducedMotion()
     CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed, LocalReducedMotion provides reducedMotion) {
         MaterialExpressiveTheme(
-            colorScheme = scheme,
+            colorScheme = animatedScheme(scheme, reducedMotion),
             motionScheme = MotionScheme.expressive(),
             typography = expressiveTypography(MaterialTheme.typography),
             content = content,
         )
     }
 }
+
+/**
+ * [target] with every role eased toward it, so an accent change, a light/dark switch or the
+ * artwork seed arriving crossfades over ~400 ms instead of snapping the whole app to new colours.
+ * A critically damped spring (no bounce) so colours never overshoot. With reduced motion the
+ * scheme switches at once.
+ */
+@Composable
+private fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorScheme {
+    if (reducedMotion) return target
+    @Composable fun Color.animated(): Color = animateColorAsState(this, ColorSpring, label = "scheme").value
+    return target.copy(
+        primary = target.primary.animated(),
+        onPrimary = target.onPrimary.animated(),
+        primaryContainer = target.primaryContainer.animated(),
+        onPrimaryContainer = target.onPrimaryContainer.animated(),
+        inversePrimary = target.inversePrimary.animated(),
+        secondary = target.secondary.animated(),
+        onSecondary = target.onSecondary.animated(),
+        secondaryContainer = target.secondaryContainer.animated(),
+        onSecondaryContainer = target.onSecondaryContainer.animated(),
+        tertiary = target.tertiary.animated(),
+        onTertiary = target.onTertiary.animated(),
+        tertiaryContainer = target.tertiaryContainer.animated(),
+        onTertiaryContainer = target.onTertiaryContainer.animated(),
+        background = target.background.animated(),
+        onBackground = target.onBackground.animated(),
+        surface = target.surface.animated(),
+        onSurface = target.onSurface.animated(),
+        surfaceVariant = target.surfaceVariant.animated(),
+        onSurfaceVariant = target.onSurfaceVariant.animated(),
+        surfaceTint = target.surfaceTint.animated(),
+        inverseSurface = target.inverseSurface.animated(),
+        inverseOnSurface = target.inverseOnSurface.animated(),
+        error = target.error.animated(),
+        onError = target.onError.animated(),
+        errorContainer = target.errorContainer.animated(),
+        onErrorContainer = target.onErrorContainer.animated(),
+        outline = target.outline.animated(),
+        outlineVariant = target.outlineVariant.animated(),
+        scrim = target.scrim.animated(),
+        surfaceBright = target.surfaceBright.animated(),
+        surfaceDim = target.surfaceDim.animated(),
+        surfaceContainer = target.surfaceContainer.animated(),
+        surfaceContainerHigh = target.surfaceContainerHigh.animated(),
+        surfaceContainerHighest = target.surfaceContainerHighest.animated(),
+        surfaceContainerLow = target.surfaceContainerLow.animated(),
+        surfaceContainerLowest = target.surfaceContainerLowest.animated(),
+        primaryFixed = target.primaryFixed.animated(),
+        primaryFixedDim = target.primaryFixedDim.animated(),
+        onPrimaryFixed = target.onPrimaryFixed.animated(),
+        onPrimaryFixedVariant = target.onPrimaryFixedVariant.animated(),
+        secondaryFixed = target.secondaryFixed.animated(),
+        secondaryFixedDim = target.secondaryFixedDim.animated(),
+        onSecondaryFixed = target.onSecondaryFixed.animated(),
+        onSecondaryFixedVariant = target.onSecondaryFixedVariant.animated(),
+        tertiaryFixed = target.tertiaryFixed.animated(),
+        tertiaryFixedDim = target.tertiaryFixedDim.animated(),
+        onTertiaryFixed = target.onTertiaryFixed.animated(),
+        onTertiaryFixedVariant = target.onTertiaryFixedVariant.animated(),
+    )
+}
+
+/** No bounce; settles in roughly 400 ms. */
+private val ColorSpring = spring<Color>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 200f)
 
 private fun baseScheme(dark: Boolean, context: android.content.Context, dynamic: Boolean): ColorScheme =
     if (dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

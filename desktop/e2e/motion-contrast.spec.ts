@@ -193,8 +193,8 @@ test.describe("motion, contrast and zoom", () => {
         await page.keyboard.press("ArrowDown");
         await expectNoViolations(page, `${theme} accent ${accent}: menu`);
         await page.keyboard.press("Escape");
-        // A toast's action is the accent on the inverse surface.
-        await page.getByTestId("shuffle").click();
+        // A toast's action is the accent on the inverse surface (replaying the album offers Undo).
+        await page.getByTestId("album-play").click();
         await expect(page.getByTestId("toast-action").first()).toBeVisible();
         await expectNoViolations(page, `${theme} accent ${accent}: toast`);
         await page.getByTestId("shuffle").click();

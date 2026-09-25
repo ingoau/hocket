@@ -491,6 +491,11 @@ impl Actor {
                     });
                 }
             }
+            Output::LibraryEditReceived {
+                from,
+                items,
+                playlists,
+            } => self.on_library_edit_received(from, items, playlists),
             Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.log(level, message),
         }
@@ -940,7 +945,11 @@ impl Actor {
             ("Redo".to_string(), Command::Redo)
         };
         if result.tier == UndoTier::SessionState {
-            self.toast(format!("{verb} {label}"), Some(action));
+            self.toast_for(
+                format!("{verb} {label}"),
+                Some(action),
+                Some(result.entry_id.clone()),
+            );
         }
         self.emit(Event::UndoChanged {
             state: self.undo.state(),

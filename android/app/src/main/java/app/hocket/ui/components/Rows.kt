@@ -1,7 +1,12 @@
 package app.hocket.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ripple
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +58,7 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ActionTarget
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
@@ -84,17 +90,26 @@ fun SelectableRow(
     state: String? = null,
     actions: List<CustomAccessibilityAction> = emptyList(),
     clickLabel: String? = null,
+    /** Shared with a child that draws the press ripple itself (grid cells ripple on the artwork only). */
+    interactionSource: MutableInteractionSource? = null,
+    /** False when a child draws the press indication from [interactionSource]. */
+    rowIndication: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val container by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, label = "rowSelected",
+    )
     val selectLabel = stringResource(R.string.a11y_select)
     val deselectLabel = stringResource(R.string.a11y_deselect)
     val openLabel = clickLabel ?: stringResource(R.string.a11y_open)
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        color = container,
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
+                interactionSource = interactionSource,
+                indication = if (rowIndication) ripple() else null,
                 onClick = { if (selectionActive) onToggleSelect() else onClick() },
                 onClickLabel = if (!selectionActive) openLabel else if (selected) deselectLabel else selectLabel,
                 onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onToggleSelect() },
@@ -182,57 +197,73 @@ fun TrackRow(
     actionTarget: ActionTarget? = null,
     /** Row-specific accessibility actions (the queue's move and remove), added to the row menu's. */
     extraActions: List<CustomAccessibilityAction> = emptyList(),
+    /** Whose swipe settings the row follows; rows with a menu swipe like song lists, read-only rows not at all. */
+    swipe: SwipeSurface? = if (onMore != null) SwipeSurface.List else null,
 ) {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
     val label = trackLabel(track)
     var rating by remember { mutableStateOf(false) }
+    var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.id))
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
+    val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
+    // The row (and the caller's modifier) stays the one merged accessibility item; only its content
+    // slides under the swipe.
     SelectableRow(
-        selected, selectionActive, onClick, onToggleSelect, label, modifier,
+        selected, selectionActive, onClick, onToggleSelect, label,
+        modifier = modifier,
         // "playing, downloaded": the row's state, merged with its label into one item.
         state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
             .joinToString(", ").ifEmpty { null },
         actions = actions,
         clickLabel = stringResource(R.string.action_play),
     ) {
-        Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            leading?.invoke()
-            if (showArtwork) {
-                Box(Modifier.size(48.dp)) {
-                    Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
-                    if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+        SwipeActionBox(
+            startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
+            endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
+            // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
+            enabled = swipe != null && !selectionActive,
+            swipeSurface = MaterialTheme.colorScheme.surface,
+        ) {
+            Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke()
+                if (showArtwork) {
+                    Box(Modifier.size(48.dp)) {
+                        Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                        if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
+                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (nowPlaying) {
+                            Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OfflineBadge(track.offline, describe = false)
+                        Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Spacer(Modifier.width(14.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (nowPlaying) {
-                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                if (track.loved) {
+                    Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OfflineBadge(track.offline, describe = false)
-                    Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                trailing?.invoke()
+                if (onMore != null) {
+                    IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
                 }
-            }
-            if (track.loved) {
-                Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            trailing?.invoke()
-            if (onMore != null) {
-                IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
             }
         }
     }
+    if (playlistPicker) PlaylistPicker(target = target, onDismiss = { playlistPicker = false })
     if (rating) {
         val client = LocalCoreClient.current
         RatingDialog(current = track.rating.toInt(), onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rating = false }, onDismiss = { rating = false })
@@ -266,20 +297,34 @@ fun AlbumCard(
 ) {
     val artist = album.artist ?: stringResource(R.string.unknown_artist)
     val label = stringResource(R.string.row_album_a11y, album.name, artist)
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
+    val interaction = remember { MutableInteractionSource() }
+    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp)) {
             Box {
-                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f), RoundedCornerShape(16.dp))
+                // The press ripple is drawn on the cover only (Navic): the text below stays calm.
+                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text(album.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            GridCellText(album.name, artist)
         }
     }
 }
+
+/**
+ * The two text lines under a grid or carousel cell: a title of up to two lines (always two lines
+ * tall, so cells in a row and their loading skeletons line up) and a one-line subtitle.
+ */
+@Composable
+fun GridCellText(title: String, subtitle: String) {
+    Text(title, style = GridTitleStyle, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+internal val GridTitleStyle: androidx.compose.ui.text.TextStyle
+    @Composable get() = MaterialTheme.typography.titleSmallEmphasized
 
 @Composable
 fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
@@ -305,7 +350,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
     ).joinToString(", ")
     SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
+            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -342,8 +387,8 @@ fun Badge(text: String, modifier: Modifier = Modifier, container: androidx.compo
 
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
-    Row(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
         action?.invoke()
     }
 }

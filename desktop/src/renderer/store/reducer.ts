@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import type { PlayerNotice } from "../lib/notice";
@@ -47,6 +47,8 @@ export interface CoreState {
   lastError: { kind: string; message: string; detail?: string; at: number } | undefined;
   /** Undo entry ids already announced with a toast (the core only emits UndoChanged for a fresh mutation). */
   announcedUndo: string[];
+  /** Undo entry ids whose action replaced or cleared the queue: the only ones that get toasts. */
+  queueReplacingUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
 }
 
@@ -91,6 +93,7 @@ export const initialCoreState: CoreState = {
   lastError: undefined,
   exported: undefined,
   announcedUndo: [],
+  queueReplacingUndo: [],
 };
 
 
@@ -137,6 +140,20 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":
       return { ...state, libraryVersion: state.libraryVersion + 1, libraryChangedIds: e.data.ids };
+    case "libraryItemsChanged": {
+      // A rating or love set here or on another signed-in device. Lists refetch on the
+      // libraryChanged that follows; copies held in view state are patched now.
+      const items = e.data.items;
+      return {
+        ...state,
+        nowPlaying: state.nowPlaying && patchEntry(state.nowPlaying, items),
+        queue: patchQueue(state.queue, items),
+        lastServerSearch: state.lastServerSearch && patchSearch(state.lastServerSearch, items),
+      };
+    }
+    case "playlistChanged":
+      // Views refetch on the libraryChanged that follows.
+      return state;
     case "searchResults":
       return { ...state, lastServerSearch: e.data.results };
     case "sessionChanged":
@@ -150,19 +167,25 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
     case "undoChanged": {
-      // design.md "Global undo": a fresh mutation gets one toast with the single
-      // Undo action. The core emits only UndoChanged for it (its own toasts are
-      // "Undid …/Redid …"), so announce the newest entry here, once per id.
+      // design.md "Global undo": a fresh mutation that throws the queue away gets
+      // one toast with the single Undo action; everything else stays quiet (the
+      // undo button and history still cover it). The core emits only UndoChanged
+      // for it (its own toasts are "Undid …/Redid …"), so announce the newest
+      // entry here, once per id.
       // Freshness is keyed on the top entry's id, never on the history length:
       // the core caps the history it sends (HISTORY_SHEET_LIMIT, byte budget),
       // so the length stops growing long before the user stops mutating.
       const top = e.data.state.history[0];
       const fresh = top && e.data.state.canUndo && !state.announcedUndo.includes(top.id) && top.id !== state.undo.history[0]?.id;
-      const toasts = fresh ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
+      const toasts = fresh && top.replacesQueue ? [...state.toasts, { id: `undo-${top.id}`, message: top.label, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "undo" }), durationMs: 5000 }].slice(-4) : state.toasts;
       const announced = fresh ? [...state.announcedUndo, top.id].slice(-500) : state.announcedUndo;
-      return { ...state, undo: e.data.state, toasts, announcedUndo: announced };
+      const replacing = e.data.state.history.filter((h) => h.replacesQueue && !state.queueReplacingUndo.includes(h.id)).map((h) => h.id);
+      const queueReplacingUndo = replacing.length ? [...state.queueReplacingUndo, ...replacing].slice(-500) : state.queueReplacingUndo;
+      return { ...state, undo: e.data.state, toasts, announcedUndo: announced, queueReplacingUndo };
     }
     case "toast":
+      // "Undid …/Redid …" only for an entry that replaced the queue.
+      if (e.data.toast.undoEntryId && !state.queueReplacingUndo.includes(e.data.toast.undoEntryId)) return state;
       return { ...state, toasts: [...state.toasts.filter((t) => t.id !== e.data.toast.id), e.data.toast].slice(-4) };
     case "playerNotice":
       return { ...state, playerNotice: e.data.message || e.data.code ? { message: e.data.message ?? undefined, code: e.data.code ?? undefined, detail: e.data.detail ?? undefined } : undefined };
@@ -218,6 +241,42 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return state;
     }
   }
+}
+
+// -- libraryItemsChanged: the core's new values onto copies the view already holds ---------------
+
+function findItem(items: LibraryItemState[], kind: LibraryItemState["kind"], id: string): LibraryItemState | undefined {
+  return items.find((i) => i.kind === kind && i.id === id);
+}
+
+export function patchTrack<T extends { id: string; rating: number; loved: boolean }>(t: T, items: LibraryItemState[]): T {
+  const s = findItem(items, "track", t.id);
+  return s && (s.rating !== t.rating || s.loved !== t.loved) ? { ...t, rating: s.rating, loved: s.loved } : t;
+}
+
+function patchEntry(e: QueueEntry, items: LibraryItemState[]): QueueEntry {
+  const track = patchTrack(e.track, items);
+  return track === e.track ? e : { ...e, track };
+}
+
+function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
+  const list = (l: QueueEntry[]) => l.map((e) => patchEntry(e, items));
+  return { ...q, history: list(q.history), current: q.current && patchEntry(q.current, items), playingNext: list(q.playingNext), upcoming: list(q.upcoming) };
+}
+
+export function patchSearch(r: SearchResults, items: LibraryItemState[]): SearchResults {
+  return {
+    ...r,
+    tracks: r.tracks.map((t) => patchTrack(t, items)),
+    albums: r.albums.map((a) => {
+      const s = findItem(items, "album", a.id);
+      return s ? { ...a, rating: s.rating, loved: s.loved } : a;
+    }),
+    artists: r.artists.map((a) => {
+      const s = findItem(items, "artist", a.id);
+      return s ? { ...a, loved: s.loved } : a;
+    }),
+  };
 }
 
 export function dismissToast(state: CoreState, id: string): CoreState {

@@ -267,7 +267,7 @@ impl Actor {
         let Some(api) = self.api() else {
             // Offline: the artist's most played tracks from the mirror.
             let mut tracks = self.db.artist_tracks(&id).unwrap_or_default();
-            tracks.sort_by(|a, b| b.play_count.cmp(&a.play_count));
+            tracks.sort_by_key(|t| std::cmp::Reverse(t.play_count));
             tracks.truncate(count as usize);
             let _ = reply.send(QueryResult::TrackList(tracks));
             return;

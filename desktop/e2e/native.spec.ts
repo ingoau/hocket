@@ -91,13 +91,13 @@ test.describe("real core against a fake Navidrome", () => {
       // Rate the current track from the album table; the outbox reaches the server; undo reverts.
       const row = page.getByTestId("track-row").first();
       await row.locator(".stars .star").nth(3).click();
-      const toast = page.getByTestId("toast").last();
-      await expect(toast.getByTestId("toast-action")).toHaveText("Undo", { timeout: 10_000 });
       await expect(row.locator(".stars .star.on")).toHaveCount(4, { timeout: 10_000 });
       await expect.poll(() => server.callsTo("setRating").length, { timeout: 15_000 }).toBeGreaterThan(0);
-      await toast.getByTestId("toast-action").click();
+      // Rating leaves the queue alone, so no toast: undo from the keyboard.
+      await expect(page.getByTestId("toast")).toHaveCount(0);
+      await page.getByTestId("content").click();
+      await page.keyboard.press("Control+z");
       await expect(row.locator(".stars .star.on")).toHaveCount(0, { timeout: 10_000 });
-      await expect(page.getByTestId("toast").last()).toContainText("Undid");
 
       // Lyrics from getLyricsBySongId render (line tier) in the right panel.
       await expect(page.getByTestId("lyrics-view")).toBeVisible({ timeout: 20_000 });

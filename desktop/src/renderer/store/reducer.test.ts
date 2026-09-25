@@ -52,6 +52,22 @@ describe("reducer", () => {
     expect(s.resumeOffer?.deviceName).toBe("Pixel");
   });
 
+  it("patches ratings and loves from libraryItemsChanged into now playing, the queue and server search results", () => {
+    const track = (id: string) => ({ id, serverId: "s", title: id, durationMs: 1, rating: 0, loved: false, offline: "none" as const });
+    const entry = (id: string) => ({ item: { key: `k-${id}`, trackId: id, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
+    let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), upcoming: [entry("t2"), entry("t1")] } });
+    s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true } } });
+    const version = s.libraryVersion;
+    s = reduce(s, { type: "libraryItemsChanged", data: { server_id: "s", items: [{ kind: "track", id: "t1", rating: 4, loved: true }], from_device: "other" } });
+    expect(s.nowPlaying?.track).toMatchObject({ rating: 4, loved: true });
+    expect(s.queue.upcoming.map((e) => e.track.rating)).toEqual([0, 4]);
+    expect(s.lastServerSearch?.tracks.map((t) => t.loved)).toEqual([true, false]);
+    // Lists refetch on the libraryChanged that follows, not twice.
+    expect(s.libraryVersion).toBe(version);
+    s = reduce(s, { type: "playlistChanged", data: { server_id: "s", playlist_id: "p1", playlist: undefined } });
+    expect(s.libraryVersion).toBe(version);
+  });
+
   it("follows the core's network state (NetworkChanged), not the browser's", () => {
     let s = applySnapshot(initialCoreState, snapshot);
     expect(s.network).toBeUndefined();
@@ -63,22 +79,37 @@ describe("reducer", () => {
     expect(s.network).toBeUndefined();
   });
 
-  it("announces a fresh undo entry with one Undo toast, never twice, and not on undo/redo", () => {
-    const entry = (id: string, label: string) => ({ id, label, deviceId: "me", at: 1, note: undefined });
-    let s = reduce(initialCoreState, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Rate ★★★★", canRedo: false, redoLabel: undefined, history: [entry("u1", "Rate ★★★★")] } } });
-    expect(s.toasts.map((t) => [t.message, t.actionLabel])).toEqual([["Rate ★★★★", "Undo"]]);
+  it("announces a fresh queue-replacing undo entry with one Undo toast, never twice, and not on undo/redo", () => {
+    const entry = (id: string, label: string, replacesQueue = true) => ({ id, label, deviceId: "me", at: 1, note: undefined, replacesQueue });
+    let s = reduce(initialCoreState, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Play Album", canRedo: false, redoLabel: undefined, history: [entry("u1", "Play Album")] } } });
+    expect(s.toasts.map((t) => [t.message, t.actionLabel])).toEqual([["Play Album", "Undo"]]);
     // Undo pops it: no new toast (the core sends its own "Undid …").
-    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: false, undoLabel: undefined, canRedo: true, redoLabel: "Rate ★★★★", history: [] } } });
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: false, undoLabel: undefined, canRedo: true, redoLabel: "Play Album", history: [] } } });
     expect(s.toasts).toHaveLength(1);
     // Redo pushes the same id back: already announced, no toast.
-    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Rate ★★★★", canRedo: false, redoLabel: undefined, history: [entry("u1", "Rate ★★★★")] } } });
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Play Album", canRedo: false, redoLabel: undefined, history: [entry("u1", "Play Album")] } } });
     expect(s.toasts).toHaveLength(1);
-    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Shuffle on", canRedo: false, redoLabel: undefined, history: [entry("u2", "Shuffle on"), entry("u1", "Rate ★★★★")] } } });
-    expect(s.toasts.map((t) => t.message)).toEqual(["Rate ★★★★", "Shuffle on"]);
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Clear queue", canRedo: false, redoLabel: undefined, history: [entry("u2", "Clear queue"), entry("u1", "Play Album")] } } });
+    expect(s.toasts.map((t) => t.message)).toEqual(["Play Album", "Clear queue"]);
+  });
+
+  it("stays quiet for undo entries that leave the queue alone, and for their Undid/Redid toasts", () => {
+    const entry = (id: string, label: string, replacesQueue: boolean) => ({ id, label, deviceId: "me", at: 1, note: undefined, replacesQueue });
+    const undid = (id: string, undoEntryId: string, message: string): Event => ({ type: "toast", data: { toast: { id, message, actionLabel: "Redo", actionCommand: JSON.stringify({ type: "redo" }), durationMs: 5000, undoEntryId } } });
+    let s = reduce(initialCoreState, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Shuffle on", canRedo: false, redoLabel: undefined, history: [entry("u1", "Shuffle on", false)] } } });
+    expect(s.toasts).toEqual([]);
+    s = reduce(s, undid("t1", "u1", "Undid Shuffle on"));
+    expect(s.toasts).toEqual([]);
+    s = reduce(s, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Play Album", canRedo: false, redoLabel: undefined, history: [entry("u2", "Play Album", true)] } } });
+    s = reduce(s, undid("t2", "u2", "Undid Play Album"));
+    expect(s.toasts.map((t) => t.message)).toEqual(["Play Album", "Undid Play Album"]);
+    // A toast that isn't about an undo entry (an error) still shows.
+    s = reduce(s, { type: "toast", data: { toast: { id: "t3", message: "Nothing to play", actionLabel: undefined, actionCommand: undefined, durationMs: 5000, undoEntryId: undefined } } });
+    expect(s.toasts.at(-1)?.message).toBe("Nothing to play");
   });
 
   it("keeps announcing fresh undo entries once the core caps the history it sends", () => {
-    const entry = (id: string) => ({ id, label: `Mutation ${id}`, deviceId: "me", at: 1, note: undefined });
+    const entry = (id: string) => ({ id, label: `Mutation ${id}`, deviceId: "me", at: 1, note: undefined, replacesQueue: true });
     const cap = 50;
     let s = initialCoreState;
     let history: ReturnType<typeof entry>[] = [];

@@ -61,6 +61,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -69,15 +73,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
 import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -128,6 +129,12 @@ import app.hocket.ui.screens.settings.TranscodingSettingsScreen
 import app.hocket.ui.screens.setup.ServerSetupScreen
 import app.hocket.ui.screens.stats.StatsScreen
 import app.hocket.ui.queue.SavedQueuesScreen
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalLayoutDirection
+import app.hocket.ui.a11y.LocalReducedMotion
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -162,6 +169,7 @@ fun AppRoot(
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake
+        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
             // the status-bar inset and consumes it, so the screens below do not pad for it again.
@@ -170,12 +178,14 @@ fun AppRoot(
                 Box(Modifier.weight(1f).fillMaxWidth().then(if (fakeBanner) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
                     when {
                         !started || !ready -> LoadingScreen()
-                        server == null || !hasLogin || !server.capabilities.meetsFloor -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
-                        else -> MainShell()
+                        !inShell -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
+                        else -> MainShell(snackbar)
                     }
                 }
             }
-            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) { data -> Snackbar(data) }
+            // The main shell places its own host (above the mini player and the bar); setup and
+            // loading keep one just above the system navigation bar.
+            if (!inShell) SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp)) { data -> Snackbar(data) }
         }
     }
 }
@@ -258,17 +268,58 @@ private fun ToastCollector(host: SnackbarHostState) {
     }
 }
 
-/** Bottom content inset for scrolling screens: the mini player (taller at large font sizes) floats over the last rows. */
+/**
+ * Whether the mini player is showing (something is loaded in the player). Screens use it to reserve
+ * room for the mini player at the end of their lists only when there is one ([BottomContentInset]).
+ */
+val LocalPlayerVisible = compositionLocalOf { false }
+
+/**
+ * What floats over the bottom of the screens: the (transparent) navigation bar with the system
+ * navigation bar under it, or just the system inset beside a rail. Content runs under it (and
+ * under the mini player), over a gradient scrim, so screens pad their lists by
+ * [BottomContentInset] and place bottom overlays above [BottomOverlayInset].
+ */
+val LocalBottomBarInset = compositionLocalOf { 0.dp }
+
+/** The gap the mini player keeps above the navigation bar. */
+private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
+
+/**
+ * Bottom content inset for scrolling screens: the navigation bar and, while something is playing,
+ * the mini player (taller at large font sizes) float over the last rows, so they scroll clear of
+ * both; otherwise only the bar and a small margin, so nothing leaves an empty band at the bottom.
+ */
 val BottomContentInset: Dp
-    @Composable get() = app.hocket.ui.player.miniPlayerHeight() + 32.dp
+    @Composable get() = LocalBottomBarInset.current + if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
+
+/** Where a screen's bottom overlay (a selection toolbar, a floating button) sits clear of the bar and the mini player. */
+val BottomOverlayInset: Dp
+    @Composable get() = LocalBottomBarInset.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
+
+/**
+ * The phone navigation bar's height before it has been measured: Material's short navigation bar
+ * is 64 dp plus the edge-to-edge navigation-bar inset under it. Using it from the first frame means
+ * the content padding and the sheet's collapsed anchor do not jump when the bar is first measured
+ * (the measurement only corrects it where the bar grows, e.g. at very large font sizes).
+ */
+private val ShortNavBarHeight = 64.dp
+
+/** The collapsed wide navigation rail's width, before it is measured. */
+private val CollapsedRailWidth = 96.dp
 
 @Composable
-private fun MainShell() {
+private fun MainShell(snackbar: SnackbarHostState) {
     val nav = rememberNavController()
     val sheet = rememberNowPlayingSheetState()
+    // The one song menu, hosted here (not inside the player sheet or a list) and opened from anywhere.
+    val songMenu = remember { app.hocket.ui.components.SongMenuController() }
+    val client = LocalCoreClient.current
+    val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
+    val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
-        CompositionLocalProvider(LocalWideLayout provides wide) {
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -276,50 +327,81 @@ private fun MainShell() {
             val selected = selectedPlace(backStack, items, rootEntryId)
             val scope = rememberCoroutineScope()
             val density = LocalDensity.current
-            val haptics = LocalHapticFeedback.current
             var accountOpen by rememberSaveable { mutableStateOf(false) }
             var editorOpen by rememberSaveable { mutableStateOf(false) }
-            var devicesOpen by remember { mutableStateOf(false) }
-            // The phone navigation bar is measured (its height includes the edge-to-edge navigation-bar
-            // inset) so the content column ends above it and the sheet's collapsed anchor sits on it.
-            var navBarHeightPx by remember { mutableIntStateOf(0) }
+            var devicesOpen by rememberSaveable { mutableStateOf(false) }
+            // The phone navigation bar's height (including the edge-to-edge navigation-bar inset), so
+            // the content column ends above it and the sheet's collapsed anchor sits on it. Known from
+            // the first frame (fixed height + inset); the measurement only corrects it when it differs.
             val systemBottomPx = WindowInsets.navigationBars.getBottom(density)
+            var navBarMeasuredPx by remember { mutableIntStateOf(-1) }
+            val navBarHeightPx = if (navBarMeasuredPx >= 0) navBarMeasuredPx else with(density) { ShortNavBarHeight.roundToPx() } + systemBottomPx
             val bottomInsetPx = if (wide) systemBottomPx else navBarHeightPx
+            var railWidthPx by remember { mutableIntStateOf(-1) }
             // While the full player covers the screen, what is behind it (the page, the navigation
             // bar and rail) leaves the accessibility tree, as a modal would: TalkBack must not wander
             // into content nobody can see.
             val covered by remember(sheet) { derivedStateOf { sheet.progress >= 0.6f } }
             val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
-            fun go(item: NavItem) { rootEntryId = nav.goToPlace(item) }
-            val shell = remember(items, nav) { ShellNavigator(items, goTo = { rootEntryId = nav.goToPlace(it) }, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
-            val editLabel = stringResource(R.string.bottom_bar_edit)
-            val openEditor = remember { { haptics.performHapticFeedback(HapticFeedbackType.LongPress); editorOpen = true } }
-            CompositionLocalProvider(LocalShellNavigator provides shell) {
-            Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
-                if (wide) {
-                    val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
-                    ModalWideNavigationRail(state = railState, hideOnCollapse = false) {
-                        items.forEach { item ->
-                            val isSelected = item == selected
-                            WideNavigationRailItem(
-                                selected = isSelected,
-                                onClick = { go(item); scope.launch { railState.collapse() } },
-                                icon = { Icon(item.icon(isSelected), null) },
-                                label = { Text(item.label()) },
-                                railExpanded = railState.targetValue == WideNavigationRailValue.Expanded,
-                                modifier = Modifier.testTag("navRail." + item.id),
-                            )
-                        }
+            // Transitions: what the last bar/rail switch was, so the NavHost can tell it from a push.
+            val transitions = remember { ShellTransitionInfo() }
+            transitions.reducedMotion = LocalReducedMotion.current
+            transitions.layoutDirection = LocalLayoutDirection.current
+            transitions.density = density
+            val reselected = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
+            val currentSelected by rememberUpdatedState(selected)
+            val currentItems by rememberUpdatedState(items)
+            val go: (NavItem) -> Unit = remember(nav) {
+                { item ->
+                    val from = currentSelected
+                    val handled = from == item && when (nav.reselectPlace(item)) {
+                        Reselect.AtRoot -> { reselected.tryEmit(Unit); true }
+                        Reselect.Popped -> true
+                        Reselect.NotFound -> false
                     }
-                }
-                // Content ends above the navigation bar; only the mini player floats over it.
-                Box(Modifier.weight(1f).fillMaxSize().padding(bottom = with(density) { bottomInsetPx.toDp() })) {
-                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }) }
-                    CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
-                        AppNavHost(nav, Modifier.fillMaxSize())
+                    if (!handled) {
+                        val list = currentItems
+                        transitions.tabFromId = nav.currentBackStackEntry?.id
+                        transitions.tabForward = list.indexOf(item) >= list.indexOf(from)
+                        rootEntryId = nav.goToPlace(item)
+                        transitions.tabTargetId = nav.currentBackStackEntry?.id
                     }
                 }
             }
+            val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
+            val bottomInset = with(density) { bottomInsetPx.toDp() }
+            CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
+            Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
+                if (wide) {
+                    val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
+                    Box(Modifier.onSizeChanged { railWidthPx = it.width }) {
+                        ModalWideNavigationRail(state = railState, hideOnCollapse = false) {
+                            items.forEach { item ->
+                                val isSelected = item == selected
+                                WideNavigationRailItem(
+                                    selected = isSelected,
+                                    onClick = { go(item); scope.launch { railState.collapse() } },
+                                    icon = { Icon(item.icon(isSelected), null) },
+                                    label = { Text(item.label()) },
+                                    railExpanded = railState.targetValue == WideNavigationRailValue.Expanded,
+                                    modifier = Modifier.testTag("navRail." + item.id),
+                                )
+                            }
+                        }
+                    }
+                }
+                // Content runs to the bottom of the screen: the transparent navigation bar and the
+                // mini player float over it, over the scrim below ([BottomContentInset]).
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }) }
+                    CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
+                        AppNavHost(nav, transitions, Modifier.fillMaxSize())
+                    }
+                }
+            }
+            // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
+            // accessibility actions) collapse it as they navigate: the page opens in view, not
+            // behind the player.
             val navigator = remember(nav, sheet) {
                 app.hocket.ui.DetailNavigator(
                     openAlbum = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
@@ -330,21 +412,36 @@ private fun MainShell() {
             NowPlayingSheet(
                 state = sheet,
                 bottomInset = with(density) { bottomInsetPx.toDp() },
-                onOpenAlbum = { nav.navigate(Route.Album(it)) },
-                onOpenArtist = { nav.navigate(Route.Artist(it)) },
+                onOpenAlbum = navigator.openAlbum,
+                onOpenArtist = navigator.openArtist,
             )
+            }
+            app.hocket.ui.components.SongMenuHost(songMenu, navigator)
+            // The scrim the bar and the mini player float on (Navic): the surface colour eased in
+            // from transparent, so content scrolling under them fades out instead of clashing.
+            if (!wide || playerVisible) {
+                // Fully faded by about half-way up the floating mini player (it has its own card and
+                // shadow); without one, a short fade above the bar.
+                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
+                val surface = MaterialTheme.colorScheme.surface
+                val scrim = remember(surface) { easedScrim(surface) }
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
-                // sheet expands and the full player takes the screen. A long press opens its editor
-                // (also a TalkBack action on every item).
+                // sheet expands and the full player takes the screen (read in the placement phase, so
+                // dragging the sheet does not recompose the bar). Holding it does nothing special: the
+                // editor lives in Settings > Customise and the account sheet.
                 ShortNavigationBar(
+                    // Transparent over the scrim (Navic's detached style).
+                    containerColor = Color.Transparent,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .zIndex(20f)
-                        .onSizeChanged { navBarHeightPx = it.height }
+                        .onSizeChanged { navBarMeasuredPx = it.height }
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        .longPressToEdit(openEditor)
+                        // Its icons fade quickly as the player grows over them.
+                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
                 ) {
@@ -352,11 +449,27 @@ private fun MainShell() {
                         val isSelected = item == selected
                         ShortNavigationBarItem(
                             selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
-                            modifier = Modifier.testTag("navBar." + item.id).semantics { customActions = listOf(CustomAccessibilityAction(editLabel) { editorOpen = true; true }) },
+                            modifier = Modifier.testTag("navBar." + item.id),
                         )
                     }
                 }
             }
+            // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
+            // the content beside the rail on wide layouts; as the full player opens they ease down
+            // to the bottom of the screen instead of floating over its controls.
+            val miniPx = if (playerVisible) with(density) { (app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap).roundToPx() } else 0
+            val marginPx = with(density) { 8.dp.roundToPx() }
+            val collapsedBottomPx = bottomInsetPx + miniPx + marginPx
+            val expandedBottomPx = systemBottomPx + marginPx
+            val railPx = if (wide) (if (railWidthPx >= 0) railWidthPx else with(density) { CollapsedRailWidth.roundToPx() }) else 0
+            SnackbarHost(
+                snackbar,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(30f)
+                    .padding(start = with(density) { railPx.toDp() }, bottom = with(density) { collapsedBottomPx.toDp() })
+                    .offset { IntOffset(0, (sheet.progress * (collapsedBottomPx - expandedBottomPx)).roundToInt()) },
+            ) { data -> Snackbar(data) }
             if (accountOpen) {
                 AccountSheet(
                     barItems = items,
@@ -375,40 +488,72 @@ private fun MainShell() {
     }
 }
 
+/**
+ * A vertical gradient from transparent (top) to [color] (bottom) with an eased curve (circular
+ * ease-in, measured from the bottom), so the scrim is nearly solid behind the bar and fades out
+ * softly above the mini player instead of showing a hard band.
+ */
+private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGradient(
+    *Array(stops) { i ->
+        val t = i / (stops - 1f)
+        val fromBottom = 1f - t
+        t to color.copy(alpha = color.alpha * kotlin.math.sqrt((1f - fromBottom * fromBottom).coerceAtLeast(0f)))
+    },
+)
+
+/**
+ * A NavHost destination drawn inside [PredictiveBackCard], so every screen (places, details,
+ * settings pages) takes part in the predictive back animation the same way.
+ */
+private inline fun <reified T : Any> NavGraphBuilder.screen(transitions: ShellTransitionInfo, noinline content: @Composable (NavBackStackEntry) -> Unit) {
+    composable<T> { entry -> PredictiveBackCard(transitions, entry.id) { content(entry) } }
+}
+
 @Composable
-private fun AppNavHost(nav: NavHostController, modifier: Modifier) {
-    NavHost(nav, startDestination = Route.Home, modifier = modifier) {
-        composable<Route.Home> { HomeScreen(nav) }
-        composable<Route.Library> { entry -> LibraryScreen(nav, initialTab = entry.toRoute<Route.Library>().tab) }
-        composable<Route.Search> { SearchScreen(nav) }
-        composable<Route.Settings> { SettingsScreen(nav) }
-        composable<Route.Downloads> { DownloadsScreen(nav) }
-        composable<Route.Albums> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Albums) }
-        composable<Route.Artists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
-        composable<Route.Playlists> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
-        composable<Route.Songs> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
-        composable<Route.Genres> { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
-        composable<Route.AvailableOffline> { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
-        composable<Route.Filters> { FiltersScreen(nav) }
-        composable<Route.FilterBuilder> { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }
-        composable<Route.Stats> { StatsScreen(nav) }
-        composable<Route.Album> { entry -> AlbumDetailScreen(nav, entry.toRoute<Route.Album>().id) }
-        composable<Route.Artist> { entry -> ArtistDetailScreen(nav, entry.toRoute<Route.Artist>().id) }
-        composable<Route.Playlist> { entry -> PlaylistDetailScreen(nav, entry.toRoute<Route.Playlist>().id) }
-        composable<Route.Genre> { entry -> GenreDetailScreen(nav, entry.toRoute<Route.Genre>().name) }
-        composable<Route.SavedQueues> { SavedQueuesScreen(nav) }
-        composable<Route.AudioSettings> { AudioSettingsScreen(nav) }
-        composable<Route.TranscodingSettings> { TranscodingSettingsScreen(nav) }
-        composable<Route.ConnectSettings> { ConnectSettingsScreen(nav) }
-        composable<Route.CustomiseSettings> { CustomiseSettingsScreen(nav) }
-        composable<Route.About> { AboutScreen(nav) }
-        composable<Route.SettingsAccount> { AccountSettingsScreen(nav) }
-        composable<Route.SettingsAppearance> { AppearanceSettingsScreen(nav) }
-        composable<Route.SettingsPlayback> { PlaybackSettingsScreen(nav) }
-        composable<Route.SettingsDownloads> { DownloadsSettingsScreen(nav) }
-        composable<Route.SettingsLyrics> { LyricsSettingsScreen(nav) }
-        composable<Route.SettingsLibrary> { LibrarySettingsScreen(nav) }
-        composable<Route.SettingsBattery> { BatterySettingsScreen(nav) }
-        composable<Route.SettingsBackup> { BackupSettingsScreen(nav) }
+private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo, modifier: Modifier) {
+    NavHost(
+        nav,
+        startDestination = Route.Home,
+        modifier = modifier,
+        enterTransition = { transitions.enter(this) },
+        exitTransition = { transitions.exit(this) },
+        popEnterTransition = { transitions.popEnter(this) },
+        popExitTransition = { transitions.popExit(this) },
+        predictivePopEnterTransition = { edge -> transitions.predictivePopEnter(edge) },
+        predictivePopExitTransition = { edge -> transitions.predictivePopExit(this, edge) },
+        sizeTransform = null,
+    ) {
+        screen<Route.Home>(transitions) { HomeScreen(nav) }
+        screen<Route.Library>(transitions) { entry -> LibraryScreen(nav, initialTab = entry.toRoute<Route.Library>().tab) }
+        screen<Route.Search>(transitions) { SearchScreen(nav) }
+        screen<Route.Settings>(transitions) { SettingsScreen(nav) }
+        screen<Route.Downloads>(transitions) { DownloadsScreen(nav) }
+        screen<Route.Albums>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Albums) }
+        screen<Route.Artists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
+        screen<Route.Playlists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
+        screen<Route.Songs>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
+        screen<Route.Genres>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
+        screen<Route.AvailableOffline>(transitions) { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
+        screen<Route.Filters>(transitions) { FiltersScreen(nav) }
+        screen<Route.FilterBuilder>(transitions) { entry -> FilterBuilderScreen(nav, entry.toRoute<Route.FilterBuilder>().id) }
+        screen<Route.Stats>(transitions) { StatsScreen(nav) }
+        screen<Route.Album>(transitions) { entry -> AlbumDetailScreen(nav, entry.toRoute<Route.Album>().id) }
+        screen<Route.Artist>(transitions) { entry -> ArtistDetailScreen(nav, entry.toRoute<Route.Artist>().id) }
+        screen<Route.Playlist>(transitions) { entry -> PlaylistDetailScreen(nav, entry.toRoute<Route.Playlist>().id) }
+        screen<Route.Genre>(transitions) { entry -> GenreDetailScreen(nav, entry.toRoute<Route.Genre>().name) }
+        screen<Route.SavedQueues>(transitions) { SavedQueuesScreen(nav) }
+        screen<Route.AudioSettings>(transitions) { AudioSettingsScreen(nav) }
+        screen<Route.TranscodingSettings>(transitions) { TranscodingSettingsScreen(nav) }
+        screen<Route.ConnectSettings>(transitions) { ConnectSettingsScreen(nav) }
+        screen<Route.CustomiseSettings>(transitions) { CustomiseSettingsScreen(nav) }
+        screen<Route.About>(transitions) { AboutScreen(nav) }
+        screen<Route.SettingsAccount>(transitions) { AccountSettingsScreen(nav) }
+        screen<Route.SettingsAppearance>(transitions) { AppearanceSettingsScreen(nav) }
+        screen<Route.SettingsPlayback>(transitions) { PlaybackSettingsScreen(nav) }
+        screen<Route.SettingsDownloads>(transitions) { DownloadsSettingsScreen(nav) }
+        screen<Route.SettingsLyrics>(transitions) { LyricsSettingsScreen(nav) }
+        screen<Route.SettingsLibrary>(transitions) { LibrarySettingsScreen(nav) }
+        screen<Route.SettingsBattery>(transitions) { BatterySettingsScreen(nav) }
+        screen<Route.SettingsBackup>(transitions) { BackupSettingsScreen(nav) }
     }
 }

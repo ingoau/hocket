@@ -474,6 +474,13 @@
     <string name="settings_context_menu">Context menu actions</string>
     <string name="settings_media_buttons">Media notification buttons</string>
     <string name="settings_reorder_hint">Drag to reorder, toggle to show or hide.</string>
+    <string name="settings_swipe_actions">Swipe actions</string>
+    <string name="settings_swipe_hint">What swiping a song sideways does. Every action is also in the song\'s menu.</string>
+    <string name="settings_swipe_queue">In the queue</string>
+    <string name="settings_swipe_lists">In albums, playlists, search and the library</string>
+    <string name="settings_swipe_right">Swipe right</string>
+    <string name="settings_swipe_left">Swipe left</string>
+    <string name="settings_swipe_none">None</string>
     <string name="settings_section_backup">Backup</string>
     <string name="settings_export_config">Export configuration</string>
     <string name="settings_export_with_secrets">Include secrets</string>

@@ -27,8 +27,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, Ms, PositionStamp, QueueKey,
-    SavedQueue, SessionDocument, Setting, TrackId, TransportLease, TransportState, UndoEntry,
+    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms,
+    PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+    TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -39,8 +40,8 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, RefuseReason, RejectReason,
-    ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, PlaylistEdit, RefuseReason,
+    RejectReason, ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
     apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp,
@@ -102,6 +103,11 @@ const LAN_STRIKE_BLOCK_MS: f64 = 30_000.0;
 const UNSYNCED_CAP: usize = 500;
 /// Advertise the session revision at most this often.
 const ADVERT_MIN_INTERVAL_MS: f64 = 10_000.0;
+/// Pulling playback here first asks the owner to hand off (exact position,
+/// clean release). Without a takeover by then (a room or owner too old to
+/// know the request, an owner that is gone or wedged) this device takes the
+/// lease over itself, from the owner's last stamp.
+pub const PULL_FALLBACK_MS: f64 = 3_000.0;
 
 /// Persisted next to the document: the last state confirmed with a remote room.
 pub type SyncBase = SyncPoint;
@@ -296,6 +302,12 @@ pub enum Input {
         before_revision: u32,
         before: Option<SessionDocument>,
     },
+    /// This device changed ratings, loves or playlists: tell the other
+    /// devices in the room (fire and forget; nothing is sent while alone).
+    LibraryEdited {
+        items: Vec<LibraryItemState>,
+        playlists: Vec<PlaylistEdit>,
+    },
 
     Tick,
 }
@@ -415,6 +427,13 @@ pub enum Output {
         entry: UndoEntry,
         before_revision: u32,
         before: Option<SessionDocument>,
+    },
+    /// Another device changed ratings, loves or playlists: apply to the
+    /// mirror (never to the outbox: the sender owns the server write).
+    LibraryEditReceived {
+        from: DeviceId,
+        items: Vec<LibraryItemState>,
+        playlists: Vec<PlaylistEdit>,
     },
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
@@ -590,6 +609,9 @@ pub struct Engine {
     /// The last stamp another device sent (for resume offers when its lease lapses).
     last_remote_stamp: Option<LastStamp>,
     pending_take: Option<TakeInfo>,
+    /// When this device asked the owner to hand playback here (local
+    /// time); see [`PULL_FALLBACK_MS`].
+    pull_since: Option<EpochMs>,
 
     devices: Vec<DeviceInfo>,
     picker: Option<Picker>,
@@ -730,6 +752,7 @@ impl Engine {
             remote_transport: TransportState::default(),
             last_remote_stamp: None,
             pending_take: None,
+            pull_since: None,
             devices: vec![],
             picker: None,
             prebuffer: None,
@@ -1101,7 +1124,7 @@ impl Engine {
                 self.lan_blocklist.clear();
                 self.lan_strikes.clear();
                 // Inbound members were admitted under the old key.
-                let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+                let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
                 for p in inbound {
                     self.out.push(Output::WireOut {
                         peer: p.clone(),
@@ -1248,6 +1271,16 @@ impl Engine {
                     before_revision,
                     before,
                 });
+            }
+            Input::LibraryEdited { items, playlists } => {
+                if !items.is_empty() || !playlists.is_empty() {
+                    let device_id = self.cfg.device.id.clone();
+                    self.upstream_send(Msg::LibraryEdited {
+                        device_id,
+                        items,
+                        playlists,
+                    });
+                }
             }
             Input::Tick => self.on_tick(),
         }
@@ -2468,6 +2501,10 @@ impl Engine {
                     return;
                 }
                 let Some(lease) = lease else { return };
+                // The owner answered a pull: its position wins over the
+                // fallback's.
+                self.pull_since = None;
+                self.pending_take = None;
                 // Taken over mid-play: the play started on `from`.
                 self.mark_shared(started_at);
                 if scrobbled {
@@ -2549,6 +2586,19 @@ impl Engine {
                         entry,
                         before_revision,
                         before,
+                    });
+                }
+            }
+            Msg::LibraryEdited {
+                device_id,
+                items,
+                playlists,
+            } => {
+                if device_id != self.cfg.device.id {
+                    self.out.push(Output::LibraryEditReceived {
+                        from: device_id,
+                        items,
+                        playlists,
                     });
                 }
             }
@@ -2681,7 +2731,7 @@ impl Engine {
             self.last_ping_at = 0.0;
             self.send_ping();
             // Say goodbye to anyone we were serving: they'll re-elect.
-            let inbound: Vec<PeerId> = self.inbound.drain(..).collect();
+            let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
                 self.out.push(Output::WireOut {
                     peer: p.clone(),
@@ -3171,35 +3221,19 @@ impl Engine {
         if live_owner.is_some() || self.held.is_some() {
             return;
         }
-        let (Some(stamp), Some(current)) =
-            (self.last_remote_stamp.clone(), self.doc.current.clone())
+        let (Some(take), Some(stamp)) = (self.take_from_last_stamp(), &self.last_remote_stamp)
         else {
             return;
-        };
-        if stamp.device_id == self.cfg.device.id
-            || stamp.key.as_deref() != Some(current.key.as_str())
-        {
-            return;
-        }
-        let position_ms = resume_position(&stamp.position, self.now_session_ms());
-        // Whatever played on since the stamp counts towards the scrobble too
-        // (unless the gap was so long we snapped to the start).
-        let played_ms = if position_ms >= stamp.position.position_ms {
-            stamp
-                .played_ms
-                .saturating_add(position_ms - stamp.position.position_ms)
-        } else {
-            stamp.played_ms
         };
         let draft = ResumeOfferDraft {
             device_id: stamp.device_id.clone(),
             device_name: stamp.device_name.clone(),
-            key: current.key.clone(),
-            track_id: current.track_id.clone(),
-            position_ms,
-            played_ms,
-            started_at: stamp.started_at,
-            scrobbled: stamp.scrobbled,
+            key: take.key,
+            track_id: take.track_id,
+            position_ms: take.position_ms,
+            played_ms: take.played_ms,
+            started_at: take.started_at,
+            scrobbled: take.scrobbled,
             last_seen: last_seen.unwrap_or(stamp.position.taken_at),
         };
         if self.resume.as_ref() != Some(&draft) {
@@ -3232,6 +3266,7 @@ impl Engine {
         self.lease = lease.clone();
         self.remote_transport.lease = lease.clone();
         if mine {
+            self.pull_since = None;
             self.held_from_remote = !from_loopback;
             match &mut self.held {
                 Some(h) => {
@@ -3470,22 +3505,21 @@ impl Engine {
         let Some(h) = self.held.clone() else {
             // Not ours to hand off: ask whoever plays to hand off to the
             // pick (this device, to pull playback here, or a third one).
-            let now = self.now_session_ms();
-            let owner = self
-                .lease
-                .owner
-                .clone()
-                .filter(|_| self.lease.expires_at > now);
-            match owner {
+            match self.remote_owner() {
                 Some(owner) if owner == device_id => {
                     self.log("debug", "handoff target already plays");
                 }
                 Some(_) => {
                     self.upstream_send(Msg::HandoffRequest {
-                        target: device_id,
-                        from: me,
+                        target: device_id.clone(),
+                        from: me.clone(),
                     });
+                    if device_id == me {
+                        self.pull_since = Some(self.now_local_ms());
+                    }
                 }
+                // Nobody plays: playing here needs nobody's leave.
+                None if device_id == me => self.pull_by_takeover(),
                 None => self.log("debug", "handoff needs a device that plays"),
             }
             return;
@@ -3546,6 +3580,64 @@ impl Engine {
             });
         }
         self.emit_lease();
+    }
+
+    /// The device the room last named as transport owner, when that is not
+    /// this one. Rooms send the lease to everyone only when it changes
+    /// (renewals go to the owner alone), so `expires_at` here is stale for
+    /// every other device and is no test of liveness: a lapse arrives as its
+    /// own grant with no owner.
+    fn remote_owner(&self) -> Option<DeviceId> {
+        self.lease
+            .owner
+            .clone()
+            .filter(|o| *o != self.cfg.device.id)
+    }
+
+    /// What taking over the play another device last reported would start
+    /// from: its last stamp for the current item, extrapolated to now.
+    fn take_from_last_stamp(&self) -> Option<TakeInfo> {
+        let stamp = self.last_remote_stamp.as_ref()?;
+        let current = self.doc.current.as_ref()?;
+        if stamp.device_id == self.cfg.device.id
+            || stamp.key.as_deref() != Some(current.key.as_str())
+        {
+            return None;
+        }
+        let position_ms = resume_position(&stamp.position, self.now_session_ms());
+        // Whatever played on since the stamp counts towards the scrobble too
+        // (unless the gap was so long we snapped to the start).
+        let played_ms = if position_ms >= stamp.position.position_ms {
+            stamp
+                .played_ms
+                .saturating_add(position_ms - stamp.position.position_ms)
+        } else {
+            stamp.played_ms
+        };
+        Some(TakeInfo {
+            key: current.key.clone(),
+            track_id: current.track_id.clone(),
+            position_ms,
+            played_ms,
+            started_at: stamp.started_at,
+            scrobbled: stamp.scrobbled,
+        })
+    }
+
+    /// Pull playback here without the owner's help: a deliberate takeover
+    /// of the lease (which always works at once), playing from the owner's
+    /// last stamp. The owner stops when the room tells it the lease moved.
+    fn pull_by_takeover(&mut self) {
+        self.pull_since = None;
+        let Some(take) = self.take_from_last_stamp() else {
+            // Nothing played elsewhere to pick up: Play does the rest.
+            self.log("debug", "nothing playing elsewhere to pull here");
+            return;
+        };
+        // Taking another device's play over: it is shared.
+        self.mark_shared(take.started_at);
+        self.pending_take = Some(take);
+        self.claim(None, true);
     }
 
     fn on_prebuffer_result(&mut self, key: QueueKey, ready: bool) {
@@ -3790,6 +3882,16 @@ impl Engine {
                 self.detached = true;
                 self.held_remote_epoch = Some(h.epoch);
                 self.emit_lease();
+            }
+        }
+
+        // A pull the owner never answered.
+        if let Some(since) = self.pull_since {
+            if self.held.is_some() {
+                self.pull_since = None;
+            } else if now - since >= PULL_FALLBACK_MS {
+                self.log("info", "owner did not hand off: taking playback over");
+                self.pull_by_takeover();
             }
         }
 
@@ -4632,6 +4734,152 @@ mod tests {
         )));
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(!a.owns_transport());
+    }
+
+    /// Other devices only hear the lease when it changes, so the owner's
+    /// `expiresAt` is long past for them while it plays on. A pull still
+    /// asks the owner, and takes the lease over from the owner's last stamp
+    /// when no handoff comes (a room too old to relay the request).
+    #[test]
+    fn pull_works_on_a_stale_lease_and_falls_back_to_a_takeover() {
+        let (mut b, clock) = engine("b");
+        b.cfg.upstream_idle_ms = 1e12;
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.current = Some(crate::api::QueueItem {
+            key: "k".into(),
+            track_id: "t".into(),
+            source: crate::api::QueueSource::Inserted,
+            unavailable: false,
+        });
+        attach(&mut b, Some(replica_with(room_doc)), vec![dev("a")]);
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 30_000.0,
+                },
+            }),
+        });
+        b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::TransportStamp {
+                device_id: "a".into(),
+                key: Some("k".into()),
+                position: PositionStamp {
+                    position_ms: 50_000,
+                    taken_at: 60_000.0,
+                    rate: 1.0,
+                    is_playing: true,
+                },
+                played_ms: 50_000,
+                started_at: 7.0,
+                scrobbled: false,
+                epoch: 1,
+            }),
+        });
+        // a minute on: the lease b knows "expired" 40 s ago
+        clock.0.store(70_000, Ordering::SeqCst);
+        let outs = b.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::HandoffRequest { target, .. } if target == "b")));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
+        // no takeover arrives: b claims the lease itself
+        clock
+            .0
+            .store(70_000 + PULL_FALLBACK_MS as u64, Ordering::SeqCst);
+        let outs = b.handle(Input::Tick);
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
+        let outs = b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 2,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::TakeTransport { key, track_id, position_ms, played_ms, started_at, play: true, .. }
+                if key == "k" && track_id == "t" && (62_000..=64_000).contains(position_ms)
+                    && *played_ms == *position_ms && *started_at == 7.0
+        )));
+        assert!(b.owns_transport());
+        // and no second claim later
+        clock.0.store(90_000, Ordering::SeqCst);
+        let outs = b.handle(Input::Tick);
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
+    }
+
+    /// With nobody playing, picking this device takes the last play over at
+    /// once.
+    #[test]
+    fn pull_with_no_owner_claims_at_once() {
+        let (mut b, _) = engine("b");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.current = Some(crate::api::QueueItem {
+            key: "k".into(),
+            track_id: "t".into(),
+            source: crate::api::QueueSource::Inserted,
+            unavailable: false,
+        });
+        let mut rep = replica_with(room_doc);
+        rep.last_stamp = Some(crate::connect::wire::LastStamp {
+            device_id: "a".into(),
+            device_name: "A".into(),
+            key: Some("k".into()),
+            position: PositionStamp {
+                position_ms: 5_000,
+                taken_at: 9_000.0,
+                rate: 1.0,
+                is_playing: false,
+            },
+            played_ms: 5_000,
+            started_at: 3.0,
+            scrobbled: false,
+        });
+        attach(&mut b, Some(rep), vec![dev("a")]);
+        let outs = b.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
+        let outs = b.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        assert!(outs.iter().any(|o| matches!(
+            o,
+            Output::TakeTransport {
+                position_ms: 5_000,
+                play: true,
+                ..
+            }
+        )));
     }
 
     #[test]

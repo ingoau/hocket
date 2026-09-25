@@ -39,6 +39,8 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
   const animated = mapped.synced && !plain;
   const stampRef = useRef(stamp);
   stampRef.current = stamp;
+  const mappedRef = useRef(mapped);
+  mappedRef.current = mapped;
 
   // Create/destroy the DOM player for synced tiers.
   useEffect(() => {
@@ -51,14 +53,16 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     p.setWordFadeWidth(0.5);
     host.current.replaceChildren(p.getElement());
     player.current = p;
+    // AMLL re-dispatches DOM clicks on a line as "line-click" (not "click").
     const onClick = (e: Event) => {
       const ev = e as LyricLineMouseEvent;
-      const line = mapped.lines[ev.lineIndex];
-      if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime - mapped.offsetMs) } });
+      const m = mappedRef.current;
+      const line = m.lines[ev.lineIndex];
+      if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime - m.offsetMs) } });
     };
-    p.addEventListener("click", onClick);
+    p.addEventListener("line-click", onClick);
     return () => {
-      p.removeEventListener("click", onClick);
+      p.removeEventListener("line-click", onClick);
       p.dispose();
       player.current = undefined;
     };

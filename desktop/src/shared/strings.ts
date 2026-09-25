@@ -309,7 +309,6 @@ const STRINGS = {
   "filters.descending": "Descending",
   "filters.limit": "Limit",
   "filters.delete": "Delete filter",
-  "filters.exported": "Exported to {path}",
   "filters.smartUnavailable": "Needs the native API (behind a capability flag)",
   "filters.sample": "Sample",
 
@@ -401,8 +400,6 @@ const STRINGS = {
   "settings.importConfig": "Import configuration…",
   "settings.importConfirm": "Importing replaces your settings, filters and shortcuts on this device. Continue?",
   "settings.copyDiagnostics": "Copy diagnostics",
-  "settings.diagnosticsCopied": "Diagnostics copied to the clipboard",
-  "settings.configExported": "Configuration exported",
   "settings.credentialsVolatile": "No usable OS keyring was found, so server passwords are kept in memory only: you'll be asked to sign in again after restarting Hocket.",
   "config.exportSecretsTitle": "Export server passwords in plain text?",
   "config.exportSecretsDetail": "{n} server password(s) will be written into the file unencrypted. Anyone who can read the file can sign in as you. Keep it private and delete it after importing.",

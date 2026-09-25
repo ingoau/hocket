@@ -179,11 +179,12 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("dialog-trackInfo").locator("dl")).toBeVisible();
       await expectNoViolations(page, `${theme} track info dialog`);
       await page.keyboard.press("Escape");
-      // A toast with an Undo action.
-      await page.getByTestId("shuffle").click();
+      // A toast with an Undo action (only queue-replacing actions get one).
+      await page.evaluate(() => window.hocket.dispatch({ type: "clearQueue" }));
       await expect(page.getByTestId("toast").first()).toBeVisible();
       await expectNoViolations(page, `${theme} toast`);
-      await page.getByTestId("shuffle").click();
+      await page.evaluate(() => window.hocket.dispatch({ type: "undo" }));
+      await expect(page.getByTestId("queue-row-current")).toHaveCount(1);
     }
   });
 
