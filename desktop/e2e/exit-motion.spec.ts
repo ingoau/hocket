@@ -34,6 +34,16 @@ test.describe("exit animations", () => {
     await playFirstAlbum(page);
     await slowExits(page);
 
+    // A toast, first while the one from playing is fresh (it auto-dismisses
+    // after 5 s; hovering holds it): dismissed by its action, it sinks away
+    // rather than vanishing.
+    const toast = page.getByTestId("toast").filter({ hasText: "Play" }).first();
+    await expect(toast).toBeVisible();
+    await toast.hover();
+    await toast.getByTestId("toast-action").click();
+    await expect.poll(() => exitState(toast)).toEqual({ closing: true, inert: true, animating: true });
+    await expect(page.locator('[data-testid="toast"].closing')).toHaveCount(0);
+
     // Context menu: Escape starts the exit; it is inert at once and then gone.
     await page.getByTestId("track-row").first().click({ button: "right" });
     const menu = page.getByTestId("context-menu");
@@ -67,13 +77,6 @@ test.describe("exit animations", () => {
     await expect(popover).toBeVisible();
     await page.getByTestId("jobs-button").click();
     await expectExiting(popover);
-
-    // A toast: dismissed by its action, it sinks away rather than vanishing.
-    const toast = page.getByTestId("toast").filter({ hasText: "Play" }).first();
-    await expect(toast).toBeVisible();
-    await toast.getByTestId("toast-action").click();
-    await expect.poll(() => exitState(toast)).toEqual({ closing: true, inert: true, animating: true });
-    await expect(page.locator('[data-testid="toast"].closing')).toHaveCount(0);
 
     // The fullscreen player: fades out, focus already back in the shell.
     await page.getByTestId("content").click();
