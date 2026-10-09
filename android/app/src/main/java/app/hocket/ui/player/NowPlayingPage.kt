@@ -141,8 +141,10 @@ import androidx.compose.foundation.combinedClickable
  * the big slot and the thumbnail slot as [modeFraction] goes 0 (artwork) to 1 (another mode); both
  * slots are measured into [hero], which the sheet's flying artwork also lands on.
  *
- * At least a screen tall; on short screens or at large font sizes the whole page scrolls. [position] is read
- * in the draw phase (the seek bar) and once a second (its labels), never here.
+ * At least a screen tall; on short screens or at large font sizes the whole page scrolls, without
+ * an overscroll effect (a swipe past either end, or on a page that fits, must not stretch the
+ * player). [position] is read in the draw phase (the seek bar) and once a second (its labels),
+ * never here.
  */
 @Composable
 internal fun FullPlayer(
@@ -176,7 +178,7 @@ internal fun FullPlayer(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = maxHeight
         val pageWidth = maxWidth
-        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player.page")) {
+        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
                 minHeight = viewport,
                 hero = hero,
