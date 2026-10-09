@@ -1,3 +1,5 @@
+Note: This is a work in progress. Do not install it, and if you do, do not expect it to work or to get support
+
 # Hocket
 
 A Navidrome client for Android and desktop. Multi-device playback that keeps
