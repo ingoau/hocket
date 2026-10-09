@@ -227,13 +227,28 @@ fun selectedPlace(backStack: List<NavBackStackEntry>, items: List<NavItem>, root
  * of the stack's root entry (the one above the start destination), null for the start's own.
  */
 fun NavHostController.goToPlace(item: NavItem): String? {
+    // Settings is opened over a place, not part of it: switching places closes it (and anything
+    // opened from it) instead of saving it into that place's stack, where it would come back on
+    // return; for Home, whose stack is restored under the start destination, that meant Home
+    // reopened Settings and could never be reached.
+    val entries = currentBackStack.value.filter { it.destination !is NavGraph }
+    entries.drop(1).firstOrNull { it.destination.isSettings() }?.let { popBackStack(it.destination.id, inclusive = true) }
     navigate(item.route()) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
     }
-    return currentBackStack.value.filter { it.destination !is NavGraph }.getOrNull(1)?.id
+    // Only the place's own screen roots a stack; Home's restored screens sit on the start's own.
+    return currentBackStack.value.filter { it.destination !is NavGraph }.getOrNull(1)?.takeIf { item.isScreen(it.destination) }?.id
 }
+
+/** Settings and its sub-screens: opened over a place from the account button, closed when switching places. */
+fun NavDestination.isSettings(): Boolean = listOf(
+    Route.Settings::class, Route.AudioSettings::class, Route.TranscodingSettings::class, Route.ConnectSettings::class,
+    Route.CustomiseSettings::class, Route.About::class, Route.SettingsAccount::class, Route.SettingsAppearance::class,
+    Route.SettingsPlayback::class, Route.SettingsDownloads::class, Route.SettingsLyrics::class, Route.SettingsLibrary::class,
+    Route.SettingsBattery::class, Route.SettingsBackup::class,
+).any { hasRoute(it) }
 
 fun NavItem.icon(selected: Boolean): ImageVector = when (this) {
     NavItem.Home -> if (selected) Icons.Filled.Home else Icons.Outlined.Home

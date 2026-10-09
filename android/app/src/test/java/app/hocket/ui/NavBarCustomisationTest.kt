@@ -231,6 +231,37 @@ class NavBarCustomisationTest {
     }
 
     @Test
+    fun switchingPlacesClosesSettings() {
+        start()
+        compose.waitUntil(5_000) { bar().size == 3 }
+        // Over Home: Library then Home is Home itself, not Settings brought back with Home's stack.
+        compose.openSettingsFromAccount()
+        click("navBar.library")
+        await("library.links")
+        click("navBar.home")
+        compose.waitUntil(5_000) { !exists("settings.categories") && !exists("library.links") }
+        assertEquals(listOf("home"), selected())
+        // Over Library, a sub-screen deep: Home closes it, and Library comes back at its own screen.
+        click("navBar.library")
+        await("library.links")
+        compose.openSettingsFromAccount()
+        click("settings.category.audio")
+        await("settings.screen")
+        click("navBar.home")
+        compose.waitUntil(5_000) { !exists("settings.screen") && !exists("library.links") }
+        assertEquals(listOf("home"), selected())
+        click("navBar.library")
+        await("library.links")
+        assertFalse(exists("settings.screen") || exists("settings.categories"))
+        assertEquals(listOf("library"), selected())
+        // Re-tapping the selected place over Settings pops back to its root.
+        compose.openSettingsFromAccount()
+        click("navBar.library")
+        compose.waitUntil(5_000) { !exists("settings.categories") }
+        await("library.links")
+    }
+
+    @Test
     fun theAccountButtonOpensTheSheetAndSettings() {
         start()
         compose.waitUntil(5_000) { bar().size == 3 }
