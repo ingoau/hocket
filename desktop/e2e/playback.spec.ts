@@ -52,15 +52,19 @@ test.describe("playback and queue", () => {
   });
 
   test("the fullscreen player opens with F and shows lyrics, related and up next", async ({ hocket }) => {
-    const { page } = hocket;
+    const { app, page } = hocket;
+    const windowFullscreen = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isFullScreen()));
     await completeSetup(page);
     await playFirstAlbum(page);
     await page.getByTestId("content").click();
     await page.keyboard.press("f");
     const fs = page.getByTestId("fullscreen-player");
     await expect(fs).toBeVisible();
+    // Opening it leaves the window as it was.
+    expect(await windowFullscreen()).toBe(false);
+    await expect(fs.getByTestId("fs-window-fullscreen")).toHaveAttribute("aria-pressed", "false");
     // It covers the whole window, sidebar and player bar included.
-    // (Polled: the window itself may still be entering fullscreen.)
+    // (Polled: the layout may still be settling as it opens.)
     await expect.poll(async () => {
       const box = (await fs.boundingBox())!;
       const win = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
@@ -105,7 +109,12 @@ test.describe("playback and queue", () => {
     await expect(fs.getByTestId("np-pane-lyrics")).toBeVisible();
     await fs.getByTestId("np-thumb").click();
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
+    // Its full screen button puts the window into fullscreen; closing the player takes it back out.
+    await fs.getByTestId("fs-window-fullscreen").click();
+    await expect.poll(windowFullscreen).toBe(true);
+    await expect(fs.getByTestId("fs-window-fullscreen")).toHaveAttribute("aria-pressed", "true");
     await page.getByTestId("fullscreen-exit").click();
     await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
+    await expect.poll(windowFullscreen).toBe(false);
   });
 });
