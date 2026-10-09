@@ -37,6 +37,7 @@ pub const TEXTS: &[SettingText] = &[
     t("actions.order.contextMenu", "Context menu items", "Which actions appear in context menus, and in what order."),
     t("actions.order.sidebar", "Sidebar items", "Which sections appear in the sidebar, and in what order."),
     t("actions.order.mediaSession", "Media session buttons", "Which actions appear as OS media controls, and in what order."),
+    t("nav.mobileBar", "Bottom bar", "Which places appear in the phone's bottom bar, and in what order."),
     t("swipe.queue.startToEnd", "Queue: swipe right", "What swiping a queue item towards the end of the line does (right in left-to-right languages)."),
     t("swipe.queue.endToStart", "Queue: swipe left", "What swiping a queue item towards the start of the line does (left in left-to-right languages)."),
     t("swipe.list.startToEnd", "Song lists: swipe right", "What swiping a song in an album, playlist, search results or the library does, towards the end of the line."),
