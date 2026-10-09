@@ -20,7 +20,7 @@ const MAP = {
   play: "play_arrow", pause: "pause", stop: "stop", next: "skip_next", previous: "skip_previous", rewind: "fast_rewind", forward: "fast_forward",
   shuffle: "shuffle", repeat: "repeat", repeatOne: "repeat_one", autoplay: "all_inclusive", volume: "volume_up", mute: "volume_off",
   heart: "favorite", heartOff: "heart_minus", star: "star", starOff: "star",
-  queue: "queue_music", lyrics: "lyrics", fullscreen: "fullscreen", mini: "picture_in_picture_alt", devices: "devices",
+  queue: "queue_music", lyrics: "lyrics", fullscreen: "fullscreen", fullscreenExit: "fullscreen_exit", mini: "picture_in_picture_alt", devices: "devices",
   search: "search", command: "keyboard_command_key", settings: "settings",
   home: "home", library: "library_music", album: "album", artist: "person", playlist: "playlist_play", playlistAdd: "playlist_add", song: "music_note", genre: "category",
   download: "download", downloadOff: "file_download_off", cached: "hard_drive", filter: "filter_alt", filterAdd: "library_add", stats: "insights", info: "info",
