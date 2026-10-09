@@ -129,12 +129,12 @@ import androidx.compose.foundation.combinedClickable
 /**
  * The full player (the owner's mockup, made Material 3 Expressive). Top to bottom:
  *
- * - "Playing from" and the queue's name (a tap switches queues), with Connect and the collapse chevron;
+ * - "Playing from" and the queue's name (a tap switches queues), with Connect (the only way to the
+ *   device picker; highlighted while another device plays) and the collapse chevron;
  * - the mode area: the big artwork (at its top) in [PlayerMode.Artwork], or Lyrics / Queue / About;
  * - the title row, right under the artwork: a small thumbnail slot (non-artwork modes), title,
  *   "artist • album" links, and add to playlist and the More sheet (the rating and the sleep timer);
- * - spread over what is left: notices (resume offer, a problem, autoplay's reason, remote playback,
- *   the sleep timer), the wavy seek bar with elapsed / total, the transport (play/pause shows a
+ * - spread over what is left: notices (resume offer, a problem, autoplay's reason, the sleep timer), the wavy seek bar with elapsed / total, the transport (play/pause shows a
  *   loading indicator while buffering), and the Lyrics / Queue / About pills ([PlayerLayout]).
  *
  * There is ONE artwork ([PlayerArtwork]), drawn over the page and moved in a graphics layer between
@@ -191,7 +191,7 @@ internal fun FullPlayer(
                             onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep"))) }
                     }, onAddTo = { addTo = true }) },
                 items = listOf(
-                    { PlayerNoticeLines(onConnect = { handoff = true }) },
+                    { PlayerNoticeLines() },
                     { PlayerSeek(position) },
                     {
                         val client = LocalCoreClient.current
@@ -429,19 +429,17 @@ private fun PlayerTitle(mode: PlayerMode, onOpenAlbum: (String) -> Unit, onOpenA
 }
 
 /**
- * Notices: skipped-unavailable, resume offer, autoplay "why", remote playback (a tap opens the
- * device picker), sleep timer. Nothing at all when there are none (the layout then gives it no gap).
+ * Notices: skipped-unavailable, resume offer, autoplay "why", sleep timer. Nothing at all when
+ * there are none (the layout then gives it no gap).
  */
 @Composable
-private fun PlayerNoticeLines(onConnect: () -> Unit) {
+private fun PlayerNoticeLines() {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val resume by client.resumeOffer.collectAsStateWithLifecycle()
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
-    val devices by client.devices.collectAsStateWithLifecycle()
-    val owns by client.ownsTransport.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
         notice?.let { NoticeLine(it, MaterialTheme.colorScheme.error) }
         resume?.let { offer ->
@@ -452,31 +450,10 @@ private fun PlayerNoticeLines(onConnect: () -> Unit) {
             }
         }
         (entry?.item?.source as? QueueSource.Autoplay)?.let { NoticeLine(stringResource(R.string.player_autoplay_reason, it.data.reason), MaterialTheme.colorScheme.tertiary) }
-        if (!owns) devices.firstOrNull { it.playing }?.let { PlayingOnLine(it.name, onConnect) }
         sleep?.let { t ->
             val label = t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track)
             NoticeLine(label, MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-}
-
-/**
- * "Playing on <device>" while another device plays: a tap (a 48 dp tall target) opens the device
- * picker, as Connect in the header does.
- */
-@Composable
-private fun PlayingOnLine(device: String, onConnect: () -> Unit) {
-    val color = MaterialTheme.colorScheme.primary
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
-            .clickable(onClickLabel = stringResource(R.string.player_connect), role = Role.Button, onClick = onConnect)
-            .testTag("player.playingOn"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Filled.Cast, null, Modifier.size(18.dp), tint = color)
-        Spacer(Modifier.width(8.dp))
-        Text(stringResource(R.string.player_playing_on, device), style = MaterialTheme.typography.labelLarge, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Icon(Icons.Filled.ArrowDropDown, null, tint = color)
     }
 }
 
