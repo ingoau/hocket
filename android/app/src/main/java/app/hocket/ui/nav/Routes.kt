@@ -42,22 +42,22 @@ sealed interface Route {
 /**
  * The places the phone's bottom bar can hold, chosen and ordered by the user (a device-local app
  * preference, [app.hocket.AppPrefs]). Settings is never one: it lives behind the account button in
- * the main destinations' top app bars. [canonicalActionId] is the registry action for the place,
- * used to keep the core's `sidebar` surface in step.
+ * the main destinations' top app bars. The bar is the phone's own: it does not touch the synced
+ * desktop sidebar order (the core's `sidebar` surface).
  */
-enum class NavItem(val id: String, val canonicalActionId: String) {
-    Home("home", "navigateHome"),
-    Search("search", "findInList"),
-    Library("library", "navigateLibrary"),
-    Playlists("playlists", "navigatePlaylists"),
-    Artists("artists", "navigateArtists"),
-    Albums("albums", "navigateAlbums"),
-    Songs("songs", "navigateTracks"),
-    Genres("genres", "navigateGenres"),
-    RecentQueues("recentQueues", "navigateRecent"),
-    Stats("stats", "navigateStats"),
-    Downloads("downloads", "navigateDownloads"),
-    Filters("filters", "navigateFilters");
+enum class NavItem(val id: String) {
+    Home("home"),
+    Search("search"),
+    Library("library"),
+    Playlists("playlists"),
+    Artists("artists"),
+    Albums("albums"),
+    Songs("songs"),
+    Genres("genres"),
+    RecentQueues("recentQueues"),
+    Stats("stats"),
+    Downloads("downloads"),
+    Filters("filters");
 
     companion object {
         val DEFAULT = listOf(Home, Search, Library)
