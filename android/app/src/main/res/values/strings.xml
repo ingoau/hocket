@@ -36,6 +36,7 @@
     <string name="action_love">Love</string>
     <string name="action_unlove">Remove love</string>
     <string name="action_rate">Rate</string>
+    <string name="action_set_rating">Set rating…</string>
     <string name="action_share">Share</string>
     <string name="action_copy">Copy</string>
     <string name="action_go_to_album">Go to album</string>
