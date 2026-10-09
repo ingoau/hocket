@@ -152,6 +152,22 @@ test.describe("window chrome", () => {
     await check();
   });
 
+  test("a sidebar place switched off in Settings stays listed and can be switched back on", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("settings-nav-customisation").click();
+    const list = page.getByTestId("order-sidebar");
+    const genres = list.getByRole("switch", { name: "Genres" });
+    await expect(genres).toBeChecked();
+    await genres.click();
+    await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toHaveCount(0);
+    await expect(genres).not.toBeChecked();
+    await genres.click();
+    await expect(genres).toBeChecked();
+    await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toBeVisible();
+  });
+
   test("settings stays pinned below the sidebar list, and a long server row never scrolls the settings page sideways", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
