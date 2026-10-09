@@ -22,7 +22,7 @@ export const MATERIAL: Record<string, string> = {
   history: "restore", push_pin: "pin", keep_off: "pinOff", delete_forever: "trash", star_rate: "star", star_outline: "starOff",
   star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "download", file_download_off: "downloadOff",
   album: "album", artist: "artist", person: "artist", undo: "undo", redo: "redo", select_all: "selectAll",
-  keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen",
+  keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen", fullscreen_exit: "fullscreenExit",
   picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
   play_circle: "resume", close: "close", bug_report: "bug", home: "home", music_note: "song", category: "genre",
   insights: "stats", settings: "settings", filter_alt: "filter", info: "info", library_music: "library",

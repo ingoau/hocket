@@ -6,6 +6,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -22,7 +23,8 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The full player's page: the artwork at the top with the title right under it and the rest spread
  * over the remaining height; the album beside the thumbnail in the other modes; "Playing from"
- * opening the queue switcher and "Playing on" the device picker.
+ * opening the queue switcher; another device playing shown only by the highlighted Connect button,
+ * which opens the device picker.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
@@ -102,14 +104,15 @@ class FullPlayerLayoutTest {
     }
 
     @Test
-    fun playingOnAnotherDeviceOpensTheDevicePicker() {
+    fun playingOnAnotherDeviceHasNoTextAndConnectOpensTheDevicePicker() {
         startExpanded()
         core.client.dispatch(Commands.handoffTo("laptop"))
         // The client reads who owns the transport from snapshots.
         core.client.requestSnapshot()
         compose.waitUntil(5_000) { !core.client.ownsTransport.value }
-        compose.waitUntil(5_000) { exists("player.playingOn") }
-        click("player.playingOn")
+        compose.waitForIdle()
+        assertTrue("no \"Playing on\" line", compose.onAllNodesWithText("Playing on", substring = true).fetchSemanticsNodes().isEmpty())
+        click("player.connect")
         compose.waitUntil(5_000) { exists("handoff.sheet") }
     }
 }

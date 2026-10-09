@@ -1,6 +1,8 @@
 package app.hocket.ui.screens.library
 
 import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -46,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -156,7 +159,11 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
-            Column {
+            // The lists scroll under the whole header, so the link chips and tabs share the bar's
+            // (scroll-tinted) colour as one opaque surface rather than letting rows show through.
+            val defaults = TopAppBarDefaults.topAppBarColors()
+            val header = lerp(defaults.containerColor, defaults.scrolledContainerColor, FastOutLinearInEasing.transform(scroll.state.collapsedFraction))
+            Column(Modifier.background(header)) {
                 MediumFlexibleTopAppBar(
                     title = { Text(stringResource(R.string.nav_library), modifier = Modifier.semantics { heading() }) },
                     actions = {
@@ -178,10 +185,11 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                         AccountButton()
                     },
                     scrollBehavior = scroll,
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = header, scrolledContainerColor = header),
                 )
                 // The places beyond the tabs, so each stays reachable when it is not in the bottom bar.
                 LibraryLinks(nav)
-                PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = 8.dp) {
+                PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = 8.dp, containerColor = header) {
                     tabs.forEachIndexed { i, res ->
                         Tab(selected = pager.currentPage == i, onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
                     }

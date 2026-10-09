@@ -36,6 +36,7 @@
     <string name="action_love">Love</string>
     <string name="action_unlove">Remove love</string>
     <string name="action_rate">Rate</string>
+    <string name="action_set_rating">Set rating…</string>
     <string name="action_share">Share</string>
     <string name="action_copy">Copy</string>
     <string name="action_go_to_album">Go to album</string>
@@ -225,7 +226,6 @@
     <string name="player_sleep_timer">Sleep timer</string>
     <string name="player_connect">Play on another device</string>
     <string name="player_take_over">Play here</string>
-    <string name="player_playing_on">Playing on %1$s</string>
     <string name="player_resume_offer">%1$s was playing %2$s</string>
     <string name="player_resume_here">Resume here</string>
     <string name="player_skipped">Skipped</string>

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,6 +53,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,9 +70,9 @@ import kotlin.math.abs
 
 /**
  * The collapsed player, a floating card (Navic's detached style): square-ish rounded artwork, title
- * and artist (scrolling once when too long), play/pause and next, and a thin progress line along
- * the card's bottom edge. The card itself (margins, corners, shadow) is the sheet's clip, so it
- * grows into the full player. Tap or drag up to expand; swipe the content left/right to skip: the
+ * and artist (scrolling once when too long), play/pause (a loading indicator while buffering) and
+ * next, and a thin progress line along the card's bottom edge. The card itself (margins, corners,
+ * shadow) is the sheet's clip, so it grows into the full player. Tap or drag up to expand; swipe the content left/right to skip: the
  * artwork and text move with the finger, a haptic marks the threshold, and it settles back without
  * overshoot.
  *
@@ -88,6 +91,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
+    val transport by client.transport.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val resume by client.resumeOffer.collectAsStateWithLifecycle()
@@ -203,8 +207,15 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                     Text(sub, style = MaterialTheme.typography.bodyMedium, color = if (notice != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = if (reducedMotion) TextOverflow.Ellipsis else TextOverflow.Clip, modifier = marquee)
                 }
                 val colors = IconButtonDefaults.iconButtonVibrantColors()
-                IconButton(onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); client.dispatch(Command.TogglePlay) }, colors = colors, modifier = Modifier.testTag("miniPlayer.playPause")) {
-                    Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, stringResource(if (playing) R.string.action_pause else R.string.action_play))
+                val playLabel = stringResource(if (playing) R.string.action_pause else R.string.action_play)
+                val bufferingLabel = stringResource(R.string.player_buffering)
+                IconButton(
+                    onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); client.dispatch(Command.TogglePlay) },
+                    colors = colors,
+                    modifier = Modifier.testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (transport.buffering) stateDescription = bufferingLabel },
+                ) {
+                    if (transport.buffering) LoadingIndicator(Modifier.size(28.dp), color = androidx.compose.material3.LocalContentColor.current)
+                    else Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null)
                 }
                 IconButton(onClick = { client.dispatch(Command.Next) }, colors = colors) { Icon(Icons.Filled.SkipNext, stringResource(R.string.action_next)) }
             }

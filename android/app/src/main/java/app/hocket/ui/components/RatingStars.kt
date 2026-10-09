@@ -75,13 +75,17 @@ fun RatingStars(rating: Int, onRate: (Int) -> Unit, modifier: Modifier = Modifie
     }
 }
 
-/** "Rate" from a menu or an accessibility action: the stars in a dialog; picking one closes it. */
+/**
+ * "Rate" from a menu or an accessibility action: the stars in a dialog; picking one closes it.
+ * [offerClear] adds a "Clear rating" button (rates 0), for when tapping the current stars cannot.
+ */
 @Composable
-fun RatingDialog(current: Int, onRate: (Int) -> Unit, onDismiss: () -> Unit) {
+fun RatingDialog(current: Int, onRate: (Int) -> Unit, onDismiss: () -> Unit, title: String = stringResource(R.string.action_rate), offerClear: Boolean = false) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.action_rate)) },
+        title = { Text(title) },
         text = { RatingStars(rating = current, onRate = onRate) },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+        dismissButton = if (offerClear) { { TextButton(onClick = { onRate(0) }, modifier = Modifier.testTag("rating.clear")) { Text(stringResource(R.string.rating_clear)) } } } else null,
     )
 }

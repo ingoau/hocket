@@ -12,8 +12,11 @@
 //
 // A modal dialog: focus moves in on open (the collapse button), Tab stays
 // inside, Escape closes, and focus returns to what opened it. On close it
-// stays mounted, inert, while it fades (lib/presence.ts); focus goes back and
-// the window leaves fullscreen as the fade starts.
+// stays mounted, inert, while it fades (lib/presence.ts) and focus goes back.
+//
+// Opening it leaves the window as it is; the button beside the collapse
+// chevron toggles the window's own fullscreen. If that button put the window
+// into fullscreen, the window leaves it again as the close fade starts.
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
@@ -94,6 +97,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const navigate = useApp((s) => s.navigate);
   const openDialog = useApp((s) => s.openDialog);
   const covered = useApp((s) => !!s.dialog || s.paletteOpen);
+  const windowFullscreen = useApp((s) => s.windowState.fullscreen);
   const reducedMotion = usePrefersReducedMotion();
   const closeRef = useRef<HTMLButtonElement>(null);
   const bigArt = useRef<HTMLDivElement>(null);
@@ -112,10 +116,19 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const remote = owner && !owner.isSelf ? owner.name : undefined;
   const source = queue.contextLabel ?? track?.album;
 
+  /** Whether the full screen button put the window into fullscreen, so closing takes it back out. */
+  const madeFullscreen = useRef(false);
+  const toggleWindowFullscreen = () => {
+    madeFullscreen.current = !windowFullscreen;
+    bridge().window.openFullscreen(!windowFullscreen);
+  };
   useEffect(() => {
     if (closing) return;
-    bridge().window.openFullscreen(true);
-    return () => bridge().window.openFullscreen(false);
+    return () => {
+      if (!madeFullscreen.current) return;
+      madeFullscreen.current = false;
+      if (useApp.getState().windowState.fullscreen) bridge().window.openFullscreen(false);
+    };
   }, [closing]);
 
   const visibleArt = (): HTMLElement | null => (mode === "art" ? bigArt.current : thumbArt.current);
@@ -183,6 +196,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             <span className="np-kicker">{t("nowPlaying.playingFrom")}</span>
             <span className="np-source-name" data-testid="np-source">{source ?? t("player.nothingPlaying")}</span>
           </div>
+          <button type="button" className="np-icon-btn" aria-pressed={windowFullscreen} aria-label={t("player.windowFullscreen")} title={windowFullscreen ? t("player.exitWindowFullscreen") : t("player.windowFullscreen")} onClick={toggleWindowFullscreen} data-testid="fs-window-fullscreen"><Icon name={windowFullscreen ? "fullscreenExit" : "fullscreen"} size={24} /></button>
           <button ref={closeRef} type="button" className="np-icon-btn" aria-label={t("fullscreen.exit")} title={t("fullscreen.exit")} onClick={() => setFullscreen(false)} data-testid="fullscreen-exit"><Icon name="chevronDown" size={24} /></button>
         </header>
 
