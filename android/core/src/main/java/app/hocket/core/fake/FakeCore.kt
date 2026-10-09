@@ -149,6 +149,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_SIDEBAR, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.NAV_MOBILE_BAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)

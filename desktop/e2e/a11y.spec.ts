@@ -149,6 +149,8 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("dialog-addToPlaylist")).toBeVisible();
       await expectNoViolations(page, `${theme} add-to-playlist dialog`);
       await page.keyboard.press("Escape");
+      // Gone, exit animation included: its "New playlist…" row would match the button below.
+      await expect(page.getByTestId("dialog-addToPlaylist")).toHaveCount(0);
       // Prompt dialog (new playlist), confirmation dialog (remove server), sleep timer, Connect, track info.
       await page.getByTestId("nav-playlists").click();
       await page.getByRole("button", { name: "New playlist" }).click();

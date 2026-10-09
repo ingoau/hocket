@@ -32,6 +32,7 @@ object SettingKeys {
     const val ACTIONS_ORDER_CONTEXT_MENU = "actions.order.contextMenu"
     const val ACTIONS_ORDER_SIDEBAR = "actions.order.sidebar"
     const val ACTIONS_ORDER_MEDIA_SESSION = "actions.order.mediaSession"
+    const val NAV_MOBILE_BAR = "nav.mobileBar"
     const val SYNC_ENABLED = "sync.enabled"
     const val CONNECT_COORDINATOR_URL = "connect.coordinatorUrl"
     const val CONNECT_LAN_DISCOVERY = "connect.lanDiscovery"

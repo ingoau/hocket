@@ -20,11 +20,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
-import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.AppPrefs
 import app.hocket.InMemoryNavBarPrefs
 import app.hocket.NavBarPrefs
+import app.hocket.SyncedNavBarPrefs
 import app.hocket.ui.a11y.A11yChecks
 import app.hocket.ui.a11y.performCustomAction
 import app.hocket.ui.nav.AppRoot
@@ -34,7 +34,6 @@ import app.hocket.core.SettingKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -111,22 +110,16 @@ class NavBarCustomisationTest {
         assertEquals(NavItem.DEFAULT, NavItem.fromIds(listOf("nonsense", "settings")))
         assertEquals("duplicates collapse", listOf(NavItem.Home, NavItem.Search), NavItem.fromIds(listOf("home", "home", "search")))
         assertEquals("capped at five", 5, NavItem.fromIds(listOf("home", "search", "library", "albums", "songs", "genres")).size)
-        // Every place has its own registry action; Library no longer borrows navigateAlbums.
-        assertEquals("navigateLibrary", NavItem.Library.canonicalActionId)
-        assertEquals(NavItem.entries.size, NavItem.entries.map { it.canonicalActionId }.distinct().size)
         // And in the app: an old stored order with Settings in it.
         start(InMemoryNavBarPrefs(listOf("downloads", "settings", "home", "filters")))
         compose.waitUntil(5_000) { bar() == listOf("downloads", "home", "filters") }
     }
 
     @Test
-    fun addReorderAndRemovePersistAcrossRecreation() = runBlocking {
-        val file = tmp.newFile("bar.preferences_pb").also { it.delete() }
-        val scope1 = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val store1 = PreferenceDataStoreFactory.create(scope = scope1) { file }
-        var prefs by mutableStateOf<NavBarPrefs>(AppPrefs(store1))
-        var generation by mutableIntStateOf(0)
+    fun addReorderAndRemovePersistAcrossRecreation() {
         val core = TestCore(startPlaying = false)
+        var prefs by mutableStateOf<NavBarPrefs>(SyncedNavBarPrefs(core.client))
+        var generation by mutableIntStateOf(0)
         compose.setThemedContent(core) {
             key(generation) { CompositionLocalProvider(LocalNavBarPrefs provides prefs) { AppRoot(core.client) } }
         }
@@ -141,19 +134,32 @@ class NavBarCustomisationTest {
         compose.waitUntil(5_000) { bar() == listOf("home", "search", "albums", "library") }
         click("bottomBar.remove.search")
         compose.waitUntil(5_000) { bar() == listOf("home", "albums", "library") }
-        val key = stringPreferencesKey("navItems")
-        compose.waitUntil(5_000) { runBlocking { store1.data.first()[key] } == "home,albums,library" }
-        // The core's sidebar surface follows, Library as its own action (not a second Albums).
-        compose.waitUntil(5_000) {
-            core.client.settings.value[SettingKeys.ACTIONS_ORDER_SIDEBAR]?.value == """["navigateHome","navigateAlbums","navigateLibrary"]"""
-        }
+        // Saved as the synced phone bar; the desktop sidebar's order is left alone.
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.NAV_MOBILE_BAR]?.value == """["home","albums","library"]""" }
+        assertEquals("[]", core.client.settings.value[SettingKeys.ACTIONS_ORDER_SIDEBAR]?.value)
 
-        // Recreate: a fresh DataStore over the same file, a fresh composition.
-        scope1.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
-        val store2 = PreferenceDataStoreFactory.create(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)) { file }
-        compose.runOnUiThread { prefs = AppPrefs(store2); generation++ }
+        // Recreate: a fresh store over the same core (another phone on the account), a fresh composition.
+        compose.runOnUiThread { prefs = SyncedNavBarPrefs(core.client); generation++ }
         await("navBar")
         compose.waitUntil(5_000) { bar() == listOf("home", "albums", "library") }
+    }
+
+    @Test
+    fun aDeviceLocalBarIsAdoptedOnce() = runBlocking {
+        val file = tmp.newFile("bar.preferences_pb").also { it.delete() }
+        val local = AppPrefs(PreferenceDataStoreFactory.create(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)) { file })
+        local.setNavItems(listOf("downloads", "home", "filters"))
+        val core = TestCore(startPlaying = false)
+        core.start()
+        val synced = SyncedNavBarPrefs(core.client)
+        synced.adoptLocal(local)
+        assertEquals(listOf("downloads", "home", "filters"), synced.navItems.first { it.isNotEmpty() })
+        assertEquals(emptyList<String>(), local.navItems.first())
+        // An account that already has a bar keeps it.
+        local.setNavItems(listOf("home", "stats"))
+        synced.adoptLocal(local)
+        assertEquals(listOf("downloads", "home", "filters"), synced.navItems.first())
+        assertEquals(emptyList<String>(), local.navItems.first())
     }
 
     @Test

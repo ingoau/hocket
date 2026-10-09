@@ -84,8 +84,8 @@ import app.hocket.HocketApp
 import app.hocket.InMemoryNavBarPrefs
 import app.hocket.NavBarPrefs
 import app.hocket.R
-import app.hocket.core.Commands
-import app.hocket.ui.LocalCoreClient
+import app.hocket.SyncedNavBarPrefs
+import app.hocket.core.client.CoreClient
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -100,13 +100,25 @@ import sh.calvin.reorderable.ReorderableColumn
 /** The bar's storage for this composition; AppRoot provides one so every reader shares it. */
 val LocalNavBarPrefs = staticCompositionLocalOf<NavBarPrefs?> { null }
 
-/** The app's DataStore-backed prefs when running in the app, else an in-memory store. */
+/** The provided store (AppRoot's), else an in-memory one. */
 @Composable
 fun rememberNavBarPrefs(): NavBarPrefs {
     val provided = LocalNavBarPrefs.current
-    val app = LocalContext.current.applicationContext as? HocketApp
     val fallback = remember { InMemoryNavBarPrefs() }
-    return provided ?: app?.prefs ?: fallback
+    return provided ?: fallback
+}
+
+/**
+ * The bar's store for the shell: a host-provided one (tests), else in the app the synced core
+ * setting, adopting the device-local bar saved before it synced; elsewhere in memory.
+ */
+@Composable
+fun rememberShellNavBarPrefs(client: CoreClient): NavBarPrefs {
+    val provided = LocalNavBarPrefs.current
+    val app = LocalContext.current.applicationContext as? HocketApp
+    val prefs = remember(provided, app, client) { provided ?: if (app != null) SyncedNavBarPrefs(client) else InMemoryNavBarPrefs() }
+    if (prefs is SyncedNavBarPrefs && app != null) LaunchedEffect(prefs) { prefs.adoptLocal(app.prefs) }
+    return prefs
 }
 
 /** The user's bar, migrated and bounded ([NavItem.fromIds]). */
@@ -287,16 +299,14 @@ fun NavItem.label(): String = stringResource(
 @Composable
 fun NavItem.barLabel(): String = if (this == NavItem.RecentQueues) stringResource(R.string.nav_recent_queues_short) else label()
 
-/** Saves the bar and keeps the core's `sidebar` surface in step (as the navigation items always have). */
+/** Saves the bar (device-local; the desktop sidebar order is separate). */
 @Composable
 fun rememberBarSaver(prefs: NavBarPrefs = rememberNavBarPrefs()): (List<NavItem>) -> Unit {
-    val client = LocalCoreClient.current
     val scope = rememberCoroutineScope()
-    return remember(prefs, client, scope) {
+    return remember(prefs, scope) {
         { next ->
             val ids = if (next == NavItem.DEFAULT) emptyList() else next.map { it.id }
             scope.launch { prefs.setNavItems(ids) }
-            client.dispatch(Commands.setActionOrder("sidebar", next.map { it.canonicalActionId }.distinct()))
         }
     }
 }

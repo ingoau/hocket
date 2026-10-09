@@ -13,6 +13,7 @@ import { Icon } from "../components/Icon";
 import { fmtBytes, fmtRelative } from "../lib/format";
 import { chordFromEvent, chordToString, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
+import { CUSTOMISABLE } from "@shared/action-orders";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
@@ -533,11 +534,19 @@ function Customisation() {
 
 function OrderList({ surface, title }: { surface: string; title: string }) {
   const version = useApp((s) => s.actionsVersion);
-  // The full set comes from the registry (empty order = all); current order from Query.Actions.
-  const all = useQuery(() => ({ type: "actions", data: { surface, target: { type: surface === "contextMenu" ? "tracks" : "none", data: surface === "contextMenu" ? { ids: ["__all__"] } : undefined } as never } }), "actions", [surface, version], { static: true });
+  const target = { type: surface === "contextMenu" ? "tracks" : "none", data: surface === "contextMenu" ? { ids: ["__all__"] } : undefined } as never;
+  // The chosen ones, in order, from Query.Actions (an empty stored order = the default); the
+  // switched-off rest of CUSTOMISABLE after them, described by the palette (which lists everything).
+  const chosen = useQuery(() => ({ type: "actions", data: { surface, target } }), "actions", [surface, version], { static: true });
+  const palette = useQuery(() => ({ type: "actions", data: { surface: "palette", target } }), "actions", [surface], { static: true });
   const [items, setItems] = useState<{ a: ActionDescriptor; on: boolean }[]>([]);
   const [dragIdx, setDragIdx] = useState<number | undefined>(undefined);
-  useEffect(() => { if (all.data) setItems(all.data.map((a) => ({ a, on: true }))); }, [all.data]);
+  useEffect(() => {
+    if (!chosen.data || !palette.data) return;
+    const on = new Set(chosen.data.map((a) => a.id));
+    const off = (CUSTOMISABLE[surface] ?? []).filter((id) => !on.has(id)).flatMap((id) => palette.data?.filter((a) => a.id === id) ?? []);
+    setItems([...chosen.data.map((a) => ({ a, on: true })), ...off.map((a) => ({ a, on: false }))]);
+  }, [chosen.data, palette.data, surface]);
   const commit = (next: typeof items) => {
     setItems(next);
     bridge().dispatch({ type: "setActionOrder", data: { surface, action_ids: next.filter((x) => x.on).map((x) => x.a.id) } });

@@ -153,7 +153,7 @@ fun AppRoot(
     val fatal by fatalError.collectAsStateWithLifecycle()
     fatal?.let { FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
-    CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberNavBarPrefs()) {
+    CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client)) {
         val started by client.started.collectAsStateWithLifecycle()
         val servers by client.servers.collectAsStateWithLifecycle()
         // The fake core has nothing to replay; the native core waits for the keystore replay first.

@@ -1802,6 +1802,7 @@ export class FakeCore implements CoreHandle {
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
+      ["nav.mobileBar", [], "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],

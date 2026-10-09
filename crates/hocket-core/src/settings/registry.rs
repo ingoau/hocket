@@ -78,6 +78,9 @@ pub mod keys {
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
+    /// The phone's bottom bar: ordered place ids (the app's own, not action ids), [] = its default.
+    /// Synced between phones; separate from the desktop sidebar's `actions.order.sidebar`.
+    pub const NAV_MOBILE_BAR: &str = "nav.mobileBar";
     pub const SWIPE_QUEUE_START_TO_END: &str = "swipe.queue.startToEnd";
     pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
@@ -404,6 +407,7 @@ pub static REGISTRY: &[SettingDef] = &[
         || json!([]),
         string_list_valid,
     ),
+    json_def(NAV_MOBILE_BAR, Synced, || json!([]), string_list_valid),
     // Swipe actions on song rows. `love` toggles (love / unlove by the row's
     // state); the platform runs the chosen id through `RunAction`.
     def(
