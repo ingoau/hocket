@@ -134,8 +134,8 @@ import androidx.compose.foundation.combinedClickable
  * - the title row, right under the artwork: a small thumbnail slot (non-artwork modes), title,
  *   "artist • album" links, and add to playlist and the More sheet (the rating and the sleep timer);
  * - spread over what is left: notices (resume offer, a problem, autoplay's reason, remote playback,
- *   the sleep timer), the wavy seek bar with elapsed / total, the transport, and the Lyrics / Queue /
- *   About pills ([PlayerLayout]).
+ *   the sleep timer), the wavy seek bar with elapsed / total, the transport (play/pause shows a
+ *   loading indicator while buffering), and the Lyrics / Queue / About pills ([PlayerLayout]).
  *
  * There is ONE artwork ([PlayerArtwork]), drawn over the page and moved in a graphics layer between
  * the big slot and the thumbnail slot as [modeFraction] goes 0 (artwork) to 1 (another mode); both
@@ -196,9 +196,11 @@ internal fun FullPlayer(
                     {
                         val client = LocalCoreClient.current
                         val playing by client.isPlaying.collectAsStateWithLifecycle()
+                        val transport by client.transport.collectAsStateWithLifecycle()
                         // Narrow screens (display size "largest" leaves ~320 dp): a smaller transport.
                         TransportRow(
                             playing = playing,
+                            buffering = transport.buffering,
                             onPrevious = { client.dispatch(Command.Previous) },
                             onToggle = { client.dispatch(Command.TogglePlay) },
                             onNext = { client.dispatch(Command.Next) },
@@ -478,18 +480,16 @@ private fun PlayingOnLine(device: String, onConnect: () -> Unit) {
     }
 }
 
-/** The wavy seek bar with elapsed / total (and "buffering" under it while it is). */
+/** The wavy seek bar with elapsed / total. */
 @Composable
 private fun PlayerSeek(position: () -> Long) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
-    val transport by client.transport.collectAsStateWithLifecycle()
     val reducedMotion = LocalReducedMotion.current
     val track = entry?.track ?: return
     Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) })
-        if (transport.buffering) Text(stringResource(R.string.player_buffering), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

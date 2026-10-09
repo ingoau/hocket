@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -157,7 +158,8 @@ private fun TransportButton(
 /**
  * Play/pause as a big filled button whose outline morphs (Material 3 Expressive): a soft
  * nine-sided cookie while paused, a rounded square while playing, on a springy spec. The icon
- * crossfades with a little scale; haptics are toggle on/off.
+ * crossfades with a little scale; haptics are toggle on/off. While [buffering] a loading
+ * indicator takes the icon's place (the button still toggles, and says it is buffering).
  */
 @Composable
 fun PlayPauseButton(
@@ -166,6 +168,7 @@ fun PlayPauseButton(
     modifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     iconSize: Dp = 40.dp,
+    buffering: Boolean = false,
 ) {
     val reduced = LocalReducedMotion.current
     // 0 = paused (cookie), 1 = playing (rounded square).
@@ -177,6 +180,7 @@ fun PlayPauseButton(
     val morph = remember { Morph(MaterialShapes.Cookie9Sided, MaterialShapes.Square) }
     val haptics = LocalHapticFeedback.current
     val label = stringResource(if (playing) R.string.action_pause else R.string.action_play)
+    val bufferingLabel = stringResource(R.string.player_buffering)
     TransportButton(
         onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); onToggle() },
         label = label,
@@ -184,16 +188,19 @@ fun PlayPauseButton(
         content = MaterialTheme.colorScheme.onPrimary,
         interactionSource = interactionSource,
         shapeFor = { MorphShape(morph, morphProgress.value) },
-        modifier = modifier.testTag("player.playPause"),
+        modifier = modifier.testTag("player.playPause").semantics { if (buffering) stateDescription = bufferingLabel },
     ) {
         AnimatedContent(
-            targetState = playing,
+            targetState = if (buffering) null else playing,
             transitionSpec = {
                 if (reduced) fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                 else (fadeIn(tween(150)) + scaleIn(initialScale = 0.6f)) togetherWith (fadeOut(tween(100)) + scaleOut(targetScale = 0.6f))
             },
             label = "playPauseIcon",
-        ) { p -> Icon(if (p) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(iconSize)) }
+        ) { p ->
+            if (p == null) LoadingIndicator(Modifier.size(iconSize * 1.2f), color = androidx.compose.material3.LocalContentColor.current)
+            else Icon(if (p) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(iconSize))
+        }
     }
 }
 
@@ -213,10 +220,11 @@ private class MorphShape(private val morph: Morph, private val progress: Float) 
  * Previous, play/pause and next (Material 3 Expressive): tonal round skip buttons either side of a
  * larger shape-morphing play/pause. A pressed skip button widens and squishes towards a rounded
  * square while its neighbours give way a little, on springy specs; every button bounces on press.
- * [height] is the play button's size; the skip buttons are a little smaller.
+ * [height] is the play button's size; the skip buttons are a little smaller. While [buffering] the
+ * play button shows a loading indicator.
  */
 @Composable
-fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier) {
+fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier, buffering: Boolean = false) {
     val reduced = LocalReducedMotion.current
     val prevSource = remember { MutableInteractionSource() }
     val playSource = remember { MutableInteractionSource() }
@@ -232,7 +240,7 @@ fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit,
     val onTonal = MaterialTheme.colorScheme.onSecondaryContainer
     Row(modifier.fillMaxWidth().height(height), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
         SkipButton(onPrevious, stringResource(R.string.action_previous), Icons.Filled.SkipPrevious, tonal, onTonal, prevSource, prevPressed, Modifier.size(prevWidth, skip).testTag("player.previous"))
-        PlayPauseButton(playing, onToggle, Modifier.size(height), playSource, iconSize = height * 0.45f)
+        PlayPauseButton(playing, onToggle, Modifier.size(height), playSource, iconSize = height * 0.45f, buffering = buffering)
         SkipButton(onNext, stringResource(R.string.action_next), Icons.Filled.SkipNext, tonal, onTonal, nextSource, nextPressed, Modifier.size(nextWidth, skip).testTag("player.next"))
     }
 }
