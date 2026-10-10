@@ -38,6 +38,7 @@ test("fullscreen player with real covers", async () => {
   const shot = (i: number) => SHAPES.every((shape) => existsSync(join(out!, `${String(i).padStart(3, "0")}-${shape.name}.png`)));
   let offset = 0;
   let failures = 0;
+  let lastFailure = -1;
   while (offset < total) {
     while (offset < total && shot(offset)) offset++;
     if (offset >= total) break;
@@ -65,6 +66,8 @@ test("fullscreen player with real covers", async () => {
           await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), shape);
           // Artwork, classifier and the continuation's canvas: let them land.
           await page.waitForTimeout(900);
+          // A new continuation fades in: shoot it once it has, not halfway over the fluid background.
+          await page.evaluate(() => Promise.all(document.querySelector('[data-testid="np-continuation"]')?.getAnimations().map((a) => a.finished) ?? []));
           await page.evaluate(() => {
             const set = (sel: string, text: string) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
             set("#fs-title", "Song Name");
@@ -77,8 +80,10 @@ test("fullscreen player with real covers", async () => {
       offset += Math.max(count, 1);
     } catch (error) {
       // An app that died mid-batch: relaunch from the first cover not yet shot, and
-      // give up on one that keeps failing.
+      // give up only when relaunches stop getting anywhere.
       console.warn(`batch at ${offset} failed:`, error);
+      if (offset > lastFailure) failures = 0;
+      lastFailure = offset;
       if (++failures > 3) throw error;
     } finally {
       await app.close().catch(() => undefined);

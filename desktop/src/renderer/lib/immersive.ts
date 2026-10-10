@@ -207,29 +207,53 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     }
     if (near) band([[0, 1], [0.1, 0]], reflection(near));
   }
-  // The scrim the controls need, already at full strength where they start (right at the seam):
-  // it comes in under the artwork's fading edge (or, past a crisp flat edge, just after it).
+  // Where the scrim is at full strength: the controls start right at the seam below the artwork,
+  // but a little way past it beside the artwork, so there it can come in more gently.
+  const full = flat ? S + 0.12 * S : right ? S + 0.06 * S : S;
+  // The scrim the controls need: it comes in under the artwork's fading edge (or, past a crisp
+  // flat edge, just after it).
   if (edge.scrim > 0) {
     const rgb = edge.light ? "255,255,255" : "0,0,0";
-    const [from, to] = flat ? [S, S + 0.12 * S] : [band0, S];
-    const g = ctx.createLinearGradient(0, from, 0, to);
-    g.addColorStop(0, `rgba(${rgb},0)`);
-    g.addColorStop(1, `rgba(${rgb},${edge.scrim})`);
+    const from = flat ? S : band0;
+    const g = ctx.createLinearGradient(0, from, 0, full);
+    eased(g, rgb, 0, edge.scrim);
     ctx.fillStyle = g;
     ctx.fillRect(0, from, W, H - from);
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // From the controls down (in screen terms, whichever way the continuation runs) it fades part
   // of the way to the controls' opposite: black under light controls, white under dark ones.
-  {
-    const rgb = edge.light ? "255,255,255" : "0,0,0";
-    const x0 = right ? S : 0;
-    const top = right ? canvas.height * 0.3 : S;
-    const g = ctx.createLinearGradient(0, top, 0, canvas.height);
-    g.addColorStop(0, `rgba(${rgb},0)`);
-    g.addColorStop(1, `rgba(${rgb},${BOTTOM_FADE})`);
-    ctx.fillStyle = g;
-    ctx.fillRect(x0, top, canvas.width - x0, canvas.height - top);
+  // Beside the artwork it comes in across the seam too, under the artwork's fading edge.
+  const rgb = edge.light ? "255,255,255" : "0,0,0";
+  const x0 = right ? (flat ? S : band0) : 0;
+  const top = right ? canvas.height * 0.3 : S;
+  const layer = document.createElement("canvas");
+  layer.width = canvas.width - x0;
+  layer.height = canvas.height - top;
+  const lc = layer.getContext("2d");
+  if (!lc) return;
+  const down = lc.createLinearGradient(0, 0, 0, layer.height);
+  eased(down, rgb, 0, BOTTOM_FADE);
+  lc.fillStyle = down;
+  lc.fillRect(0, 0, layer.width, layer.height);
+  if (right) {
+    lc.globalCompositeOperation = "destination-in";
+    const across = lc.createLinearGradient(0, 0, Math.max(1, full - x0), 0);
+    eased(across, "0,0,0", 0, 1);
+    lc.fillStyle = across;
+    lc.fillRect(0, 0, layer.width, layer.height);
+  }
+  ctx.drawImage(layer, x0, top);
+}
+
+/**
+ * Fills `g` from alpha `from` to `to` along a smoothstep: a straight ramp has a kink where it
+ * starts and where it ends, and the eye reads that kink as an edge.
+ */
+function eased(g: CanvasGradient, rgb: string, from: number, to: number): void {
+  for (let i = 0; i <= 8; i++) {
+    const t = i / 8;
+    g.addColorStop(t, `rgba(${rgb},${from + (to - from) * t * t * (3 - 2 * t)})`);
   }
 }
 

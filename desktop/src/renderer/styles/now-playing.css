@@ -243,9 +243,11 @@
 .np[data-immersive] .np-main { position: absolute; left: 0; top: 0; z-index: 1; container-type: normal; }
 .np[data-immersive] .np-art-slot { display: block; }
 .np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
-/* The artwork's last 18% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas beneath. */
-.np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, #000 82%, transparent); }
-.np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, #000 82%, transparent); }
+/* The artwork's last 18% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
+   beneath, along a smoothstep: a straight ramp's ends read as edges. */
+.np[data-immersive] { --np-feather: #000 82%, rgba(0, 0, 0, 0.96) 84.25%, rgba(0, 0, 0, 0.84) 86.5%, rgba(0, 0, 0, 0.68) 88.75%, rgba(0, 0, 0, 0.5) 91%, rgba(0, 0, 0, 0.32) 93.25%, rgba(0, 0, 0, 0.16) 95.5%, rgba(0, 0, 0, 0.04) 97.75%, transparent; }
+.np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)); }
+.np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)); }
 /* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
 .np[data-immersive][data-flat] .np-art { mask-image: none; }
 .np[data-immersive] .np-head, .np[data-immersive] .np-controls { position: relative; z-index: 2; }
