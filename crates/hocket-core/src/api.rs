@@ -765,6 +765,114 @@ pub struct AutoplaySettings {
 }
 
 // ---------------------------------------------------------------------------
+// Immersive artwork (how the full player shows a cover; `crate::artwork`)
+// ---------------------------------------------------------------------------
+
+/// How the full player shows a cover along one of its edges.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtworkStyle {
+    /// Edge to edge, continued past the edge by a flipped copy that blurs and fades with distance.
+    Mirror,
+    /// Edge to edge, continued past the edge by the colours along it ([`ArtworkEdge::edge_colors`]).
+    Extend,
+    /// A rounded card on the artwork's blurred colours (the player as it was).
+    Card,
+}
+
+/// The `display.immersiveArtwork` setting.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ImmersiveArtwork {
+    /// Mirror or extend where the cover suits it, a card otherwise.
+    #[default]
+    Automatic,
+    /// Mirror or extend every square cover.
+    Always,
+    /// Always a card.
+    Never,
+}
+
+/// A detected face, as fractions of the image's width and height (origin top left).
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// What the platform hands [`crate::artwork::layout`] beside the pixels.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkLayoutRequest {
+    #[serde(default)]
+    pub faces: Vec<FaceRect>,
+    #[serde(default)]
+    pub preference: ImmersiveArtwork,
+}
+
+/// The measurements a decision was made from (for tuning and the debug grid).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkMetrics {
+    /// Share of the edge strip within a small colour distance of its median (1 = one flat colour).
+    pub flat: f64,
+    /// Mean colour distance of the edge strip from its own column colours (0 = every column is one colour).
+    pub drift: f64,
+    /// How much the column colours change from one column to the next.
+    pub rough: f64,
+    /// Small high-contrast shapes (text, logos, stickers) in the zone a reflection shows sharply.
+    pub marks: u32,
+    /// Mean colour change between neighbouring pixels in the lower 40%.
+    pub busy: f64,
+    pub faces: u32,
+}
+
+/// How to show the cover with the continuation along one edge (bottom for a portrait layout, right
+/// for a landscape one). Colours are `0xRRGGBB`.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkEdge {
+    pub style: ArtworkStyle,
+    /// The colours along the edge, sampled evenly (left to right for the bottom edge, top to bottom
+    /// for the right edge): what [`ArtworkStyle::Extend`] carries on. All one colour when the edge is flat.
+    pub edge_colors: Vec<u32>,
+    /// What the continuation fades into, far from the artwork.
+    pub base_color: u32,
+    /// Dark text and controls over the continuation (it is light); light ones otherwise.
+    pub light: bool,
+    /// The opacity of the scrim (black under light text, white under dark text) that the controls
+    /// need over the continuation to reach 4.5:1.
+    pub scrim: f64,
+    /// Why this style, e.g. `mirror`, `extend:flat`, `card:marks` (debugging and tuning).
+    pub reason: String,
+    pub metrics: ArtworkMetrics,
+}
+
+/// The full player's artwork layout for one cover.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkLayout {
+    /// Art on top, continued downwards (phones, narrow windows).
+    pub bottom: ArtworkEdge,
+    /// Art on the left, continued to the right (wide windows).
+    pub right: ArtworkEdge,
+    /// The top strip (under the status bar and the player's header) is light: dark icons there.
+    pub top_light: bool,
+    /// Text or a logo sits in the top strip: start the artwork below the status bar.
+    pub top_marks: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Lyrics (renderable model adapted from OpenSubsonic v2 structured lyrics)
 // ---------------------------------------------------------------------------
 
