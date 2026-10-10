@@ -73,6 +73,49 @@ Main files: `ui/player/NowPlayingPage.kt`, `NowPlayingSheet.kt`, `Transport.kt`,
 - `RatingStars` gains horizontal drag: the rating follows the finger, rounded to whole stars, committed on release, with a haptic tick per star.
 - Tap keeps its current behaviour, including tap-again-to-clear. Accessibility stays a slider-like semantic with custom actions.
 
+**Immersive artwork while dragging the player down (user, 10 Oct: "feels a bit janky")**
+
+*Cause:*
+- While the sheet moves, `FlyingArtwork` (`NowPlayingSheet.kt` ~:570) lerps the cover from the full-width big slot to the mini thumbnail.
+- `ImmersiveContinuation` (~:492) stays laid out for the full-size cover and only fades with `backgroundAlpha(progress)`.
+- So mid-drag a shrinking square sits beside a continuation still sized for the full cover. The hard right and bottom edges in the user's screenshot come from this.
+- The flying cover's `immersiveFade` is also re-driven by progress, so its seam changes while it shrinks.
+
+*Fix:* make the cover and its continuation one unit while in flight.
+- Draw the continuation inside the flying layer, under the same transform, so it scales and moves with the cover. It fades out over the first part of the drag, and the corners round towards the thumbnail's.
+- Keep the seam fade fixed (the landed one) until the continuation has faded, so nothing re-renders per frame.
+- Shape the motion like Apple Music: for roughly the first 40% of the drag the whole immersive scene slides down with the sheet at full size, and only then shrinks into the mini player.
+- The header and controls fade early (they already do; check the Cast and collapse icons don't hang over the art mid-drag, as in the screenshot).
+- Check on a real device and in a Robolectric frame sequence: capture `progress` at 0.9, 0.7, 0.5 and 0.3, for a mirror cover and an extend cover.
+
+**Swipe between songs with the neighbour's artwork peeking (user, 10 Oct)**
+
+*Today:* `PlayerArtwork` (`NowPlayingPage.kt` :617-700) and `MiniPlayerBar` (:99-200) rubber-band the current cover, dispatch `Next`/`Previous` past a threshold, and spring back. Nothing of the neighbour shows.
+
+*New behaviour,* like a standard music player:
+- The cover becomes a three-slot carousel (previous, current, next) that follows the finger 1:1.
+- The neighbour's cover slides in from the edge, with a gap equal to the side margin.
+- On release, past half the width or a fling, it settles on the neighbour and then dispatches the command. Otherwise it springs back.
+- The neighbours come from the queue view: the next upcoming item, and the last history item.
+- At the queue's end with repeat off, there's no next slot, and the swipe rubber-bands as today. With autoplay, use the first autoplay item if one is already queued.
+- `Previous` restarts the track when it is more than a few seconds in (check the core's rule). Then the previous swipe peeks at the current cover's restart, not the previous track, so the peek matches what happens.
+- Preload the neighbours' images through the existing artwork loader so a peek never shows a blank.
+
+*Immersive:*
+- Compute neighbours' `rememberArtworkLayout` ahead, as the desktop does with `prepareScene` for the next track.
+- A neighbour slides in as its own unit: an immersive neighbour with its continuation, a card neighbour as a card.
+- The backdrop and colour scheme crossfade on commit, not during the drag.
+- The title and artist text crossfade with the swipe fraction.
+
+*Mini player:* the same carousel in miniature. The neighbour's thumbnail, title and artist slide in.
+
+*Other details:*
+- Haptic tick when the swipe passes the commit point.
+- The accessibility custom actions stay (next and previous).
+- Reduced motion: no peek, a plain crossfade on commit.
+
+*Tests:* a Robolectric drag test. Half a swipe shows the next cover's tag and dispatches nothing; a full swipe dispatches `Next` once; a swipe at the queue's end springs back.
+
 **Tests to update:** `FullPlayerLayoutTest`, `NowPlayingSheetTest`, `PlayerAccessibilityTest`, `LargeFontLayoutTest`, `SongMenuTest`. New tests cover the title tap opening the info sheet, the star drag, the "Playing on" visibility, and the setting hiding the stars.
 
 ## 3. Desktop: bottom bar, sidebar, fullscreen (#47)
@@ -208,6 +251,8 @@ Measurements were taken off the images (both are 2×) and rounded to the app's s
    3. info sheet
    4. Queue and Lyrics mode panels with the gradient pills
    5. swipe stars
+   6. dismiss-drag fix for immersive artwork
+   7. swipe carousel with peeking neighbours (full player and mini player)
 
    Run the unit and Robolectric tests after each step.
 5. Commit in logical steps and push to `claude/funny-brahmagupta-9ggj7k`. No PR unless asked.
@@ -228,6 +273,7 @@ Measurements were taken off the images (both are 2×) and rounded to the app's s
 - the info sheet;
 - the song menu;
 - the stars hidden by the setting;
+- a frame sequence of the dismiss drag (mirror and extend covers), and of a half swipe showing the next cover peeking;
 - one immersive cover via `ImmersiveScreenshotTest`.
 
 Put them together in one contact sheet per platform and send them with `SendUserFile`, along with before/after pairs.
