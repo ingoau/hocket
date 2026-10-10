@@ -3,9 +3,33 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Two voices alternating notes: the hocket. -->
-    <path android:fillColor="#FFB5A7F5" android:pathData="M30,40 h10 v36 h-10z" />
-    <path android:fillColor="#FF7DD3C0" android:pathData="M49,30 h10 v46 h-10z" />
-    <path android:fillColor="#FFB5A7F5" android:pathData="M68,48 h10 v28 h-10z" />
-    <path android:fillColor="#FFF4F1FF" android:pathData="M25,76 h58 v6 h-58z" />
+    <!-- The Crescendo mark: one line, two voices taking alternate notes.
+         Drawn on its 100-unit tile, mapped onto the 72 dp visible area of the adaptive icon.
+         Each note overlaps the one before it, so the round caps hide the hand-offs. -->
+    <group
+        android:scaleX="0.72"
+        android:scaleY="0.72"
+        android:translateX="18"
+        android:translateY="18">
+        <path
+            android:pathData="M16,48.5 C23,37.81 26,37.81 33,48.5"
+            android:strokeColor="#FFE4DFFF"
+            android:strokeLineCap="round"
+            android:strokeWidth="12" />
+        <path
+            android:pathData="M33,48.5 C40,63.2 43,63.2 50,48.5"
+            android:strokeColor="#FF8F80F5"
+            android:strokeLineCap="round"
+            android:strokeWidth="12" />
+        <path
+            android:pathData="M50,48.5 C57,29.8 60,29.8 67,48.5"
+            android:strokeColor="#FFE4DFFF"
+            android:strokeLineCap="round"
+            android:strokeWidth="12" />
+        <path
+            android:pathData="M67,48.5 C74,71.21 77,71.21 84,48.5"
+            android:strokeColor="#FF8F80F5"
+            android:strokeLineCap="round"
+            android:strokeWidth="12" />
+    </group>
 </vector>
