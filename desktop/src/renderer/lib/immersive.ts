@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
-import { useArtwork } from "../components/Artwork";
+import { resolveArtwork } from "../components/Artwork";
 
 /** What the classifier gets: the cover at this side (it resamples to 128 itself). */
 const SIDE = 256;
@@ -47,23 +47,70 @@ export async function classify(url: string, preference: ImmersiveArtwork, dark: 
 }
 
 /**
- * The layout for `coverArt`: undefined while it is worked out, without a cover, or without the
- * native core. `dark` is the app's theme: the controls follow it unless the cover is almost all
- * dark or light.
+ * Everything the fullscreen player shows of one cover, ready to draw: the artwork (decoded at
+ * full size) and its layout. The player switches to a cover only once its scene is ready, and
+ * switches the artwork, the layout and the continuation together, so they never disagree on
+ * screen (a new cover beside the old continuation, or beside one still fading in).
  */
-export function useArtworkLayout(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): ArtworkLayout | undefined {
-  const url = useArtwork(coverArt, 300);
-  const [layout, setLayout] = useState<ArtworkLayout | undefined>(undefined);
+export interface Scene {
+  coverArt: string;
+  url: string | undefined;
+  img: HTMLImageElement | undefined;
+  /** Undefined without the native core (or for a cover that could not be read): a card. */
+  layout: ArtworkLayout | undefined;
+}
+
+/** Scenes being prepared or ready, most recent last; a few are kept (the current, the next, the last). */
+const scenes = new Map<string, Promise<Scene>>();
+const ready = new Map<string, Scene>();
+const KEEP = 8;
+
+/** The scene for `coverArt`, prepared once and cached (call it ahead of time for the next track). */
+export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dark: boolean): Promise<Scene> {
+  const key = `${coverArt}|${preference}|${dark}`;
+  let p = scenes.get(key);
+  if (p) {
+    scenes.delete(key);
+    scenes.set(key, p);
+    return p;
+  }
+  p = Promise.all([
+    resolveArtwork(coverArt, 1000).then(async (url) => ({ url, img: url ? await loadImage(url) : undefined })),
+    resolveArtwork(coverArt, 300).then((url) => (url ? classify(url, preference, dark) : undefined)),
+  ]).then(([{ url, img }, layout]) => {
+    const scene = { coverArt, url, img, layout };
+    if (scenes.has(key)) ready.set(key, scene);
+    return scene;
+  });
+  scenes.set(key, p);
+  for (const old of [...scenes.keys()].slice(0, Math.max(0, scenes.size - KEEP))) {
+    scenes.delete(old);
+    ready.delete(old);
+  }
+  return p;
+}
+
+/**
+ * The scene to show for `coverArt`: the one before it until its own is ready (undefined only
+ * before the first, or without a cover).
+ */
+export function useScene(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): Scene | undefined {
+  const key = coverArt ? `${coverArt}|${preference}|${dark}` : undefined;
+  const [scene, setScene] = useState<Scene | undefined>(() => (key ? ready.get(key) : undefined));
+  const cached = key ? ready.get(key) : undefined;
+  if (cached && cached !== scene) setScene(cached);
   useEffect(() => {
-    setLayout(undefined);
-    if (!url) return;
+    if (!coverArt) {
+      setScene(undefined);
+      return;
+    }
     let alive = true;
-    void classify(url, preference, dark).then((l) => alive && setLayout(l));
+    void prepareScene(coverArt, preference, dark).then((s) => alive && setScene(s));
     return () => {
       alive = false;
     };
-  }, [url, preference, dark]);
-  return layout;
+  }, [coverArt, preference, dark]);
+  return coverArt ? scene : undefined;
 }
 
 export type Orientation = "bottom" | "right";

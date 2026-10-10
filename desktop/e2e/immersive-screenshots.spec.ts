@@ -15,8 +15,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "@playwright/test";
-import type { AlbumPage, ServerInfo } from "../src/core/api";
+import { expect, test } from "@playwright/test";
+import type { AlbumPage, ServerInfo, Snapshot } from "../src/core/api";
 import { completeSetup, launchFake } from "./fixtures";
 
 const covers = process.env.HOCKET_FAKE_COVERS;
@@ -62,13 +62,34 @@ test("fullscreen player with real covers", async () => {
           await page.keyboard.press("f");
           await page.getByTestId("fullscreen-player").waitFor();
         }
+        // The cover of the track now playing (an album's tracks may wear their own).
+        let cover: string | undefined;
+        await expect
+          .poll(async () => {
+            const snapshot = (await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: Snapshot };
+            const track = snapshot.data.queue.current?.track;
+            cover = track?.coverArt;
+            return track?.albumId === album.id;
+          })
+          .toBe(true);
         for (const shape of SHAPES) {
           await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), shape);
-          // Artwork, classifier and the continuation's canvas: let them land.
-          await page.waitForTimeout(900);
-          // A new continuation fades in, and the player crossfades to the new track: shoot once both
-          // have finished, not halfway (endless animations, like a spinner, never do).
-          await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY).map((a) => a.finished.catch(() => undefined))));
+          // The new cover's scene (artwork, layout, continuation) on screen on its own, then settled.
+          await page.locator(`[data-testid="np-artwork"][data-cover="${cover}"]`).waitFor();
+          await page.waitForTimeout(300);
+          // Then the scene's own fades and the controls' change of colour: shoot once they have
+          // finished, not halfway (only the player's; lyrics animate for as long as a line lasts).
+          await page.evaluate(() =>
+            Promise.all(
+              document
+                .getAnimations()
+                .filter((a) => {
+                  const target = (a.effect as KeyframeEffect | null)?.target;
+                  return target instanceof Element && !!target.closest(".np-art, .np-continuation, .np-controls") && a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY;
+                })
+                .map((a) => a.finished.catch(() => undefined)),
+            ),
+          );
           await page.evaluate(() => {
             const set = (sel: string, text: string) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
             set("#fs-title", "Song Name");

@@ -37,8 +37,7 @@ import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
-import { drawContinuation, isFlat, loadImage, useArtworkLayout, type Orientation } from "../lib/immersive";
-import { useArtwork } from "../components/Artwork";
+import { drawContinuation, isFlat, prepareScene, useScene, type Orientation, type Scene } from "../lib/immersive";
 import { SK } from "@shared/settings-keys";
 import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { volumeValueText } from "../lib/a11y";
@@ -196,17 +195,49 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
   const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
-  const layout = useArtworkLayout(track?.coverArt, preference, dark);
+  // The artwork, its layout and its continuation switch together, once the new cover's scene is
+  // ready (the next track's is prepared ahead), and the new scene crossfades in over the last.
+  const scene = useScene(track?.coverArt, preference, dark);
+  const next = (queue.playingNext[0] ?? queue.upcoming[0])?.track.coverArt;
+  useEffect(() => {
+    if (next) void prepareScene(next, preference, dark);
+  }, [next, preference, dark]);
+  const layout = scene?.layout;
   const wide = useMediaQuery(WIDE_IMMERSIVE);
   const tall = useMediaQuery(TALL_IMMERSIVE);
-  const orientation: Orientation | undefined = mode === "art" && layout ? (wide ? "right" : tall ? "bottom" : undefined) : undefined;
-  const edge = orientation ? layout?.[orientation] : undefined;
-  const immersive = edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
+  const orientation: Orientation | undefined = mode === "art" ? (wide ? "right" : tall ? "bottom" : undefined) : undefined;
+  const immersiveOf = (s: Scene | undefined) => {
+    const edge = s && orientation ? s.layout?.[orientation] : undefined;
+    return edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
+  };
+  const immersive = immersiveOf(scene);
+  /** The scenes on screen: the current one last, over the one it is fading in from. */
+  const [shown, setShown] = useState<Scene[]>([]);
+  if (scene ? shown.at(-1) !== scene : shown.length > 0) setShown(scene ? [...shown.slice(-1), scene] : []);
+  // The one beneath goes when the new one has faded in (or, should no fade run, a little after).
+  const settle = () => setShown((s) => s.slice(-1));
+  useEffect(() => {
+    if (shown.length < 2) return;
+    const id = window.setTimeout(settle, SCENE_FADE_MS);
+    return () => window.clearTimeout(id);
+  }, [shown]);
+  // The one before stays beneath only when it is laid out the same way (both immersive, or both a
+  // card); otherwise the new scene fades in from the background on its own.
+  const fading = shown.length > 1;
+  const layers = shown.filter((s, i) => i === shown.length - 1 || !immersiveOf(s) === !immersive);
+  const bigArtContent = layers.length ? (
+    layers.map((s, i) => (s.url ? <img key={s.coverArt} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={s.coverArt} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
+  ) : (
+    <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>
+  );
 
   return (
     <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
-      <FluidBackground coverArt={track?.coverArt} />
-      {immersive && track ? <ImmersiveContinuation coverArt={track.coverArt} edge={immersive.edge} orientation={immersive.orientation} controls={controls} /> : null}
+      <FluidBackground coverArt={scene?.coverArt ?? track?.coverArt} />
+      {layers.map((s) => {
+        const im = immersiveOf(s);
+        return im ? <ImmersiveContinuation key={s.coverArt} img={s.img} edge={im.edge} orientation={im.orientation} controls={controls} /> : null;
+      })}
       <div className="np-fade" aria-hidden="true" />
       <div className="np-stage">
         <header className="np-head">
@@ -221,7 +252,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         <div className="np-main">
           {mode === "art" ? (
             <div className="np-art-slot">
-              <div ref={bigArt} className="np-art" data-testid="np-artwork">{art}</div>
+              <div ref={bigArt} className="np-art" data-testid="np-artwork" data-cover={layers.length === 1 ? scene?.coverArt : undefined}>{bigArtContent}</div>
             </div>
           ) : (
             <section key={mode} className={`np-pane np-pane-${mode}`} aria-label={t(`nowPlaying.view.${mode}`)} data-testid={`np-pane-${mode}`}>
@@ -292,6 +323,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   );
 }
 
+/** The latest a new cover's scene has faded in over the last (np-scene-in takes 500ms). */
+const SCENE_FADE_MS = 2000;
 /** Room for the controls beside a full-height artwork: at least 3:2. */
 const WIDE_IMMERSIVE = "(min-aspect-ratio: 3/2) and (min-height: 480px)";
 /** Room for the controls under a full-width artwork: at most 2:3. */
@@ -301,8 +334,7 @@ const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
  * The continuation past the immersive artwork's edge, drawn once per cover, layout and window size
  * (and wherever the controls, which its fade covers, end up).
  */
-function ImmersiveContinuation({ coverArt, edge, orientation, controls }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null> }) {
-  const url = useArtwork(coverArt, 1000);
+function ImmersiveContinuation({ img, edge, orientation, controls }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null> }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0, top: 0, bottom: 0 });
   useLayoutEffect(() => {
@@ -318,21 +350,15 @@ function ImmersiveContinuation({ coverArt, edge, orientation, controls }: { cove
     if (controls.current) ro.observe(controls.current);
     return () => ro.disconnect();
   }, [controls]);
-  useEffect(() => {
+  // Before paint: the scene's artwork is already decoded, so the continuation lands with it.
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !size.w || !size.h) return;
-    let alive = true;
     const dpr = window.devicePixelRatio || 1;
-    void (url ? loadImage(url) : Promise.resolve(undefined)).then((img) => {
-      if (!alive) return;
-      el.width = Math.round(size.w * dpr);
-      el.height = Math.round(size.h * dpr);
-      drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [url, edge, orientation, size]);
+    el.width = Math.round(size.w * dpr);
+    el.height = Math.round(size.h * dpr);
+    drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined);
+  }, [img, edge, orientation, size]);
   return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
 }
 
