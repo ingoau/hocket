@@ -18,6 +18,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(ROOT, "target", "release", "examples", "artwork_layout")
 W, H = 240, 520          # a phone, in "dp"
 DECODE = 256             # what the platform hands the core (Android decodes downsampled)
+FEATHER = 0.18           # share of the artwork that fades into the continuation
+BLUR_NEAR = 6            # blur at the seam (px at W)
+BLUR_FAR = 16            # blur far from it
 
 
 def faces_of(img):
@@ -73,30 +76,36 @@ def render(art, layout, edge="bottom"):
         # Far from the artwork every style ends on its blurred colours (the Card backdrop; moving
         # on the device); a flat extension stays its one colour all the way down.
         backdrop = art.resize((48, 48)).filter(ImageFilter.GaussianBlur(8)).resize((W, H)).crop((0, W, W, H))
-        flat = e["reason"] == "extend:flat"
+        flat = style == "extend" and len(set(e["edgeColors"])) <= 1
         cont = Image.new("RGB", (W, below), base) if flat else backdrop
+        # The seam: the artwork fades out over its last FEATHER of height onto a blurred copy of
+        # itself, and the continuation starts at that same blur, so nothing cuts over at the edge.
+        # A flat extension skips it: the artwork already ends in that colour, so it stays crisp.
+        f = int(W * FEATHER)
+        soft_art = top.filter(ImageFilter.GaussianBlur(BLUR_NEAR))
+        if not flat:
+            top.paste(soft_art.crop((0, W - f, W, W)), (0, W - f), mask(W, f, [(0, 0), (1, 255)]))
         if style == "mirror":
             flip = top.transpose(Image.FLIP_TOP_BOTTOM)
             sharp = Image.new("RGB", (W, below), base); sharp.paste(flip)
-            mid = sharp.filter(ImageFilter.GaussianBlur(5))
-            soft = sharp.filter(ImageFilter.GaussianBlur(16))
-            cont.paste(soft, (0, 0), mask(W, below, [(0, 255), (0.45, 255), (0.85, 0)]))
-            cont.paste(mid, (0, 0), mask(W, below, [(0, 255), (0.08, 255), (0.25, 0)]))
-            cont.paste(sharp, (0, 0), mask(W, below, [(0, 255), (0.04, 0)]))
+            near = sharp.filter(ImageFilter.GaussianBlur(BLUR_NEAR))
+            far = sharp.filter(ImageFilter.GaussianBlur(BLUR_FAR))
+            cont.paste(far, (0, 0), mask(W, below, [(0, 255), (0.5, 255), (0.9, 0)]))
+            cont.paste(near, (0, 0), mask(W, below, [(0, 255), (0.12, 255), (0.4, 0)]))
         else:
-            # The edge's colours carried down, softening sideways with distance (sharp at the seam,
-            # a wide blur by mid-way), then fading into the backdrop.
+            # The edge's colours carried down, as soft at the seam as the artwork's blurred edge,
+            # softening further with distance, then fading into the backdrop.
             cols = [rgb(c) for c in e["edgeColors"]]
             row = Image.fromarray(np.array([cols], np.uint8)).resize((W, 1), Image.BILINEAR)
-            sharp = row.resize((W, below))
             wide = row.resize((W, 8)).filter(ImageFilter.GaussianBlur(28)).crop((0, 4, W, 5)).resize((W, below))
-            soft = row.resize((W, 8)).filter(ImageFilter.GaussianBlur(10)).crop((0, 4, W, 5)).resize((W, below))
+            soft = row.resize((W, 8)).filter(ImageFilter.GaussianBlur(BLUR_NEAR)).crop((0, 4, W, 5)).resize((W, below))
             cont.paste(wide, (0, 0), mask(W, below, [(0, 255), (0.5, 255), (0.9, 0)]))
-            cont.paste(soft, (0, 0), mask(W, below, [(0, 255), (0.12, 255), (0.4, 0)]))
-            cont.paste(sharp, (0, 0), mask(W, below, [(0, 255), (0.12, 0)]))
-            # Feather the seam over the artwork's last few rows.
-            f = 10
-            top.paste(sharp.crop((0, 0, W, f)), (0, W - f), mask(W, f, [(0, 0), (1, 255)]))
+            cont.paste(soft, (0, 0), mask(W, below, [(0, 255), (0.15, 255), (0.45, 0)]))
+            # Bridge: a short, blurred reflection of the edge, so the colours take over from
+            # exactly what the artwork's softened edge shows.
+            bridge = Image.new("RGB", (W, below), base); bridge.paste(soft_art.transpose(Image.FLIP_TOP_BOTTOM))
+            if not flat:
+                cont.paste(bridge.filter(ImageFilter.GaussianBlur(BLUR_NEAR)), (0, 0), mask(W, below, [(0, 255), (0.1, 0)]))
         phone.paste(top, (0, 0))
         phone.paste(cont, (0, W))
         light = e["light"]

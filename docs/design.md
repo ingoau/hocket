@@ -373,6 +373,24 @@ Every user-visible action is a first-class object: id, label, icon, applicabilit
 - Always-on-top mini player: artwork thumbnail, title and artist, transport, progress. No queue, no lyrics.
 
 
+### Immersive artwork
+
+Apple Music's full-bleed artwork, without its animated covers (which we don't have): the full player's artwork runs edge to edge and is carried on past its edge, or stays a card when that would look wrong. One setting, `display.immersiveArtwork`: Automatic, Always (never a card for a square cover), Never.
+
+| Style | What it draws | When |
+|---|---|---|
+| Mirror | The artwork flipped past its edge, sharp at the seam and blurring with distance, fading into the moving background. | Nothing near the edge looks wrong flipped: no close-up face, no text, logo or sticker in the zone a reflection shows sharply, not so busy the controls drown. |
+| Extend | The colours along the edge carried on, sharp at the seam and softening sideways with distance. A flat edge stays its one colour all the way down: a white cover stays white, with dark controls. | The edge strip is one colour (text on a plain background), or the very last row is (a border, a band, a backdrop) and a mirror isn't safe, or each column holds its colour (a horizon, a gradient). |
+| Card | The artwork as a rounded card on its own blurred, moving colours. | Everything else: close-up portraits, busy covers, text across the bottom, non-square art. |
+
+- **The decision is the core's** (`hocket_core::artwork`), a pure function of the cover's pixels and the faces the platform found: both platforms decide the same, and it is tested once. Everything is measured on the cover resampled to 128 px in OKLab. Text and logos are small shapes standing out from the median of their surroundings (a median keeps edges, so the boundary of a large shape never counts) on a plain background (foliage and crowds are texture, not text), at two scales so bold titles count too.
+- **Faces**: platform-side, only ruling a mirror out, and only close-ups (at least a tenth of the width): a figure seen whole reflects like one standing by water. Android uses the framework's `FaceDetector`, no dependency; the desktop has none yet. On a 504-cover library a frontal-only detector found faces on 72 covers where YuNet found 170: a better detector is the main thing left.
+- **Both edges at once**: the bottom for portrait screens and narrow windows, the right for wide windows (the artwork at the window's full height on the left, the controls beside it). Between the two shapes, a card.
+- **Contrast**: the core picks light or dark controls, whichever needs the lighter scrim over the continuation, and sizes that scrim for 4.5:1.
+- **Rendering is a still**: drawn once per cover and window size (the desktop's canvas, Compose layers on Android); only the background beneath moves. Mirror's progressive blur needs Android 12; before it the reflection only fades.
+- **Tuning**: `scripts/artwork-eval.py` runs the classifier over a folder of covers and draws what each would look like, grouped by style.
+
+
 ### Keyboard
 
 | Key | Action |

@@ -75,16 +75,66 @@ export function soften(colors: number[], radius: number): number[] {
   });
 }
 
+/** One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. */
+export function isFlat(edge: ArtworkEdge): boolean {
+  return edge.style === "extend" && new Set(edge.edgeColors).size <= 1;
+}
+
+/** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
+export const FEATHER = 0.18;
+/** Blur at the seam and far from it, as shares of the artwork's side. */
+const BLUR_NEAR = 0.025;
+const BLUR_FAR = 0.067;
+
+/**
+ * The artwork with its reflection below it, padded on every side by reflection too, blurred by
+ * `blur` px: what both sides of the seam are cut from. Blurring the two together keeps the seam
+ * continuous, and the padding keeps the canvas edges from blurring into transparency.
+ */
+function mirrored(source: CanvasImageSource, W: number, S: number, blur: number): { canvas: HTMLCanvasElement; pad: number } {
+  const pad = Math.ceil(blur * 3);
+  const c = document.createElement("canvas");
+  c.width = W + 2 * pad;
+  c.height = 2 * S + pad;
+  const ctx = c.getContext("2d");
+  if (!ctx) return { canvas: c, pad };
+  const tile = document.createElement("canvas");
+  tile.width = c.width;
+  tile.height = c.height;
+  const t = tile.getContext("2d");
+  if (t) {
+    for (const [sx, dx] of [[1, pad], [-1, pad], [-1, pad + 2 * W]] as const) {
+      // The artwork, then flipped below it; the side copies are mirrored horizontally.
+      t.save();
+      t.translate(dx, 0);
+      t.scale(sx, 1);
+      t.drawImage(source, 0, 0, W, S);
+      t.translate(0, 2 * S);
+      t.scale(1, -1);
+      t.drawImage(source, 0, 0, W, S);
+      t.restore();
+    }
+  }
+  ctx.filter = blur > 0 ? `blur(${blur}px)` : "none";
+  ctx.drawImage(tile, 0, 0);
+  return { canvas: c, pad };
+}
+
 /**
  * Draws the continuation into `canvas` (sized to the player, in CSS px × dpr): for
- * "bottom", everything below the artwork's square (the full width at the top); for
- * "right", everything right of it (the full height at the left). Mirror: the artwork
- * flipped, sharp at the seam and blurring with distance. Extend: the colours along
- * the edge carried on, softening sideways with distance. Both fade out (to the
- * fluid background beneath) except over a light continuation or one flat colour,
- * which carry on in their own colour. Then the scrim the core worked out for 4.5:1.
+ * "bottom", from the artwork's lower part down (the full width at the top); for
+ * "right", from its right part rightwards (the full height at the left). The seam
+ * never cuts over: the artwork fades out over its last FEATHER (a CSS mask) onto a
+ * blurred copy of itself drawn here, and the continuation starts at that same blur.
+ * Except a flat extension ([isFlat]): the artwork already ends in that one colour, so
+ * it stays crisp to its edge and the colour simply carries on.
+ * Mirror: the reflection, blurring further with distance. Extend: a short blurred
+ * reflection bridging into the colours along the edge, softening sideways with
+ * distance. Both fade out (to the fluid background beneath) except over a light
+ * continuation or one flat colour, which carry on in their own colour. Then the
+ * scrim the core worked out for 4.5:1.
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, dpr: number): void {
+export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -109,12 +159,13 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   }
   if (right) ctx.setTransform(0, 1, 1, 0, 0, 0);
   const region = H - S;
-  const flat = new Set(edge.edgeColors).size <= 1;
+  const flat = isFlat(edge);
+  const band0 = flat ? S : Math.round(S * (1 - FEATHER));
   if (flat || edge.light) {
     ctx.fillStyle = hex(edge.baseColor);
-    ctx.fillRect(0, S, W, region);
+    ctx.fillRect(0, band0, W, H - band0);
   }
-  /** Draws `paint` into a band layer masked to `stops` ([fraction of S from the seam, alpha]). */
+  /** Draws `paint` into a layer below the seam, masked to `stops` ([fraction of S from the seam, alpha]). */
   const band = (stops: [number, number][], paint: (c: CanvasRenderingContext2D) => void) => {
     const layer = document.createElement("canvas");
     layer.width = W;
@@ -129,27 +180,25 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     lc.fillRect(0, 0, W, region);
     ctx.drawImage(layer, 0, S);
   };
-  if (edge.style === "mirror" && source) {
-    const flipped = (blurPx: number) => (c: CanvasRenderingContext2D) => {
-      c.filter = blurPx > 0 ? `blur(${blurPx * dpr}px)` : "none";
-      c.save();
-      c.scale(1, -1);
-      c.drawImage(source, 0, -S, W, S);
-      c.restore();
-    };
-    band([[0, 1], [0.45, 1], [0.85, 0]], flipped(40));
-    band([[0, 1], [0.08, 1], [0.25, 0]], flipped(12));
-    band([[0, 1], [0.04, 0]], flipped(0));
-  } else if (edge.style === "extend" && !flat) {
+  const near = source && !flat ? mirrored(source, W, S, BLUR_NEAR * S) : undefined;
+  const reflection = (m: { canvas: HTMLCanvasElement; pad: number }) => (c: CanvasRenderingContext2D) => c.drawImage(m.canvas, m.pad, S, W, region, 0, 0, W, region);
+  // Under the artwork's fading edge: the same artwork, blurred.
+  if (near) ctx.drawImage(near.canvas, near.pad, band0, W, S - band0, 0, band0, W, S - band0);
+  if (edge.style === "mirror" && near && source) {
+    band([[0, 1], [0.5, 1], [0.9, 0]], reflection(mirrored(source, W, S, BLUR_FAR * S)));
+    band([[0, 1], [0.12, 1], [0.4, 0]], reflection(near));
+  } else if (edge.style === "extend") {
     const across = (colors: number[]) => (c: CanvasRenderingContext2D) => {
       const g = c.createLinearGradient(0, 0, W, 0);
       colors.forEach((col, i) => g.addColorStop(colors.length > 1 ? i / (colors.length - 1) : 0, hex(col)));
       c.fillStyle = g;
       c.fillRect(0, 0, W, region);
     };
-    band([[0, 1], [0.5, 1], [0.9, 0]], across(soften(edge.edgeColors, 6)));
-    band([[0, 1], [0.12, 1], [0.4, 0]], across(soften(edge.edgeColors, 2)));
-    band([[0, 1], [0.12, 0]], across(edge.edgeColors));
+    if (!flat) {
+      band([[0, 1], [0.5, 1], [0.9, 0]], across(soften(edge.edgeColors, 6)));
+      band([[0, 1], [0.15, 1], [0.45, 0]], across(soften(edge.edgeColors, 2)));
+    }
+    if (near) band([[0, 1], [0.1, 0]], reflection(near));
   }
   if (edge.scrim > 0) {
     const rgb = edge.light ? "255,255,255" : "0,0,0";

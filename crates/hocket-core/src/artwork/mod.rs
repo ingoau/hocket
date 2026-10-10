@@ -33,7 +33,7 @@ const REFLECT_ROWS: usize = 16;
 const BUSY_ROWS: usize = 51;
 /// The strip under the status bar and the player's header (~10%).
 const TOP_ROWS: usize = 13;
-/// Colours closer than this (OKLab distance) count as the same flat colour.
+/// Colours closer than this ([dist_flat]) count as the same flat colour.
 const FLAT_TOL: f32 = 0.05;
 /// An edge this flat is extended even where a mirror would do: there is nothing to reflect.
 const FLAT_PLAIN: f64 = 0.97;
@@ -163,7 +163,7 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
     let rough = columns
         .iter()
         .zip(&smooth)
-        .map(|(a, b)| dist(*a, *b) as f64)
+        .map(|(a, b)| dist_flat(*a, *b) as f64)
         .sum::<f64>()
         / N as f64;
     let marks = img.marks(N - REFLECT_ROWS..N);
@@ -333,7 +333,7 @@ impl Img {
 
     fn share_within(&self, rows: std::ops::Range<usize>, c: [f32; 3], tol: f32) -> f64 {
         let (n, near) = self.rows(rows).fold((0, 0), |(n, near), p| {
-            (n + 1, near + (dist(p, c) <= tol) as usize)
+            (n + 1, near + (dist_flat(p, c) <= tol) as usize)
         });
         near as f64 / n.max(1) as f64
     }
@@ -347,7 +347,7 @@ impl Img {
     fn drift(&self, rows: std::ops::Range<usize>, columns: &[[f32; 3]]) -> f64 {
         let n = rows.len() * N;
         rows.flat_map(|y| (0..N).map(move |x| (x, y)))
-            .map(|(x, y)| dist(self.at(x, y), columns[x]) as f64)
+            .map(|(x, y)| dist_flat(self.at(x, y), columns[x]) as f64)
             .sum::<f64>()
             / n.max(1) as f64
     }
@@ -529,6 +529,22 @@ fn mean_lab(cells: &[[f32; 3]]) -> [f32; 3] {
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+/// [dist] with lightness through Ottosson's "toe" (the L_r of Okhsl), for asking whether colours
+/// are the same flat colour: plain OKLab's cube root makes near-blacks far apart (sRGB 0 and 2
+/// differ by 0.08 in L, more than a visible step elsewhere), which would call a pure black
+/// background noisy. Texture and marks keep plain [dist], which they were tuned in.
+fn dist_flat(a: [f32; 3], b: [f32; 3]) -> f32 {
+    dist([toe(a[0]), a[1], a[2]], [toe(b[0]), b[1], b[2]])
+}
+
+const K1: f32 = 0.206;
+const K2: f32 = 0.03;
+const K3: f32 = (1.0 + K1) / (1.0 + K2);
+
+fn toe(x: f32) -> f32 {
+    0.5 * (K3 * x - K1 + ((K3 * x - K1) * (K3 * x - K1) + 4.0 * K2 * K3 * x).sqrt())
 }
 
 // ---------------------------------------------------------------------------

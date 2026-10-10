@@ -37,7 +37,7 @@ import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
-import { drawContinuation, loadImage, useArtworkLayout, type Orientation } from "../lib/immersive";
+import { drawContinuation, isFlat, loadImage, useArtworkLayout, type Orientation } from "../lib/immersive";
 import { useArtwork } from "../components/Artwork";
 import { SK } from "@shared/settings-keys";
 import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
@@ -201,7 +201,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const immersive = edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
 
   return (
-    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={track?.coverArt} />
       {immersive && track ? <ImmersiveContinuation coverArt={track.coverArt} edge={immersive.edge} orientation={immersive.orientation} /> : null}
       <div className="np-fade" aria-hidden="true" />
@@ -315,7 +315,7 @@ function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: stri
       if (!alive) return;
       el.width = Math.round(size.w * dpr);
       el.height = Math.round(size.h * dpr);
-      drawContinuation(el, img, edge, orientation, dpr);
+      drawContinuation(el, img, edge, orientation);
     });
     return () => {
       alive = false;

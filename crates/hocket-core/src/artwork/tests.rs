@@ -307,3 +307,18 @@ fn colour_round_trip() {
         }
     }
 }
+
+#[test]
+fn near_black_noise_is_flat() {
+    // A black background with JPEG-level noise (0..2) is one colour, not texture.
+    let mut c = Canvas::new(S, S, [0; 3]);
+    for y in 0..S {
+        for x in 0..S {
+            let v = ((x * 7 + y * 13) % 3) as u8;
+            c.set(x, y, [v, v, v]);
+        }
+    }
+    c.fill(80, 40, 96, 96, [230, 80, 70]);
+    let l = c.auto();
+    assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}

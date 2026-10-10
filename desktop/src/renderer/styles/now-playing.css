@@ -243,6 +243,11 @@
 .np[data-immersive] .np-main { position: absolute; left: 0; top: 0; z-index: 1; container-type: normal; }
 .np[data-immersive] .np-art-slot { display: block; }
 .np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
+/* The artwork's last 18% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas beneath. */
+.np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, #000 82%, transparent); }
+.np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, #000 82%, transparent); }
+/* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
+.np[data-immersive][data-flat] .np-art { mask-image: none; }
 .np[data-immersive] .np-head, .np[data-immersive] .np-controls { position: relative; z-index: 2; }
 .np[data-immersive="right"] .np-main { width: 100vh; height: 100vh; }
 .np[data-immersive="right"] .np-stage, .np[data-immersive="right"][data-mode] .np-stage {
