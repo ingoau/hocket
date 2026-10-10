@@ -153,9 +153,13 @@ Main files: `ui/player/NowPlayingPage.kt`, `NowPlayingSheet.kt`, `Transport.kt`,
 - Update `panels.spec.ts`, `chrome.spec.ts`, `exit-motion.spec.ts`, `motion-contrast.spec.ts`, `a11y.spec.ts`, `keyboard-a11y.spec.ts` and `lyrics.spec.ts`.
 - Update `docs/design.md` "Desktop layout" and the fullscreen bullet.
 
-## 3d. Visual fidelity: the prototypes' shapes and spacing are the spec
+## 3d. Visual fidelity: keep the prototypes' feel; they're a reference, not a spec
 
-The user wants the prototypes' vibe kept: shapes, proportions and spacing.
+The user wants the prototypes' vibe kept: shapes, proportions and spacing. **The user also said (10 Oct): "if you think something is better, use it instead. you don't need to follow exactly."** So the numbers below are a reference. Where something is better, do that instead and say why in the final summary.
+
+Deviations already planned:
+- Mobile bottom-row buttons are 48 dp (Material's minimum touch target), not 44 dp.
+- Desktop sizes snap to the app's existing radius and spacing tokens rather than the exact measured values.
 - The colours, copy, background and font stay the app's own.
 - The prototype images are on this branch in `docs/plans/prototypes/`. The GitHub attachment URLs need a login, so a new container can't fetch them.
 - While building, compare each screen side by side with its prototype, and include those pairs with the final screenshots.
