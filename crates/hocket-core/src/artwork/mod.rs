@@ -56,7 +56,7 @@ const ROUGH_MAX: f64 = 0.02;
 /// Faces narrower than this share of the width are ignored: a figure seen whole reflects like
 /// one standing by water; it is a close-up face that looks wrong upside down.
 const FACE_MIN: f64 = 0.1;
-/// A cover this much very dark (or very light) is a dark (light) cover: the controls follow it, not the theme.
+/// A continuation this much very dark (or very light) keeps light (dark) controls, whatever the theme.
 const TONE_SHARE: f64 = 0.8;
 /// Very dark / very light, in WCAG relative luminance (about sRGB 70 and 205 in grey).
 const DARK_LUM: f64 = 0.06;
@@ -101,25 +101,8 @@ pub fn layout(
         })
         .collect();
     let top = img.median(0..TOP_ROWS);
-    // Light or dark controls: the cover's when it is almost all one or the other, else the theme's.
-    let (dark_share, light_share) = img.tone_shares();
-    let controls = if dark_share >= TONE_SHARE {
-        Controls::Light
-    } else if light_share >= TONE_SHARE {
-        Controls::Dark
-    } else {
-        match request.theme {
-            Some(ArtworkTheme::Dark) => Controls::Light,
-            Some(ArtworkTheme::Light) => Controls::Dark,
-            None => Controls::Auto,
-        }
-    };
-    let decide = |img: &Img, faces: &[FaceRect]| {
-        let mut e = edge(img, faces, square, request.preference, controls);
-        e.metrics.dark_share = dark_share;
-        e.metrics.light_share = light_share;
-        e
-    };
+    let decide =
+        |img: &Img, faces: &[FaceRect]| edge(img, faces, square, request.preference, request.theme);
     ArtworkLayout {
         bottom: decide(&img, &faces),
         right: decide(&img.transposed(), &transposed_faces),
@@ -167,7 +150,7 @@ fn edge(
     faces: &[FaceRect],
     square: bool,
     preference: ImmersiveArtwork,
-    controls: Controls,
+    theme: Option<ArtworkTheme>,
 ) -> ArtworkEdge {
     let strip = N - 1 - EDGE_ROWS..N - 1;
     // The outermost row alone (a few pixels of the original): one colour means a border, a
@@ -252,6 +235,25 @@ fn edge(
         ),
     };
     let behind_rgb: Vec<[f32; 3]> = behind.iter().map(|c| srgb_of_lab(*c)).collect();
+    // Light or dark controls: from what sits behind them (the continuation), when that is almost
+    // all very dark or very light; else the theme's.
+    let (dark_share, light_share) = tone_shares(&behind_rgb);
+    let controls = if dark_share >= TONE_SHARE {
+        Controls::Light
+    } else if light_share >= TONE_SHARE {
+        Controls::Dark
+    } else {
+        match theme {
+            Some(ArtworkTheme::Dark) => Controls::Light,
+            Some(ArtworkTheme::Light) => Controls::Dark,
+            None => Controls::Auto,
+        }
+    };
+    let metrics = ArtworkMetrics {
+        dark_share,
+        light_share,
+        ..metrics
+    };
     let (light, scrim) = if style == ArtworkStyle::Card {
         (false, 0.0)
     } else {
@@ -266,6 +268,20 @@ fn edge(
         reason: reason.into(),
         metrics,
     }
+}
+
+/// The shares of `colors` (sRGB 0..1) that are very dark and very light.
+fn tone_shares(colors: &[[f32; 3]]) -> (f64, f64) {
+    let n = colors.len().max(1) as f64;
+    let dark = colors
+        .iter()
+        .filter(|c| luminance_srgb(**c) < DARK_LUM)
+        .count() as f64;
+    let light = colors
+        .iter()
+        .filter(|c| luminance_srgb(**c) > LIGHT_LUM)
+        .count() as f64;
+    (dark / n, light / n)
 }
 
 /// Which controls go over the continuation.
@@ -347,18 +363,6 @@ impl Img {
             }
         }
         Img { lab }
-    }
-
-    /// The shares of the cover that are very dark and very light.
-    fn tone_shares(&self) -> (f64, f64) {
-        let (mut dark, mut light) = (0usize, 0usize);
-        for c in &self.lab {
-            let l = luminance(*c);
-            dark += (l < DARK_LUM) as usize;
-            light += (l > LIGHT_LUM) as usize;
-        }
-        let n = self.lab.len().max(1) as f64;
-        (dark as f64 / n, light as f64 / n)
     }
 
     fn transposed(&self) -> Img {

@@ -825,8 +825,8 @@ pub struct ArtworkLayoutRequest {
     #[serde(default)]
     pub preference: ImmersiveArtwork,
     /// The app's theme: the controls follow it (light in dark mode, dark in light mode) unless
-    /// the cover is almost all dark or all light, when they follow the cover. Without it, whichever
-    /// controls need the lighter scrim.
+    /// what sits behind them is almost all dark or all light, when they follow that. Without it,
+    /// whichever controls need the lighter scrim.
     #[serde(default)]
     pub theme: Option<ArtworkTheme>,
 }
@@ -847,8 +847,8 @@ pub struct ArtworkMetrics {
     /// Mean colour change between neighbouring pixels in the lower 40%.
     pub busy: f64,
     pub faces: u32,
-    /// Share of the whole cover that is very dark / very light (one of them near 1: the controls
-    /// follow the cover, not the theme).
+    /// Share of what sits behind the controls (the continuation) that is very dark / very light
+    /// (one of them near 1: the controls follow it, not the theme).
     #[serde(default)]
     pub dark_share: f64,
     #[serde(default)]

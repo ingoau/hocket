@@ -373,3 +373,14 @@ fn an_almost_all_dark_or_light_cover_keeps_its_own_controls_in_either_theme() {
         assert!(w.scrim < 0.01, "a white cover stays white: {w:?}");
     }
 }
+
+#[test]
+fn a_big_subject_on_white_still_carries_on_in_white_in_dark_mode() {
+    // Under half the cover is white, but all that sits behind the controls is: dark controls.
+    let mut c = Canvas::new(S, S, [252, 252, 250]);
+    c.fill(30, 40, 196, 150, [120, 80, 60]);
+    let l = themed(&c, ArtworkTheme::Dark).bottom;
+    assert_eq!(l.style, ArtworkStyle::Extend, "{l:?}");
+    assert!(l.light && l.scrim < 0.01, "{l:?}");
+    assert!(l.metrics.light_share >= TONE_SHARE, "{:?}", l.metrics);
+}
