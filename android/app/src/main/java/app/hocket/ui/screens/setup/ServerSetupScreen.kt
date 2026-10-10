@@ -16,11 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -54,6 +49,7 @@ import app.hocket.core.api.ServerInfo
 import app.hocket.playback.CoreHost
 import app.hocket.playback.ServerCredential
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 
 /**
  * Server setup is the entire first screen (design: empty states). URL, username, password, connect.
@@ -134,7 +130,7 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false) {
                     keyboardActions = KeyboardActions(onGo = { connect() }),
                     trailingIcon = {
                         IconButton(onClick = { showPassword = !showPassword }) {
-                            Icon(if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, stringResource(if (showPassword) R.string.setup_hide_password else R.string.setup_show_password))
+                            Icon(if (showPassword) HocketIcons.Filled.VisibilityOff else HocketIcons.Filled.Visibility, stringResource(if (showPassword) R.string.setup_hide_password else R.string.setup_show_password))
                         }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("setup.password"), enabled = !connecting,
@@ -192,7 +188,7 @@ fun CapabilitySummary(server: ServerInfo) {
 @Composable
 private fun CapRow(label: String, ok: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (ok) Icons.Filled.Check else Icons.Filled.Close, stringResource(if (ok) R.string.cap_yes else R.string.cap_no), tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+        Icon(if (ok) HocketIcons.Filled.Check else HocketIcons.Filled.Close, stringResource(if (ok) R.string.cap_yes else R.string.cap_no), tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
         Spacer(Modifier.size(8.dp))
         Text(label, style = MaterialTheme.typography.bodyMedium)
     }

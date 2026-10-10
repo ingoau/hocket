@@ -297,7 +297,9 @@ async function main(): Promise<void> {
     shutdown();
   });
 
-  if (process.platform === "darwin") app.dock?.setIcon(appIcon(512));
+  // Dev builds only: a packaged app has its icon in the bundle, and replacing it here would
+  // swap the Liquid Glass icon for a flat one.
+  if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(appIcon(512));
   windows.ensureAnchor();
   windows.createMain();
   core.dispatch({ type: "start" });

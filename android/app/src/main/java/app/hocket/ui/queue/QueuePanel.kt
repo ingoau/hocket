@@ -25,14 +25,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AllInclusive
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -100,6 +92,7 @@ import app.hocket.ui.components.offlineStateText
 import app.hocket.ui.components.trackLabel
 import app.hocket.ui.components.trackRowActions
 import app.hocket.core.ActionIds
+import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -144,19 +137,19 @@ private fun QueueModeHeader(modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModeToggle(
             checked = queue.shuffle, onCheckedChange = { client.dispatch(Commands.setShuffle(it)) },
-            icon = Icons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f),
+            icon = HocketIcons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f),
         )
         ModeToggle(
             checked = queue.repeat != RepeatMode.Off,
             onCheckedChange = { client.dispatch(Commands.setRepeat(when (queue.repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })) },
-            icon = if (queue.repeat == RepeatMode.One) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+            icon = if (queue.repeat == RepeatMode.One) HocketIcons.Filled.RepeatOne else HocketIcons.Filled.Repeat,
             label = stringResource(R.string.action_label_repeat),
             state = stringResource(when (queue.repeat) { RepeatMode.Off -> R.string.player_repeat_off; RepeatMode.All -> R.string.player_repeat_all; RepeatMode.One -> R.string.player_repeat_one }),
             tag = "queue.repeat", modifier = Modifier.weight(1f),
         )
         ModeToggle(
             checked = queue.autoplay, onCheckedChange = { client.dispatch(Commands.setAutoplay(it)) },
-            icon = Icons.Filled.AllInclusive, label = stringResource(R.string.player_autoplay), tag = "queue.infinite", modifier = Modifier.weight(1f),
+            icon = HocketIcons.Filled.AllInclusive, label = stringResource(R.string.player_autoplay), tag = "queue.infinite", modifier = Modifier.weight(1f),
         )
     }
 }
@@ -403,7 +396,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                                 onDragStopped = { drop() },
                                             ),
                                             contentAlignment = Alignment.Center,
-                                        ) { Icon(Icons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                        ) { Icon(HocketIcons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                                     }) else null,
                                 )
                             }
@@ -490,13 +483,13 @@ private fun QueueRow(
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp, end = if (handle != null) 4.dp else 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                 Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
-                if (selected) Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                if (selected) Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (current) {
-                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                        Icon(HocketIcons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = content.copy(alpha = content.alpha * dim))

@@ -13,14 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -60,6 +52,7 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.TrackSummary
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.screens.settings.actionLabel
 import app.hocket.ui.screens.settings.setting
 import kotlinx.coroutines.launch
@@ -111,16 +104,16 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
     val scheme = MaterialTheme.colorScheme
     val run = { action: String -> { client.dispatch(Commands.runAction(action, target)) } }
     return when (id) {
-        ActionIds.REMOVE_FROM_QUEUE -> SwipeAction(id, actionLabel(id), Icons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer, dismisses = true, run(id))
-        ActionIds.PLAY_NEXT -> SwipeAction(id, actionLabel(id), Icons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
-        ActionIds.PLAY_LATER -> SwipeAction(id, actionLabel(id), Icons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, run(id))
+        ActionIds.REMOVE_FROM_QUEUE -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer, dismisses = true, run(id))
+        ActionIds.PLAY_NEXT -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
+        ActionIds.PLAY_LATER -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, run(id))
         ActionIds.LOVE -> {
             val action = if (track.loved) ActionIds.UNLOVE else ActionIds.LOVE
-            SwipeAction(action, actionLabel(action), if (track.loved) Icons.Filled.FavoriteBorder else Icons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(action))
+            SwipeAction(action, actionLabel(action), if (track.loved) HocketIcons.Filled.FavoriteBorder else HocketIcons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(action))
         }
-        ActionIds.ADD_TO_PLAYLIST -> SwipeAction(id, actionLabel(id), Icons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, onAddToPlaylist)
+        ActionIds.ADD_TO_PLAYLIST -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, onAddToPlaylist)
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null
-            else SwipeAction(id, actionLabel(id), Icons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
+            else SwipeAction(id, actionLabel(id), HocketIcons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         else -> null
     }
 }
