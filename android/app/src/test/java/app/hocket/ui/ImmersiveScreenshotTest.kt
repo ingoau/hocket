@@ -42,6 +42,7 @@ import java.io.File
  *     HOCKET_COVERS=/path/to/covers           a folder of cover images (any names)
  *     HOCKET_HOST_LIB=target/debug/libhocket_android.so   the core built for the host
  *
+ * (and HOCKET_SCREENSHOT_THEME=light for light mode; dark otherwise)
  * and plays the fake library's albums one by one, each wearing the next cover, a batch of covers
  * per test case. SDK 32: on 33+ the UniFFI glue needs a cleaner Robolectric cannot shadow (so the
  * backdrop is the still blur, not the moving one).
@@ -58,6 +59,8 @@ class ImmersiveScreenshotTest(private val batch: Int) {
         private val outDir = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
         private val covers = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.sortedBy { f -> f.name } }.orEmpty()
         private val lib = env("HOCKET_HOST_LIB")?.let(::File)?.takeIf { it.exists() }
+        /** `light` renders in light mode; anything else (the default) in dark mode. */
+        private val theme = if (env("HOCKET_SCREENSHOT_THEME") == "light") "light" else "dark"
         private const val SEED = 7L
         private val albumCount = FakeLibrary(SEED).albums.size
 
@@ -82,6 +85,7 @@ class ImmersiveScreenshotTest(private val batch: Int) {
         System.setProperty("uniffi.component.hocket_android.libraryOverride", lib!!.absolutePath)
         assumeTrue("host library not loadable on this JVM", NativeCore.isAvailable())
         dir!!.mkdirs()
+        if (theme == "light") org.robolectric.RuntimeEnvironment.setQualifiers("+notnight")
         val now = { System.currentTimeMillis().toDouble() }
         val fake = FakeCore(seed = SEED, startWithServer = true, startPlaying = true, timers = false, now = now, dispatcher = Dispatchers.Unconfined)
         val albums = fake.library.albums
@@ -120,7 +124,7 @@ class ImmersiveScreenshotTest(private val batch: Int) {
             }
             val full = compose.onRoot().captureToImage().asAndroidBitmap()
             val small = Bitmap.createScaledBitmap(full, full.width / 3, full.height / 3, true)
-            File(dir, "%03d-%s.png".format(offset + i, cover.nameWithoutExtension)).outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            File(dir, "%03d-%s-%s.png".format(offset + i, cover.nameWithoutExtension, theme)).outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
 

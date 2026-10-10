@@ -298,6 +298,9 @@ const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
 function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation }) {
   const url = useArtwork(coverArt, 1000);
   const ref = useRef<HTMLCanvasElement>(null);
+  const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     const el = ref.current;
@@ -315,12 +318,12 @@ function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: stri
       if (!alive) return;
       el.width = Math.round(size.w * dpr);
       el.height = Math.round(size.h * dpr);
-      drawContinuation(el, img, edge, orientation);
+      drawContinuation(el, img, edge, orientation, dark);
     });
     return () => {
       alive = false;
     };
-  }, [url, edge, orientation, size]);
+  }, [url, edge, orientation, size, dark]);
   return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
 }
 

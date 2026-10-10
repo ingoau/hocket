@@ -132,10 +132,10 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * reflection bridging into the colours along the edge, softening sideways with
  * distance. Both fade out (to the fluid background beneath) except over a light
  * continuation or one flat colour, which carry on in their own colour. Then the
- * scrim the core worked out for 4.5:1, and towards the bottom of the window a fade to
- * near black (light controls) or near white (dark controls).
+ * scrim the core worked out for 4.5:1, and from the controls down a partial fade to
+ * the app theme's black (`dark`) or white.
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
+export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, dark: boolean): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -214,12 +214,12 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     ctx.fillRect(0, from, W, H - from);
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Towards the bottom of the window (in screen terms, whichever way it runs) the continuation
-  // fades to the controls' opposite: near black under light controls, near white under dark ones.
+  // From the controls down (in screen terms, whichever way the continuation runs) it fades part
+  // of the way to the app theme's black (dark) or white (light).
   {
-    const rgb = edge.light ? "255,255,255" : "0,0,0";
+    const rgb = dark ? "0,0,0" : "255,255,255";
     const x0 = right ? S : 0;
-    const top = right ? canvas.height * 0.45 : Math.max(S, canvas.height * 0.45);
+    const top = right ? canvas.height * 0.3 : S;
     const g = ctx.createLinearGradient(0, top, 0, canvas.height);
     g.addColorStop(0, `rgba(${rgb},0)`);
     g.addColorStop(1, `rgba(${rgb},${BOTTOM_FADE})`);
@@ -228,5 +228,5 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   }
 }
 
-/** How far the bottom of the window fades to black (light controls) or white (dark controls). */
-const BOTTOM_FADE = 0.85;
+/** How far the bottom of the window fades to the theme's black or white. */
+const BOTTOM_FADE = 0.6;

@@ -392,6 +392,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             }
         }
         val seedState = LocalArtworkSeedState.current
+        // The app's own theme (the player overrides it for its subtree, below).
+        val appDark = LocalDarkTheme.current
         val coverArt = entry?.track?.coverArt
         val artworkSeed by artworkSeed(coverArt)
         val seed = artworkSeed ?: coverArt?.let { ArtworkColors.seedFor(it) }
@@ -488,7 +490,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // An immersive artwork's continuation (reflection or colours) below it, fading out as
                 // the artwork shrinks to a thumbnail for lyrics, the queue or the details.
                 if (immersiveEdge != null) {
-                    ImmersiveContinuation(coverArt, immersiveEdge, hero, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
+                    ImmersiveContinuation(coverArt, immersiveEdge, hero, dark = appDark, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
                 }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.

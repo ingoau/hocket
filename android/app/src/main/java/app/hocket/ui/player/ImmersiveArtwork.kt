@@ -179,11 +179,11 @@ private const val BLUR_FAR = 0.1f
  * Blurs clamp at their edges (the same edge row on both sides of the seam) and need Android 12;
  * before it the copies are sharp and only fade. Everything fades into the moving backdrop, except
  * over a light continuation or a flat colour, which carry on in their own colour (a white cover
- * stays white). Under the controls, the scrim the core worked out for 4.5:1, and towards the
- * bottom of the screen a fade to near black (light controls) or near white (dark controls).
+ * stays white). Under the controls, the scrim the core worked out for 4.5:1, and from the title
+ * down a partial fade to the app theme's black ([dark]) or white.
  */
 @Composable
-internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, modifier: Modifier = Modifier) {
+internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, dark: Boolean, modifier: Modifier = Modifier) {
     val base = argb(edge.baseColor)
     val colors = edge.edgeColors.map(::argb)
     val flat = edge.isFlat()
@@ -264,15 +264,17 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
                 drawRect(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 1f to scrim, startY = from, endY = to.coerceAtLeast(from + 1f)))
             })
         }
-        // Towards the bottom of the screen the continuation fades to the controls' opposite: near
-        // black under light controls, near white under dark ones, so the mode pills stand out.
-        val end = if (edge.light) Color.White else Color.Black
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to end.copy(alpha = BOTTOM_FADE))))
+        // From the title down, the continuation fades part of the way to the app's theme: black in
+        // dark mode, white in light mode.
+        val end = (if (dark) Color.Black else Color.White).copy(alpha = BOTTOM_FADE)
+        Box(Modifier.fillMaxSize().drawBehind {
+            drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to end, startY = seam(), endY = size.height))
+        })
     }
 }
 
-/** How far the bottom of the screen fades to black (light controls) or white (dark controls). */
-private const val BOTTOM_FADE = 0.85f
+/** How far the bottom of the screen fades to the theme's black or white. */
+private const val BOTTOM_FADE = 0.6f
 
 /**
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as
