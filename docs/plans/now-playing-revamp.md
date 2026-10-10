@@ -139,6 +139,38 @@ Main files: `ui/player/NowPlayingPage.kt`, `NowPlayingSheet.kt`, `Transport.kt`,
 - Update `panels.spec.ts`, `chrome.spec.ts`, `exit-motion.spec.ts`, `motion-contrast.spec.ts`, `a11y.spec.ts`, `keyboard-a11y.spec.ts` and `lyrics.spec.ts`.
 - Update `docs/design.md` "Desktop layout" and the fullscreen bullet.
 
+## 3d. Visual fidelity: the prototypes' shapes and spacing are the spec
+
+The user wants the prototypes' vibe kept: shapes, proportions and spacing.
+- The colours, copy, background and font stay the app's own.
+- The prototype images are on this branch in `docs/plans/prototypes/`. The GitHub attachment URLs need a login, so a new container can't fetch them.
+- While building, compare each screen side by side with its prototype, and include those pairs with the final screenshots.
+
+Measurements were taken off the images (both are 2×) and rounded to the app's spacing scale:
+
+**Mobile** (`issue40-*`; a 390 dp-wide phone)
+
+| Part | Size |
+|---|---|
+| Side margins | 20 dp. Everything aligns to them. |
+| Art | Full width (350 dp square), about 26 dp corners, 53 dp below the top of the sheet (under the drag handle) |
+| Title block | Title 24 sp extra-bold, then artist · album 16 sp muted, then 5 stars at about 14 dp with 6 dp gaps |
+| Add-to-playlist | A 48 dp tonal circle, right-aligned with the title |
+| Seek | Wavy, the full content width. Times and "Playing on" are 13 sp on the line below. |
+| Transport | One row, **84 dp tall**, 10 dp gaps. Previous and next are 84 dp squares with about 30 dp outer and about 14 dp inner corners (the expressive "leaf" shape). Play/pause fills the rest (about 161 dp) with about 28 dp corners, filled accent. Previous and next are tonal. |
+| Gap from transport to bottom row | About 38 dp |
+| Bottom row | 44 dp tall, 18 dp from the bottom. The queue pill is a full-radius tonal pill about 206 dp wide: name at 16 sp bold, a thin divider, then the chevron. Next comes a 44 dp tonal circle (device), then two 44 dp icon buttons with no fill (lyrics, more). An active toggle becomes a filled accent circle or pill. |
+| Lyrics and queue panels | Fill the art's slot (same 350 dp square, same corners), tonal fill. The title row gets a 52 dp thumbnail with about 14 dp corners. The queue's mode chips are about 40 dp full-radius pills, and the bottom strip is a gradient. |
+
+**Desktop** (`issue47-*`; a 1440 px window)
+
+| Part | Size |
+|---|---|
+| Window gutters | 8 px everywhere: around and between the main panel and the sidebar, and above the bar. Panels have **20 px** corners on a slightly darker shell. |
+| Sidebar | 360 px wide, 16 px inner padding, art 328 px square with about 16 px corners. Cards are tonal with **16 px** corners and 16 px padding, 12 px apart. Card titles are 15 px bold, and the action link ("Show lyrics", "Open queue", "More") is 13 px accent. |
+| Bottom bar | **92 px** tall, no top border, on the shell colour. Left: art 64 px with 12 px corners, then title 15 px bold, artist 13 px, stars 12 px, then add and more as plain 36 px icon buttons. Centre: 36 px circular icon buttons; play/pause is a **52×44 px rounded rectangle (about 14 px corners)** in filled accent. An active shuffle or repeat gets a light circle. The seek sits under the transport, about 340 px wide, with times either side. Right: 36 px icon buttons, an active toggle on a tonal circle. The connect pill is **40 px tall**, full radius, filled accent when remote. |
+| Fullscreen (card layout) | Art 440 px square with about 28 px corners and a soft shadow, 120 px from the left. Below it the title is 22 px extra-bold and the artist line 16 px. The round add and more buttons are 36 px tonal. Then stars, then the wavy seek (art width), then the transport row: 44 px shuffle and repeat circles, and play/pause as an **80 px rounded square (about 24 px corners)**. The panel starts about 80 px right of the art. The collapse button is a 44 px tonal circle, 28 px from the top-right. The bottom-right pill sits 40 px from the edges, about 52 px tall, full radius, tonal; connect sits inside it as a filled pill, then a divider and 44 px toggle circles. |
+
 ## 4. Order of work
 
 1. Environment and baseline (section 0).
