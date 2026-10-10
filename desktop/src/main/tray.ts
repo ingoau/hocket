@@ -1,7 +1,7 @@
 // Tray icon with close-to-tray. The icon is generated at runtime (no binary
-// assets), see png.ts.
-import { Menu, Tray, nativeImage } from "electron";
-import { appIconPng } from "./png";
+// assets), see brand.ts.
+import { Menu, Tray, nativeImage, type NativeImage } from "electron";
+import { appIconPng, waveGlyphPng } from "./brand";
 
 export interface TrayHandlers {
   show(): void;
@@ -20,10 +20,7 @@ export class AppTray {
 
   install(): void {
     if (this.tray) return;
-    const size = process.platform === "darwin" ? 22 : 32;
-    const img = nativeImage.createFromBuffer(appIconPng(size));
-    if (process.platform === "darwin") img.setTemplateImage(false);
-    this.tray = new Tray(img);
+    this.tray = new Tray(trayIcon());
     this.tray.setToolTip("Hocket");
     this.tray.on("click", () => this.handlers.show());
     this.tray.on("double-click", () => this.handlers.show());
@@ -57,6 +54,18 @@ export class AppTray {
     this.tray?.destroy();
     this.tray = undefined;
   }
+}
+
+/**
+ * macOS: the bare wave as a template image, so the menu bar tints it for light, dark
+ * and selected states. Elsewhere the taskbar colour is unknown, so the full-colour tile.
+ */
+function trayIcon(): NativeImage {
+  if (process.platform !== "darwin") return nativeImage.createFromBuffer(appIconPng(32, 0.03));
+  const img = nativeImage.createEmpty();
+  for (const scaleFactor of [1, 2]) img.addRepresentation({ scaleFactor, buffer: waveGlyphPng(14, scaleFactor).png });
+  img.setTemplateImage(true);
+  return img;
 }
 
 export function appIcon(size = 256) {
