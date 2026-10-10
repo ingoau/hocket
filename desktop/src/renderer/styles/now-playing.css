@@ -266,5 +266,16 @@
 /* Over a light continuation (a white cover carried on in white): dark text and controls. */
 .np[data-light] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
 .np[data-light] .np-play { background: #1c1b1f; color: #fff; }
+.np[data-light] .np-play:focus-visible { outline-color: #1c1b1f; }
+.np[data-light] .np-icon-btn, .np[data-light] .np-skip { color: #1c1b1f; }
+.np[data-light] .np-icon-btn:hover, .np[data-light] .np-skip:hover, .np[data-light] .np-mode:hover { background: rgba(0, 0, 0, 0.08); }
+.np[data-light] .np-tonal, .np[data-light] .np-chip { background: rgba(0, 0, 0, 0.08); color: #1c1b1f; }
+.np[data-light] .np-tonal:hover, .np[data-light] .np-chip:hover { background: rgba(0, 0, 0, 0.14); }
+.np[data-light] .np-tonal.on, .np[data-light] .np-mode.on, .np[data-light] .np-chip.on, .np[data-light] .np-tonal.np-flank.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
+.np[data-light] .np-tonal.on:hover, .np[data-light] .np-mode.on:hover { background: #1c1b1f; }
+.np[data-light] .np-mode { color: #1c1b1f; border-color: rgba(0, 0, 0, 0.34); }
+.np[data-light] .np-seek-bar .played, .np[data-light] .np-seek-bar .stop, .np[data-light] .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
+.np[data-light] .np-seek-bar .played { fill: none; }
+.np[data-light] .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
 .np[data-light] .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
 @media (prefers-reduced-motion: reduce) { .np-continuation { animation: none; } }

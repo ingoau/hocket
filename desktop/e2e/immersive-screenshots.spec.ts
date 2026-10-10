@@ -9,7 +9,8 @@
 // Each album of the fake library wears the next cover; every one is shot in a wide
 // window (artwork full height on the left) and a tall one (full width on top). Song,
 // artist and album names are replaced by placeholders. HOCKET_SCREENSHOT_LIMIT caps
-// how many covers are shot.
+// how many covers are shot; HOCKET_SCREENSHOT_THEME=light|dark sets the app's theme
+// (default: the system's).
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +37,10 @@ test("fullscreen player with real covers", async () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers!, HOCKET_FAKE_COVERS_OFFSET: String(offset) });
     try {
       await completeSetup(page);
+      // The play commands' own "Play Album / Undo" toasts would pile up over the artwork.
+      await page.addStyleTag({ content: '[data-testid="toasts"] { display: none !important; }' });
+      const theme = process.env.HOCKET_SCREENSHOT_THEME;
+      if (theme === "light" || theme === "dark") await page.evaluate((value) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(value) } }), theme);
       const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
       const serverId = servers.data[0]!.id;
       const albums = ((await page.evaluate((id) => window.hocket.query({ type: "albums", data: { server_id: id, sort: "default", descending: false, page: { offset: 0, limit: 1000 } } }), serverId)) as { data: AlbumPage }).data.items;
