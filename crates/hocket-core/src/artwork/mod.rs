@@ -46,6 +46,12 @@ const COARSE_MIN: u32 = 4;
 /// The outermost row this share one colour: extend it, whatever is above (the art's own edge
 /// carries on exactly, and nothing is flipped).
 const EDGE_ROW_FLAT: f64 = 0.95;
+/// The share of the edge strip in one colour above which the artwork carries on in that colour
+/// with a crisp edge (no fade, no blur). Between FLAT_MIN and this the edge is plain but not
+/// uniform (low-contrast texture: dark ground, grain, a gradient), and a crisp cut into one flat
+/// colour shows where the texture stops: it carries on in its own colours, faded in like any
+/// other extension.
+const CRISP_MIN: f64 = 0.95;
 /// This many small marks in the reflection zone rule a mirror out.
 const MARKS_MAX: u32 = 2;
 /// Busier than this (mean neighbour distance) rules a mirror out.
@@ -194,7 +200,8 @@ fn edge(
         // The art ends in one colour (a plain background, a border, a band, a backdrop, with or
         // without a caption or sticker on it): carry that colour on, never reflect it. Before the
         // mirror, so the choice doesn't hang on whether small text near the edge was seen.
-        _ if flat >= FLAT_MIN || last_row_flat => (ArtworkStyle::Extend, "extend:flat"),
+        _ if last_row_flat || flat >= CRISP_MIN => (ArtworkStyle::Extend, "extend:flat"),
+        _ if flat >= FLAT_MIN => (ArtworkStyle::Extend, "extend:plain"),
         _ if mirror_ok => (ArtworkStyle::Mirror, "mirror"),
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
         _ if face_count == 0 && columns_ok() => (ArtworkStyle::Extend, "extend:columns"),
@@ -205,10 +212,11 @@ fn edge(
     };
 
     let flat_edge = reason == "extend:flat";
-    // Extending a busy edge (the Always fallback) smears it: much smoother columns.
+    // Extending a busy edge (the Always fallback) smears it, and a plain one may carry a caption
+    // or a sticker: much smoother columns.
     let edge_cols = if flat_edge {
         vec![median; N]
-    } else if reason == "extend:always" {
+    } else if reason == "extend:always" || reason == "extend:plain" {
         smooth_columns(&columns, 16)
     } else {
         smooth

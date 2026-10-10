@@ -384,3 +384,21 @@ fn a_big_subject_on_white_still_carries_on_in_white_in_dark_mode() {
     assert!(l.light && l.scrim < 0.01, "{l:?}");
     assert!(l.metrics.light_share >= TONE_SHARE, "{:?}", l.metrics);
 }
+
+#[test]
+fn a_plain_but_textured_edge_carries_on_in_its_own_colours_not_cut_crisp() {
+    // Ground with a sparse grain of darker specks across all of it: plain enough to extend, but
+    // not one colour, so a crisp cut into one flat colour would show where the grain stops.
+    let mut c = Canvas::new(S, S, [150, 120, 90]);
+    for by in 0..S / 2 {
+        for bx in 0..S / 2 {
+            if (bx * 7 + by * 3) % 10 == 0 {
+                c.fill(bx * 2, by * 2, 2, 2, [95, 70, 45]);
+            }
+        }
+    }
+    let l = c.auto();
+    assert_eq!(l.bottom.style, ArtworkStyle::Extend, "{:?}", l.bottom);
+    // Not "extend:flat": the apps fade it in rather than cut it crisp.
+    assert_eq!(l.bottom.reason, "extend:plain", "{:?}", l.bottom);
+}

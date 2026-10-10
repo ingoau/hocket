@@ -872,7 +872,10 @@ pub struct ArtworkEdge {
     /// The opacity of the scrim (black under light text, white under dark text) that the controls
     /// need over the continuation to reach 4.5:1.
     pub scrim: f64,
-    /// Why this style, e.g. `mirror`, `extend:flat`, `card:marks` (debugging and tuning).
+    /// Why this style, e.g. `mirror`, `extend:flat`, `card:marks` (debugging and tuning). The apps
+    /// read one: `extend:flat` means the artwork already ends in one colour, carried on with a
+    /// crisp edge (no fade, no blur); any other extension (`extend:plain`, `extend:columns`, …)
+    /// fades in.
     pub reason: String,
     pub metrics: ArtworkMetrics,
 }

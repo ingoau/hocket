@@ -159,8 +159,12 @@ private fun Modifier.verticalMask(unit: () -> Float, vararg stops: Pair<Float, F
         drawRect(brush, blendMode = BlendMode.DstIn)
     }
 
-/** One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. */
-internal fun ArtworkEdge.isFlat(): Boolean = style == ArtworkStyle.Extend && edgeColors.distinct().size <= 1
+/**
+ * One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. The
+ * core says so ("extend:flat"); a plain but textured edge ("extend:plain") may smooth into one
+ * colour too, yet fades in like any other extension.
+ */
+internal fun ArtworkEdge.isFlat(): Boolean = style == ArtworkStyle.Extend && reason == "extend:flat"
 
 /** The share of the artwork that fades into the continuation. */
 internal const val FEATHER = 0.18f

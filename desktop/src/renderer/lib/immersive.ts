@@ -79,9 +79,13 @@ export function soften(colors: number[], radius: number): number[] {
   });
 }
 
-/** One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. */
+/**
+ * One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. The
+ * core says so ("extend:flat"); a plain but textured edge ("extend:plain") may smooth into one
+ * colour too, yet fades in like any other extension.
+ */
 export function isFlat(edge: ArtworkEdge): boolean {
-  return edge.style === "extend" && new Set(edge.edgeColors).size <= 1;
+  return edge.style === "extend" && edge.reason === "extend:flat";
 }
 
 /** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
