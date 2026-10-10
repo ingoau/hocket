@@ -66,8 +66,9 @@ test("fullscreen player with real covers", async () => {
           await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), shape);
           // Artwork, classifier and the continuation's canvas: let them land.
           await page.waitForTimeout(900);
-          // A new continuation fades in: shoot it once it has, not halfway over the fluid background.
-          await page.evaluate(() => Promise.all(document.querySelector('[data-testid="np-continuation"]')?.getAnimations().map((a) => a.finished) ?? []));
+          // A new continuation fades in, and the player crossfades to the new track: shoot once both
+          // have finished, not halfway (endless animations, like a spinner, never do).
+          await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY).map((a) => a.finished.catch(() => undefined))));
           await page.evaluate(() => {
             const set = (sel: string, text: string) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
             set("#fs-title", "Song Name");
