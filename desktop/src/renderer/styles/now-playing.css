@@ -243,11 +243,13 @@
 .np[data-immersive] .np-main { position: absolute; left: 0; top: 0; z-index: 1; container-type: normal; }
 .np[data-immersive] .np-art-slot { display: block; }
 .np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
-/* The artwork's last 18% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
+/* The artwork's last 30% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
    beneath, along a smoothstep: a straight ramp's ends read as edges. */
-.np[data-immersive] { --np-feather: #000 82%, rgba(0, 0, 0, 0.96) 84.25%, rgba(0, 0, 0, 0.84) 86.5%, rgba(0, 0, 0, 0.68) 88.75%, rgba(0, 0, 0, 0.5) 91%, rgba(0, 0, 0, 0.32) 93.25%, rgba(0, 0, 0, 0.16) 95.5%, rgba(0, 0, 0, 0.04) 97.75%, transparent; }
-.np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)); }
-.np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)); }
+.np[data-immersive] { --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent; }
+/* And a vignette on that side, so the fade is no straight line: it comes in sooner towards the
+   corners there, while the far edges stay put. */
+.np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
+.np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)), radial-gradient(ellipse 120% 90% at 0% 50%, var(--np-feather)); mask-composite: intersect; }
 /* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
 .np[data-immersive][data-flat] .np-art { mask-image: none; }
 .np[data-immersive] .np-head, .np[data-immersive] .np-controls { position: relative; z-index: 2; }

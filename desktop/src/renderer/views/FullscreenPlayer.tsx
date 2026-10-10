@@ -17,7 +17,7 @@
 // Opening it leaves the window as it is; the button beside the collapse
 // chevron toggles the window's own fullscreen. If that button put the window
 // into fullscreen, the window leaves it again as the close fade starts.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
 import { useApp, useSetting, type NowPlayingMode } from "../store/app";
@@ -206,7 +206,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   return (
     <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={track?.coverArt} />
-      {immersive && track ? <ImmersiveContinuation coverArt={track.coverArt} edge={immersive.edge} orientation={immersive.orientation} /> : null}
+      {immersive && track ? <ImmersiveContinuation coverArt={track.coverArt} edge={immersive.edge} orientation={immersive.orientation} controls={controls} /> : null}
       <div className="np-fade" aria-hidden="true" />
       <div className="np-stage">
         <header className="np-head">
@@ -297,18 +297,27 @@ const WIDE_IMMERSIVE = "(min-aspect-ratio: 3/2) and (min-height: 480px)";
 /** Room for the controls under a full-width artwork: at most 2:3. */
 const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
 
-/** The continuation past the immersive artwork's edge, drawn once per cover, layout and window size. */
-function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation }) {
+/**
+ * The continuation past the immersive artwork's edge, drawn once per cover, layout and window size
+ * (and wherever the controls, which its fade covers, end up).
+ */
+function ImmersiveContinuation({ coverArt, edge, orientation, controls }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null> }) {
   const url = useArtwork(coverArt, 1000);
   const ref = useRef<HTMLCanvasElement>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [size, setSize] = useState({ w: 0, h: 0, top: 0, bottom: 0 });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      const c = controls.current?.getBoundingClientRect();
+      setSize({ w: el.clientWidth, h: el.clientHeight, top: c ? c.top - box.top : 0, bottom: c ? c.bottom - box.top : 0 });
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
+    if (controls.current) ro.observe(controls.current);
     return () => ro.disconnect();
-  }, []);
+  }, [controls]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !size.w || !size.h) return;
@@ -318,7 +327,7 @@ function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: stri
       if (!alive) return;
       el.width = Math.round(size.w * dpr);
       el.height = Math.round(size.h * dpr);
-      drawContinuation(el, img, edge, orientation);
+      drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined);
     });
     return () => {
       alive = false;

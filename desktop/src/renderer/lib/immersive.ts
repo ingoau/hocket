@@ -85,10 +85,13 @@ export function isFlat(edge: ArtworkEdge): boolean {
 }
 
 /** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
-export const FEATHER = 0.18;
+export const FEATHER = 0.3;
 /** Blur at the seam and far from it, as shares of the artwork's side. */
-const BLUR_NEAR = 0.025;
-const BLUR_FAR = 0.1;
+// Strong enough at the seam that a thin strip along the artwork's edge (a shadow, a border)
+// averages away instead of reading, doubled by its own reflection, as a band.
+const BLUR_NEAR = 0.07;
+const BLUR_MID = 0.1;
+const BLUR_FAR = 0.14;
 
 /**
  * The artwork with its reflection below it, padded on every side by reflection too, blurred by
@@ -121,6 +124,10 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
   }
   ctx.filter = blur > 0 ? `blur(${blur}px)` : "none";
   ctx.drawImage(tile, 0, 0);
+  // A large blur comes back a few percent see-through even where the artwork is opaque; the same
+  // blur again on top makes it opaque without changing its colour (else whatever lies beneath
+  // shows through, more on one side of the seam than the other).
+  if (blur > 0) ctx.drawImage(tile, 0, 0);
   return { canvas: c, pad };
 }
 
@@ -140,7 +147,7 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * black under light controls or white under dark ones (the controls follow the app's
  * theme unless the cover is almost all dark or light).
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
+export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -188,12 +195,32 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   };
   const near = source && !flat ? mirrored(source, W, S, BLUR_NEAR * S) : undefined;
   const reflection = (m: { canvas: HTMLCanvasElement; pad: number }) => (c: CanvasRenderingContext2D) => c.drawImage(m.canvas, m.pad, S, W, region, 0, 0, W, region);
-  // Under the artwork's fading edge: the same artwork, blurred.
-  if (near) ctx.drawImage(near.canvas, near.pad, band0, W, S - band0, 0, band0, W, S - band0);
+  /**
+   * The artwork blurred, under all of it (its fading, vignetted edge shows it) and on past the
+   * seam as one image, so nothing meets at the seam; masked past it to `after` ([fraction of S
+   * from the seam, alpha]).
+   */
+  const nearAcross = (after: [number, number][]) => {
+    if (!near) return;
+    const h = Math.min(H, near.canvas.height);
+    const layer = document.createElement("canvas");
+    layer.width = W;
+    layer.height = h;
+    const lc = layer.getContext("2d");
+    if (!lc) return;
+    lc.drawImage(near.canvas, near.pad, 0, W, h, 0, 0, W, h);
+    lc.globalCompositeOperation = "destination-in";
+    const g = lc.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, "rgba(0,0,0,1)");
+    for (const [y, a] of after) g.addColorStop(Math.min(1, (S + y * S) / h), `rgba(0,0,0,${a})`);
+    lc.fillStyle = g;
+    lc.fillRect(0, 0, W, h);
+    ctx.drawImage(layer, 0, 0);
+  };
   if (edge.style === "mirror" && near && source) {
     band([[0, 1], [0.5, 1], [0.9, 0]], reflection(mirrored(source, W, S, BLUR_FAR * S)));
-    // Only a thin band at the seam stays this sharp: the controls start right under the artwork.
-    band([[0, 1], [0.03, 1], [0.1, 0]], reflection(near));
+    band([[0, 1], [0.08, 1], [0.3, 0]], reflection(mirrored(source, W, S, BLUR_MID * S)));
+    nearAcross([[0, 1], [0.03, 1], [0.14, 0]]);
   } else if (edge.style === "extend") {
     const across = (colors: number[]) => (c: CanvasRenderingContext2D) => {
       const g = c.createLinearGradient(0, 0, W, 0);
@@ -205,7 +232,8 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
       band([[0, 1], [0.5, 1], [0.9, 0]], across(soften(edge.edgeColors, 6)));
       band([[0, 1], [0.15, 1], [0.45, 0]], across(soften(edge.edgeColors, 2)));
     }
-    if (near) band([[0, 1], [0.1, 0]], reflection(near));
+    if (near && source) band([[0, 1], [0.1, 1], [0.25, 0]], reflection(mirrored(source, W, S, BLUR_MID * S)));
+    nearAcross([[0, 1], [0.08, 0]]);
   }
   // Where the scrim is at full strength: the controls start right at the seam below the artwork,
   // but a little way past it beside the artwork, so there it can come in more gently.
@@ -221,18 +249,22 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     ctx.fillRect(0, from, W, H - from);
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // From the controls down (in screen terms, whichever way the continuation runs) it fades part
-  // of the way to the controls' opposite: black under light controls, white under dark ones.
-  // Beside the artwork it comes in across the seam too, under the artwork's fading edge.
+  // Over the controls (`controls`: their top and bottom in canvas px; in screen terms, whichever
+  // way the continuation runs) it fades part of the way to the controls' opposite: black under
+  // light controls, white under dark ones. It comes in a little above them and is at full
+  // strength by their bottom, so it covers all of them. Beside the artwork it comes in across
+  // the seam too, under the artwork's fading edge.
   const rgb = edge.light ? "255,255,255" : "0,0,0";
   const x0 = right ? (flat ? S : band0) : 0;
-  const top = right ? canvas.height * 0.3 : S;
+  const lead = 0.08 * canvas.height;
+  const top = Math.max(right ? 0 : band0, Math.min(controls ? controls.top - lead : right ? canvas.height * 0.3 : S, canvas.height - 1));
+  const end = controls ? Math.max(top + 1, Math.min(controls.bottom, canvas.height)) : canvas.height;
   const layer = document.createElement("canvas");
   layer.width = canvas.width - x0;
   layer.height = canvas.height - top;
   const lc = layer.getContext("2d");
   if (!lc) return;
-  const down = lc.createLinearGradient(0, 0, 0, layer.height);
+  const down = lc.createLinearGradient(0, 0, 0, end - top);
   eased(down, rgb, 0, BOTTOM_FADE);
   lc.fillStyle = down;
   lc.fillRect(0, 0, layer.width, layer.height);
