@@ -177,7 +177,8 @@ private const val BLUR_FAR = 0.067f
  * Blurs clamp at their edges (the same edge row on both sides of the seam) and need Android 12;
  * before it the copies are sharp and only fade. Everything fades into the moving backdrop, except
  * over a light continuation or a flat colour, which carry on in their own colour (a white cover
- * stays white). Under the controls, the scrim the core worked out for 4.5:1.
+ * stays white). Under the controls, the scrim the core worked out for 4.5:1, and under light
+ * controls a fade to near black at the bottom of the screen.
  */
 @Composable
 internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, modifier: Modifier = Modifier) {
@@ -250,8 +251,16 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 0.2f to scrim, 1f to scrim)))
             }
         }
+        // Under light controls, the continuation darkens to near black towards the bottom of the
+        // screen (the mode pills sit on it). Not under dark controls: they need the light colour.
+        if (!edge.light) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = BOTTOM_FADE))))
+        }
     }
 }
+
+/** How dark the bottom of the screen gets under light controls. */
+private const val BOTTOM_FADE = 0.85f
 
 /**
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as

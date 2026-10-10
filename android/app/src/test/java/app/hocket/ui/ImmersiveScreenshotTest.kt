@@ -47,7 +47,7 @@ import java.io.File
  * backdrop is the still blur, not the moving one).
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
-@Config(sdk = [32], qualifiers = "w411dp-h891dp-xxhdpi+night")
+@Config(sdk = [32], qualifiers = "w411dp-h891dp-night-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ImmersiveScreenshotTest(private val batch: Int) {
     @get:Rule
@@ -102,10 +102,19 @@ class ImmersiveScreenshotTest(private val batch: Int) {
         awaitTag("player.playPause")
         for ((i, album) in albums.withIndex()) {
             val cover = covers.getOrNull(offset + i) ?: break
+            // Load the cover into the image loader's memory first: a cache hit draws at once,
+            // where a fresh load crossfades on a clock the test only advances by hand.
+            kotlinx.coroutines.runBlocking {
+                val context = compose.activity
+                coil3.SingletonImageLoader.get(context).execute(coil3.request.ImageRequest.Builder(context).data(cover).size(ArtworkSizes.FULL).build())
+            }
             client.dispatch(Commands.playContext(Commands.albumContext(fake.library.serverId, album.id, album.name)))
             // Decoding and classifying run off the main thread: let them land, then let the UI settle.
-            repeat(3) {
-                Thread.sleep(150)
+            // Robolectric's SystemClock stands still unless advanced, and the image loader's
+            // crossfade runs on it: advance it too, or new artwork stays transparent.
+            repeat(4) {
+                Thread.sleep(350)
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(400))
                 compose.mainClock.advanceTimeBy(600)
                 compose.waitForIdle()
             }

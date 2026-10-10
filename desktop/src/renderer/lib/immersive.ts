@@ -132,7 +132,8 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * reflection bridging into the colours along the edge, softening sideways with
  * distance. Both fade out (to the fluid background beneath) except over a light
  * continuation or one flat colour, which carry on in their own colour. Then the
- * scrim the core worked out for 4.5:1.
+ * scrim the core worked out for 4.5:1, and under light controls a fade to near black
+ * at the bottom of the window.
  */
 export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
   const ctx = canvas.getContext("2d");
@@ -210,4 +211,18 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     ctx.fillRect(0, S, W, region);
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Under light controls, the continuation darkens to near black towards the bottom of the
+  // window (in screen terms, whichever way it runs). Not under dark controls: they need the light colour.
+  if (!edge.light) {
+    const x0 = right ? S : 0;
+    const top = right ? canvas.height * 0.45 : Math.max(S, canvas.height * 0.45);
+    const g = ctx.createLinearGradient(0, top, 0, canvas.height);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, `rgba(0,0,0,${BOTTOM_FADE})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(x0, top, canvas.width - x0, canvas.height - top);
+  }
 }
+
+/** How dark the bottom of the window gets under light controls. */
+const BOTTOM_FADE = 0.85;

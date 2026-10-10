@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -104,6 +105,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
@@ -179,11 +181,15 @@ internal fun FullPlayer(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = maxHeight
         val pageWidth = maxWidth
-        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), overscrollEffect = null).testTag("player.page")) {
+        val scroll = rememberScrollState()
+        val header = @Composable { PlayerHeader(onCollapse, onConnect = { handoff = true }, onSwitchQueue = { queues = true }) }
+        Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
                 minHeight = viewport,
                 hero = hero,
-                header = { PlayerHeader(onCollapse, onConnect = { handoff = true }, onSwitchQueue = { queues = true }) },
+                // An immersive artwork runs under the header, and the artwork is drawn over the
+                // page: the page keeps the header's room (invisible) and the real one goes on top.
+                header = { if (immersive != null) Box(Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics { }) { header() } else header() },
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 title = { PlayerTitle(mode, onOpenAlbum, onOpenArtist, hero, onMore = {
                         // The song menu is hosted at the app level, not in this (moving) sheet;
@@ -227,6 +233,7 @@ internal fun FullPlayer(
             onPreviewToggle = onPreviewToggle,
             immersive = immersive,
         )
+        if (immersive != null) Box(Modifier.offset { IntOffset(0, -scroll.value) }) { header() }
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (queues) QueueSwitcherSheet(onDismiss = { queues = false })

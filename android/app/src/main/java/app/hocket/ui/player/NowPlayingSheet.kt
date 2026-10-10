@@ -408,7 +408,17 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // controls there. The scheme crossfades on a track or mode change while the player is
         // showing, and snaps while hidden.
         val lightPlayer = immersiveEdge?.light == true && state.mode == PlayerMode.Artwork
-        val targetScheme = remember(seed, lightPlayer) { seed?.let { ArtworkColors.scheme(it, dark = !lightPlayer) } ?: darkColorScheme() }
+        val targetScheme = remember(seed, lightPlayer) {
+            val scheme = seed?.let { ArtworkColors.scheme(it, dark = !lightPlayer) } ?: darkColorScheme()
+            // Over a light continuation the text sits on the cover's colour, not on the scheme's
+            // near-white surfaces: the one dark the core checked 4.5:1 for, and translucent dark
+            // tonal buttons that take on the colour beneath instead of a pale container.
+            if (!lightPlayer) scheme else scheme.copy(
+                onSurface = IMMERSIVE_DARK, onSurfaceVariant = IMMERSIVE_DARK, onBackground = IMMERSIVE_DARK,
+                secondaryContainer = IMMERSIVE_DARK.copy(alpha = 0.12f), onSecondaryContainer = IMMERSIVE_DARK,
+                surfaceContainerHighest = IMMERSIVE_DARK.copy(alpha = 0.12f),
+            )
+        }
         val playerScheme = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion)
         val artScale = animateFloatAsState(if (playing || reducedMotion) 1f else HeroGeometry.PAUSED_SCALE, Motion.artwork, label = "artworkScale")
         hero.bigCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
@@ -518,11 +528,14 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // The one artwork that flies from the mini player's thumbnail to the full player's
                 // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
                 // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value })
+                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge)
             }
         }
     }
 }
+
+/** The dark text and controls over a light immersive continuation (the core's contrast target). */
+private val IMMERSIVE_DARK = Color(0xFF1C1B1F)
 
 /** Sheet progress from which the full player (not the mini bar) is what accessibility sees. */
 private const val FULL_PLAYER_A11Y_PROGRESS = 0.6f
@@ -552,7 +565,7 @@ private class SheetShape(private val inset: Float, private val corner: Float, pr
  * and it gains the target's shadow. With nothing measured yet it just fades out from the thumbnail.
  */
 @Composable
-private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float) {
+private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float, immersiveEdge: app.hocket.core.api.ArtworkEdge? = null) {
     val density = LocalDensity.current
     val thumbSizePx = with(density) { HeroGeometry.THUMB_SIZE.toPx() }
     val fallbackThumb = with(density) {
@@ -594,7 +607,9 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
             }
             .clearAndSetSemantics { },
     ) {
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RectangleShape)
+        // Immersive: its bottom fades into the continuation as the sheet opens (and back as it
+        // closes), so the seam is the same in flight as landed; the corners go thumbnail to square.
+        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersiveEdge, fraction = progress), RectangleShape)
     }
 }
 
