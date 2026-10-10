@@ -23,7 +23,8 @@ To rebuild a recycled container:
    - Unzip the latest `commandlinetools-linux-*_latest.zip` from dl.google.com into `~/android-sdk/cmdline-tools/latest`.
    - Run `sdkmanager --licenses`, then `sdkmanager "platform-tools" "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"`.
    - Write `android/local.properties` with `sdk.dir=/root/android-sdk` (gitignored).
-   - Run `scripts/build-android-core.sh`; without it the app shows a "Core not built" banner.
+   - Run `ANDROID_HOME=/root/android-sdk scripts/build-android-core.sh` so that `assembleDebug` has real jniLibs (gitignored).
+   - Robolectric can't load Android `.so` files, so screenshot tests always run the fake core and show the "Core not built" banner (`AppRoot.kt:162`). In the new screenshots, hide it in the test only (a flag in the test harness, or crop it out). Don't change the app.
 4. **Maven Central returns 429 through the container proxy.** Add `~/.gradle/init.d/central-mirror.gradle.kts`, which:
    - adds `https://maven-central.storage-download.googleapis.com/maven2/` to both `pluginManagement` and `dependencyResolutionManagement` in `beforeSettings`;
    - sets `systemProperty("robolectric.dependency.repo.url", mirror)` on every `Test` task, since Robolectric downloads its android-all jars itself at test time.
