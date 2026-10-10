@@ -193,7 +193,10 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   // carried on to the right; a tall one at its full width on top, carried on below.
   // In between (and in the other modes) the artwork is a card.
   const preference = useSetting<ImmersiveArtwork>(SK.displayImmersiveArtwork, "automatic");
-  const layout = useArtworkLayout(track?.coverArt, preference);
+  const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
+  const layout = useArtworkLayout(track?.coverArt, preference, dark);
   const wide = useMediaQuery(WIDE_IMMERSIVE);
   const tall = useMediaQuery(TALL_IMMERSIVE);
   const orientation: Orientation | undefined = mode === "art" && layout ? (wide ? "right" : tall ? "bottom" : undefined) : undefined;
@@ -298,9 +301,6 @@ const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
 function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation }) {
   const url = useArtwork(coverArt, 1000);
   const ref = useRef<HTMLCanvasElement>(null);
-  const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
-  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     const el = ref.current;
@@ -318,12 +318,12 @@ function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: stri
       if (!alive) return;
       el.width = Math.round(size.w * dpr);
       el.height = Math.round(size.h * dpr);
-      drawContinuation(el, img, edge, orientation, dark);
+      drawContinuation(el, img, edge, orientation);
     });
     return () => {
       alive = false;
     };
-  }, [url, edge, orientation, size, dark]);
+  }, [url, edge, orientation, size]);
   return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
 }
 

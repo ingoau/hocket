@@ -400,7 +400,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
         val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
-        val artworkLayout by rememberArtworkLayout(coverArt, preference)
+        val artworkLayout by rememberArtworkLayout(coverArt, preference, dark = appDark)
         val portrait = constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
         val immersiveEdge = artworkLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
         val hero = remember { HeroGeometry() }
@@ -490,7 +490,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // An immersive artwork's continuation (reflection or colours) below it, fading out as
                 // the artwork shrinks to a thumbnail for lyrics, the queue or the details.
                 if (immersiveEdge != null) {
-                    ImmersiveContinuation(coverArt, immersiveEdge, hero, dark = appDark, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
+                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
                 }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.

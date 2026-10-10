@@ -39,6 +39,7 @@ import app.hocket.core.api.ArtworkEdge
 import app.hocket.core.api.ArtworkLayout
 import app.hocket.core.api.ArtworkLayoutRequest
 import app.hocket.core.api.ArtworkStyle
+import app.hocket.core.api.ArtworkTheme
 import app.hocket.core.api.FaceRect
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
@@ -72,8 +73,8 @@ object ImmersiveArtwork {
     }
 
     /** The layout for the cover at [path], or null when it cannot be decoded or classified. */
-    suspend fun analyse(path: String, preference: Preference): ArtworkLayout? = withContext(Dispatchers.Default) {
-        val key = "$path|${preference.string}"
+    suspend fun analyse(path: String, preference: Preference, dark: Boolean): ArtworkLayout? = withContext(Dispatchers.Default) {
+        val key = "$path|${preference.string}|$dark"
         cache.get(key)?.let { return@withContext it }
         val file = File(path.removePrefix("file://"))
         if (!file.exists()) return@withContext null
@@ -100,7 +101,7 @@ object ImmersiveArtwork {
                 rgba[i * 4 + 2] = c.toByte()
                 rgba[i * 4 + 3] = (c ushr 24).toByte()
             }
-            ArtworkLayouts.layout(rgba, w, h, ArtworkLayoutRequest(faces = faces(bitmap), preference = preference))?.also { cache.put(key, it) }
+            ArtworkLayouts.layout(rgba, w, h, ArtworkLayoutRequest(faces = faces(bitmap), preference = preference, theme = if (dark) ArtworkTheme.Dark else ArtworkTheme.Light))?.also { cache.put(key, it) }
         } finally {
             if (bitmap !== decoded) bitmap.recycle()
             decoded.recycle()
@@ -128,12 +129,15 @@ object ImmersiveArtwork {
     }
 }
 
-/** The layout for [coverArt] (null while it is worked out, without a cover, or without the native core). */
+/**
+ * The layout for [coverArt] (null while it is worked out, without a cover, or without the native
+ * core). [dark] is the app's theme: the controls follow it unless the cover is almost all dark or light.
+ */
 @Composable
-fun rememberArtworkLayout(coverArt: String?, preference: Preference): State<ArtworkLayout?> {
+fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ArtworkLayout?> {
     val client = LocalCoreClient.current
-    return produceState<ArtworkLayout?>(initialValue = null, coverArt, preference) {
-        value = coverArt?.let { client.artworkPath(it, ArtworkSizes.GRID) }?.let { ImmersiveArtwork.analyse(it, preference) }
+    return produceState<ArtworkLayout?>(initialValue = null, coverArt, preference, dark) {
+        value = coverArt?.let { client.artworkPath(it, ArtworkSizes.GRID) }?.let { ImmersiveArtwork.analyse(it, preference, dark) }
     }
 }
 
@@ -180,10 +184,11 @@ private const val BLUR_FAR = 0.1f
  * before it the copies are sharp and only fade. Everything fades into the moving backdrop, except
  * over a light continuation or a flat colour, which carry on in their own colour (a white cover
  * stays white). Under the controls, the scrim the core worked out for 4.5:1, and from the title
- * down a partial fade to the app theme's black ([dark]) or white.
+ * down a partial fade to black under light controls or white under dark ones. The controls follow
+ * the app's theme unless the cover is almost all dark or light ([rememberArtworkLayout]).
  */
 @Composable
-internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, dark: Boolean, modifier: Modifier = Modifier) {
+internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, modifier: Modifier = Modifier) {
     val base = argb(edge.baseColor)
     val colors = edge.edgeColors.map(::argb)
     val flat = edge.isFlat()
@@ -264,16 +269,16 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
                 drawRect(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 1f to scrim, startY = from, endY = to.coerceAtLeast(from + 1f)))
             })
         }
-        // From the title down, the continuation fades part of the way to the app's theme: black in
-        // dark mode, white in light mode.
-        val end = (if (dark) Color.Black else Color.White).copy(alpha = BOTTOM_FADE)
+        // From the title down, the continuation fades part of the way to the controls' opposite:
+        // black under light controls (dark mode, or a dark cover), white under dark ones.
+        val end = (if (edge.light) Color.White else Color.Black).copy(alpha = BOTTOM_FADE)
         Box(Modifier.fillMaxSize().drawBehind {
             drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to end, startY = seam(), endY = size.height))
         })
     }
 }
 
-/** How far the bottom of the screen fades to the theme's black or white. */
+/** How far the bottom of the screen fades to black or white. */
 private const val BOTTOM_FADE = 0.6f
 
 /**

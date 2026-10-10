@@ -806,6 +806,15 @@ pub struct FaceRect {
     pub h: f64,
 }
 
+/// The app's theme, for [`ArtworkLayoutRequest::theme`].
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtworkTheme {
+    Dark,
+    Light,
+}
+
 /// What the platform hands [`crate::artwork::layout`] beside the pixels.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -815,6 +824,11 @@ pub struct ArtworkLayoutRequest {
     pub faces: Vec<FaceRect>,
     #[serde(default)]
     pub preference: ImmersiveArtwork,
+    /// The app's theme: the controls follow it (light in dark mode, dark in light mode) unless
+    /// the cover is almost all dark or all light, when they follow the cover. Without it, whichever
+    /// controls need the lighter scrim.
+    #[serde(default)]
+    pub theme: Option<ArtworkTheme>,
 }
 
 /// The measurements a decision was made from (for tuning and the debug grid).
@@ -833,6 +847,12 @@ pub struct ArtworkMetrics {
     /// Mean colour change between neighbouring pixels in the lower 40%.
     pub busy: f64,
     pub faces: u32,
+    /// Share of the whole cover that is very dark / very light (one of them near 1: the controls
+    /// follow the cover, not the theme).
+    #[serde(default)]
+    pub dark_share: f64,
+    #[serde(default)]
+    pub light_share: f64,
 }
 
 /// How to show the cover with the continuation along one edge (bottom for a portrait layout, right

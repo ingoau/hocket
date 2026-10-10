@@ -22,8 +22,8 @@ export function loadImage(url: string): Promise<HTMLImageElement | undefined> {
 }
 
 /** The layout for the cover at `url` (cached per URL and preference). */
-export async function classify(url: string, preference: ImmersiveArtwork): Promise<ArtworkLayout | undefined> {
-  const key = `${url}|${preference}`;
+export async function classify(url: string, preference: ImmersiveArtwork, dark: boolean): Promise<ArtworkLayout | undefined> {
+  const key = `${url}|${preference}|${dark}`;
   if (cache.has(key)) return cache.get(key);
   const img = await loadImage(url);
   let layout: ArtworkLayout | undefined;
@@ -39,26 +39,30 @@ export async function classify(url: string, preference: ImmersiveArtwork): Promi
       ctx.drawImage(img, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
       // No face detection on the desktop yet: faces only rule a mirror out, so a portrait may mirror.
-      layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference }).catch(() => undefined);
+      layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference, theme: dark ? "dark" : "light" }).catch(() => undefined);
     }
   }
   cache.set(key, layout);
   return layout;
 }
 
-/** The layout for `coverArt`: undefined while it is worked out, without a cover, or without the native core. */
-export function useArtworkLayout(coverArt: string | undefined, preference: ImmersiveArtwork): ArtworkLayout | undefined {
+/**
+ * The layout for `coverArt`: undefined while it is worked out, without a cover, or without the
+ * native core. `dark` is the app's theme: the controls follow it unless the cover is almost all
+ * dark or light.
+ */
+export function useArtworkLayout(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): ArtworkLayout | undefined {
   const url = useArtwork(coverArt, 300);
   const [layout, setLayout] = useState<ArtworkLayout | undefined>(undefined);
   useEffect(() => {
     setLayout(undefined);
     if (!url) return;
     let alive = true;
-    void classify(url, preference).then((l) => alive && setLayout(l));
+    void classify(url, preference, dark).then((l) => alive && setLayout(l));
     return () => {
       alive = false;
     };
-  }, [url, preference]);
+  }, [url, preference, dark]);
   return layout;
 }
 
@@ -133,9 +137,10 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * distance. Both fade out (to the fluid background beneath) except over a light
  * continuation or one flat colour, which carry on in their own colour. Then the
  * scrim the core worked out for 4.5:1, and from the controls down a partial fade to
- * the app theme's black (`dark`) or white.
+ * black under light controls or white under dark ones (the controls follow the app's
+ * theme unless the cover is almost all dark or light).
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, dark: boolean): void {
+export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -215,9 +220,9 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // From the controls down (in screen terms, whichever way the continuation runs) it fades part
-  // of the way to the app theme's black (dark) or white (light).
+  // of the way to the controls' opposite: black under light controls, white under dark ones.
   {
-    const rgb = dark ? "0,0,0" : "255,255,255";
+    const rgb = edge.light ? "255,255,255" : "0,0,0";
     const x0 = right ? S : 0;
     const top = right ? canvas.height * 0.3 : S;
     const g = ctx.createLinearGradient(0, top, 0, canvas.height);
@@ -228,5 +233,5 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   }
 }
 
-/** How far the bottom of the window fades to the theme's black or white. */
+/** How far the bottom of the window fades to black or white. */
 const BOTTOM_FADE = 0.6;

@@ -45,7 +45,11 @@ impl Canvas {
             &self.px,
             self.w as u32,
             self.h as u32,
-            &ArtworkLayoutRequest { faces, preference },
+            &ArtworkLayoutRequest {
+                faces,
+                preference,
+                theme: None,
+            },
         )
     }
 
@@ -321,4 +325,51 @@ fn near_black_noise_is_flat() {
     c.fill(80, 40, 96, 96, [230, 80, 70]);
     let l = c.auto();
     assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
+
+fn themed(c: &Canvas, theme: ArtworkTheme) -> ArtworkLayout {
+    layout(
+        &c.px,
+        c.w as u32,
+        c.h as u32,
+        &ArtworkLayoutRequest {
+            theme: Some(theme),
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn the_controls_follow_the_theme_over_a_mixed_cover() {
+    let c = soft_texture();
+    let mut red = Canvas::new(S, S, [230, 70, 65]);
+    red.fill(60, 30, 130, 150, [30, 120, 140]);
+    for c in [&c, &red] {
+        let dark = themed(c, ArtworkTheme::Dark).bottom;
+        let light = themed(c, ArtworkTheme::Light).bottom;
+        assert!(!dark.light, "dark mode: light controls {dark:?}");
+        assert!(light.light, "light mode: dark controls {light:?}");
+    }
+}
+
+#[test]
+fn an_almost_all_dark_or_light_cover_keeps_its_own_controls_in_either_theme() {
+    // A circle on black, a white cover with a caption: the cover decides.
+    let mut black = Canvas::new(S, S, [4, 4, 4]);
+    black.fill(90, 60, 70, 70, [230, 80, 70]);
+    let mut white = Canvas::new(S, S, [250, 250, 248]);
+    white.caption(120, S - 30, [10; 3]);
+    for theme in [ArtworkTheme::Dark, ArtworkTheme::Light] {
+        let b = themed(&black, theme).bottom;
+        assert!(
+            !b.light && b.metrics.dark_share >= TONE_SHARE,
+            "{theme:?}: {b:?}"
+        );
+        let w = themed(&white, theme).bottom;
+        assert!(
+            w.light && w.metrics.light_share >= TONE_SHARE,
+            "{theme:?}: {w:?}"
+        );
+        assert!(w.scrim < 0.01, "a white cover stays white: {w:?}");
+    }
 }

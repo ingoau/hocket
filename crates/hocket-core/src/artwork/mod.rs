@@ -16,8 +16,8 @@
 //! example (`cargo run -p hocket-core --example artwork_layout`).
 
 use crate::api::{
-    ArtworkEdge, ArtworkLayout, ArtworkLayoutRequest, ArtworkMetrics, ArtworkStyle, FaceRect,
-    ImmersiveArtwork,
+    ArtworkEdge, ArtworkLayout, ArtworkLayoutRequest, ArtworkMetrics, ArtworkStyle, ArtworkTheme,
+    FaceRect, ImmersiveArtwork,
 };
 
 #[cfg(test)]
@@ -56,6 +56,11 @@ const ROUGH_MAX: f64 = 0.02;
 /// Faces narrower than this share of the width are ignored: a figure seen whole reflects like
 /// one standing by water; it is a close-up face that looks wrong upside down.
 const FACE_MIN: f64 = 0.1;
+/// A cover this much very dark (or very light) is a dark (light) cover: the controls follow it, not the theme.
+const TONE_SHARE: f64 = 0.8;
+/// Very dark / very light, in WCAG relative luminance (about sRGB 70 and 205 in grey).
+const DARK_LUM: f64 = 0.06;
+const LIGHT_LUM: f64 = 0.6;
 /// How many colours [`ArtworkEdge::edge_colors`] carries.
 const EDGE_SAMPLES: usize = 16;
 /// Contrast the controls need over the continuation (WCAG AA for text).
@@ -96,14 +101,28 @@ pub fn layout(
         })
         .collect();
     let top = img.median(0..TOP_ROWS);
+    // Light or dark controls: the cover's when it is almost all one or the other, else the theme's.
+    let (dark_share, light_share) = img.tone_shares();
+    let controls = if dark_share >= TONE_SHARE {
+        Controls::Light
+    } else if light_share >= TONE_SHARE {
+        Controls::Dark
+    } else {
+        match request.theme {
+            Some(ArtworkTheme::Dark) => Controls::Light,
+            Some(ArtworkTheme::Light) => Controls::Dark,
+            None => Controls::Auto,
+        }
+    };
+    let decide = |img: &Img, faces: &[FaceRect]| {
+        let mut e = edge(img, faces, square, request.preference, controls);
+        e.metrics.dark_share = dark_share;
+        e.metrics.light_share = light_share;
+        e
+    };
     ArtworkLayout {
-        bottom: edge(&img, &faces, square, request.preference),
-        right: edge(
-            &img.transposed(),
-            &transposed_faces,
-            square,
-            request.preference,
-        ),
+        bottom: decide(&img, &faces),
+        right: decide(&img.transposed(), &transposed_faces),
         top_light: luminance(top) > 0.4,
         top_marks: img.marks(0..TOP_ROWS) >= MARKS_MAX,
     }
@@ -143,7 +162,13 @@ fn card_layout(reason: &str) -> ArtworkLayout {
 }
 
 /// The decision for the bottom edge of `img` (the right edge is the bottom of the transposed image).
-fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwork) -> ArtworkEdge {
+fn edge(
+    img: &Img,
+    faces: &[FaceRect],
+    square: bool,
+    preference: ImmersiveArtwork,
+    controls: Controls,
+) -> ArtworkEdge {
     let strip = N - 1 - EDGE_ROWS..N - 1;
     // The outermost row alone (a few pixels of the original): one colour means a border, a
     // backdrop or a plain band, and the art can simply carry on in it.
@@ -174,6 +199,7 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
         marks,
         busy,
         faces: face_count,
+        ..Default::default()
     };
 
     let mirror_ok = face_count == 0 && marks < MARKS_MAX && busy <= BUSY_MAX;
@@ -229,7 +255,7 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
     let (light, scrim) = if style == ArtworkStyle::Card {
         (false, 0.0)
     } else {
-        foreground(&behind_rgb)
+        foreground(&behind_rgb, controls)
     };
     ArtworkEdge {
         style,
@@ -242,8 +268,19 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
     }
 }
 
-/// Light or dark controls, whichever needs the lighter scrim over `behind` (sRGB 0..1), and that scrim.
-fn foreground(behind: &[[f32; 3]]) -> (bool, f64) {
+/// Which controls go over the continuation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Controls {
+    /// Light text and icons (dark mode, or an almost all dark cover).
+    Light,
+    /// Dark text and icons (light mode, or an almost all light cover).
+    Dark,
+    /// Whichever needs the lighter scrim (no theme given).
+    Auto,
+}
+
+/// Whether the controls over `behind` (sRGB 0..1) are dark, and the scrim they need for 4.5:1.
+fn foreground(behind: &[[f32; 3]], controls: Controls) -> (bool, f64) {
     let need = |fg: [f32; 3], scrim: f32| -> f64 {
         let fg_l = luminance_srgb(fg);
         (0..=100)
@@ -256,12 +293,18 @@ fn foreground(behind: &[[f32; 3]]) -> (bool, f64) {
             })
             .unwrap_or(1.0) as f64
     };
-    let white = need([1.0; 3], 0.0);
-    let dark = need(DARK_FG, 1.0);
-    if dark < white {
-        (true, dark)
-    } else {
-        (false, white)
+    match controls {
+        Controls::Light => (false, need([1.0; 3], 0.0)),
+        Controls::Dark => (true, need(DARK_FG, 1.0)),
+        Controls::Auto => {
+            let white = need([1.0; 3], 0.0);
+            let dark = need(DARK_FG, 1.0);
+            if dark < white {
+                (true, dark)
+            } else {
+                (false, white)
+            }
+        }
     }
 }
 
@@ -304,6 +347,18 @@ impl Img {
             }
         }
         Img { lab }
+    }
+
+    /// The shares of the cover that are very dark and very light.
+    fn tone_shares(&self) -> (f64, f64) {
+        let (mut dark, mut light) = (0usize, 0usize);
+        for c in &self.lab {
+            let l = luminance(*c);
+            dark += (l < DARK_LUM) as usize;
+            light += (l > LIGHT_LUM) as usize;
+        }
+        let n = self.lab.len().max(1) as f64;
+        (dark as f64 / n, light as f64 / n)
     }
 
     fn transposed(&self) -> Img {
