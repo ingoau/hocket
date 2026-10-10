@@ -38,10 +38,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -69,6 +65,7 @@ import app.hocket.core.api.QueryResult
 import app.hocket.core.lyrics.LyricsCursor
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.icons.HocketIcons
 
 /**
  * Native lyrics renderer. Syllable tier: continuous per-syllable gradient sweep from each line's own
@@ -153,9 +150,9 @@ private fun OffsetControl(doc: Lyrics, onOffset: (Int) -> Unit, systemBarPadding
         if (doc.tier != LyricsTier.Unsynced) {
             Text(stringResource(R.string.lyrics_offset_value, doc.offsetMs), style = MaterialTheme.typography.labelMedium, color = LyricsContrast.active, modifier = Modifier.padding(end = 4.dp))
             // Labelled 48 dp buttons (a "−" glyph alone reads as "minus").
-            IconButton(onClick = { onOffset(doc.offsetMs - 100) }, modifier = Modifier.testTag("lyrics.offset.earlier")) { Icon(Icons.Filled.Remove, stringResource(R.string.lyrics_offset_earlier_a11y), tint = LyricsContrast.active) }
-            IconButton(onClick = { onOffset(0) }, modifier = Modifier.testTag("lyrics.offset.reset")) { Icon(Icons.Filled.RestartAlt, stringResource(R.string.lyrics_offset_reset_a11y), tint = LyricsContrast.active) }
-            IconButton(onClick = { onOffset(doc.offsetMs + 100) }, modifier = Modifier.testTag("lyrics.offset.later")) { Icon(Icons.Filled.Add, stringResource(R.string.lyrics_offset_later_a11y), tint = LyricsContrast.active) }
+            IconButton(onClick = { onOffset(doc.offsetMs - 100) }, modifier = Modifier.testTag("lyrics.offset.earlier")) { Icon(HocketIcons.Filled.Remove, stringResource(R.string.lyrics_offset_earlier_a11y), tint = LyricsContrast.active) }
+            IconButton(onClick = { onOffset(0) }, modifier = Modifier.testTag("lyrics.offset.reset")) { Icon(HocketIcons.Filled.RestartAlt, stringResource(R.string.lyrics_offset_reset_a11y), tint = LyricsContrast.active) }
+            IconButton(onClick = { onOffset(doc.offsetMs + 100) }, modifier = Modifier.testTag("lyrics.offset.later")) { Icon(HocketIcons.Filled.Add, stringResource(R.string.lyrics_offset_later_a11y), tint = LyricsContrast.active) }
         }
     }
 }

@@ -38,19 +38,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Lyrics
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
@@ -116,6 +103,7 @@ import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.PlaylistPicker
 import app.hocket.ui.components.formatClock
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.lyrics.LyricsPage
 import app.hocket.ui.queue.QueueList
 import app.hocket.ui.theme.ArtworkColors
@@ -189,7 +177,7 @@ internal fun FullPlayer(
                         // the player adds the sleep timer as its extra.
                         val sleep = client.sleepTimer.value
                         val sleepState = sleep?.let { t -> t.endsAt?.let { resources.getString(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: resources.getString(R.string.sleep_active_end_of_track) }
-                        track?.let { songMenu.open(it, extras = listOf(app.hocket.ui.components.SongMenuExtra(sleepLabel, Icons.Filled.Bedtime,
+                        track?.let { songMenu.open(it, extras = listOf(app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
                             onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep"))) }
                     }, onAddTo = { addTo = true }) },
                 items = listOf(
@@ -329,7 +317,7 @@ private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit, onSwitch
                 Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 Text(source, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Icon(Icons.Filled.ArrowDropDown, null, Modifier.padding(bottom = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(HocketIcons.Filled.ArrowDropDown, null, Modifier.padding(bottom = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         // Connect, highlighted while another device plays. Tap opens the picker; long-press pulls
         // playback straight to this device.
@@ -353,10 +341,10 @@ private fun PlayerHeader(onCollapse: () -> Unit, onConnect: () -> Unit, onSwitch
                 .testTag("player.connect"),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Cast, stringResource(R.string.player_connect), tint = if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(HocketIcons.Filled.Cast, stringResource(R.string.player_connect), tint = if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconButton(onClick = onCollapse, modifier = Modifier.testTag("player.collapse")) {
-            Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse), Modifier.size(28.dp))
+            Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse), Modifier.size(28.dp))
         }
     }
 }
@@ -448,7 +436,7 @@ private fun PlayerNoticeLines() {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.player_resume_offer, offer.deviceName, offer.track.title), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 TextButton(onClick = { client.dispatch(Command.ResumeHere) }, modifier = Modifier.testTag("player.resumeHere")) { Text(stringResource(R.string.player_resume_here)) }
-                IconButton(onClick = { client.dispatch(Command.DismissResumeOffer) }) { Icon(Icons.Filled.Close, stringResource(R.string.action_dismiss)) }
+                IconButton(onClick = { client.dispatch(Command.DismissResumeOffer) }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_dismiss)) }
             }
         }
         (entry?.item?.source as? QueueSource.Autoplay)?.let { NoticeLine(stringResource(R.string.player_autoplay_reason, it.data.reason), MaterialTheme.colorScheme.tertiary) }
@@ -527,8 +515,8 @@ private fun TitleRow(track: app.hocket.core.api.TrackSummary, compact: Boolean, 
                 }
             }
         }
-        IconButton(onClick = onAddTo, modifier = Modifier.testTag("player.addToPlaylist")) { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist)) }
-        IconButton(onClick = onMore, modifier = Modifier.testTag("player.more")) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
+        IconButton(onClick = onAddTo, modifier = Modifier.testTag("player.addToPlaylist")) { Icon(HocketIcons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist)) }
+        IconButton(onClick = onMore, modifier = Modifier.testTag("player.more")) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) }
     }
     }
 }
@@ -552,7 +540,7 @@ private fun ModeBar(mode: PlayerMode, onMode: (PlayerMode) -> Unit, pageWidth: D
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             labels.forEach { (m, label) ->
-                val icon = when (m) { PlayerMode.Lyrics -> Icons.Filled.Lyrics; PlayerMode.Queue -> Icons.AutoMirrored.Filled.QueueMusic; else -> Icons.Outlined.Info }
+                val icon = when (m) { PlayerMode.Lyrics -> HocketIcons.Filled.Lyrics; PlayerMode.Queue -> HocketIcons.AutoMirrored.Filled.QueueMusic; else -> HocketIcons.Outlined.Info }
                 ModePill(label, icon, selected = mode == m, showLabel = !compact || mode == m, tag = "player.mode." + m.name.lowercase(), onClick = { onMode(if (mode == m) PlayerMode.Artwork else m) })
             }
         }

@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
@@ -17,9 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -116,8 +114,8 @@ fun SearchScreen(nav: NavHostController) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(
                 value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text(stringResource(R.string.search_hint)) },
-                leadingIcon = { Icon(Icons.Filled.Search, null) },
-                trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, stringResource(R.string.search_clear)) } },
+                leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
+                trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } },
                 modifier = Modifier.weight(1f).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp).focusRequester(focus).testTag("search.input"),
             )
             AccountButton(Modifier.padding(end = 4.dp))

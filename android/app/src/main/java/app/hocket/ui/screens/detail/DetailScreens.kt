@@ -17,15 +17,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.PlaylistRemove
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,6 +54,7 @@ import app.hocket.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
@@ -137,7 +129,7 @@ private fun DetailScaffold(
                     else Text(title, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 },
                 subtitle = subtitle?.let { { Text(it, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
-                navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = actions, scrollBehavior = scroll,
             )
         },
@@ -247,14 +239,14 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val songMenu = app.hocket.ui.components.rememberSongMenu()
     var albumSheet by remember { mutableStateOf(false) }
     val context = Commands.albumContext(a.serverId, a.id, a.name)
-    DetailScaffold(nav, embedded, a.name, a.artist, a.coverArt, actions = { IconButton(onClick = { albumSheet = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) } }, header = {
+    DetailScaffold(nav, embedded, a.name, a.artist, a.coverArt, actions = { IconButton(onClick = { albumSheet = true }) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) } }, header = {
         Text(listOfNotNull(a.year?.toString(), a.genre).joinToString(stringResource(R.string.dot_separator)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong())), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
         FlowRow(itemVerticalAlignment = Alignment.CenterVertically) {
             RatingStars(a.rating.toInt(), onRate = { client.dispatch(Commands.setRating(listOf(app.hocket.core.api.RatingTarget.Album(app.hocket.core.api.RatingTargetAlbumInner(a.id))), it)) }, starSize = 20.dp)
             IconToggleButton(checked = a.loved, onCheckedChange = { client.dispatch(Commands.loveAlbum(a.id, it)) }) {
-                Icon(if (a.loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, stringResource(if (a.loved) R.string.action_unlove else R.string.action_love), tint = if (a.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(if (a.loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (a.loved) R.string.action_unlove else R.string.action_love), tint = if (a.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -274,8 +266,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
 @Composable
 fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = onPlay, shapes = ButtonDefaults.shapes()) { Icon(Icons.Filled.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_play)) }
-        FilledTonalButton(onClick = onShuffle, shapes = ButtonDefaults.shapes()) { Icon(Icons.Filled.Shuffle, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_shuffle)) }
+        Button(onClick = onPlay, shapes = ButtonDefaults.shapes()) { Icon(HocketIcons.Filled.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_play)) }
+        FilledTonalButton(onClick = onShuffle, shapes = ButtonDefaults.shapes()) { Icon(HocketIcons.Filled.Shuffle, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.action_shuffle)) }
     }
 }
 
@@ -305,7 +297,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val songMenu = app.hocket.ui.components.rememberSongMenu()
     DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, header = {
         IconToggleButton(checked = ar.loved, onCheckedChange = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) {
-            Icon(if (ar.loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, stringResource(if (ar.loved) R.string.action_unlove else R.string.action_love), tint = if (ar.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(if (ar.loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (ar.loved) R.string.action_unlove else R.string.action_love), tint = if (ar.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
@@ -393,8 +385,8 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             LargeFlexibleTopAppBar(
                 title = { if (p == null) SkeletonLine(Modifier.width(200.dp), 24.dp) else Text(p.name, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() }) },
                 subtitle = { Text(p?.owner?.let { stringResource(R.string.playlist_by, it) } ?: "") },
-                navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-                actions = { if (p != null) IconButton(onClick = { playlistSheet = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) } }, scrollBehavior = scroll)
+                navigationIcon = { if (!embedded) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                actions = { if (p != null) IconButton(onClick = { playlistSheet = true }) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) } }, scrollBehavior = scroll)
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
@@ -431,14 +423,14 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                         ReorderableItem(reorderable, key = e.key, enabled = editable) { dragging ->
                             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = {
                                 // The playlist's own extra: remove this entry (by its position).
-                                val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(removeFromPlaylist, Icons.Filled.PlaylistRemove,
+                                val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(removeFromPlaylist, HocketIcons.Filled.PlaylistRemove,
                                     onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))) }, destructive = true, testTag = "songMenu.removeFromPlaylist")) else emptyList()
                                 songMenu.open(t.toSummary(), extras = extras)
                             },
                                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
                                 nowPlaying = nowPlaying?.track?.id == t.id,
                                 trailing = if (editable) ({
-                                    Icon(Icons.Filled.DragHandle, stringResource(R.string.playlist_reorder_handle), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    Icon(HocketIcons.Filled.DragHandle, stringResource(R.string.playlist_reorder_handle), tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(start = 8.dp).draggableHandle(
                                             onDragStarted = {
                                                 dragKey = e.key

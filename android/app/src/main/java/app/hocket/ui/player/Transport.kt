@@ -40,11 +40,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LoadingIndicator
@@ -93,6 +88,7 @@ import app.hocket.R
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.a11y.Spoken
 import app.hocket.ui.components.formatClock
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -199,7 +195,7 @@ fun PlayPauseButton(
             label = "playPauseIcon",
         ) { p ->
             if (p == null) LoadingIndicator(Modifier.size(iconSize * 1.2f), color = androidx.compose.material3.LocalContentColor.current)
-            else Icon(if (p) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(iconSize))
+            else Icon(if (p) HocketIcons.Filled.Pause else HocketIcons.Filled.PlayArrow, null, Modifier.size(iconSize))
         }
     }
 }
@@ -239,9 +235,9 @@ fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit,
     val tonal = MaterialTheme.colorScheme.secondaryContainer
     val onTonal = MaterialTheme.colorScheme.onSecondaryContainer
     Row(modifier.fillMaxWidth().height(height), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        SkipButton(onPrevious, stringResource(R.string.action_previous), Icons.Filled.SkipPrevious, tonal, onTonal, prevSource, prevPressed, Modifier.size(prevWidth, skip).testTag("player.previous"))
+        SkipButton(onPrevious, stringResource(R.string.action_previous), HocketIcons.Filled.SkipPrevious, tonal, onTonal, prevSource, prevPressed, Modifier.size(prevWidth, skip).testTag("player.previous"))
         PlayPauseButton(playing, onToggle, Modifier.size(height), playSource, iconSize = height * 0.45f, buffering = buffering)
-        SkipButton(onNext, stringResource(R.string.action_next), Icons.Filled.SkipNext, tonal, onTonal, nextSource, nextPressed, Modifier.size(nextWidth, skip).testTag("player.next"))
+        SkipButton(onNext, stringResource(R.string.action_next), HocketIcons.Filled.SkipNext, tonal, onTonal, nextSource, nextPressed, Modifier.size(nextWidth, skip).testTag("player.next"))
     }
 }
 

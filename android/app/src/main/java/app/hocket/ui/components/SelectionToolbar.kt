@@ -9,10 +9,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalFloatingToolbar
@@ -39,6 +35,7 @@ import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -83,13 +80,13 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
                 colors = FloatingToolbarDefaults.vibrantFloatingToolbarColors(),
                 modifier = Modifier.semantics { contentDescription = count },
                 leadingContent = {
-                    IconButton(onClick = { client.clearSelection() }) { Icon(Icons.Filled.Close, stringResource(R.string.action_clear_selection)) }
+                    IconButton(onClick = { client.clearSelection() }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_clear_selection)) }
                     Text(count, style = MaterialTheme.typography.labelLarge)
                 },
                 trailingContent = {
-                    if (onSelectAll != null) IconButton(onClick = onSelectAll) { Icon(Icons.Filled.SelectAll, stringResource(R.string.action_select_all)) }
+                    if (onSelectAll != null) IconButton(onClick = onSelectAll) { Icon(HocketIcons.Filled.SelectAll, stringResource(R.string.action_select_all)) }
                     Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
+                        IconButton(onClick = { menu = true }) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             toolbarActions.drop(4).forEach { a ->
                                 DropdownMenuItem(text = { Text(label(a)) }, leadingIcon = { Icon(icon(a), null) }, enabled = a.enabled, onClick = { menu = false; run(a) },

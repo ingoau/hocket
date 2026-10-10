@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,8 +26,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.hocket.core.api.SettingScope
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
@@ -65,6 +61,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.components.formatAgo
 import app.hocket.ui.components.formatBytes
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -77,7 +74,7 @@ import kotlin.math.roundToInt
  */
 
 @Composable
-private fun Chevron() = Icon(Icons.Filled.ChevronRight, null)
+private fun Chevron() = Icon(HocketIcons.Filled.ChevronRight, null)
 
 /** Account & server: the settings-sync master switch, the server, sync now / full sync, sign out. */
 @Composable
@@ -95,7 +92,7 @@ fun AccountSettingsScreen(nav: NavHostController) {
         }
         SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
         // Destructive, and last: nothing below it to hit by mistake.
-        server?.let { SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove", destructive = true) { Icon(Icons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) } }
+        server?.let { SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove", destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) } }
     }
     // Sign-out goes through CoreHost.removeServer: the stored login is removed before RemoveServer,
     // so nothing can replay it and resurrect the server.
@@ -160,7 +157,7 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
                         .clip(CircleShape).background(colour),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (isSelected) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    if (isSelected) Icon(HocketIcons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
                 }
             }
         }

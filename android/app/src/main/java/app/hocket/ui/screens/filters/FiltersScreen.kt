@@ -6,12 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -33,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
@@ -52,8 +47,8 @@ fun FiltersScreen(nav: NavHostController) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.filters_title)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
-        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset - 16.dp)) { Icon(Icons.Filled.Add, stringResource(R.string.filters_new)) } },
+        topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.filters_title)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
+        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset - 16.dp)) { Icon(HocketIcons.Filled.Add, stringResource(R.string.filters_new)) } },
     ) { padding ->
         if (filters.isEmpty()) {
             EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
@@ -64,11 +59,11 @@ fun FiltersScreen(nav: NavHostController) {
                 ListItem(
                     headlineContent = { Text(f.name) },
                     supportingContent = { Text(describe(f)) },
-                    leadingContent = { Icon(Icons.Filled.FilterAlt, null) },
+                    leadingContent = { Icon(HocketIcons.Filled.FilterAlt, null) },
                     trailingContent = {
                         androidx.compose.foundation.layout.Row {
-                            IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(Icons.Filled.PlayArrow, stringResource(R.string.filter_play)) }
-                            IconButton(onClick = { deleting = f }) { Icon(Icons.Filled.Delete, stringResource(R.string.action_delete)) }
+                            IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.filter_play)) }
+                            IconButton(onClick = { deleting = f }) { Icon(HocketIcons.Filled.Delete, stringResource(R.string.action_delete)) }
                         }
                     },
                     modifier = Modifier.clickable { nav.navigate(Route.FilterBuilder(f.id)) },

@@ -20,10 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
@@ -64,6 +60,7 @@ import app.hocket.core.api.Command
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.components.Artwork
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -215,9 +212,9 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                     modifier = Modifier.testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (transport.buffering) stateDescription = bufferingLabel },
                 ) {
                     if (transport.buffering) LoadingIndicator(Modifier.size(28.dp), color = androidx.compose.material3.LocalContentColor.current)
-                    else Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null)
+                    else Icon(if (playing) HocketIcons.Filled.Pause else HocketIcons.Filled.PlayArrow, null)
                 }
-                IconButton(onClick = { client.dispatch(Command.Next) }, colors = colors) { Icon(Icons.Filled.SkipNext, stringResource(R.string.action_next)) }
+                IconButton(onClick = { client.dispatch(Command.Next) }, colors = colors) { Icon(HocketIcons.Filled.SkipNext, stringResource(R.string.action_next)) }
             }
             }
         }

@@ -9,21 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.BatterySaver
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Lyrics
-import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.SettingsBackupRestore
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
@@ -54,6 +39,7 @@ import app.hocket.core.api.ReplayGainMode
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.formatAgo
 import app.hocket.ui.components.formatBytes
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
 
@@ -123,7 +109,7 @@ private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolea
             headlineContent = { Text(category.title()) },
             supportingContent = { Text(category.summary(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingContent = { Icon(category.icon(), null, tint = MaterialTheme.colorScheme.primary) },
-            trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+            trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             modifier = Modifier.clickable(onClick = onClick).testTag("settings.category.${category.id}"),
         )
@@ -131,19 +117,19 @@ private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolea
 }
 
 private fun SettingsCategory.icon(): ImageVector = when (this) {
-    SettingsCategory.Account -> Icons.Filled.AccountCircle
-    SettingsCategory.Appearance -> Icons.Filled.Palette
-    SettingsCategory.Playback -> Icons.AutoMirrored.Filled.QueueMusic
-    SettingsCategory.Audio -> Icons.Filled.GraphicEq
-    SettingsCategory.Streaming -> Icons.Filled.NetworkCheck
-    SettingsCategory.Downloads -> Icons.Filled.Download
-    SettingsCategory.Lyrics -> Icons.Filled.Lyrics
-    SettingsCategory.Library -> Icons.Filled.LibraryMusic
-    SettingsCategory.Battery -> Icons.Filled.BatterySaver
-    SettingsCategory.Connect -> Icons.Filled.Devices
-    SettingsCategory.Customise -> Icons.Filled.Tune
-    SettingsCategory.Backup -> Icons.Filled.SettingsBackupRestore
-    SettingsCategory.About -> Icons.Filled.Info
+    SettingsCategory.Account -> HocketIcons.Filled.AccountCircle
+    SettingsCategory.Appearance -> HocketIcons.Filled.Palette
+    SettingsCategory.Playback -> HocketIcons.AutoMirrored.Filled.QueueMusic
+    SettingsCategory.Audio -> HocketIcons.Filled.GraphicEq
+    SettingsCategory.Streaming -> HocketIcons.Filled.NetworkCheck
+    SettingsCategory.Downloads -> HocketIcons.Filled.Download
+    SettingsCategory.Lyrics -> HocketIcons.Filled.Lyrics
+    SettingsCategory.Library -> HocketIcons.Filled.LibraryMusic
+    SettingsCategory.Battery -> HocketIcons.Filled.BatterySaver
+    SettingsCategory.Connect -> HocketIcons.Filled.Devices
+    SettingsCategory.Customise -> HocketIcons.Filled.Tune
+    SettingsCategory.Backup -> HocketIcons.Filled.SettingsBackupRestore
+    SettingsCategory.About -> HocketIcons.Filled.Info
 }
 
 @Composable
