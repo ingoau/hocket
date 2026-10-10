@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.foundation.background
@@ -20,10 +21,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Sort
-import androidx.compose.material.icons.outlined.OfflineBolt
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -168,16 +165,16 @@ fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
                     title = { Text(stringResource(R.string.nav_library), modifier = Modifier.semantics { heading() }) },
                     actions = {
                         Box {
-                            IconButton(onClick = { sortMenu = true }) { Icon(Icons.Filled.Sort, stringResource(R.string.action_sort)) }
+                            IconButton(onClick = { sortMenu = true }) { Icon(HocketIcons.Filled.Sort, stringResource(R.string.action_sort)) }
                             DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                                 val options = if (pager.currentPage == 3) listOf(SortOrder.Title, SortOrder.Artist, SortOrder.Album, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Duration, SortOrder.Bpm, SortOrder.Energy, SortOrder.Random)
                                 else listOf(SortOrder.Default, SortOrder.Artist, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Random)
                                 options.forEach { o ->
                                     // The check mark is drawn only; the chosen order is announced as "selected".
-                                    DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(Icons.Filled.Check, null) }, onClick = { sort = o; sortMenu = false },
+                                    DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(HocketIcons.Filled.Check, null) }, onClick = { sort = o; sortMenu = false },
                                         modifier = Modifier.semantics { selected = sort == o })
                                 }
-                                DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(Icons.Filled.Check, null) }, onClick = { descending = !descending; sortMenu = false },
+                                DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(HocketIcons.Filled.Check, null) }, onClick = { descending = !descending; sortMenu = false },
                                     modifier = Modifier.semantics { stateDescription = if (descending) onLabel else offLabel })
                             }
                         }
@@ -373,7 +370,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
                 FilterChip(
                     selected = offlineOnly, onClick = { onOfflineOnlyChange(!offlineOnly) },
                     label = { Text(stringResource(R.string.available_offline)) },
-                    leadingIcon = { Icon(if (offlineOnly) Icons.Filled.Check else Icons.Outlined.OfflineBolt, null, Modifier.size(FilterChipDefaults.IconSize)) },
+                    leadingIcon = { Icon(if (offlineOnly) HocketIcons.Filled.Check else HocketIcons.Outlined.OfflineBolt, null, Modifier.size(FilterChipDefaults.IconSize)) },
                     modifier = Modifier.testTag("library.availableOffline"),
                 )
             }

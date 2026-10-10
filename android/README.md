@@ -202,6 +202,15 @@ syllable lyrics and a streamed read with a ranged re-open against a real Navidro
 33+ needs `jdk.internal.ref`, which the JDK does not export. It is skipped when the host `.so` is
 absent.
 
+## Icons
+
+Icons are Material Symbols (rounded), the same glyphs as desktop, generated into
+`ui/icons/HocketIcons.kt` by `scripts/gen-android-icons.mjs` (from desktop's
+`@iconify-json/material-symbols` dev dependency, so `pnpm install` in `desktop/` first). The object
+mirrors androidx's `Icons` layout: `HocketIcons.Filled.Home`, `HocketIcons.Outlined.Home`,
+`HocketIcons.AutoMirrored.Filled.ArrowBack`. To add one, map its Compose-style name to a Material
+Symbols name in the script, list it under its group, and re-run; the output is committed.
+
 ## Gesture and motion conventions
 
 - Anything the finger drives settles with a spring (`ui/theme/Motion.kt`): low-bouncy for the

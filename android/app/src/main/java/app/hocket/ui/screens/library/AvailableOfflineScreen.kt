@@ -3,8 +3,6 @@ package app.hocket.ui.screens.library
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -28,6 +26,7 @@ import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.api.SortOrder
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.screens.detail.PlayShuffleRow
 
 /**
@@ -50,7 +49,7 @@ fun AvailableOfflineScreen(nav: NavHostController) {
             MediumFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.available_offline), modifier = Modifier.semantics { heading() }) },
                 subtitle = { Text(stringResource(R.string.settings_available_offline_body)) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )
         },

@@ -12,9 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,10 +35,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.outlined.OfflineBolt
 import androidx.compose.material3.ListItem
 import androidx.compose.ui.platform.testTag
 import app.hocket.ui.nav.Route
@@ -73,7 +69,7 @@ fun DownloadsScreen(nav: NavHostController) {
             LargeFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.downloads_title)) },
                 subtitle = { Text(stringResource(R.string.downloads_storage, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), storage.freeBytes?.let { formatBytes(it) } ?: "?")) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = { AccountButton() },
                 scrollBehavior = scroll,
             )
@@ -85,8 +81,8 @@ fun DownloadsScreen(nav: NavHostController) {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.available_offline)) },
                     supportingContent = { Text(stringResource(R.string.settings_available_offline_body)) },
-                    leadingContent = { Icon(Icons.Outlined.OfflineBolt, null) },
-                    trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                    leadingContent = { Icon(HocketIcons.Outlined.OfflineBolt, null) },
+                    trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
                     modifier = Modifier.clickable { nav.navigate(Route.AvailableOffline) }.testTag("downloads.availableOffline"),
                 )
             }
@@ -106,7 +102,7 @@ fun DownloadsScreen(nav: NavHostController) {
                                 Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original))
                             }
                         }
-                        IconButton(onClick = { removing = pin }) { Icon(Icons.Filled.Delete, stringResource(R.string.action_remove_download)) }
+                        IconButton(onClick = { removing = pin }) { Icon(HocketIcons.Filled.Delete, stringResource(R.string.action_remove_download)) }
                     }
                     if (pin.downloadedCount < pin.trackCount) {
                         LinearWavyProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))

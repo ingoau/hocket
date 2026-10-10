@@ -3,9 +3,6 @@ package app.hocket.ui.components
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.ui.a11y.Spoken
+import app.hocket.ui.icons.HocketIcons
 import kotlin.math.roundToInt
 
 /**
@@ -69,7 +67,7 @@ fun RatingStars(rating: Int, onRate: (Int) -> Unit, modifier: Modifier = Modifie
         for (i in 1..5) {
             val filled = i <= rating
             IconButton(onClick = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); onRate(if (i == rating) 0 else i) }, modifier = Modifier.size(starSize + 12.dp)) {
-                Icon(if (filled) Icons.Filled.Star else Icons.Outlined.StarOutline, contentDescription = null, tint = if (filled) tint else MaterialTheme.colorScheme.outline, modifier = Modifier.size(starSize))
+                Icon(if (filled) HocketIcons.Filled.Star else HocketIcons.Outlined.StarOutline, contentDescription = null, tint = if (filled) tint else MaterialTheme.colorScheme.outline, modifier = Modifier.size(starSize))
             }
         }
     }
