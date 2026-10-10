@@ -7,6 +7,7 @@ import android.media.FaceDetector
 import android.util.LruCache
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
@@ -177,8 +179,8 @@ private const val BLUR_FAR = 0.1f
  * Blurs clamp at their edges (the same edge row on both sides of the seam) and need Android 12;
  * before it the copies are sharp and only fade. Everything fades into the moving backdrop, except
  * over a light continuation or a flat colour, which carry on in their own colour (a white cover
- * stays white). Under the controls, the scrim the core worked out for 4.5:1, and under light
- * controls a fade to near black at the bottom of the screen.
+ * stays white). Under the controls, the scrim the core worked out for 4.5:1, and towards the
+ * bottom of the screen a fade to near black (light controls) or near white (dark controls).
  */
 @Composable
 internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: HeroGeometry, modifier: Modifier = Modifier) {
@@ -190,20 +192,30 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
     val sidePx = hero.bigSlot().width
     val near = with(density) { (sidePx * BLUR_NEAR).toDp() }
     val far = with(density) { (sidePx * BLUR_FAR).toDp() }
-    /** The artwork (or its reflection) at the artwork's size, placed [dy] px down, blurred by [blur]. */
+    /** Where the seam (the artwork's bottom edge) is in this box: [FEATHER] of the side below its top. */
+    val seam = { if (flat) 0f else side() * FEATHER }
+
+    /**
+     * The artwork with its reflection below it, blurred by [blur] as one image, its seam on ours:
+     * both sides of the seam come from one blur, so it stays continuous (two separately blurred
+     * copies each fade at their own edge, which shows as a dark line there). Masked to [stops]
+     * (fractions of the side from this box's top, with alphas).
+     */
     @Composable
-    fun Copy(flipped: Boolean, blur: Dp, dy: () -> Float, modifier: Modifier = Modifier) = Box(
-        modifier
+    fun Reflected(blur: Dp, vararg stops: Pair<Float, Float>) = Box(
+        Modifier
             .fillMaxSize()
+            .verticalMask(side, *stops)
             .clipToBounds()
             .layout { m, c ->
                 val s = side().roundToInt().coerceAtLeast(1)
-                val p = m.measure(Constraints.fixed(c.maxWidth, s))
-                layout(c.maxWidth, c.maxHeight) { p.place(0, dy().roundToInt()) }
+                val p = m.measure(Constraints.fixed(c.maxWidth, 2 * s))
+                layout(c.maxWidth, c.maxHeight) { p.place(0, (seam() - s).roundToInt()) }
             },
     ) {
-        Box(Modifier.fillMaxSize().graphicsLayer { if (flipped) scaleY = -1f }.let { if (blur > 0.dp) it.blur(blur, BlurredEdgeTreatment.Rectangle) else it }) {
-            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RectangleShape)
+        Column(Modifier.fillMaxSize().let { if (blur > 0.dp) it.blur(blur, BlurredEdgeTreatment.Rectangle) else it }) {
+            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f), RectangleShape)
+            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f).graphicsLayer { scaleY = -1f }, RectangleShape)
         }
     }
     Box(
@@ -218,49 +230,48 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             },
     ) {
         if (flat || edge.light) Box(Modifier.fillMaxSize().background(base))
-        // Everything from here down is measured from the seam, [FEATHER] of the side below this box's top.
-        val seam = { if (flat) 0f else side() * FEATHER }
-        val below = Modifier.layout { m, c ->
-            val top = seam().roundToInt().coerceIn(0, c.maxHeight)
-            val p = m.measure(Constraints.fixed(c.maxWidth, (c.maxHeight - top).coerceAtLeast(0)))
-            layout(c.maxWidth, c.maxHeight) { p.place(0, top) }
-        }
-        if (!flat) {
-            // Under the artwork's fading edge: the same artwork, blurred (its bottom at the seam).
-            Copy(flipped = false, blur = near, dy = { seam() - side() }, modifier = Modifier.layout { m, c ->
-                val h = seam().roundToInt().coerceIn(0, c.maxHeight)
-                val p = m.measure(Constraints.fixed(c.maxWidth, h))
-                layout(c.maxWidth, c.maxHeight) { p.place(0, 0) }
-            })
-        }
-        Box(below) {
-            when {
-                edge.style == ArtworkStyle.Mirror -> {
-                    Copy(flipped = true, blur = far, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f))
-                    // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
-                    Copy(flipped = true, blur = near, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.03f to 1f, 0.1f to 0f))
+        val f = FEATHER
+        when {
+            edge.style == ArtworkStyle.Mirror -> {
+                Reflected(far, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
+                // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
+                Reflected(near, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f)
+            }
+            !flat -> {
+                // The edge's colours from the seam down, softening sideways with distance.
+                val below = Modifier.layout { m, c ->
+                    val top = seam().roundToInt().coerceIn(0, c.maxHeight)
+                    val p = m.measure(Constraints.fixed(c.maxWidth, (c.maxHeight - top).coerceAtLeast(0)))
+                    layout(c.maxWidth, c.maxHeight) { p.place(0, top) }
                 }
-                !flat -> {
+                Box(below) {
                     Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
                     Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.15f to 1f, 0.45f to 0f).background(Brush.horizontalGradient(soften(colors, 2))))
-                    // The bridge: a short blurred reflection, so the colours take over from exactly what the softened edge shows.
-                    Copy(flipped = true, blur = near, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.1f to 0f))
                 }
-            }
-            if (edge.scrim > 0.0) {
-                val scrim = (if (edge.light) Color.White else Color.Black).copy(alpha = edge.scrim.toFloat())
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 0.2f to scrim, 1f to scrim)))
+                // Under the artwork's fading edge and just past the seam: the artwork blurred, then
+                // its short reflection, bridging into the colours.
+                Reflected(near, 0f to 1f, f to 1f, f + 0.1f to 0f)
             }
         }
-        // Under light controls, the continuation darkens to near black towards the bottom of the
-        // screen (the mode pills sit on it). Not under dark controls: they need the light colour.
-        if (!edge.light) {
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = BOTTOM_FADE))))
+        // The scrim the controls need, already at full strength where they start (right at the
+        // seam): it comes in under the artwork's fading edge (or, under a crisp flat edge, just
+        // past it).
+        if (edge.scrim > 0.0) {
+            val scrim = (if (edge.light) Color.White else Color.Black).copy(alpha = edge.scrim.toFloat())
+            Box(Modifier.fillMaxSize().drawBehind {
+                val s = side()
+                val (from, to) = if (flat) 0f to s * 0.12f else 0f to seam()
+                drawRect(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 1f to scrim, startY = from, endY = to.coerceAtLeast(from + 1f)))
+            })
         }
+        // Towards the bottom of the screen the continuation fades to the controls' opposite: near
+        // black under light controls, near white under dark ones, so the mode pills stand out.
+        val end = if (edge.light) Color.White else Color.Black
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to end.copy(alpha = BOTTOM_FADE))))
     }
 }
 
-/** How dark the bottom of the screen gets under light controls. */
+/** How far the bottom of the screen fades to black (light controls) or white (dark controls). */
 private const val BOTTOM_FADE = 0.85f
 
 /**
@@ -285,16 +296,17 @@ internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float): 
         }
 
 /**
- * Drawn over the immersive artwork itself, fading with [fraction] (1 in artwork mode): where the top
- * of the artwork and the controls disagree (dark controls over a dark top, or light over a light
- * one), a scrim under the header.
+ * Drawn over the immersive artwork itself, fading with [fraction] (1 in artwork mode): under the
+ * header, where light header text sits on a dark top, a soft dark scrim for busy covers. Never a
+ * light one: over a light top the header turns dark instead ([immersiveHeaderColor]).
  */
 @Composable
 internal fun ImmersiveArtworkOverlay(layout: ArtworkLayout, fraction: () -> Float) {
-    val edge = layout.bottom
-    if (layout.topLight == edge.light) return
-    val scrim = if (edge.light) Color.White else Color.Black
+    if (layout.topLight) return
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = fraction() }.clearAndSetSemantics { }) {
-        Box(Modifier.fillMaxWidth().fillMaxHeight(0.22f).background(Brush.verticalGradient(0f to scrim.copy(alpha = 0.45f), 1f to scrim.copy(alpha = 0f))))
+        Box(Modifier.fillMaxWidth().fillMaxHeight(0.22f).background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent)))
     }
 }
+
+/** The header's text over an immersive artwork: from the artwork's top, not from the controls' colour below. */
+internal fun immersiveHeaderColor(layout: ArtworkLayout): Color = if (layout.topLight) Color(0xFF1C1B1F) else Color.White

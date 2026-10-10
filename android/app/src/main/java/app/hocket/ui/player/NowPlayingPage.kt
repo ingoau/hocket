@@ -233,7 +233,16 @@ internal fun FullPlayer(
             onPreviewToggle = onPreviewToggle,
             immersive = immersive,
         )
-        if (immersive != null) Box(Modifier.offset { IntOffset(0, -scroll.value) }) { header() }
+        if (immersive != null) {
+            // Its colours follow the artwork's top (dark over a light top), not the controls below.
+            val fg = immersiveHeaderColor(immersive)
+            val scheme = MaterialTheme.colorScheme.copy(onSurface = fg, onSurfaceVariant = fg.copy(alpha = 0.8f))
+            MaterialTheme(colorScheme = scheme) {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides fg) {
+                    Box(Modifier.offset { IntOffset(0, -scroll.value) }) { header() }
+                }
+            }
+        }
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (queues) QueueSwitcherSheet(onDismiss = { queues = false })

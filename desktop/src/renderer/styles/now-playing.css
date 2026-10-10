@@ -258,8 +258,11 @@
 .np[data-immersive="bottom"] .np-main { width: 100vw; height: 100vw; }
 .np[data-immersive="bottom"] .np-stage { padding-top: calc(100vw + 16px); height: auto; min-height: 100%; }
 .np[data-immersive="bottom"] .np-head { position: absolute; top: 18px; left: 24px; right: 24px; }
-/* Header legibility over the artwork's top when it disagrees with the controls. */
-.np[data-immersive="bottom"]:not([data-light])[data-top-light] .np-main::after { content: ""; position: absolute; inset: 0 0 auto; height: 22%; background: linear-gradient(rgba(0, 0, 0, 0.45), transparent); pointer-events: none; }
+/* Over a full-width artwork the header takes its colours from the artwork's top (dark over a
+   light top, light over a dark one, with a soft dark scrim for busy covers), not from the controls. */
+.np[data-immersive="bottom"]:not([data-top-light]) .np-main::after { content: ""; position: absolute; inset: 0 0 auto; height: 22%; background: linear-gradient(rgba(0, 0, 0, 0.3), transparent); pointer-events: none; }
+.np[data-immersive="bottom"][data-top-light] .np-head { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --focus-ring: #1c1b1f; }
+.np[data-immersive="bottom"]:not([data-top-light]) .np-head { color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --focus-ring: #fff; }
 /* Over a light continuation (a white cover carried on in white): dark text and controls. */
 .np[data-light] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
 .np[data-light] .np-play { background: #1c1b1f; color: #fff; }

@@ -132,8 +132,8 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * reflection bridging into the colours along the edge, softening sideways with
  * distance. Both fade out (to the fluid background beneath) except over a light
  * continuation or one flat colour, which carry on in their own colour. Then the
- * scrim the core worked out for 4.5:1, and under light controls a fade to near black
- * at the bottom of the window.
+ * scrim the core worked out for 4.5:1, and towards the bottom of the window a fade to
+ * near black (light controls) or near white (dark controls).
  */
 export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation): void {
   const ctx = canvas.getContext("2d");
@@ -202,28 +202,31 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     }
     if (near) band([[0, 1], [0.1, 0]], reflection(near));
   }
+  // The scrim the controls need, already at full strength where they start (right at the seam):
+  // it comes in under the artwork's fading edge (or, past a crisp flat edge, just after it).
   if (edge.scrim > 0) {
     const rgb = edge.light ? "255,255,255" : "0,0,0";
-    const g = ctx.createLinearGradient(0, S, 0, H);
+    const [from, to] = flat ? [S, S + 0.12 * S] : [band0, S];
+    const g = ctx.createLinearGradient(0, from, 0, to);
     g.addColorStop(0, `rgba(${rgb},0)`);
-    g.addColorStop(Math.min(1, (0.2 * S) / region), `rgba(${rgb},${edge.scrim})`);
     g.addColorStop(1, `rgba(${rgb},${edge.scrim})`);
     ctx.fillStyle = g;
-    ctx.fillRect(0, S, W, region);
+    ctx.fillRect(0, from, W, H - from);
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Under light controls, the continuation darkens to near black towards the bottom of the
-  // window (in screen terms, whichever way it runs). Not under dark controls: they need the light colour.
-  if (!edge.light) {
+  // Towards the bottom of the window (in screen terms, whichever way it runs) the continuation
+  // fades to the controls' opposite: near black under light controls, near white under dark ones.
+  {
+    const rgb = edge.light ? "255,255,255" : "0,0,0";
     const x0 = right ? S : 0;
     const top = right ? canvas.height * 0.45 : Math.max(S, canvas.height * 0.45);
     const g = ctx.createLinearGradient(0, top, 0, canvas.height);
-    g.addColorStop(0, "rgba(0,0,0,0)");
-    g.addColorStop(1, `rgba(0,0,0,${BOTTOM_FADE})`);
+    g.addColorStop(0, `rgba(${rgb},0)`);
+    g.addColorStop(1, `rgba(${rgb},${BOTTOM_FADE})`);
     ctx.fillStyle = g;
     ctx.fillRect(x0, top, canvas.width - x0, canvas.height - top);
   }
 }
 
-/** How dark the bottom of the window gets under light controls. */
+/** How far the bottom of the window fades to black (light controls) or white (dark controls). */
 const BOTTOM_FADE = 0.85;
