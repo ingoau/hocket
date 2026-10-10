@@ -35,9 +35,7 @@ const BUSY_ROWS: usize = 51;
 const TOP_ROWS: usize = 13;
 /// Colours closer than this ([dist_flat]) count as the same flat colour.
 const FLAT_TOL: f32 = 0.05;
-/// An edge this flat is extended even where a mirror would do: there is nothing to reflect.
-const FLAT_PLAIN: f64 = 0.97;
-/// An edge at least this flat is extended (the marks on it are ignored).
+/// An edge at least this flat is extended, never mirrored (the marks on it are ignored).
 const FLAT_MIN: f64 = 0.85;
 /// Local lightness contrast (OKLab L against the median of its surroundings) that makes a pixel part of a mark.
 const MARK_CONTRAST: f32 = 0.16;
@@ -184,13 +182,11 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
     let (style, reason): (ArtworkStyle, &str) = match preference {
         ImmersiveArtwork::Never => (ArtworkStyle::Card, "card:never"),
         _ if !square => (ArtworkStyle::Card, "card:notSquare"),
-        _ if flat >= FLAT_PLAIN => (ArtworkStyle::Extend, "extend:flat"),
-        // A plain background with anything on it (a caption, a sticker): its colour, not a reflection.
-        _ if flat >= FLAT_MIN && marks > 0 => (ArtworkStyle::Extend, "extend:flat"),
+        // The art ends in one colour (a plain background, a border, a band, a backdrop, with or
+        // without a caption or sticker on it): carry that colour on, never reflect it. Before the
+        // mirror, so the choice doesn't hang on whether small text near the edge was seen.
+        _ if flat >= FLAT_MIN || last_row_flat => (ArtworkStyle::Extend, "extend:flat"),
         _ if mirror_ok => (ArtworkStyle::Mirror, "mirror"),
-        // Not mirrorable, but the art ends in one colour (a border, a band, a backdrop): carry it on.
-        _ if last_row_flat => (ArtworkStyle::Extend, "extend:flat"),
-        _ if flat >= FLAT_MIN => (ArtworkStyle::Extend, "extend:flat"),
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
         _ if face_count == 0 && columns_ok() => (ArtworkStyle::Extend, "extend:columns"),
         ImmersiveArtwork::Always => (ArtworkStyle::Extend, "extend:always"),

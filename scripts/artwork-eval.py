@@ -20,7 +20,7 @@ W, H = 240, 520          # a phone, in "dp"
 DECODE = 256             # what the platform hands the core (Android decodes downsampled)
 FEATHER = 0.18           # share of the artwork that fades into the continuation
 BLUR_NEAR = 6            # blur at the seam (px at W)
-BLUR_FAR = 16            # blur far from it
+BLUR_FAR = 24            # blur far from it
 
 
 def faces_of(img):
@@ -91,7 +91,7 @@ def render(art, layout, edge="bottom"):
             near = sharp.filter(ImageFilter.GaussianBlur(BLUR_NEAR))
             far = sharp.filter(ImageFilter.GaussianBlur(BLUR_FAR))
             cont.paste(far, (0, 0), mask(W, below, [(0, 255), (0.5, 255), (0.9, 0)]))
-            cont.paste(near, (0, 0), mask(W, below, [(0, 255), (0.12, 255), (0.4, 0)]))
+            cont.paste(near, (0, 0), mask(W, below, [(0, 255), (0.03, 255), (0.1, 0)]))
         else:
             # The edge's colours carried down, as soft at the seam as the artwork's blurred edge,
             # softening further with distance, then fading into the backdrop.

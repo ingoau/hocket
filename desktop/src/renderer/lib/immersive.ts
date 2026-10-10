@@ -84,7 +84,7 @@ export function isFlat(edge: ArtworkEdge): boolean {
 export const FEATHER = 0.18;
 /** Blur at the seam and far from it, as shares of the artwork's side. */
 const BLUR_NEAR = 0.025;
-const BLUR_FAR = 0.067;
+const BLUR_FAR = 0.1;
 
 /**
  * The artwork with its reflection below it, padded on every side by reflection too, blurred by
@@ -187,7 +187,8 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   if (near) ctx.drawImage(near.canvas, near.pad, band0, W, S - band0, 0, band0, W, S - band0);
   if (edge.style === "mirror" && near && source) {
     band([[0, 1], [0.5, 1], [0.9, 0]], reflection(mirrored(source, W, S, BLUR_FAR * S)));
-    band([[0, 1], [0.12, 1], [0.4, 0]], reflection(near));
+    // Only a thin band at the seam stays this sharp: the controls start right under the artwork.
+    band([[0, 1], [0.03, 1], [0.1, 0]], reflection(near));
   } else if (edge.style === "extend") {
     const across = (colors: number[]) => (c: CanvasRenderingContext2D) => {
       const g = c.createLinearGradient(0, 0, W, 0);

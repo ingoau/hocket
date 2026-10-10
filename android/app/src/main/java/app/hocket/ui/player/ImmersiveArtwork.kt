@@ -160,7 +160,7 @@ internal fun ArtworkEdge.isFlat(): Boolean = style == ArtworkStyle.Extend && edg
 internal const val FEATHER = 0.18f
 /** Blur at the seam and far from it, as shares of the artwork's side. */
 private const val BLUR_NEAR = 0.025f
-private const val BLUR_FAR = 0.067f
+private const val BLUR_FAR = 0.1f
 
 /**
  * What carries the immersive artwork on below it, between the player's backdrop and the page, laid
@@ -237,7 +237,8 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             when {
                 edge.style == ArtworkStyle.Mirror -> {
                     Copy(flipped = true, blur = far, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f))
-                    Copy(flipped = true, blur = near, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.12f to 1f, 0.4f to 0f))
+                    // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
+                    Copy(flipped = true, blur = near, dy = { 0f }, modifier = Modifier.verticalMask(side, 0f to 1f, 0.03f to 1f, 0.1f to 0f))
                 }
                 !flat -> {
                     Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
