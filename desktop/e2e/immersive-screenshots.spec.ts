@@ -10,8 +10,9 @@
 // window (artwork full height on the left) and a tall one (full width on top). Song,
 // artist and album names are replaced by placeholders. HOCKET_SCREENSHOT_LIMIT caps
 // how many covers are shot; HOCKET_SCREENSHOT_THEME=light|dark sets the app's theme
-// (default: the system's).
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+// (default: the system's). Covers already in the output folder are skipped, so a run
+// picks up where an interrupted one stopped.
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "@playwright/test";
@@ -26,13 +27,20 @@ const SHAPES = [
   { name: "tall", width: 900, height: 1400 },
 ];
 
+// A trace of a run this long would hold every frame of hundreds of screenshots.
+test.use({ trace: "off" });
+
 test("fullscreen player with real covers", async () => {
   test.skip(!covers || !out, "set HOCKET_FAKE_COVERS and HOCKET_SCREENSHOT_DIR");
   test.setTimeout(0);
   mkdirSync(out!, { recursive: true });
   const total = Math.min(readdirSync(covers!).filter((f) => !f.startsWith(".")).length, limit);
+  const shot = (i: number) => SHAPES.every((shape) => existsSync(join(out!, `${String(i).padStart(3, "0")}-${shape.name}.png`)));
   let offset = 0;
+  let failures = 0;
   while (offset < total) {
+    while (offset < total && shot(offset)) offset++;
+    if (offset >= total) break;
     const userData = mkdtempSync(join(tmpdir(), "hocket-shots-"));
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers!, HOCKET_FAKE_COVERS_OFFSET: String(offset) });
     try {
@@ -46,6 +54,7 @@ test("fullscreen player with real covers", async () => {
       const albums = ((await page.evaluate((id) => window.hocket.query({ type: "albums", data: { server_id: id, sort: "default", descending: false, page: { offset: 0, limit: 1000 } } }), serverId)) as { data: AlbumPage }).data.items;
       const count = Math.min(albums.length, total - offset);
       for (let i = 0; i < count; i++) {
+        if (shot(offset + i)) continue;
         const album = albums[i]!;
         await page.evaluate(({ serverId, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: "Album", sort: "default" }, shuffle: false, saveOutgoing: false } } }), { serverId, id: album.id });
         if (i === 0) {
@@ -66,6 +75,11 @@ test("fullscreen player with real covers", async () => {
         }
       }
       offset += Math.max(count, 1);
+    } catch (error) {
+      // An app that died mid-batch: relaunch from the first cover not yet shot, and
+      // give up on one that keeps failing.
+      console.warn(`batch at ${offset} failed:`, error);
+      if (++failures > 3) throw error;
     } finally {
       await app.close().catch(() => undefined);
       rmSync(userData, { recursive: true, force: true });
