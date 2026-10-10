@@ -7,18 +7,32 @@ Branch: `claude/funny-brahmagupta-9ggj7k`. The prototypes are attached to the is
 
 ---
 
-## 0. Environment (first, before any UI work)
+## 0. Environment
 
-The container has JDK 21, node 22, pnpm 10, cargo and xvfb. It has no Android SDK, no `typeshare`, and no `desktop/node_modules`. The network reaches dl.google.com, crates.io, npm, Gradle and Maven.
+Set up and verified on Sat 10 Oct. If `~/android-sdk` and `desktop/node_modules` still exist, skip to step 5.
 
-1. `git fetch origin main && git merge origin/main`.
-2. `cargo install typeshare-cli`, then generate the bindings (`scripts/gen-bindings.sh`, or `pnpm gen`). This produces `desktop/src/core/api.ts` and Android `Generated.kt`.
-3. Desktop: `pnpm install`, then `pnpm typecheck && pnpm lint && pnpm test` to get a green baseline. Then `pnpm build` and one existing e2e spec under `xvfb-run`.
-   - The native addon needs `libasound2-dev`. Try `apt-get install`. Without it, desktop immersive screenshots fall back to card only, and the summary should say so.
-4. Android: install cmdline-tools into `~/android-sdk`, plus `platforms;android-35`/`36` and `build-tools` per `app/build.gradle.kts`, and write `local.properties`.
-   - Run the baseline `:app:testDebugUnitTest --tests '*AppScreenshotTest*'`.
-   - For immersive shots, build the host `libhocket_android.so` (`cargo build -p hocket-android`) for `HOCKET_HOST_LIB`.
-5. Take **before** screenshots of the current UI on both platforms, for comparison.
+**Baselines on Sat 10 Oct (all green):**
+- desktop: typecheck and lint clean, 152/152 unit tests passing, build done, `playback` e2e 3/3 under xvfb;
+- Android: app 132, core 77, playback 65, with 14 opt-in screenshot tests skipped. `AppScreenshotTest` renders.
+
+To rebuild a recycled container:
+
+1. `apt-get install -y libasound2-dev pkg-config` (the native addon needs it), then `cargo install typeshare-cli cargo-ndk`, then `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+2. `cd desktop && pnpm install --frozen-lockfile && pnpm gen`. `pnpm gen` builds the bindings and the native addon. Electron downloads itself in postinstall.
+3. Android SDK:
+   - Unzip the latest `commandlinetools-linux-*_latest.zip` from dl.google.com into `~/android-sdk/cmdline-tools/latest`.
+   - Run `sdkmanager --licenses`, then `sdkmanager "platform-tools" "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"`.
+   - Write `android/local.properties` with `sdk.dir=/root/android-sdk` (gitignored).
+   - Run `scripts/build-android-core.sh`; without it the app shows a "Core not built" banner.
+4. **Maven Central returns 429 through the container proxy.** Add `~/.gradle/init.d/central-mirror.gradle.kts`, which:
+   - adds `https://maven-central.storage-download.googleapis.com/maven2/` to both `pluginManagement` and `dependencyResolutionManagement` in `beforeSettings`;
+   - sets `systemProperty("robolectric.dependency.repo.url", mirror)` on every `Test` task, since Robolectric downloads its android-all jars itself at test time.
+
+   This is environment only; nothing in the repo changes.
+5. `git fetch origin main && git merge origin/main`, then re-run `scripts/gen-bindings.sh` if `api.rs` changed.
+6. Before screenshots:
+   - Android: `HOCKET_SCREENSHOT_DIR=… ./gradlew :app:testDebugUnitTest --tests '*AppScreenshotTest*' --rerun`. Saturday's set is in the session scratchpad `before/android/`.
+   - Desktop: run the new screenshot spec (section 5) against `main` before the UI changes land.
 
 ## 1. Shared: a setting to hide the rating in the player (#40)
 
