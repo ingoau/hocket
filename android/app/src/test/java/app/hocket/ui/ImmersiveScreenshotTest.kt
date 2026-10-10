@@ -63,6 +63,7 @@ class ImmersiveScreenshotTest(private val batch: Int) {
         private val theme = if (env("HOCKET_SCREENSHOT_THEME") == "light") "light" else "dark"
         private const val SEED = 7L
         private val albumCount = FakeLibrary(SEED).albums.size
+        private const val PLACEHOLDER_ALBUM = "Album"
 
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "batch {0}")
@@ -87,7 +88,7 @@ class ImmersiveScreenshotTest(private val batch: Int) {
         dir!!.mkdirs()
         if (theme == "light") org.robolectric.RuntimeEnvironment.setQualifiers("+notnight")
         val now = { System.currentTimeMillis().toDouble() }
-        val fake = FakeCore(seed = SEED, startWithServer = true, startPlaying = true, timers = false, now = now, dispatcher = Dispatchers.Unconfined)
+        val fake = FakeCore(seed = SEED, library = placeholderLibrary(), startWithServer = true, startPlaying = true, timers = false, now = now, dispatcher = Dispatchers.Unconfined)
         val albums = fake.library.albums
         val offset = batch * albumCount
         val byAlbum = albums.withIndex().associate { (i, a) -> a.id to covers.getOrNull(offset + i) }
@@ -112,7 +113,7 @@ class ImmersiveScreenshotTest(private val batch: Int) {
                 val context = compose.activity
                 coil3.SingletonImageLoader.get(context).execute(coil3.request.ImageRequest.Builder(context).data(cover).size(ArtworkSizes.FULL).build())
             }
-            client.dispatch(Commands.playContext(Commands.albumContext(fake.library.serverId, album.id, album.name)))
+            client.dispatch(Commands.playContext(Commands.albumContext(fake.library.serverId, album.id, PLACEHOLDER_ALBUM)))
             // Decoding and classifying run off the main thread: let them land, then let the UI settle.
             // Robolectric's SystemClock stands still unless advanced, and the image loader's
             // crossfade runs on it: advance it too, or new artwork stays transparent.
@@ -126,6 +127,16 @@ class ImmersiveScreenshotTest(private val batch: Int) {
             val small = Bitmap.createScaledBitmap(full, full.width / 3, full.height / 3, true)
             File(dir, "%03d-%s-%s.png".format(offset + i, cover.nameWithoutExtension, theme)).outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
+    }
+
+    /**
+     * The fake library with every name a placeholder ("Song Name", "Artist", "Album"): the
+     * screenshots are about the artwork, and made-up titles next to real covers only distract.
+     */
+    private fun placeholderLibrary(): FakeLibrary = FakeLibrary(SEED).apply {
+        for (i in tracks.indices) tracks[i] = tracks[i].copy(title = "Song Name", artist = "Artist", album = PLACEHOLDER_ALBUM)
+        for (i in albums.indices) albums[i] = albums[i].copy(name = PLACEHOLDER_ALBUM, artist = "Artist")
+        for (i in artists.indices) artists[i] = artists[i].copy(name = "Artist")
     }
 
     private fun awaitTag(tag: String) {
