@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- macOS app icon master (Apple's grid: an 824 px body centred on a 1024 px canvas).
+       The mark is the Crescendo wave: two voices alternating, Tonal Violet, stroke 12 on a
+       100-unit tile. scripts/gen-mac-icon.mjs renders this into build/icon.icns. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A2447"/>
+      <stop offset="1" stop-color="#1B1730"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)" filter="url(#shadow)"/>
+  <g transform="translate(100 100) scale(8.24)" fill="none" stroke-width="12" stroke-linecap="round">
+    <path stroke="#E4DFFF" d="M16 48.5 C23 37.81 26 37.81 33 48.5"/>
+    <path stroke="#8F80F5" d="M33 48.5 C40 63.2 43 63.2 50 48.5"/>
+    <path stroke="#E4DFFF" d="M50 48.5 C57 29.8 60 29.8 67 48.5"/>
+    <path stroke="#8F80F5" d="M67 48.5 C74 71.21 77 71.21 84 48.5"/>
+  </g>
+</svg>
