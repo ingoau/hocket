@@ -20,7 +20,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
-import { useApp, type NowPlayingMode } from "../store/app";
+import { useApp, useSetting, type NowPlayingMode } from "../store/app";
 import { useQuery } from "../store/queries";
 import { executeAction } from "../store/actions";
 import { bridge } from "../core/bridge";
@@ -36,7 +36,11 @@ import { openMenuFromButton } from "../components/ContextMenu";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence, type Presence } from "../lib/presence";
-import { usePrefersReducedMotion } from "../lib/media";
+import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
+import { drawContinuation, loadImage, useArtworkLayout, type Orientation } from "../lib/immersive";
+import { useArtwork } from "../components/Artwork";
+import { SK } from "@shared/settings-keys";
+import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { volumeValueText } from "../lib/a11y";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 
@@ -185,10 +189,21 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   };
   const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
   const art = track ? <Artwork id={track.coverArt} size={1000} className="np-art-img" /> : <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>;
+  // Immersive artwork: a wide window puts the artwork at its full height on the left,
+  // carried on to the right; a tall one at its full width on top, carried on below.
+  // In between (and in the other modes) the artwork is a card.
+  const preference = useSetting<ImmersiveArtwork>(SK.displayImmersiveArtwork, "automatic");
+  const layout = useArtworkLayout(track?.coverArt, preference);
+  const wide = useMediaQuery(WIDE_IMMERSIVE);
+  const tall = useMediaQuery(TALL_IMMERSIVE);
+  const orientation: Orientation | undefined = mode === "art" && layout ? (wide ? "right" : tall ? "bottom" : undefined) : undefined;
+  const edge = orientation ? layout?.[orientation] : undefined;
+  const immersive = edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
 
   return (
-    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={track?.coverArt} />
+      {immersive && track ? <ImmersiveContinuation coverArt={track.coverArt} edge={immersive.edge} orientation={immersive.orientation} /> : null}
       <div className="np-fade" aria-hidden="true" />
       <div className="np-stage">
         <header className="np-head">
@@ -272,6 +287,41 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       </div>
     </div>
   );
+}
+
+/** Room for the controls beside a full-height artwork: at least 3:2. */
+const WIDE_IMMERSIVE = "(min-aspect-ratio: 3/2) and (min-height: 480px)";
+/** Room for the controls under a full-width artwork: at most 2:3. */
+const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
+
+/** The continuation past the immersive artwork's edge, drawn once per cover, layout and window size. */
+function ImmersiveContinuation({ coverArt, edge, orientation }: { coverArt: string | undefined; edge: ArtworkEdge; orientation: Orientation }) {
+  const url = useArtwork(coverArt, 1000);
+  const ref = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !size.w || !size.h) return;
+    let alive = true;
+    const dpr = window.devicePixelRatio || 1;
+    void (url ? loadImage(url) : Promise.resolve(undefined)).then((img) => {
+      if (!alive) return;
+      el.width = Math.round(size.w * dpr);
+      el.height = Math.round(size.h * dpr);
+      drawContinuation(el, img, edge, orientation, dpr);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [url, edge, orientation, size]);
+  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
 }
 
 /** About: the song's details, its rating, and similar tracks. */

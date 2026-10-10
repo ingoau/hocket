@@ -33,6 +33,7 @@ pub const TEXTS: &[SettingText] = &[
     t("display.theme", "Theme", "Follow the system, or force light or dark."),
     t("display.accent", "Accent colour", "Accent colour as a hex value, or empty for the default."),
     t("display.dynamicColour", "Dynamic colour", "Derive the accent from the current artwork."),
+    t("display.immersiveArtwork", "Immersive artwork", "Run the artwork edge to edge, carried on below it by a reflection or by its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours."),
     t("display.queuePanelSplit", "Queue / lyrics split", "Position of the divider between the queue and lyrics panels."),
     t("actions.order.contextMenu", "Context menu items", "Which actions appear in context menus, and in what order."),
     t("actions.order.sidebar", "Sidebar items", "Which sections appear in the sidebar, and in what order."),

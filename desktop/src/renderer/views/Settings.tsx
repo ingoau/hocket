@@ -474,6 +474,7 @@ function LyricsSettings() {
 function Appearance() {
   const theme = useSetting(SK.displayTheme, "system");
   const accent = useSetting<string | null>(SK.displayAccent, null) || DEFAULT_ACCENT;
+  const immersive = useSetting(SK.displayImmersiveArtwork, "automatic");
   const set = useApp((s) => s.setSetting);
   return (
     <>
@@ -483,6 +484,9 @@ function Appearance() {
       <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
       <Toggle settingKey={SK.displayAnimatedBackground} title={t("settings.animatedBackground")} />
+      <Row title={t("settings.immersiveArtwork")} settingKey={SK.displayImmersiveArtwork}>
+        <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
+      </Row>
       <LyricsSizeRow />
       <LyricsAnimatedRow />
     </>

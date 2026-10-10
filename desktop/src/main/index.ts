@@ -125,11 +125,13 @@ async function main(): Promise<void> {
     onOpenUri: (uri) => broadcastDeepLink(uri),
   });
 
+  const classify = native?.module.artworkLayout?.bind(native.module);
   installIpc({
     core,
     windows,
     artwork,
     credentials,
+    artworkLayout: core.kind === "native" ? classify : undefined,
     meta: () => ({
       version: app.getVersion(),
       platform,

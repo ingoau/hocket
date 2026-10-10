@@ -6,10 +6,10 @@
 // writes a file (ExportNsp) may only target a path a save dialog just chose.
 import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
-import type { Command, Query, QueryResult } from "@core/api";
+import type { ArtworkLayout, Command, Query, QueryResult } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { AppMeta, AppPrefs, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
-import { IPC } from "@shared/bridge-types";
+import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
@@ -26,6 +26,13 @@ export interface IpcDeps {
   onNetworkReport: (online: boolean) => void;
   prefs: { get(): AppPrefs; set(patch: Partial<AppPrefs>): AppPrefs };
   credentials: { passwordFor(url: string, username: string): string | undefined };
+  /** The core's immersive-artwork classifier (JSON in and out), when the native core has it. */
+  artworkLayout?: (rgba: Buffer, width: number, height: number, requestJson: string) => string;
+}
+
+/** A side for `artworkLayout`: a whole number of pixels from 1 to ARTWORK_LAYOUT_MAX_SIDE. */
+function isSide(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= ARTWORK_LAYOUT_MAX_SIDE;
 }
 
 const MAX_TEXT_FILE = 16 * 1024 * 1024;
@@ -105,6 +112,17 @@ export function installIpc(deps: IpcDeps): void {
       return { type: "path", data: token };
     }
     return result;
+  });
+
+  ipcMain.handle(IPC.artworkLayout, (e, rgba: unknown, width: unknown, height: unknown, request: unknown): ArtworkLayout | undefined => {
+    if (!isOurs(windows, e.sender) || !deps.artworkLayout) return undefined;
+    if (!(rgba instanceof Uint8Array) || !isSide(width) || !isSide(height) || rgba.length !== width * height * 4 || !isObject(request)) return undefined;
+    try {
+      return JSON.parse(deps.artworkLayout(Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength), width, height, JSON.stringify(request))) as ArtworkLayout;
+    } catch (err) {
+      console.error("[ipc] artworkLayout failed", err);
+      return undefined;
+    }
   });
 
   ipcMain.handle(IPC.meta, (e): AppMeta | undefined => {

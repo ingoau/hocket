@@ -104,6 +104,19 @@ pub fn init_logging(level: String) {
         .try_init();
 }
 
+/// How the full player shows a cover (`hocket_core::artwork`): its pixels as tightly packed RGBA8
+/// plus an `ArtworkLayoutRequest` JSON in, an `ArtworkLayout` JSON out. Pure and quick.
+#[napi(catch_unwind)]
+pub fn artwork_layout(
+    rgba: Buffer,
+    width: u32,
+    height: u32,
+    request_json: String,
+) -> Result<String> {
+    hocket_core::artwork::layout_json(&rgba, width, height, &request_json)
+        .map_err(|e| Error::from_reason(e.to_string()))
+}
+
 /// Version of the addon crate (same as the workspace version).
 #[napi(catch_unwind)]
 pub fn core_version() -> String {

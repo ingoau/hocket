@@ -230,3 +230,33 @@
 
 /* While the player is open, snackbars drop in from the top instead of covering the transport. */
 .app:has(.fullscreen.np) .toasts { bottom: auto; top: 16px; }
+
+/* ---- Immersive artwork (lib/immersive.ts) ---------------------------------
+   The artwork edge to edge: at the window's full height on the left ("right":
+   carried on to the right), or its full width on top ("bottom": carried on
+   below). The continuation is a still canvas over the fluid background; the
+   controls sit on it with the scrim the core sized. */
+.np-continuation { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; animation: np-continuation-in var(--spring-effects-ms, 300ms) var(--spring-effects, var(--ease)); }
+@keyframes np-continuation-in { from { opacity: 0; } }
+.np[data-immersive] .np-fade { display: none; }
+.np[data-immersive] .np-stage { position: static; }
+.np[data-immersive] .np-main { position: absolute; left: 0; top: 0; z-index: 1; container-type: normal; }
+.np[data-immersive] .np-art-slot { display: block; }
+.np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
+.np[data-immersive] .np-head, .np[data-immersive] .np-controls { position: relative; z-index: 2; }
+.np[data-immersive="right"] .np-main { width: 100vh; height: 100vh; }
+.np[data-immersive="right"] .np-stage, .np[data-immersive="right"][data-mode] .np-stage {
+  display: flex; flex-direction: column; width: auto; max-width: 560px;
+  margin: 0 clamp(24px, 4vw, 72px) 0 calc(100vh + clamp(32px, 4vw, 72px)); padding: 28px 0 36px;
+}
+.np[data-immersive="right"] .np-controls { margin-block: auto; gap: 18px; }
+.np[data-immersive="bottom"] .np-main { width: 100vw; height: 100vw; }
+.np[data-immersive="bottom"] .np-stage { padding-top: calc(100vw + 16px); height: auto; min-height: 100%; }
+.np[data-immersive="bottom"] .np-head { position: absolute; top: 18px; left: 24px; right: 24px; }
+/* Header legibility over the artwork's top when it disagrees with the controls. */
+.np[data-immersive="bottom"]:not([data-light])[data-top-light] .np-main::after { content: ""; position: absolute; inset: 0 0 auto; height: 22%; background: linear-gradient(rgba(0, 0, 0, 0.45), transparent); pointer-events: none; }
+/* Over a light continuation (a white cover carried on in white): dark text and controls. */
+.np[data-light] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
+.np[data-light] .np-play { background: #1c1b1f; color: #fff; }
+.np[data-light] .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
+@media (prefers-reduced-motion: reduce) { .np-continuation { animation: none; } }

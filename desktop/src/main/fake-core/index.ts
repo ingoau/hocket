@@ -1799,6 +1799,7 @@ export class FakeCore implements CoreHandle {
       ["display.accent", null, "deviceLocal"],
       ["display.dynamicColour", true, "deviceLocal"],
       ["display.queuePanelSplit", 0.5, "deviceLocal"],
+      ["display.immersiveArtwork", "automatic", "deviceLocal"],
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
