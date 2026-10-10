@@ -14,6 +14,7 @@ pub mod core;
 pub mod util;
 
 pub mod actions;
+pub mod artwork;
 pub mod audio;
 pub mod autoplay;
 pub mod cache;

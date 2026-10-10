@@ -17,10 +17,10 @@
 // Opening it leaves the window as it is; the button beside the collapse
 // chevron toggles the window's own fullscreen. If that button put the window
 // into fullscreen, the window leaves it again as the close fade starts.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { t } from "@shared/strings";
 import type { Track } from "@core/api";
-import { useApp, type NowPlayingMode } from "../store/app";
+import { useApp, useSetting, type NowPlayingMode } from "../store/app";
 import { useQuery } from "../store/queries";
 import { executeAction } from "../store/actions";
 import { bridge } from "../core/bridge";
@@ -36,7 +36,10 @@ import { openMenuFromButton } from "../components/ContextMenu";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence, type Presence } from "../lib/presence";
-import { usePrefersReducedMotion } from "../lib/media";
+import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
+import { drawContinuation, isFlat, prepareScene, useScene, type Orientation, type Scene } from "../lib/immersive";
+import { SK } from "@shared/settings-keys";
+import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { volumeValueText } from "../lib/a11y";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 
@@ -185,10 +188,56 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   };
   const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
   const art = track ? <Artwork id={track.coverArt} size={1000} className="np-art-img" /> : <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>;
+  // Immersive artwork: a wide window puts the artwork at its full height on the left,
+  // carried on to the right; a tall one at its full width on top, carried on below.
+  // In between (and in the other modes) the artwork is a card.
+  const preference = useSetting<ImmersiveArtwork>(SK.displayImmersiveArtwork, "automatic");
+  const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
+  // The artwork, its layout and its continuation switch together, once the new cover's scene is
+  // ready (the next track's is prepared ahead), and the new scene crossfades in over the last.
+  const scene = useScene(track?.coverArt, preference, dark);
+  const next = (queue.playingNext[0] ?? queue.upcoming[0])?.track.coverArt;
+  useEffect(() => {
+    if (next) void prepareScene(next, preference, dark);
+  }, [next, preference, dark]);
+  const layout = scene?.layout;
+  const wide = useMediaQuery(WIDE_IMMERSIVE);
+  const tall = useMediaQuery(TALL_IMMERSIVE);
+  const orientation: Orientation | undefined = mode === "art" ? (wide ? "right" : tall ? "bottom" : undefined) : undefined;
+  const immersiveOf = (s: Scene | undefined) => {
+    const edge = s && orientation ? s.layout?.[orientation] : undefined;
+    return edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
+  };
+  const immersive = immersiveOf(scene);
+  /** The scenes on screen: the current one last, over the one it is fading in from. */
+  const [shown, setShown] = useState<Scene[]>([]);
+  if (scene ? shown.at(-1) !== scene : shown.length > 0) setShown(scene ? [...shown.slice(-1), scene] : []);
+  // The one beneath goes when the new one has faded in (or, should no fade run, a little after).
+  const settle = () => setShown((s) => s.slice(-1));
+  useEffect(() => {
+    if (shown.length < 2) return;
+    const id = window.setTimeout(settle, SCENE_FADE_MS);
+    return () => window.clearTimeout(id);
+  }, [shown]);
+  // The one before stays beneath only when it is laid out the same way (both immersive, or both a
+  // card); otherwise the new scene fades in from the background on its own.
+  const fading = shown.length > 1;
+  const layers = shown.filter((s, i) => i === shown.length - 1 || !immersiveOf(s) === !immersive);
+  const bigArtContent = layers.length ? (
+    layers.map((s, i) => (s.url ? <img key={s.coverArt} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={s.coverArt} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
+  ) : (
+    <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>
+  );
 
   return (
-    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
-      <FluidBackground coverArt={track?.coverArt} />
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} style={MOTION} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
+      <FluidBackground coverArt={scene?.coverArt ?? track?.coverArt} />
+      {layers.map((s) => {
+        const im = immersiveOf(s);
+        return im ? <ImmersiveContinuation key={s.coverArt} img={s.img} edge={im.edge} orientation={im.orientation} controls={controls} /> : null;
+      })}
       <div className="np-fade" aria-hidden="true" />
       <div className="np-stage">
         <header className="np-head">
@@ -203,7 +252,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         <div className="np-main">
           {mode === "art" ? (
             <div className="np-art-slot">
-              <div ref={bigArt} className="np-art" data-testid="np-artwork">{art}</div>
+              <div ref={bigArt} className="np-art" data-testid="np-artwork" data-cover={layers.length === 1 ? scene?.coverArt : undefined}>{bigArtContent}</div>
             </div>
           ) : (
             <section key={mode} className={`np-pane np-pane-${mode}`} aria-label={t(`nowPlaying.view.${mode}`)} data-testid={`np-pane-${mode}`}>
@@ -272,6 +321,45 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       </div>
     </div>
   );
+}
+
+/** The latest a new cover's scene has faded in over the last (np-scene-in takes 500ms). */
+const SCENE_FADE_MS = 2000;
+/** Room for the controls beside a full-height artwork: at least 3:2. */
+const WIDE_IMMERSIVE = "(min-aspect-ratio: 3/2) and (min-height: 480px)";
+/** Room for the controls under a full-width artwork: at most 2:3. */
+const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
+
+/**
+ * The continuation past the immersive artwork's edge, drawn once per cover, layout and window size
+ * (and wherever the controls, which its fade covers, end up).
+ */
+function ImmersiveContinuation({ img, edge, orientation, controls }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null> }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0, top: 0, bottom: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      const c = controls.current?.getBoundingClientRect();
+      setSize({ w: el.clientWidth, h: el.clientHeight, top: c ? c.top - box.top : 0, bottom: c ? c.bottom - box.top : 0 });
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (controls.current) ro.observe(controls.current);
+    return () => ro.disconnect();
+  }, [controls]);
+  // Before paint: the scene's artwork is already decoded, so the continuation lands with it.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !size.w || !size.h) return;
+    const dpr = window.devicePixelRatio || 1;
+    el.width = Math.round(size.w * dpr);
+    el.height = Math.round(size.h * dpr);
+    drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined);
+  }, [img, edge, orientation, size]);
+  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
 }
 
 /** About: the song's details, its rating, and similar tracks. */

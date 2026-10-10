@@ -75,6 +75,9 @@ pub mod keys {
     pub const DISPLAY_ACCENT: &str = "display.accent";
     pub const DISPLAY_DYNAMIC_COLOUR: &str = "display.dynamicColour";
     pub const DISPLAY_QUEUE_PANEL_SPLIT: &str = "display.queuePanelSplit";
+    /// The full player's artwork: `automatic` (mirror or extend where the cover suits it, a card
+    /// otherwise), `always` (mirror or extend every square cover) or `never` (always a card).
+    pub const DISPLAY_IMMERSIVE_ARTWORK: &str = "display.immersiveArtwork";
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
@@ -388,6 +391,12 @@ pub static REGISTRY: &[SettingDef] = &[
             nullable: false,
         },
         || json!(0.5),
+    ),
+    def(
+        DISPLAY_IMMERSIVE_ARTWORK,
+        Local,
+        SettingKind::Enum(&["automatic", "always", "never"]),
+        || json!("automatic"),
     ),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,

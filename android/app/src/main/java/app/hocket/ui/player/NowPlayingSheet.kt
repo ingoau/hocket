@@ -94,6 +94,7 @@ import app.hocket.ui.theme.ArtworkColors
 import app.hocket.ui.theme.LocalArtworkSeedState
 import app.hocket.ui.theme.LocalDarkTheme
 import app.hocket.ui.theme.Motion
+import app.hocket.core.api.ArtworkStyle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -225,6 +226,13 @@ internal class HeroGeometry {
     var smallCorner = 0f
     /** The mode animation (0 = artwork mode, 1 = another mode), read in layout and draw lambdas. */
     var modeFraction: () -> Float = { 0f }
+    /**
+     * Immersive artwork ([ImmersiveArtwork]): the big artwork runs edge to edge from the top of the
+     * page, under the header, with square corners and no shadow, and does not shrink while paused.
+     */
+    var immersive by mutableStateOf(false)
+    /** The header's height (px) as the page laid it out: the immersive artwork starts this far above the area. */
+    var headerHeight = 0f
 
     fun measure(coordinates: LayoutCoordinates): Rect {
         val r = root ?: return Rect.Zero
@@ -240,23 +248,29 @@ internal class HeroGeometry {
     fun bigSlot(): Rect {
         val a = area
         if (a.width <= 0f || a.height <= 0f) return Rect.Zero
+        if (immersive) return Rect(Offset(a.left, a.top - headerHeight), Size(a.width, a.width))
         val side = if (artSide > 0f) minOf(artSide, a.width - 2 * artInset) else minOf(a.width - 2 * artInset, a.height - 2 * artPad, artMax)
         if (side <= 0f) return Rect.Zero
         return Rect(Offset(a.center.x - side / 2, a.top + artPad), Size(side, side))
     }
 
-    /** Where the full player's artwork is at mode fraction [f], shrunk to [pausedScale] while big. */
+    /** Where the full player's artwork is at mode fraction [f], shrunk to [pausedScale] while big (not when immersive). */
     fun playerArt(f: Float, pausedScale: Float): Rect {
         val big = bigSlot()
         if (big.width <= 0f) return Rect.Zero
-        val s = lerpF(pausedScale, 1f, f.coerceIn(0f, 1f))
+        val s = if (immersive) 1f else lerpF(pausedScale, 1f, f.coerceIn(0f, 1f))
         val from = Rect(big.center - Offset(big.width * s / 2, big.height * s / 2), Size(big.width * s, big.height * s))
         val to = small.takeIf { it.width > 0f } ?: return if (f < 0.5f) from else Rect.Zero
         return Rect(lerpF(from.left, to.left, f), lerpF(from.top, to.top, f), lerpF(from.right, to.right, f), lerpF(from.bottom, to.bottom, f))
     }
 
     /** The visible corner radius at mode fraction [f]. */
-    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(bigCorner, smallCorner, f.coerceIn(0f, 1f))
+    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, smallCorner, f.coerceIn(0f, 1f))
+
+    /** The artwork's shadow (px) at mode fraction [f]: none while immersive and big. */
+    fun elevationFor(f: Float, density: Density): Float = with(density) {
+        lerpF(if (immersive) 0f else HERO_ELEVATION.toPx(), 2.dp.toPx(), f.coerceIn(0f, 1f))
+    }
 
     companion object {
         /** The mini player's artwork and its corners (square-ish, Navic). */
@@ -378,15 +392,37 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             }
         }
         val seedState = LocalArtworkSeedState.current
+        // The app's own theme (the player overrides it for its subtree, below).
+        val appDark = LocalDarkTheme.current
         val coverArt = entry?.track?.coverArt
         val artworkSeed by artworkSeed(coverArt)
         val seed = artworkSeed ?: coverArt?.let { ArtworkColors.seedFor(it) }
-        // The full player is always dark (it sits on darkened artwork), themed from the artwork; the
-        // scheme crossfades on a track change while the player is showing, and snaps while hidden.
-        val targetScheme = remember(seed) { seed?.let { ArtworkColors.scheme(it, dark = true) } ?: darkColorScheme() }
+        // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
+        val settings by client.settings.collectAsStateWithLifecycle()
+        val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
+        val artworkLayout by rememberArtworkLayout(coverArt, preference, dark = appDark)
+        val portrait = constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
+        val immersiveEdge = artworkLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
+        val hero = remember { HeroGeometry() }
+        hero.immersive = immersiveEdge != null
+        // The full player is dark (it sits on darkened artwork), themed from the artwork, except in
+        // artwork mode over a light immersive continuation (a white cover carried on in white): dark
+        // controls there. The scheme crossfades on a track or mode change while the player is
+        // showing, and snaps while hidden.
+        val lightPlayer = immersiveEdge?.light == true && state.mode == PlayerMode.Artwork
+        val targetScheme = remember(seed, lightPlayer) {
+            val scheme = seed?.let { ArtworkColors.scheme(it, dark = !lightPlayer) } ?: darkColorScheme()
+            // Over a light continuation the text sits on the cover's colour, not on the scheme's
+            // near-white surfaces: the one dark the core checked 4.5:1 for, and translucent dark
+            // tonal buttons that take on the colour beneath instead of a pale container.
+            if (!lightPlayer) scheme else scheme.copy(
+                onSurface = IMMERSIVE_DARK, onSurfaceVariant = IMMERSIVE_DARK, onBackground = IMMERSIVE_DARK,
+                secondaryContainer = IMMERSIVE_DARK.copy(alpha = 0.12f), onSecondaryContainer = IMMERSIVE_DARK,
+                surfaceContainerHighest = IMMERSIVE_DARK.copy(alpha = 0.12f),
+            )
+        }
         val playerScheme = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion)
         val artScale = animateFloatAsState(if (playing || reducedMotion) 1f else HeroGeometry.PAUSED_SCALE, Motion.artwork, label = "artworkScale")
-        val hero = remember { HeroGeometry() }
         hero.bigCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
         // The mode's animation: 0 with the big artwork, 1 with lyrics / queue / about (the artwork
@@ -450,11 +486,16 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // The full player's backdrop: blurred artwork over the artwork's colour fading to
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
                 // tenth, then quickly opaque).
-                PlayerBackground(coverArt, seed, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                // An immersive artwork's continuation (reflection or colours) below it, fading out as
+                // the artwork shrinks to a thumbnail for lyrics, the queue or the details.
+                if (immersiveEdge != null) {
+                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
+                }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.
                 MaterialExpressiveTheme(colorScheme = playerScheme) {
-                    CompositionLocalProvider(LocalContentColor provides playerScheme.onSurface, LocalDarkTheme provides true) {
+                    CompositionLocalProvider(LocalContentColor provides playerScheme.onSurface, LocalDarkTheme provides !lightPlayer) {
                         Box(
                             Modifier
                                 .fillMaxSize()
@@ -474,6 +515,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 artworkScale = { artScale.value },
                                 lyricsVisible = expanded && settledOpen && mode == PlayerMode.Lyrics,
                                 onPreviewToggle = { seed -> seedState.seed = if (seedState.seed == null) seed else null },
+                                immersive = artworkLayout?.takeIf { immersiveEdge != null },
                             )
                         }
                     }
@@ -488,11 +530,14 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // The one artwork that flies from the mini player's thumbnail to the full player's
                 // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
                 // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value })
+                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge)
             }
         }
     }
 }
+
+/** The dark text and controls over a light immersive continuation (the core's contrast target). */
+private val IMMERSIVE_DARK = Color(0xFF1C1B1F)
 
 /** Sheet progress from which the full player (not the mini bar) is what accessibility sees. */
 private const val FULL_PLAYER_A11Y_PROGRESS = 0.6f
@@ -522,7 +567,7 @@ private class SheetShape(private val inset: Float, private val corner: Float, pr
  * and it gains the target's shadow. With nothing measured yet it just fades out from the thumbnail.
  */
 @Composable
-private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float) {
+private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float, immersiveEdge: app.hocket.core.api.ArtworkEdge? = null) {
     val density = LocalDensity.current
     val thumbSizePx = with(density) { HeroGeometry.THUMB_SIZE.toPx() }
     val fallbackThumb = with(density) {
@@ -559,24 +604,41 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
                 val visibleRadius = lerpF(fromRadius, if (landed) hero.cornerFor(f, to.width) else fromRadius, p)
                 shape = RoundedCornerShape(visibleRadius / k.coerceAtLeast(0.01f))
                 clip = true
-                shadowElevation = if (landed) lerpF(HeroGeometry.HERO_ELEVATION.toPx(), 2.dp.toPx(), f) * p else 0f
+                shadowElevation = if (landed) hero.elevationFor(f, this) * p else 0f
                 alpha = if (landed) 1f else (1f - p * 4f).coerceIn(0f, 1f)
             }
             .clearAndSetSemantics { },
     ) {
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RectangleShape)
+        // Immersive: its bottom fades into the continuation as the sheet opens (and back as it
+        // closes), so the seam is the same in flight as landed; the corners go thumbnail to square.
+        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersiveEdge, fraction = progress), RectangleShape)
     }
 }
 
 /**
- * The full player's backdrop (Metrolist): the artwork, heavily blurred (Android 12+), over a vertical
- * gradient from the artwork's colour to near black (the whole backdrop before Android 12, and what
- * shows while the image loads), under a dark scrim that keeps light text legible on any cover.
- * Crossfades on a track change.
+ * The full player's backdrop: the artwork, blurred and slowly moving (the lyrics background's AGSL
+ * warp, Android 13+, so artwork, lyrics and the queue share one backdrop), darkened by its adaptive
+ * scrim. It moves only while [moving] (the player is open and settled) and the animated background
+ * is on and battery saver off; otherwise a still. Before Android 13 (Metrolist): the artwork heavily
+ * blurred (Android 12) over a gradient from the artwork's colour to near black (the whole backdrop
+ * before Android 12, and what shows while the image loads), under a dark scrim. Crossfades on a
+ * track change.
  */
 @Composable
-private fun PlayerBackground(coverArt: String?, seed: Color?, modifier: Modifier) {
+private fun PlayerBackground(coverArt: String?, seed: Color?, moving: Boolean, modifier: Modifier) {
     val reduced = LocalReducedMotion.current
+    if (Build.VERSION.SDK_INT >= 33) {
+        val client = LocalCoreClient.current
+        val settings by client.settings.collectAsStateWithLifecycle()
+        val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+        val animated = settings[app.hocket.core.SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !batterySaver
+        Box(modifier.background(Color.Black)) {
+            Crossfade(targetState = coverArt, animationSpec = tween(if (reduced) 0 else Motion.BACKGROUND_MS), label = "playerBackground") { art ->
+                app.hocket.ui.lyrics.LyricsBackground(art, animated = animated, visible = moving, modifier = Modifier.fillMaxSize())
+            }
+        }
+        return
+    }
     Box(modifier.background(Color.Black)) {
         Crossfade(targetState = coverArt to seed, animationSpec = tween(if (reduced) 0 else Motion.BACKGROUND_MS), label = "playerBackground") { (art, colour) ->
             Box(Modifier.fillMaxSize()) {

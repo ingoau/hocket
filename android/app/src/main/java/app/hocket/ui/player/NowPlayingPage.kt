@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
@@ -148,6 +150,7 @@ internal fun FullPlayer(
     artworkScale: () -> Float,
     lyricsVisible: Boolean,
     onPreviewToggle: (Color) -> Unit,
+    immersive: app.hocket.core.api.ArtworkLayout? = null,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -166,11 +169,15 @@ internal fun FullPlayer(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = maxHeight
         val pageWidth = maxWidth
-        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), overscrollEffect = null).testTag("player.page")) {
+        val scroll = rememberScrollState()
+        val header = @Composable { PlayerHeader(onCollapse, onConnect = { handoff = true }, onSwitchQueue = { queues = true }) }
+        Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
                 minHeight = viewport,
                 hero = hero,
-                header = { PlayerHeader(onCollapse, onConnect = { handoff = true }, onSwitchQueue = { queues = true }) },
+                // An immersive artwork runs under the header, and the artwork is drawn over the
+                // page: the page keeps the header's room (invisible) and the real one goes on top.
+                header = { if (immersive != null) Box(Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics { }) { header() } else header() },
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 title = { PlayerTitle(mode, onOpenAlbum, onOpenArtist, hero, onMore = {
                         // The song menu is hosted at the app level, not in this (moving) sheet;
@@ -212,7 +219,18 @@ internal fun FullPlayer(
             thumbMode = mode != PlayerMode.Artwork,
             onShowArtwork = { onMode(PlayerMode.Artwork) },
             onPreviewToggle = onPreviewToggle,
+            immersive = immersive,
         )
+        if (immersive != null) {
+            // Its colours follow the artwork's top (dark over a light top), not the controls below.
+            val fg = immersiveHeaderColor(immersive)
+            val scheme = MaterialTheme.colorScheme.copy(onSurface = fg, onSurfaceVariant = fg.copy(alpha = 0.8f))
+            MaterialTheme(colorScheme = scheme) {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides fg) {
+                    Box(Modifier.offset { IntOffset(0, -scroll.value) }) { header() }
+                }
+            }
+        }
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (queues) QueueSwitcherSheet(onDismiss = { queues = false })
@@ -264,11 +282,13 @@ private fun PlayerLayout(
         val view = minHeight.roundToPx()
         val pad = 8.dp.roundToPx()
         val minArea = MIN_AREA.roundToPx()
-        // Artwork mode: the largest artwork that leaves room for the rest.
+        // Artwork mode: the largest artwork that leaves room for the rest; immersive, the full width
+        // from the top of the page (under the header), the title right below it.
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
-        val side = (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
+        val side = if (hero.immersive) w else (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
         hero.artSide = side.toFloat()
-        val artArea = side + 2 * pad
+        hero.headerHeight = hh.toFloat()
+        val artArea = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
         val spare = (view - hh - artArea - th - rest).coerceAtLeast(0)
         val shares = ih.count { it > 0 } + 1
         // Other modes: the area takes it all.
@@ -611,6 +631,7 @@ internal fun PlayerArtwork(
     thumbMode: Boolean,
     onShowArtwork: () -> Unit,
     onPreviewToggle: (Color) -> Unit,
+    immersive: app.hocket.core.api.ArtworkLayout? = null,
 ) {
     val client = LocalCoreClient.current
     val scope = rememberCoroutineScope()
@@ -642,7 +663,7 @@ internal fun PlayerArtwork(
                 translationX = swipe.value * (1f - f)
                 shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
-                shadowElevation = lerpF(HeroGeometry.HERO_ELEVATION.toPx(), 2.dp.toPx(), f)
+                shadowElevation = hero.elevationFor(f, this)
             }
             .pointerInput(thumbMode) {
                 if (thumbMode) return@pointerInput
@@ -681,7 +702,8 @@ internal fun PlayerArtwork(
                 if (thumbMode) onClick(showLabel) { onShowArtwork(); true }
             },
     ) {
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RectangleShape)
+        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersive?.bottom, fraction = { 1f - modeFraction() }), RectangleShape)
+        if (immersive != null) ImmersiveArtworkOverlay(immersive, fraction = { 1f - modeFraction() })
     }
 }
 

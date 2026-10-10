@@ -1,0 +1,344 @@
+// Immersive artwork (docs/design.md, "Immersive artwork"): the fullscreen
+// player's artwork edge to edge, carried on past its edge by a reflection or by
+// its own colours, or the usual card. The core decides which
+// (hocket_core::artwork, over IPC); this side reads the cover's pixels from a
+// canvas and draws the continuation, once per track and window size, as a
+// still on a canvas: nothing redraws per frame.
+import { useEffect, useState } from "react";
+import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
+import { bridge } from "../core/bridge";
+import { resolveArtwork } from "../components/Artwork";
+
+/** What the classifier gets: the cover at this side (it resamples to 128 itself). */
+const SIDE = 256;
+const cache = new Map<string, ArtworkLayout | undefined>();
+
+export function loadImage(url: string): Promise<HTMLImageElement | undefined> {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = url;
+  return img.decode().then(() => (img.width ? img : undefined), () => undefined);
+}
+
+/** The layout for the cover at `url` (cached per URL and preference). */
+export async function classify(url: string, preference: ImmersiveArtwork, dark: boolean): Promise<ArtworkLayout | undefined> {
+  const key = `${url}|${preference}|${dark}`;
+  if (cache.has(key)) return cache.get(key);
+  const img = await loadImage(url);
+  let layout: ArtworkLayout | undefined;
+  if (img) {
+    const scale = Math.min(1, SIDE / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (ctx) {
+      ctx.drawImage(img, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      // No face detection on the desktop yet: faces only rule a mirror out, so a portrait may mirror.
+      layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference, theme: dark ? "dark" : "light" }).catch(() => undefined);
+    }
+  }
+  cache.set(key, layout);
+  return layout;
+}
+
+/**
+ * Everything the fullscreen player shows of one cover, ready to draw: the artwork (decoded at
+ * full size) and its layout. The player switches to a cover only once its scene is ready, and
+ * switches the artwork, the layout and the continuation together, so they never disagree on
+ * screen (a new cover beside the old continuation, or beside one still fading in).
+ */
+export interface Scene {
+  coverArt: string;
+  url: string | undefined;
+  img: HTMLImageElement | undefined;
+  /** Undefined without the native core (or for a cover that could not be read): a card. */
+  layout: ArtworkLayout | undefined;
+}
+
+/** Scenes being prepared or ready, most recent last; a few are kept (the current, the next, the last). */
+const scenes = new Map<string, Promise<Scene>>();
+const ready = new Map<string, Scene>();
+const KEEP = 8;
+
+/** The scene for `coverArt`, prepared once and cached (call it ahead of time for the next track). */
+export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dark: boolean): Promise<Scene> {
+  const key = `${coverArt}|${preference}|${dark}`;
+  let p = scenes.get(key);
+  if (p) {
+    scenes.delete(key);
+    scenes.set(key, p);
+    return p;
+  }
+  p = Promise.all([
+    resolveArtwork(coverArt, 1000).then(async (url) => ({ url, img: url ? await loadImage(url) : undefined })),
+    resolveArtwork(coverArt, 300).then((url) => (url ? classify(url, preference, dark) : undefined)),
+  ]).then(([{ url, img }, layout]) => {
+    const scene = { coverArt, url, img, layout };
+    if (scenes.has(key)) ready.set(key, scene);
+    return scene;
+  });
+  scenes.set(key, p);
+  for (const old of [...scenes.keys()].slice(0, Math.max(0, scenes.size - KEEP))) {
+    scenes.delete(old);
+    ready.delete(old);
+  }
+  return p;
+}
+
+/**
+ * The scene to show for `coverArt`: the one before it until its own is ready (undefined only
+ * before the first, or without a cover).
+ */
+export function useScene(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): Scene | undefined {
+  const key = coverArt ? `${coverArt}|${preference}|${dark}` : undefined;
+  const [scene, setScene] = useState<Scene | undefined>(() => (key ? ready.get(key) : undefined));
+  const cached = key ? ready.get(key) : undefined;
+  if (cached && cached !== scene) setScene(cached);
+  useEffect(() => {
+    if (!coverArt) {
+      setScene(undefined);
+      return;
+    }
+    let alive = true;
+    void prepareScene(coverArt, preference, dark).then((s) => alive && setScene(s));
+    return () => {
+      alive = false;
+    };
+  }, [coverArt, preference, dark]);
+  return coverArt ? scene : undefined;
+}
+
+export type Orientation = "bottom" | "right";
+
+const hex = (c: number) => `#${(c & 0xffffff).toString(16).padStart(6, "0")}`;
+
+/** `colors` averaged over a window of 2·radius + 1: the same edge, blurred sideways. */
+export function soften(colors: number[], radius: number): number[] {
+  return colors.map((_, i) => {
+    const span = colors.slice(Math.max(0, i - radius), i + radius + 1);
+    const ch = (shift: number) => Math.round(span.reduce((a, c) => a + ((c >> shift) & 255), 0) / span.length);
+    return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+  });
+}
+
+/**
+ * One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. The
+ * core says so ("extend:flat"); a plain but textured edge ("extend:plain") may smooth into one
+ * colour too, yet fades in like any other extension.
+ */
+export function isFlat(edge: ArtworkEdge): boolean {
+  return edge.style === "extend" && edge.reason === "extend:flat";
+}
+
+/** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
+export const FEATHER = 0.3;
+/** Blur at the seam and far from it, as shares of the artwork's side. */
+// Strong enough at the seam that a thin strip along the artwork's edge (a shadow, a border)
+// averages away instead of reading, doubled by its own reflection, as a band.
+const BLUR_NEAR = 0.07;
+const BLUR_MID = 0.1;
+const BLUR_FAR = 0.14;
+
+/**
+ * The artwork with its reflection below it, padded on every side by reflection too, blurred by
+ * `blur` px: what both sides of the seam are cut from. Blurring the two together keeps the seam
+ * continuous, and the padding keeps the canvas edges from blurring into transparency.
+ */
+function mirrored(source: CanvasImageSource, W: number, S: number, blur: number): { canvas: HTMLCanvasElement; pad: number } {
+  const pad = Math.ceil(blur * 3);
+  const c = document.createElement("canvas");
+  c.width = W + 2 * pad;
+  c.height = 2 * S + pad;
+  const ctx = c.getContext("2d");
+  if (!ctx) return { canvas: c, pad };
+  const tile = document.createElement("canvas");
+  tile.width = c.width;
+  tile.height = c.height;
+  const t = tile.getContext("2d");
+  if (t) {
+    for (const [sx, dx] of [[1, pad], [-1, pad], [-1, pad + 2 * W]] as const) {
+      // The artwork, then flipped below it; the side copies are mirrored horizontally.
+      t.save();
+      t.translate(dx, 0);
+      t.scale(sx, 1);
+      t.drawImage(source, 0, 0, W, S);
+      t.translate(0, 2 * S);
+      t.scale(1, -1);
+      t.drawImage(source, 0, 0, W, S);
+      t.restore();
+    }
+  }
+  ctx.filter = blur > 0 ? `blur(${blur}px)` : "none";
+  ctx.drawImage(tile, 0, 0);
+  // A large blur comes back a few percent see-through even where the artwork is opaque; the same
+  // blur again on top makes it opaque without changing its colour (else whatever lies beneath
+  // shows through, more on one side of the seam than the other).
+  if (blur > 0) ctx.drawImage(tile, 0, 0);
+  return { canvas: c, pad };
+}
+
+/**
+ * Draws the continuation into `canvas` (sized to the player, in CSS px × dpr): for
+ * "bottom", from the artwork's lower part down (the full width at the top); for
+ * "right", from its right part rightwards (the full height at the left). The seam
+ * never cuts over: the artwork fades out over its last FEATHER (a CSS mask) onto a
+ * blurred copy of itself drawn here, and the continuation starts at that same blur.
+ * Except a flat extension ([isFlat]): the artwork already ends in that one colour, so
+ * it stays crisp to its edge and the colour simply carries on.
+ * Mirror: the reflection, blurring further with distance. Extend: a short blurred
+ * reflection bridging into the colours along the edge, softening sideways with
+ * distance. Both fade out (to the fluid background beneath) except over a light
+ * continuation or one flat colour, which carry on in their own colour. Then the
+ * scrim the core worked out for 4.5:1, and from the controls down a partial fade to
+ * black under light controls or white under dark ones (the controls follow the app's
+ * theme unless the cover is almost all dark or light).
+ */
+export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Work in "bottom" terms: for "right", transpose the canvas (x↔y) and the image.
+  const right = orientation === "right";
+  const W = right ? canvas.height : canvas.width;
+  const H = right ? canvas.width : canvas.height;
+  const S = W; // the artwork's side: the full width (or, for "right", the full height)
+  if (H <= S) return;
+  let source: CanvasImageSource | undefined = img;
+  if (img && right) {
+    const t = document.createElement("canvas");
+    t.width = img.width;
+    t.height = img.height;
+    const tc = t.getContext("2d");
+    if (tc) {
+      tc.setTransform(0, 1, 1, 0, 0, 0);
+      tc.drawImage(img, 0, 0);
+      source = t;
+    }
+  }
+  if (right) ctx.setTransform(0, 1, 1, 0, 0, 0);
+  const region = H - S;
+  const flat = isFlat(edge);
+  const band0 = flat ? S : Math.round(S * (1 - FEATHER));
+  if (flat || edge.light) {
+    ctx.fillStyle = hex(edge.baseColor);
+    ctx.fillRect(0, band0, W, H - band0);
+  }
+  /** Draws `paint` into a layer below the seam, masked to `stops` ([fraction of S from the seam, alpha]). */
+  const band = (stops: [number, number][], paint: (c: CanvasRenderingContext2D) => void) => {
+    const layer = document.createElement("canvas");
+    layer.width = W;
+    layer.height = region;
+    const lc = layer.getContext("2d");
+    if (!lc) return;
+    paint(lc);
+    lc.globalCompositeOperation = "destination-in";
+    const g = lc.createLinearGradient(0, 0, 0, region);
+    for (const [y, a] of stops) g.addColorStop(Math.min(1, (y * S) / region), `rgba(0,0,0,${a})`);
+    lc.fillStyle = g;
+    lc.fillRect(0, 0, W, region);
+    ctx.drawImage(layer, 0, S);
+  };
+  const near = source && !flat ? mirrored(source, W, S, BLUR_NEAR * S) : undefined;
+  const reflection = (m: { canvas: HTMLCanvasElement; pad: number }) => (c: CanvasRenderingContext2D) => c.drawImage(m.canvas, m.pad, S, W, region, 0, 0, W, region);
+  /**
+   * The artwork blurred, under all of it (its fading, vignetted edge shows it) and on past the
+   * seam as one image, so nothing meets at the seam; masked past it to `after` ([fraction of S
+   * from the seam, alpha]).
+   */
+  const nearAcross = (after: [number, number][]) => {
+    if (!near) return;
+    const h = Math.min(H, near.canvas.height);
+    const layer = document.createElement("canvas");
+    layer.width = W;
+    layer.height = h;
+    const lc = layer.getContext("2d");
+    if (!lc) return;
+    lc.drawImage(near.canvas, near.pad, 0, W, h, 0, 0, W, h);
+    lc.globalCompositeOperation = "destination-in";
+    const g = lc.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, "rgba(0,0,0,1)");
+    for (const [y, a] of after) g.addColorStop(Math.min(1, (S + y * S) / h), `rgba(0,0,0,${a})`);
+    lc.fillStyle = g;
+    lc.fillRect(0, 0, W, h);
+    ctx.drawImage(layer, 0, 0);
+  };
+  if (edge.style === "mirror" && near && source) {
+    band([[0, 1], [0.5, 1], [0.9, 0]], reflection(mirrored(source, W, S, BLUR_FAR * S)));
+    band([[0, 1], [0.08, 1], [0.3, 0]], reflection(mirrored(source, W, S, BLUR_MID * S)));
+    nearAcross([[0, 1], [0.03, 1], [0.14, 0]]);
+  } else if (edge.style === "extend") {
+    const across = (colors: number[]) => (c: CanvasRenderingContext2D) => {
+      const g = c.createLinearGradient(0, 0, W, 0);
+      colors.forEach((col, i) => g.addColorStop(colors.length > 1 ? i / (colors.length - 1) : 0, hex(col)));
+      c.fillStyle = g;
+      c.fillRect(0, 0, W, region);
+    };
+    if (!flat) {
+      band([[0, 1], [0.5, 1], [0.9, 0]], across(soften(edge.edgeColors, 6)));
+      band([[0, 1], [0.15, 1], [0.45, 0]], across(soften(edge.edgeColors, 2)));
+    }
+    if (near && source) band([[0, 1], [0.1, 1], [0.25, 0]], reflection(mirrored(source, W, S, BLUR_MID * S)));
+    nearAcross([[0, 1], [0.08, 0]]);
+  }
+  // Where the scrim is at full strength: the controls start right at the seam below the artwork,
+  // but a little way past it beside the artwork, so there it can come in more gently.
+  const full = flat ? S + 0.12 * S : right ? S + 0.06 * S : S;
+  // The scrim the controls need: it comes in under the artwork's fading edge (or, past a crisp
+  // flat edge, just after it).
+  if (edge.scrim > 0) {
+    const rgb = edge.light ? "255,255,255" : "0,0,0";
+    const from = flat ? S : band0;
+    const g = ctx.createLinearGradient(0, from, 0, full);
+    eased(g, rgb, 0, edge.scrim);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, from, W, H - from);
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Over the controls (`controls`: their top and bottom in canvas px; in screen terms, whichever
+  // way the continuation runs) it fades part of the way to the controls' opposite: black under
+  // light controls, white under dark ones. It comes in a little above them and is at full
+  // strength by their bottom, so it covers all of them. Beside the artwork it comes in across
+  // the seam too, under the artwork's fading edge.
+  const rgb = edge.light ? "255,255,255" : "0,0,0";
+  const x0 = right ? (flat ? S : band0) : 0;
+  const lead = 0.08 * canvas.height;
+  const top = Math.max(right ? 0 : band0, Math.min(controls ? controls.top - lead : right ? canvas.height * 0.3 : S, canvas.height - 1));
+  const end = controls ? Math.max(top + 1, Math.min(controls.bottom, canvas.height)) : canvas.height;
+  const layer = document.createElement("canvas");
+  layer.width = canvas.width - x0;
+  layer.height = canvas.height - top;
+  const lc = layer.getContext("2d");
+  if (!lc) return;
+  const down = lc.createLinearGradient(0, 0, 0, end - top);
+  eased(down, rgb, 0, BOTTOM_FADE);
+  lc.fillStyle = down;
+  lc.fillRect(0, 0, layer.width, layer.height);
+  if (right) {
+    lc.globalCompositeOperation = "destination-in";
+    const across = lc.createLinearGradient(0, 0, Math.max(1, full - x0), 0);
+    eased(across, "0,0,0", 0, 1);
+    lc.fillStyle = across;
+    lc.fillRect(0, 0, layer.width, layer.height);
+  }
+  ctx.drawImage(layer, x0, top);
+}
+
+/**
+ * Fills `g` from alpha `from` to `to` along a smoothstep: a straight ramp has a kink where it
+ * starts and where it ends, and the eye reads that kink as an edge.
+ */
+function eased(g: CanvasGradient, rgb: string, from: number, to: number): void {
+  for (let i = 0; i <= 8; i++) {
+    const t = i / 8;
+    g.addColorStop(t, `rgba(${rgb},${from + (to - from) * t * t * (3 - 2 * t)})`);
+  }
+}
+
+/** How far the bottom of the window fades to black or white. */
+const BOTTOM_FADE = 0.6;

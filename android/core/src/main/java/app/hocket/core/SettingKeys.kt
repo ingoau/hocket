@@ -27,6 +27,8 @@ object SettingKeys {
     const val DISPLAY_ANIMATED_BACKGROUND = "display.animatedBackground"
     const val DISPLAY_LYRICS_FPS = "display.lyricsFps"
     const val DISPLAY_THEME = "display.theme"
+    /** `automatic` | `always` | `never` (the full player's immersive artwork). */
+    const val DISPLAY_IMMERSIVE_ARTWORK = "display.immersiveArtwork"
     const val DISPLAY_ACCENT = "display.accent"
     const val DISPLAY_DYNAMIC_COLOUR = "display.dynamicColour"
     const val ACTIONS_ORDER_CONTEXT_MENU = "actions.order.contextMenu"

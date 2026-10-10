@@ -8,7 +8,7 @@
 // insertions, shuffle permutation), undo is snapshot-based, jobs progress on
 // timers, and there is one fake remote device ("Pixel 8") so Connect UI has
 // something to show.
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
@@ -1799,6 +1799,7 @@ export class FakeCore implements CoreHandle {
       ["display.accent", null, "deviceLocal"],
       ["display.dynamicColour", true, "deviceLocal"],
       ["display.queuePanelSplit", 0.5, "deviceLocal"],
+      ["display.immersiveArtwork", "automatic", "deviceLocal"],
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
@@ -2352,6 +2353,8 @@ export class FakeCore implements CoreHandle {
   }
 
   private artworkPath(id: string, size: number): string | undefined {
+    const real = this.realCover(id);
+    if (real) return real;
     const s = ARTWORK_SIZES.reduce((best, c) => (Math.abs(c - size) < Math.abs(best - size) ? c : best), 300);
     const file = join(this.config.cacheDir, "images", `${safeArtworkId(id)}-${s}.png`);
     if (!existsSync(file)) {
@@ -2363,6 +2366,28 @@ export class FakeCore implements CoreHandle {
     }
     return file;
   }
+
+  /**
+   * Screenshots only: with HOCKET_FAKE_COVERS naming a folder of cover images, album `i` (and its
+   * tracks) wears cover `i + HOCKET_FAKE_COVERS_OFFSET` from it, copied into the image cache (the
+   * artwork protocol serves nothing from outside it).
+   */
+  private realCover(id: string): string | undefined {
+    const dir = process.env.HOCKET_FAKE_COVERS;
+    if (!dir || !this.lib) return undefined;
+    this.coverFiles ??= readdirSync(dir).filter((f) => !f.startsWith(".")).sort();
+    const index = this.lib.albums.findIndex((a) => a.coverArt === id);
+    const cover = index < 0 ? undefined : this.coverFiles[index + (Number(process.env.HOCKET_FAKE_COVERS_OFFSET) || 0)];
+    if (!cover) return undefined;
+    const file = join(this.config.cacheDir, "images", `cover-${cover.replace(/\.[^.]*$/, "")}.jpg`);
+    try {
+      if (!existsSync(file)) copyFileSync(join(dir, cover), file);
+      return file;
+    } catch {
+      return undefined;
+    }
+  }
+  private coverFiles: string[] | undefined;
 
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
     const q = query.trim().toLowerCase();

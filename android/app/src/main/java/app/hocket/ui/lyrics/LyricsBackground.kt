@@ -15,7 +15,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
@@ -109,7 +109,8 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
     LaunchedEffect(shouldAnimate) {
         if (!shouldAnimate) return@LaunchedEffect
         val start = System.nanoTime()
-        while (true) withFrameNanos { now -> time = (now - start) / 1_000_000_000f }
+        // An infinite animation: test rules (InfiniteAnimationPolicy) stop it rather than wait for it.
+        while (true) withInfiniteAnimationFrameNanos { now -> time = (now - start) / 1_000_000_000f }
     }
     if (Build.VERSION.SDK_INT >= 33) {
         val shader = remember(tex) {

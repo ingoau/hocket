@@ -13,7 +13,7 @@ import { IPC } from "@shared/bridge-types";
 import { snapshotOf } from "@shared/core-handle";
 import { formatDeepLink, parseDeepLink } from "@shared/deep-link";
 import { ArtworkRegistry } from "./artwork";
-import { createCore, NativeCoreUnavailable } from "./core-host";
+import { createCore, loadNative, NativeCoreUnavailable } from "./core-host";
 import { ServerCredentialStore } from "./credentials";
 import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
@@ -125,11 +125,16 @@ async function main(): Promise<void> {
     onOpenUri: (uri) => broadcastDeepLink(uri),
   });
 
+  // The immersive-artwork classifier is a pure function of the addon: the native core's, or (for
+  // screenshots against the fake core, HOCKET_FAKE_COVERS) the addon loaded for it alone.
+  const classifier = native?.module ?? (forceFake && process.env.HOCKET_FAKE_COVERS ? loadNative(appRoot)?.module : undefined);
+  const classify = classifier?.artworkLayout?.bind(classifier);
   installIpc({
     core,
     windows,
     artwork,
     credentials,
+    artworkLayout: classify,
     meta: () => ({
       version: app.getVersion(),
       platform,

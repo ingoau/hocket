@@ -15,6 +15,8 @@ export const SK = {
   displayAccent: "display.accent",
   displayDynamicColour: "display.dynamicColour",
   displayQueuePanelSplit: "display.queuePanelSplit",
+  /** "automatic" | "always" | "never": the fullscreen player's immersive artwork. */
+  displayImmersiveArtwork: "display.immersiveArtwork",
   syncEnabled: "sync.enabled",
   connectCoordinatorUrl: "connect.coordinatorUrl",
   connectLanDiscovery: "connect.lanDiscovery",

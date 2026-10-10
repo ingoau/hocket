@@ -419,8 +419,13 @@
     <string name="settings_accent">Accent colour</string>
     <string name="settings_accent_dynamic">Dynamic (wallpaper)</string>
     <string name="settings_accent_artwork">From artwork while playing</string>
-    <string name="settings_animated_background">Animated lyrics background</string>
-    <string name="settings_animated_background_body">Off keeps a still blurred artwork.</string>
+    <string name="settings_animated_background">Animated background</string>
+    <string name="settings_animated_background_body">The full player\'s blurred artwork moves slowly. Off keeps it still.</string>
+    <string name="settings_immersive">Immersive artwork</string>
+    <string name="settings_immersive_body">Run the artwork edge to edge, carried on below it by a reflection or its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours</string>
+    <string name="settings_immersive_automatic">Automatic</string>
+    <string name="settings_immersive_always">Always</string>
+    <string name="settings_immersive_never">Never</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_replay_gain">ReplayGain</string>
     <string name="settings_rg_off">Off</string>
