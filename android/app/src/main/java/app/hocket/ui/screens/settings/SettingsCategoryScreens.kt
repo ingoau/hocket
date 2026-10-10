@@ -102,7 +102,7 @@ fun AccountSettingsScreen(nav: NavHostController) {
     if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeServer(client::dispatch, s) }, onDismiss = { signOut = false }) }
 }
 
-/** Appearance: theme, accent colour, colour from the artwork, animated background. */
+/** Appearance: theme, accent colour, colour from the artwork, animated background, immersive artwork. */
 @Composable
 fun AppearanceSettingsScreen(nav: NavHostController) {
     val theme = setting(SettingKeys.DISPLAY_THEME)
@@ -126,6 +126,11 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         )
         SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope, tag = "display.artworkColour")
         SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope, tag = "display.animatedBackground")
+        // display.immersiveArtwork: the full player's artwork edge to edge (mirrored or carried on in its colours).
+        val immersive = setting(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK)
+        val immersiveOptions = listOf("automatic" to stringResource(R.string.settings_immersive_automatic), "always" to stringResource(R.string.settings_immersive_always), "never" to stringResource(R.string.settings_immersive_never))
+        SettingRow(stringResource(R.string.settings_immersive), stringResource(R.string.settings_immersive_body), scope = immersive.scope, tag = "display.immersiveArtwork")
+        ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
     }
 }
 

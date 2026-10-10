@@ -160,6 +160,7 @@ internal fun FullPlayer(
     artworkScale: () -> Float,
     lyricsVisible: Boolean,
     onPreviewToggle: (Color) -> Unit,
+    immersive: app.hocket.core.api.ArtworkLayout? = null,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -224,6 +225,7 @@ internal fun FullPlayer(
             thumbMode = mode != PlayerMode.Artwork,
             onShowArtwork = { onMode(PlayerMode.Artwork) },
             onPreviewToggle = onPreviewToggle,
+            immersive = immersive,
         )
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
@@ -276,11 +278,13 @@ private fun PlayerLayout(
         val view = minHeight.roundToPx()
         val pad = 8.dp.roundToPx()
         val minArea = MIN_AREA.roundToPx()
-        // Artwork mode: the largest artwork that leaves room for the rest.
+        // Artwork mode: the largest artwork that leaves room for the rest; immersive, the full width
+        // from the top of the page (under the header), the title right below it.
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
-        val side = (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
+        val side = if (hero.immersive) w else (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
         hero.artSide = side.toFloat()
-        val artArea = side + 2 * pad
+        hero.headerHeight = hh.toFloat()
+        val artArea = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
         val spare = (view - hh - artArea - th - rest).coerceAtLeast(0)
         val shares = ih.count { it > 0 } + 1
         // Other modes: the area takes it all.
@@ -623,6 +627,7 @@ internal fun PlayerArtwork(
     thumbMode: Boolean,
     onShowArtwork: () -> Unit,
     onPreviewToggle: (Color) -> Unit,
+    immersive: app.hocket.core.api.ArtworkLayout? = null,
 ) {
     val client = LocalCoreClient.current
     val scope = rememberCoroutineScope()
@@ -654,7 +659,7 @@ internal fun PlayerArtwork(
                 translationX = swipe.value * (1f - f)
                 shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
-                shadowElevation = lerpF(HeroGeometry.HERO_ELEVATION.toPx(), 2.dp.toPx(), f)
+                shadowElevation = hero.elevationFor(f, this)
             }
             .pointerInput(thumbMode) {
                 if (thumbMode) return@pointerInput
@@ -693,7 +698,8 @@ internal fun PlayerArtwork(
                 if (thumbMode) onClick(showLabel) { onShowArtwork(); true }
             },
     ) {
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize(), RectangleShape)
+        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersive?.bottom, fraction = { 1f - modeFraction() }), RectangleShape)
+        if (immersive != null) ImmersiveArtworkOverlay(immersive, fraction = { 1f - modeFraction() })
     }
 }
 

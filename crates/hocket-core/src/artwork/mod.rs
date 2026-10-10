@@ -179,7 +179,8 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
     };
 
     let mirror_ok = face_count == 0 && marks < MARKS_MAX && busy <= BUSY_MAX;
-    let columns_ok = drift <= DRIFT_MAX && rough <= ROUGH_MAX && img.marks(strip.clone()) == 0;
+    // Only asked once the cheaper rules have not decided.
+    let columns_ok = || drift <= DRIFT_MAX && rough <= ROUGH_MAX && img.marks(strip.clone()) == 0;
     let (style, reason): (ArtworkStyle, &str) = match preference {
         ImmersiveArtwork::Never => (ArtworkStyle::Card, "card:never"),
         _ if !square => (ArtworkStyle::Card, "card:notSquare"),
@@ -191,7 +192,7 @@ fn edge(img: &Img, faces: &[FaceRect], square: bool, preference: ImmersiveArtwor
         _ if last_row_flat => (ArtworkStyle::Extend, "extend:flat"),
         _ if flat >= FLAT_MIN => (ArtworkStyle::Extend, "extend:flat"),
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
-        _ if columns_ok && face_count == 0 => (ArtworkStyle::Extend, "extend:columns"),
+        _ if face_count == 0 && columns_ok() => (ArtworkStyle::Extend, "extend:columns"),
         ImmersiveArtwork::Always => (ArtworkStyle::Extend, "extend:always"),
         ImmersiveArtwork::Automatic if face_count > 0 => (ArtworkStyle::Card, "card:faces"),
         ImmersiveArtwork::Automatic if marks >= MARKS_MAX => (ArtworkStyle::Card, "card:marks"),
@@ -390,9 +391,13 @@ impl Img {
         // Two scales: body text and stickers, then large lettering whose strokes are thicker
         // than the small window (it would make the median itself). The coarse pass also picks up
         // the odd bold shape in a photo, so it only counts when it finds a word's worth.
-        let coarse = self.marks_at(rows.clone(), 7, N / 5);
-        self.marks_at(rows, 3, N / 9)
-            .max(if coarse >= COARSE_MIN { coarse } else { 0 })
+        // Once the fine pass alone has ruled a mirror out, the coarse one cannot change anything.
+        let fine = self.marks_at(rows.clone(), 3, N / 9);
+        if fine >= MARKS_MAX {
+            return fine;
+        }
+        let coarse = self.marks_at(rows, 7, N / 5);
+        fine.max(if coarse >= COARSE_MIN { coarse } else { 0 })
     }
 
     fn marks_at(&self, rows: std::ops::Range<usize>, r: usize, max_h: usize) -> u32 {
