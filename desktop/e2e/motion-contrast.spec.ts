@@ -130,7 +130,7 @@ test.describe("motion, contrast and zoom", () => {
         await page.waitForTimeout(600);
         const texts = await page.evaluate(() => {
           const out: { what: string; rect: { x: number; y: number; w: number; h: number }; color: string }[] = [];
-          for (const sel of [".np-text .t1", ".np-text .t2", ".np-seek .time", ".np-kicker", ".np-source-name"].map((s) => `.fullscreen ${s}`)) {
+          for (const sel of [".np-text .t1", ".np-text .t2", ".np-seek .time", ".np-pane .qs-label", ".np-pane .qrow .t1", ".np-pane .qrow .t2"].map((s) => `.fullscreen ${s}`)) {
             for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
               const r = el.getBoundingClientRect();
               if (r.width && r.height && el.textContent?.trim()) out.push({ what: `${sel} "${el.textContent.trim().slice(0, 20)}"`, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, color: getComputedStyle(el).color });

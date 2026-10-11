@@ -20,7 +20,13 @@ test.describe("lyrics", () => {
     const view = page.getByTestId("lyrics-view");
     await expect(view).toBeVisible();
     await expect(view).toHaveAttribute("data-tier", "syllable");
+    // The sync type is in the view's Lyrics options, not over the lyrics.
+    await expect(view.getByTestId("lyrics-tools")).toHaveCount(0);
+    await page.getByTestId("lyrics-options").click();
     await expect(page.getByTestId("lyrics-tools")).toContainText("Word-synced");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("lyrics-tools")).toHaveCount(0);
+    await expect(page.getByTestId("lyrics-options")).toBeFocused();
     const host = page.getByTestId("amll-host");
     // The first line becomes active at 1.5 s; its words are separate spans
     // that AMLL animates one at a time from each syllable's start to end.
@@ -75,8 +81,9 @@ test.describe("lyrics", () => {
     expect(medium).toBeGreaterThanOrEqual(13);
     expect(medium).toBeLessThanOrEqual(24);
     await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "medium");
-    await page.getByTestId("lyrics-view").hover();
+    await page.getByTestId("lyrics-options").click();
     await page.getByTestId("lyrics-size-small").click();
+    await page.keyboard.press("Escape");
     await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "small");
     const small = await fontPx();
     expect(small).toBeLessThan(medium);

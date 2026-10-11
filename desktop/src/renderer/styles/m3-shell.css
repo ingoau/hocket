@@ -197,6 +197,8 @@
 .amll-host.compact [class*="_lyricLine"] { --bright-mask-alpha: 1 !important; --dark-mask-alpha: 1 !important; color: color-mix(in srgb, var(--fg-muted) 82%, var(--bg-elev)); }
 .amll-host.compact [class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"]) { color: var(--fg); }
 .amll-host.compact :is([class*="_lyricBgLine"], [class*="_lyricSubLine"]) { opacity: 1; }
+/* AMLL also fades lines by distance and once the song has ended (inline opacity): never here. */
+.amll-host.compact [class*="_lyricMainLine"] { opacity: 1 !important; }
 .right-panel .lyrics-static { padding: 8px 20px 16px; }
 /* The queue view: the selector and Autoplay over the timeline. */
 .right-panel .queue-header { padding: 4px 12px 8px 8px; }
@@ -213,8 +215,37 @@
 .sq-row .art { width: 44px; height: 44px; border-radius: var(--shape-md); background: var(--bg-sunken); }
 /* The queue's per-section "Clear" stays a compact text button beside its heading. */
 .right-panel .queue-clear.btn.sm { height: 28px; padding: 0 12px; font-size: var(--fs-sm); }
-/* The lyrics tools float as a small pill over the lyrics; their buttons stay compact. */
-.lyrics-tools .btn.sm:not(.icon) { height: 24px; padding: 0 8px; font-size: var(--fs-xs); }
+/* ---- Lyrics options (LyricsOptions.tsx): a small sheet from the lyrics view's tune button. */
+.lyrics-options-pop {
+  position: fixed; z-index: 90; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 12px; border-radius: var(--shape-lg);
+  background: var(--surface-tonal); color: var(--fg); box-shadow: var(--shadow-2), var(--shadow);
+}
+.lyrics-options-pop.below { transform-origin: top right; }
+.lyrics-options-pop.above { transform-origin: bottom right; }
+.lyrics-options-pop.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.lyrics-options-pop.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
+.lo-head { padding: 0 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.lo-title { font-weight: 800; }
+.lo-sub { font-size: var(--fs-sm); color: var(--fg-muted); }
+.lo-row { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.lo-label { flex: 1 1 auto; font-weight: 600; }
+.lo-stepper { display: inline-flex; align-items: center; gap: 2px; }
+.lo-value { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
+.lo-btn, .lo-reset {
+  display: inline-flex; align-items: center; justify-content: center; height: 36px; border: 0; background: var(--state-selected); color: var(--fg); font: inherit; font-weight: 700; -webkit-appearance: none; appearance: none;
+  transition: border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy), filter var(--dur-short) var(--ease-emphasized);
+}
+.lo-btn { width: 36px; border-radius: 18px; }
+.lo-reset { padding: 0 12px; border-radius: var(--shape-full); background: transparent; color: var(--accent-text); }
+.lo-btn:hover, .lo-reset:hover { filter: brightness(0.96); }
+.lo-btn:active, .lo-reset:active { border-radius: var(--shape-sm); transform: scale(0.94); }
+.lyrics-options-pop .lyrics-size { gap: 4px; }
+/* Small / medium / large: a connected group of round toggles; the chosen one fills and squares off. */
+.lyrics-options-pop .lyrics-size .btn {
+  width: 36px; min-width: 36px; height: 36px; padding: 0; border: 0; border-radius: 18px; background: var(--state-selected); color: var(--fg); font-size: var(--fs-md); font-weight: 700;
+  transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized);
+}
+.lyrics-options-pop .lyrics-size .btn.on { background: var(--accent); color: var(--accent-fg); border-radius: var(--shape-md); }
 
 /* ---- Queue header: selector and Autoplay (side panel and fullscreen) ------- */
 .queue-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; }

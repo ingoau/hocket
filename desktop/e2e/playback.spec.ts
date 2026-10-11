@@ -97,9 +97,11 @@ test.describe("playback and queue", () => {
     await expect(fs.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
     await expect(fs.getByTestId("queue-timeline")).toBeVisible();
     await expect(fs.getByTestId("queue-header")).toBeVisible();
+    // The queue's name is its selector's (there is no "Playing from" header).
+    await expect(fs.getByTestId("queue-selector-label")).not.toHaveText("");
+    await expect(fs.getByText("Playing from")).toHaveCount(0);
     await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
-    await expect(fs.getByTestId("np-source")).not.toHaveText("");
     // Lyrics / Queue / About take the right; the artwork stays beside them, a button back to it alone.
     await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");

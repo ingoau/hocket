@@ -122,6 +122,10 @@ test("now playing surfaces", async () => {
         await page.screenshot({ path: join(out!, `desktop-${theme}-sidebar-lyrics.png`) });
         if (await current.count()) break;
       }
+      await page.getByTestId("lyrics-options").click();
+      await expect(page.getByTestId("lyrics-tools")).toBeVisible();
+      await shot("sidebar-lyrics-options");
+      await page.keyboard.press("Escape");
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("sidebar-queue");
@@ -164,6 +168,10 @@ test("now playing surfaces", async () => {
         await fsMode(page, mode);
         await shot(`fs-card-${mode}`);
       }
+      await fsMode(page, "lyrics");
+      await page.getByTestId("fullscreen-player").getByTestId("lyrics-options").click();
+      await shot("fs-card-lyrics-options");
+      await page.keyboard.press("Escape");
       await fsMode(page, "queue");
       await page.getByTestId("fullscreen-player").getByTestId("queue-selector").click();
       await shot("fs-card-queue-selector");

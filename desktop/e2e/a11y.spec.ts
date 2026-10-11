@@ -101,6 +101,11 @@ test.describe("axe: no violations anywhere", () => {
       await expectNoViolations(page, `${theme} side panel about`);
       await page.getByTestId("sidebar-back").click();
       await showSideView(page, "lyrics");
+      await page.getByTestId("lyrics-options").click();
+      await expect(page.getByTestId("lyrics-tools")).toBeVisible();
+      await expectNoViolations(page, `${theme} lyrics options`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("lyrics-tools")).toHaveCount(0);
     }
   });
 
@@ -142,6 +147,13 @@ test.describe("axe: no violations anywhere", () => {
         await page.getByTestId(`fs-mode-${mode}`).click();
         await page.waitForTimeout(700);
         await expectNoViolations(page, `${theme} fullscreen/${mode}`);
+        if (mode === "lyrics") {
+          await fs.getByTestId("lyrics-options").click();
+          await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
+          await expectNoViolations(page, `${theme} fullscreen/lyrics options`);
+          await page.keyboard.press("Escape");
+          await expect(fs.getByTestId("lyrics-tools")).toHaveCount(0);
+        }
       }
       await page.getByTestId("fs-mode-queue").click();
       await fs.getByTestId("queue-selector").click();

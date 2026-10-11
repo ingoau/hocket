@@ -28,6 +28,7 @@ import { EmptyState } from "./EmptyState";
 import { Artwork, useArtwork } from "./Artwork";
 import { AboutSong, formatLine } from "./AboutSong";
 import { Icon } from "./Icon";
+import { LyricsOptionsButton } from "./LyricsOptions";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -104,6 +105,7 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
         <button type="button" className="side-icon-btn" aria-label={t("nowPlaying.back")} title={t("nowPlaying.back")} onClick={() => showSideView(PARENT[view])} data-testid="sidebar-back"><Icon name="back" size={22} /></button>
         <h2 className="side-drill-title" id={`side-title-${view}`}>{t(TITLES[view])}</h2>
         <span className="spacer" />
+        {view === "lyrics" ? <LyricsOptionsButton className="side-icon-btn" placement="below" /> : null}
         {view === "queue" ? <button type="button" className="side-icon-btn" title={t("queue.clear")} aria-label={t("queue.clear")} onClick={() => bridge().dispatch({ type: "clearQueue" })} data-testid="queue-clear"><Icon name="trash" size={20} /></button> : null}
       </div>
       <div className="side-drill-body">

@@ -42,6 +42,7 @@ import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/NowPlayingSidebar";
 import { AboutSong } from "../components/AboutSong";
 import { ConnectPill } from "../components/ConnectPill";
+import { LyricsOptionsButton } from "../components/LyricsOptions";
 import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
@@ -142,7 +143,6 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const d = bridge().dispatch;
   const track = now?.track;
   const playing = transport.position.isPlaying;
-  const source = queue.contextLabel ?? track?.album;
 
   /** Whether the full screen button put the window into fullscreen, so closing takes it back out. */
   const madeFullscreen = useRef(false);
@@ -318,10 +318,6 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       <div className="np-fade" aria-hidden="true" />
 
       <header className="np-head np-chrome">
-        <div className="np-source">
-          <span className="np-kicker">{t("nowPlaying.playingFrom")}</span>
-          <span className="np-source-name" data-testid="np-source">{source ?? t("player.nothingPlaying")}</span>
-        </div>
         <button type="button" className="np-icon-btn np-round" aria-pressed={windowFullscreen} aria-label={t("player.windowFullscreen")} title={windowFullscreen ? t("player.exitWindowFullscreen") : t("player.windowFullscreen")} onClick={toggleWindowFullscreen} data-testid="fs-window-fullscreen"><Icon name={windowFullscreen ? "fullscreenExit" : "fullscreen"} size={22} /></button>
         <button ref={closeRef} type="button" className="np-icon-btn np-round" aria-label={t("fullscreen.exit")} title={t("fullscreen.exit")} onClick={() => setFullscreen(false)} data-testid="fullscreen-exit"><Icon name="closeFullscreen" size={22} /></button>
       </header>
@@ -399,6 +395,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
               <Icon name={p.icon} size={22} filled={mode === p.key} />
             </button>
           ))}
+          {mode === "lyrics" ? <LyricsOptionsButton className="np-mode" placement="above" /> : null}
         </div>
         <span className="np-pill-divider" aria-hidden="true" />
         <button type="button" className={`np-mode ${sleep ? "on" : ""}`} aria-pressed={!!sleep} aria-label={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} title={sleep ? t("nowPlaying.sleepTimerOn") : t("player.sleepTimer")} onClick={() => openDialog({ kind: "sleepTimer" })} data-testid="fs-sleep"><Icon name="sleep" size={22} filled={!!sleep} /></button>

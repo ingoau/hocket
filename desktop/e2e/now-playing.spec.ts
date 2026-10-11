@@ -182,6 +182,69 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "queue");
   });
 
+  test("lyrics options live in a popover from the lyrics view's header and the fullscreen pill", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.evaluate(async () => {
+      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
+    });
+    await page.getByTestId("toggle-lyrics").click();
+    const panel = page.getByTestId("right-panel");
+    await expect(panel.getByTestId("lyrics-view")).toBeVisible();
+    // Nothing is laid over the lyrics; the header's button opens the options, by keyboard too.
+    await expect(panel.getByTestId("lyrics-view").getByTestId("lyrics-tools")).toHaveCount(0);
+    const button = panel.getByTestId("lyrics-options");
+    await button.focus();
+    await page.keyboard.press("Enter");
+    const options = page.getByTestId("lyrics-tools");
+    await expect(options).toBeVisible();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(options).toContainText("Word-synced");
+    await expect(page.getByTestId("lyrics-offset-earlier")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("lyrics-offset-value")).toHaveText("-0.1s");
+    await page.getByTestId("lyrics-offset-reset").click();
+    await expect(page.getByTestId("lyrics-offset-value")).toHaveText("0.0s");
+    await expect(page.getByTestId("lyrics-offset-reset")).toHaveCount(0);
+    await page.getByTestId("lyrics-size-large").click();
+    await expect(panel.getByTestId("amll-host")).toHaveAttribute("data-size", "large");
+    await page.keyboard.press("Escape");
+    await expect(options).toHaveCount(0);
+    await expect(button).toBeFocused();
+    // Fullscreen: the pill offers it while the lyrics show, and only then.
+    await page.getByTestId("toggle-fullscreen").click();
+    const fs = page.getByTestId("fullscreen-player");
+    await expect(fs).toHaveAttribute("data-mode", "queue");
+    await expect(fs.getByTestId("fs-pill").getByTestId("lyrics-options")).toHaveCount(0);
+    await fs.getByTestId("fs-mode-lyrics").click();
+    const fsButton = fs.getByTestId("fs-pill").getByTestId("lyrics-options");
+    await fsButton.click();
+    await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
+    // It rises above the pill.
+    const [pop, pill] = await Promise.all([fs.getByTestId("lyrics-tools").boundingBox(), fs.getByTestId("fs-pill").boundingBox()]);
+    expect(pop!.y + pop!.height).toBeLessThanOrEqual(pill!.y);
+    // Escape closes the options, not the player.
+    await page.keyboard.press("Escape");
+    await expect(fs.getByTestId("lyrics-tools")).toHaveCount(0);
+    await expect(fs).toBeVisible();
+  });
+
+  test("another device's resume offer is not shown; the fullscreen player has no 'Playing from' header", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    // The fake core offers to resume what "Pixel 8" was playing once it appears.
+    await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { resumeOffer?: unknown } }).data.resumeOffer !== undefined, { timeout: 10_000 }).toBe(true);
+    await expect(page.getByTestId("resume-offer")).toHaveCount(0);
+    await expect(page.getByTestId("player-bar")).not.toContainText("was playing");
+    await page.getByTestId("toggle-fullscreen").click();
+    const fs = page.getByTestId("fullscreen-player");
+    await expect(fs).toBeVisible();
+    await expect(fs.getByText("Playing from")).toHaveCount(0);
+    await expect(fs.getByTestId("fs-window-fullscreen")).toBeVisible();
+    await expect(fs.getByTestId("fullscreen-exit")).toBeVisible();
+  });
+
   test("the Connect pill names the device only while another one plays", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

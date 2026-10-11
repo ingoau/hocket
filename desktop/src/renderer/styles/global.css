@@ -524,7 +524,6 @@ h3 { font-size: var(--fs-lg); }
 .connect-pill .connect-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .connect-pill:focus-visible { border-radius: var(--shape-full); }
 .player .notice { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 10px; font-size: var(--fs-xs); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; box-shadow: var(--shadow); white-space: nowrap; max-width: 90%; }
-.player .notice.resume { color: var(--fg); }
 .player .notice .btn { height: 20px; padding: 0 6px; font-size: var(--fs-xs); }
 .player .notice .btn.icon { width: 20px; border-radius: 10px; }
 
@@ -565,8 +564,6 @@ button.qrow { width: 100%; }
 /* Background vocals: smaller, never fainter than the other lines (no opacity: that would cut contrast). */
 .lyrics-static .bg { font-size: 0.7em; }
 .lyrics-static .duet { text-align: right; }
-.lyrics-tools { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 4px; align-items: center; background: color-mix(in srgb, var(--bg-elev) 85%, transparent); border: 1px solid var(--border); border-radius: var(--shape-full); padding: 2px 8px; font-size: var(--fs-xs); color: var(--fg-muted); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
-.lyrics-pane:hover .lyrics-tools, .lyrics-tools:focus-within { opacity: 1; }
 /* AMLL sizes itself from --amll-lp-font-size (its own default is 5vh, far too big
    for a side pane). The in-window view scales with the viewport and the
    device-local small/medium/large preference (--lyrics-scale); fullscreen stays large. */

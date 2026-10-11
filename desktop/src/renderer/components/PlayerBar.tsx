@@ -4,8 +4,8 @@
 // play/pause, next, repeat, and the wavy seek bar. Right: the sleep and
 // battery badges, volume, then the side panel, lyrics and queue toggles, the
 // Connect pill (the device's name only while another device plays), the mini
-// player and the fullscreen player. Above it, the inline notice line and the
-// dormant resume offer.
+// player and the fullscreen player. Above it, the inline notice line. (Another
+// device's dormant resume offer is not shown: play resumes where it was.)
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RepeatMode } from "@core/api";
 import { t } from "@shared/strings";
@@ -32,7 +32,6 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const queue = useApp((s) => s.queue);
   // The offline notices get the app-wide banner (App.tsx) instead.
   const notice = useApp((s) => (isOfflineNotice(s.playerNotice) ? undefined : noticeText(s.playerNotice)));
-  const resume = useApp((s) => s.resumeOffer);
   const panels = useApp((s) => s.panels);
   const drawerOpen = useApp((s) => s.drawerOpen);
   const narrow = useMediaQuery(NARROW);
@@ -51,13 +50,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
 
   return (
     <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
-      {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : resume ? (
-        <div className="notice resume" data-testid="resume-offer">
-          <span>{t("player.resume", { device: resume.deviceName, track: resume.track.title })}</span>
-          <button type="button" className="btn primary" onClick={() => d({ type: "resumeHere" })}>{t("player.resumeAction")}</button>
-          <button type="button" className="btn icon sm" aria-label={t("player.resumeDismiss")} onClick={() => d({ type: "dismissResumeOffer" })}><Icon name="close" size={12} /></button>
-        </div>
-      ) : null}
+      {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
       <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}>
         {track ? <Artwork id={track.coverArt} size={128} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}

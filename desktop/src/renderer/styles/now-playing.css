@@ -29,10 +29,7 @@
 .np[data-idle] .np-chrome { opacity: 0; pointer-events: none; transition: opacity 900ms var(--ease-emphasized); }
 .np[data-idle], .np[data-idle] * { cursor: none; }
 
-.np-head { position: absolute; z-index: 3; top: 20px; left: 32px; right: 24px; display: flex; align-items: center; gap: 8px; min-height: 48px; }
-.np-source { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.np-kicker { font-size: var(--fs-sm); color: var(--fg-muted); }
-.np-source-name { font-size: var(--fs-lg); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-head { position: absolute; z-index: 3; top: 20px; right: 24px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 48px; }
 
 .np-stage { position: absolute; inset: 0; z-index: 1; }
 .np-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -160,6 +157,8 @@
 .np .autoplay-pill:hover { background: rgba(255, 255, 255, 0.22); filter: none; }
 .np .autoplay-pill.on { background: rgba(255, 255, 255, 0.94); color: #121214; }
 .np .autoplay-pill:active { transform: scale(0.95); border-radius: var(--shape-sm); }
+.fullscreen .lyrics-options-pop { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); --focus-ring: #fff; }
+.fullscreen .lyrics-options-pop .lyrics-size .btn.on { background: #fff; color: #121214; }
 .fullscreen .qs-popover { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); }
 .np .queue-scroll { border-radius: var(--shape-lg); }
 .np .queue-list { padding-bottom: 30vh; }
@@ -234,7 +233,6 @@
 .np[data-layout="immersive"] { --np-card-w: min(calc(100vh - 56px), 480px); }
 .np[data-layout="immersive"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vh; height: 100vh; z-index: 1; }
 .np[data-layout="immersive"] .np-controls { position: absolute; bottom: 28px; left: calc((100vh - var(--np-card-w)) / 2); width: var(--np-card-w); background: rgba(10, 10, 14, var(--np-glass)); }
-.np[data-layout="immersive"] .np-head { left: calc(100vh + 32px); }
 .np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; left: calc(100vh + 40px); right: 40px; top: 88px; bottom: 104px; }
 /* With a view open, the carried-on part shortens and dissolves into the moving blur, and the view sits on that. */
 @property --np-solid { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
