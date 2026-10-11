@@ -217,7 +217,18 @@
 .np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
 .np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)), radial-gradient(ellipse 120% 90% at 0% 50%, var(--np-feather)); mask-composite: intersect; }
 /* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
-.np[data-immersive][data-flat] .np-art { mask-image: none; }
+.np[data-immersive="bottom"][data-flat] .np-art { mask-image: none; }
+/* Beside a view, a flat extension dissolves too: the artwork's own last 30% fades into the moving
+   blur (a smoothstep, eased in as the view opens) and the carried-on colour is gone by its edge,
+   so the soft edge is as wide as a mirror's rather than the crisp seam. */
+@property --np-art-solid { syntax: "<percentage>"; inherits: false; initial-value: 100%; }
+.np[data-immersive="right"][data-flat] .np-art {
+  --np-art-solid: 100%;
+  --np-art-span: calc(100% - var(--np-art-solid));
+  mask-image: linear-gradient(to right, #000 var(--np-art-solid), rgba(0, 0, 0, 0.84) calc(var(--np-art-solid) + var(--np-art-span) * 0.25), rgba(0, 0, 0, 0.5) calc(var(--np-art-solid) + var(--np-art-span) * 0.5), rgba(0, 0, 0, 0.16) calc(var(--np-art-solid) + var(--np-art-span) * 0.75), transparent 100%);
+  transition: --np-art-solid 700ms var(--ease-emphasized);
+}
+.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-art { --np-art-solid: 70%; }
 
 /* Wide: the artwork full height on the left, the card floating over its bottom, a view on the right. */
 .np[data-layout="immersive"] { --np-card-w: min(calc(100vh - 56px), 480px); }
@@ -234,6 +245,7 @@
   transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized);
 }
 .np[data-immersive="right"]:not([data-mode="art"]) .np-continuation { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
+.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-continuation { --np-solid: 70vh; --np-clear: 100vh; }
 /* And a scrim comes in beside the artwork, so the view's white text holds 4.5:1 over what is left of a light continuation. */
 .np[data-layout="immersive"] .np-fade { display: block; opacity: 0; background: linear-gradient(to right, transparent calc(100vh - 8vw), rgba(0, 0, 0, 0.4) calc(100vh + 2vw)); transition: opacity 700ms var(--ease-emphasized); }
 .np[data-layout="immersive"]:not([data-mode="art"]) .np-fade { opacity: 1; }
