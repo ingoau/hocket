@@ -54,6 +54,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,6 +75,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -526,7 +530,9 @@ private fun SeekStatus() {
  * Title and "artist · album" as one target that opens the song's details ([SongInfoSheet]), the
  * star rating under them (when [showRating]), and add to playlist (a tonal round button). In a
  * non-artwork mode a thumbnail slot opens at the start of the row (its width follows
- * [HeroGeometry.modeFraction] in the layout phase); the one artwork lands in it. While the artwork
+ * [HeroGeometry.modeFraction] in the layout phase); the one artwork lands in it. The thumbnail spans
+ * the text block as one unit: its top on the title's cap height, its bottom on the star glyphs' bottom
+ * (without them, on the artist line's baseline), sized from the measured block. While the artwork
  * is swiped, the neighbour's title and artist crossfade in with the swipe.
  */
 @Composable
@@ -535,53 +541,116 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     val infoLabel = stringResource(R.string.player_about_title)
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
     val previous = if (carousel.restartPeek) track else neighbours.previous?.track
-    Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        // The thumbnail slot: laid out at its full size, reporting a width that opens with the mode.
-        Box(
-            Modifier
-                .layout { measurable, _ ->
-                    val side = HeroGeometry.SMALL_SIZE.roundToPx()
-                    val gap = 14.dp.roundToPx()
-                    val placeable = measurable.measure(Constraints.fixed(side, side))
-                    layout(((side + gap) * hero.modeFraction()).roundToInt(), side) { placeable.place(0, 0) }
+    val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
+    // The thumbnail's side as the last layout worked it out (it follows the text block's metrics,
+    // which change only with the font scale or the rating setting).
+    var thumbSide by remember { mutableIntStateOf(0) }
+    Layout(
+        contents = listOf(
+            {
+                // The thumbnail slot (the one artwork lands in it); empty itself.
+                Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) })
+            },
+            {
+                Column {
+                    Box(Modifier.fillMaxWidth()) {
+                        // The page's heading and a polite live region: it changes once per track, so a
+                        // track change is announced once (never the position). A tap opens the details.
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
+                                .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
+                                .testTag("player.title"),
+                        ) { TrackLines(track, compact) }
+                        // The neighbours' lines, faded in as the artwork is swiped towards them.
+                        for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
+                            if (neighbour == null || neighbour === track) continue
+                            Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, compact = true, tagged = false) }
+                        }
+                    }
+                    if (showRating) {
+                        RatingStars(
+                            track.rating.toInt(),
+                            onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
+                            starSize = STAR_SIZE,
+                            spacing = 8.dp,
+                            tint = MaterialTheme.colorScheme.primary,
+                            emptyTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) },
+                        )
+                    }
                 }
-                .onGloballyPositioned { hero.small = hero.measure(it) },
-        )
-        Column(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxWidth()) {
-                // The page's heading and a polite live region: it changes once per track, so a
-                // track change is announced once (never the position). A tap opens the details.
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
-                        .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
-                        .testTag("player.title"),
-                ) { TrackLines(track, compact) }
-                // The neighbours' lines, faded in as the artwork is swiped towards them.
-                for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
-                    if (neighbour == null || neighbour === track) continue
-                    Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, compact = true, tagged = false) }
+            },
+            {
+                FilledTonalIconButton(onClick = onAddTo, shapes = IconButtonDefaults.shapes(), modifier = Modifier.size(48.dp).testTag("player.addToPlaylist")) {
+                    Icon(HocketIcons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist))
                 }
-            }
-            if (showRating) {
-                RatingStars(
-                    track.rating.toInt(),
-                    onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
-                    starSize = 20.dp,
-                    spacing = 8.dp,
-                    tint = MaterialTheme.colorScheme.primary,
-                    emptyTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) },
-                )
-            }
+            },
+        ),
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
+    ) { (thumbSlot, text, add), constraints ->
+        val w = constraints.maxWidth
+        val gap = THUMB_GAP.roundToPx()
+        val addGap = 12.dp.roundToPx()
+        val a = add.first().measure(Constraints())
+        // The thumbnail's width opens with the mode (it lands as the mode animates).
+        val side0 = thumbSide.takeIf { it > 0 } ?: HeroGeometry.SMALL_SIZE.roundToPx()
+        val reserve = ((side0 + gap) * hero.modeFraction()).roundToInt()
+        val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
+        val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
+        // The thumbnail spans the text block: from the title's cap height (not its line box) to the
+        // stars' bottom, or without them the artist line's baseline.
+        val first = t[FirstBaseline]
+        val last = t[LastBaseline]
+        val top = if (first == AlignmentLine.Unspecified) 0 else (first - capHeight).roundToInt().coerceAtLeast(0)
+        // The stars' row is 48 dp tall around 20 dp icons, whose star glyph ends ~17% above the icon's bottom.
+        val starsSlack = ((48.dp - STAR_SIZE) / 2 + STAR_SIZE * STAR_GLYPH_BOTTOM_INSET).roundToPx()
+        val bottom = when {
+            showRating -> t.height - starsSlack
+            last != AlignmentLine.Unspecified -> last
+            else -> t.height
         }
-        Spacer(Modifier.width(12.dp))
-        FilledTonalIconButton(onClick = onAddTo, shapes = IconButtonDefaults.shapes(), modifier = Modifier.size(48.dp).testTag("player.addToPlaylist")) {
-            Icon(HocketIcons.AutoMirrored.Filled.PlaylistAdd, stringResource(R.string.player_add_to_playlist))
+        // Large fonts on narrow screens: capped (a share of the row), then centred on the block.
+        val span = bottom - top
+        val side = span.coerceIn(THUMB_MIN.roundToPx(), minOf(THUMB_MAX.roundToPx(), (w * THUMB_MAX_SHARE).roundToInt()))
+        if (side != thumbSide) thumbSide = side
+        val thumb = thumbSlot.first().measure(Constraints.fixed(side, side))
+        val h = maxOf(t.height, a.height)
+        val textY = (h - t.height) / 2
+        layout(w, h) {
+            thumb.place(0, textY + top + (span - side) / 2)
+            t.place(reserve, textY)
+            a.place(w - a.width, (h - a.height) / 2)
         }
+    }
+}
+
+/** The stars' size in the title block. */
+private val STAR_SIZE = 20.dp
+/** How far above its icon's bottom the star glyph ends (Material Symbols "star": 4 of 24 units). */
+private const val STAR_GLYPH_BOTTOM_INSET = 4.05f / 24f
+/** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
+private val THUMB_GAP = 14.dp
+private val THUMB_MIN = 40.dp
+private val THUMB_MAX = 96.dp
+/** The thumbnail's largest share of the row's width (keeps room for the text at large font sizes). */
+private const val THUMB_MAX_SHARE = 0.22f
+
+/** The cap height (px) of the system sans-serif, bold, at [fontSize]: where a title's letters start. */
+@Composable
+private fun rememberCapHeightPx(fontSize: androidx.compose.ui.unit.TextUnit): Float {
+    val px = with(LocalDensity.current) { fontSize.toPx() }
+    return remember(px) {
+        val paint = android.graphics.Paint().apply {
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+            textSize = px
+        }
+        val bounds = android.graphics.Rect()
+        paint.getTextBounds("H", 0, 1, bounds)
+        -bounds.top.toFloat()
     }
 }
 

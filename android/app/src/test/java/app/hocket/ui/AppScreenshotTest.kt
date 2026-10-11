@@ -166,6 +166,11 @@ class AppScreenshotTest {
             core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
             settle()
             shot(dir, "$prefix-10-player-stars-hidden")
+            click("player.mode.queue")
+            settle()
+            shot(dir, "$prefix-10b-queue-stars-hidden")
+            click("player.mode.queue")
+            settle()
             core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "true"))
             settle()
         }

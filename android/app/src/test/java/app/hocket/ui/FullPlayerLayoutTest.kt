@@ -171,6 +171,57 @@ class FullPlayerLayoutTest {
         compose.waitUntil(5_000) { exists("handoff.sheet") }
     }
 
+    /** The first baseline (px, in the root) of the title block's line reading [text], from its text layout. */
+    private fun baseline(text: String): Float {
+        // In the title block (the queue below lists the same song).
+        val block = bounds("player.title")
+        val node = compose.onAllNodes(androidx.compose.ui.test.hasText(text), useUnmergedTree = true).fetchSemanticsNodes()
+            .first { it.config.contains(SemanticsActions.GetTextLayoutResult) && block.contains(it.boundsInRoot.center) }
+        val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        return node.positionInRoot.y + results.first().firstBaseline
+    }
+
+    /** The system sans-serif bold's cap height at the title's size (px), as the player works it out. */
+    private fun titleCapHeight(): Float {
+        val px = 24f * compose.activity.resources.displayMetrics.scaledDensity
+        val paint = android.graphics.Paint().apply { typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD); textSize = px }
+        val r = android.graphics.Rect()
+        paint.getTextBounds("H", 0, 1, r)
+        return -r.top.toFloat()
+    }
+
+    /**
+     * In lyrics and queue modes the thumbnail spans the title block: its top on the title's cap
+     * height, its bottom on the star glyphs' bottom, or (rating hidden) on the artist line's baseline.
+     */
+    @Test
+    fun theThumbnailSpansTheTitleArtistAndRating() {
+        startExpanded()
+        val track = core.client.nowPlaying.value!!.track
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val thumb = bounds("player.artwork")
+        val capTop = baseline(track.title) - titleCapHeight()
+        val stars = bounds("rating")
+        // The star glyphs' bottom: the 48 dp row less half its slack and the glyph's own inset.
+        val starBottom = stars.bottom - ((48f - 20f) / 2f + 20f * 4.05f / 24f) * dp
+        assertEquals("thumbnail top on the title's cap height", capTop, thumb.top, 2f)
+        assertEquals("thumbnail bottom on the star glyphs' bottom", starBottom, thumb.bottom, 2f)
+        assertEquals("square", thumb.width, thumb.height, 1f)
+        assertTrue("about 72 dp: ${thumb.height / dp}", thumb.height / dp in 60f..90f)
+        // Without the stars: title to the artist line.
+        core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
+        compose.waitUntil(5_000) { !exists("rating") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val small = bounds("player.artwork")
+        assertEquals("top on the cap height", baseline(track.title) - titleCapHeight(), small.top, 2f)
+        assertEquals("bottom on the artist's baseline", baseline(track.artist!!), small.bottom, 2f)
+    }
+
     @Test
     fun anotherDevicesResumeOfferIsNotShownInThePlayer() {
         startExpanded()

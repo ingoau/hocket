@@ -310,9 +310,12 @@ internal class HeroGeometry {
         /** The mini player's artwork and its corners (square-ish, Navic). */
         val THUMB_SIZE: Dp = 48.dp
         val THUMB_CORNER: Dp = 8.dp
-        /** The thumbnail beside the title in a non-artwork mode, and its corners. */
-        val SMALL_SIZE: Dp = 56.dp
-        val SMALL_CORNER: Dp = 12.dp
+        /**
+         * The thumbnail beside the title in a non-artwork mode (before the title block has been
+         * measured: it spans that block, about this at the default font size) and its corners.
+         */
+        val SMALL_SIZE: Dp = 72.dp
+        val SMALL_CORNER: Dp = 16.dp
         /** The big artwork's corners and shadow. */
         val HERO_CORNER: Dp = 28.dp
         val HERO_ELEVATION: Dp = 16.dp
