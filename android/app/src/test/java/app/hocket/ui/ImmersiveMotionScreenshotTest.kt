@@ -115,6 +115,9 @@ class ImmersiveMotionScreenshotTest {
             compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
             settle()
             val prefix = "android-$theme-immersive-${name(current)}"
+            // The cover is decoded and crossfaded in on a clock the test steps by hand: wait for the
+            // frame to stop changing, or the capture can catch the artwork's empty background.
+            awaitStill()
             shot(File(dir, "$prefix-artwork.png"))
             if (current == 1) {
                 // The queue on its panel, the continuation fading away under it.
@@ -155,6 +158,23 @@ class ImmersiveMotionScreenshotTest {
                 compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Collapse)
                 settle()
             }
+        }
+    }
+
+    /**
+     * Settles until the artwork's part of the screen (the top third: the seek bar's clock below it
+     * ticks on) is the same picture in two captures in a row, for a few seconds at most.
+     */
+    private fun awaitStill() {
+        fun top(): Bitmap = compose.onRoot().captureToImage().asAndroidBitmap().let { Bitmap.createBitmap(it, 0, 0, it.width, it.height / 3) }
+        settle()
+        settle()
+        var last = top()
+        repeat(8) {
+            settle()
+            val now = top()
+            if (now.sameAs(last)) return
+            last = now
         }
     }
 

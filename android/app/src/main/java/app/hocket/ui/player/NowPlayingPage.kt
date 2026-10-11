@@ -389,7 +389,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
             when (m) {
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 PlayerMode.Queue -> ModePanel(hero) { QueueList(Modifier.fillMaxSize(), controlsAtBottom = true, listModifier = Modifier.fadingEdges()) }
-                PlayerMode.Lyrics -> ModePanel(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize().fadingEdges(), embedded = true) }
+                PlayerMode.Lyrics -> ModePanel(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
             }
         }
     }
@@ -422,19 +422,27 @@ private fun ModePanel(hero: HeroGeometry, content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/** How far the lyric lines fade in and out at the panel's top and at the offset controls under them. */
+private val LYRICS_FADE = 72.dp
+
 /** The mode panel's wash: the content colour, faint, over the player's backdrop. */
 @Composable
 private fun panelColor(): Color = LocalContentColor.current.copy(alpha = 0.10f)
 
-/** Content scrolling out of the mode area fades at its top and bottom edges instead of being cut. */
-private fun Modifier.fadingEdges(): Modifier = this
+/**
+ * Content scrolling out of the mode panel fades at its top and bottom edges instead of being cut:
+ * over [top] and [bottom] (the lyrics' big lines need the longer fade to dissolve rather than be
+ * sliced by the panel's edge).
+ */
+private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
-        val top = 20.dp.toPx()
-        val bottom = 28.dp.toPx()
-        drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, startY = 0f, endY = top), blendMode = BlendMode.DstIn, size = size.copy(height = top))
-        drawRect(Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = size.height - bottom, endY = size.height), blendMode = BlendMode.DstIn, topLeft = Offset(0f, size.height - bottom), size = size.copy(height = bottom))
+        val top = top.toPx()
+        val bottom = bottom.toPx()
+        // Eased: mostly gone over the outer half, so a line there dissolves rather than reads cut.
+        drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Black, startY = 0f, endY = top), blendMode = BlendMode.DstIn, size = size.copy(height = top))
+        drawRect(Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = size.height - bottom, endY = size.height), blendMode = BlendMode.DstIn, topLeft = Offset(0f, size.height - bottom), size = size.copy(height = bottom))
     }
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */

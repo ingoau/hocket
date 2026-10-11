@@ -391,6 +391,17 @@ class NowPlayingSheetTest {
         assertEquals("one skip", next.item.key, core.client.nowPlaying.value!!.item.key)
     }
 
+    /** Square only at rest fully open; extra-large corners as soon as it is dragged; the mini card's when collapsed. */
+    @Test
+    fun theSheetsTopCornersRoundAsSoonAsItLeavesTheOpenRest() {
+        val corner = { p: Float -> app.hocket.ui.player.sheetTopCorner(p, miniCorner = 16f, sheetCorner = 28f) }
+        assertEquals(0f, corner(1f), 0f)
+        assertTrue("rounding off the rest: ${corner(0.99f)}", corner(0.99f) > 5f)
+        assertEquals(28f, corner(0.95f), 1f)
+        assertEquals(22f, corner(0.5f), 0.5f)
+        assertEquals(16f, corner(0f), 0f)
+    }
+
     @Test
     fun theSheetStateSavesItsModeAndPosition() {
         val state = app.hocket.ui.player.NowPlayingSheetState(app.hocket.ui.player.SheetValue.Expanded, app.hocket.ui.player.PlayerMode.Lyrics)

@@ -83,9 +83,12 @@ import app.hocket.ui.icons.HocketIcons
  * announced as they pass. With reduced motion (animations removed) the sweep becomes a static
  * highlight of the lit line, blur and line scaling are off, the list jumps instead of scrolling
  * smoothly, the fluid background stands still and the position is sampled 4 times a second.
+ *
+ * [listModifier] applies to the lines only, not the offset controls under them (the full player
+ * fades the lines out at its panel's edges).
  */
 @Composable
-fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false) {
+fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val lyricsMap by client.lyrics.collectAsStateWithLifecycle()
@@ -134,7 +137,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         }
         val doc = lyrics ?: return@Box
         Column(Modifier.fillMaxSize()) {
-            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f),
+            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f).then(listModifier),
                 padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
             OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) }, systemBarPadding = !embedded)
         }

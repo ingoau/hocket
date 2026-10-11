@@ -497,6 +497,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val margin = with(density) { HeroGeometry.MINI_MARGIN.toPx() }
         val maxCard = with(density) { HeroGeometry.MINI_MAX_WIDTH.toPx() }
         val corner = with(density) { HeroGeometry.MINI_CORNER.toPx() }
+        val sheetCorner = with(density) { SHEET_CORNER.toPx() }
         val cardElevation = with(density) { HeroGeometry.MINI_ELEVATION.toPx() }
         val appearShift = miniHeightPx + with(density) { HeroGeometry.MINI_GAP.toPx() }
         val sheetOffset: () -> Float = { state.draggable.offset.takeIf { !it.isNaN() } ?: if (state.draggable.currentValue == SheetValue.Expanded) 0f else collapsedOffset }
@@ -516,7 +517,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     val screenBottom = maxHeightPx - sheetOffset()
                     shape = SheetShape(
                         inset = cardInset * (1f - (p / 0.3f).coerceIn(0f, 1f)),
-                        corner = corner * (1f - p),
+                        topCorner = sheetTopCorner(p, corner, sheetCorner),
+                        bottomCorner = corner * (1f - p),
                         bottom = lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)),
                     )
                     clip = true
@@ -616,15 +618,35 @@ private const val FLY_EPSILON = 0.002f
 /** The backdrop's opacity for a sheet progress (Metrolist). */
 private fun backgroundAlpha(p: Float): Float = (1.4f * sqrt((p.coerceAtLeast(0.1f) - 0.1f))).coerceIn(0f, 1f)
 
+/** A moving sheet's top corners (Material's extra-large shape, as a bottom sheet being dragged keeps). */
+private val SHEET_CORNER = 28.dp
+
+/** How much of the travel from fully open the top corners take to round (and to square off as it lands open). */
+private const val TOP_CORNER_RAMP = 0.05f
+
+/**
+ * The sheet's top corners (px) at progress [p]: the mini card's [miniCorner] when collapsed, growing
+ * to [sheetCorner] on the way up, and square only while it rests fully open: off that rest they
+ * round within the first [TOP_CORNER_RAMP] of travel, so a dragged sheet's top edge reads as a sheet.
+ */
+internal fun sheetTopCorner(p: Float, miniCorner: Float, sheetCorner: Float): Float {
+    if (p >= 1f) return 0f
+    return lerpF(miniCorner, sheetCorner, p.coerceIn(0f, 1f)) * ((1f - p) / TOP_CORNER_RAMP).coerceIn(0f, 1f)
+}
+
 /**
  * The sheet's clip: the floating card (side margins, all four corners, the mini player's height)
- * growing into a full-screen rectangle.
+ * growing into a full-screen rectangle; its top corners per [sheetTopCorner], its bottom ones
+ * going from the card's to square (the bottom reaches the screen's).
  */
-private class SheetShape(private val inset: Float, private val corner: Float, private val bottom: Float) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
-        Outline.Rounded(RoundRect(left = inset, top = 0f, right = size.width - inset, bottom = bottom.coerceIn(0f, size.height), cornerRadius = CornerRadius(corner)))
-    override fun equals(other: Any?): Boolean = other is SheetShape && other.inset == inset && other.corner == corner && other.bottom == bottom
-    override fun hashCode(): Int = (31 * inset.hashCode() + corner.hashCode()) * 31 + bottom.hashCode()
+private class SheetShape(private val inset: Float, private val topCorner: Float, private val bottomCorner: Float, private val bottom: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val top = CornerRadius(topCorner)
+        val low = CornerRadius(bottomCorner)
+        return Outline.Rounded(RoundRect(left = inset, top = 0f, right = size.width - inset, bottom = bottom.coerceIn(0f, size.height), topLeftCornerRadius = top, topRightCornerRadius = top, bottomRightCornerRadius = low, bottomLeftCornerRadius = low))
+    }
+    override fun equals(other: Any?): Boolean = other is SheetShape && other.inset == inset && other.topCorner == topCorner && other.bottomCorner == bottomCorner && other.bottom == bottom
+    override fun hashCode(): Int = ((31 * inset.hashCode() + topCorner.hashCode()) * 31 + bottomCorner.hashCode()) * 31 + bottom.hashCode()
 }
 
 /** A scale about the top-left corner, then a translation (px). */
