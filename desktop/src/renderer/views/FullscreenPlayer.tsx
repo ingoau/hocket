@@ -29,7 +29,7 @@ import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { WavySeek } from "../components/WavySeek";
 import { QueuePanel } from "../components/QueuePanel";
-import { LyricsPane } from "../components/RightPanel";
+import { LyricsPane } from "../components/NowPlayingSidebar";
 import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";

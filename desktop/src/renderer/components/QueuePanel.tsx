@@ -1,4 +1,5 @@
-// One scrollable timeline, like Apple Music's: it rests with the current item
+// The queue view: its header (the queue selector and Autoplay, QueueSelector.tsx),
+// then one scrollable timeline, like Apple Music's: it rests with the current item
 // at the top (Now playing, "Playing next" with Clear, "Continue playing —
 // from <context>"), and scrolling up reveals History (with Clear). Follows
 // the current item when it changes unless the user is scrolling or working
@@ -23,6 +24,7 @@ import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
 import { EmptyState } from "./EmptyState";
+import { QueueHeader } from "./QueueSelector";
 
 /** How long after the last scroll, wheel or pointer activity the list may follow the current item again. */
 const IDLE_MS = 4000;
@@ -131,10 +133,10 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     window.setTimeout(() => { programmatic.current = false; }, first || reducedMotion ? 50 : 600);
   }, [currentKey, reducedMotion]);
 
-  if (!queue.current && !all.length) return <EmptyState message={t("queue.empty")} icon="queue" testId="queue-empty" />;
+  if (!queue.current && !all.length) return <div className={`queue-wrap ${large ? "large" : ""}`}><QueueHeader large={large} /><EmptyState message={t("queue.empty")} icon="queue" testId="queue-empty" /></div>;
 
   const idPrefix = large ? "fsq" : "q";
-  const header = large ? <QueueHeader /> : null;
+  const header = <QueueHeader large={large} />;
   const optionId = (key: string) => `${idPrefix}-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const row = (e: QueueEntry, kind: "history" | "current" | "next" | "upcoming") => (
     <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "next" || kind === "upcoming"}
@@ -183,6 +185,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
         {queue.history.length ? clearButton("history", t("queue.clearHistory"), "queue-clear-history", () => { d({ type: "removeQueueItems", data: { keys: queue.history.map((e) => e.item.key) } }); publish(EMPTY_SELECTION); }) : null}
         {queue.playingNext.length ? clearButton("next", t("queue.clearInsertions"), "queue-clear-next", () => d({ type: "clearInsertions" })) : null}
         {queue.totalUpcoming > queue.upcoming.length ? <div className="queue-more">{t("queue.more", { count: queue.totalUpcoming - queue.upcoming.length })}</div> : null}
+        {queue.autoplay ? <div className="queue-autoplay-note" data-testid="queue-autoplay-note"><Icon name="autoplay" size={18} />{t("queue.autoplayFooter")}</div> : null}
       </div>
       <span id={`${idPrefix}-hint`} className="sr-only">{t("a11y.queueHint")}</span>
     </div>
@@ -207,20 +210,6 @@ function QueueRow({ id, entry, kind, large, selected, focused, sortable, onClick
       {/* Pointer drag handle; the keyboard reorders with Alt+Up/Down on the list. */}
       {sortable ? <span className="grip" {...listeners} aria-hidden="true"><Icon name={large ? "dragHandle" : "grip"} size={large ? 18 : 14} /></span> : <span className="grip-space" aria-hidden="true" />}
       {entry.item.unavailable ? <span className="sr-only">{t("queue.unavailable")}</span> : null}
-    </div>
-  );
-}
-
-/** Shuffle, repeat and autoplay as tonal pill toggles over the fullscreen queue. */
-function QueueHeader() {
-  const queue = useApp((s) => s.queue);
-  const d = bridge().dispatch;
-  const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
-  return (
-    <div className="queue-header" role="toolbar" aria-label={t("nowPlaying.playbackOptions")} data-testid="queue-header">
-      <button type="button" className={`np-chip ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="queue-shuffle"><Icon name="shuffle" size={16} />{t("player.shuffle")}</button>
-      <button type="button" className={`np-chip ${queue.repeat !== "off" ? "on" : ""}`} aria-pressed={queue.repeat !== "off"} aria-label={repeatLabel} onClick={() => d({ type: "setRepeat", data: { mode: queue.repeat === "off" ? "all" : queue.repeat === "all" ? "one" : "off" } })} data-testid="queue-repeat"><Icon name={queue.repeat === "one" ? "repeatOne" : "repeat"} size={16} />{t("player.repeat")}</button>
-      <button type="button" className={`np-chip ${queue.autoplay ? "on" : ""}`} aria-pressed={queue.autoplay} onClick={() => d({ type: "setAutoplay", data: { enabled: !queue.autoplay } })} data-testid="queue-autoplay"><Icon name="autoplay" size={16} />{t("player.autoplay")}</button>
     </div>
   );
 }

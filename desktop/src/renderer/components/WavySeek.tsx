@@ -11,9 +11,13 @@
 // - Reduced motion: the wave neither travels nor springs (it is simply wavy
 //   while playing and flat when paused).
 //
-// Same slider semantics and keys as the player bar's SeekBar. The wave is
+// Same slider semantics and keys as the mini player's SeekBar. The wave is
 // drawn by a requestAnimationFrame loop that writes the path directly (no
 // React render per frame) and only runs while something is moving.
+//
+// Two sizes: the fullscreen player's (times under the bar, the remaining time
+// on the right) and the player bar's ("bar": a slimmer wave with the elapsed
+// time and the duration either side, like the bar's old seek).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -32,6 +36,15 @@ export const WAVE = {
   gap: 7,
   /** Seconds for the wave to travel one wavelength. */
   period: 1.6,
+};
+/** The player bar's slimmer wave. */
+export const BAR_WAVE: typeof WAVE = {
+  wavelength: 30,
+  amplitude: 3,
+  stroke: 4,
+  height: 24,
+  gap: 5,
+  period: 1.4,
 };
 // Amplitude spring (unit mass): a little overshoot when it swells.
 const STIFFNESS = 220;
@@ -59,7 +72,9 @@ export function wavePath(x0: number, x1: number, mid: number, amplitude: number,
   return `${d} L ${x1.toFixed(1)} ${y(x1).toFixed(2)}`;
 }
 
-export function WavySeek({ durationMs, playing }: { durationMs: number | undefined; playing: boolean }) {
+export function WavySeek({ durationMs, playing, variant = "player" }: { durationMs: number | undefined; playing: boolean; variant?: "player" | "bar" }) {
+  const geo = variant === "bar" ? BAR_WAVE : WAVE;
+  const ids = variant === "bar" ? { root: "seek", slider: "seek-slider", position: "seek-position" } : { root: "fs-seek", slider: "fs-seek-slider", position: "fs-seek-position" };
   const stamp = useApp((s) => s.transport.position);
   const offset = useApp((s) => s.connection.clockOffsetMs);
   const stopped = useApp((s) => s.perf === "stopped");
@@ -111,7 +126,7 @@ export function WavySeek({ durationMs, playing }: { durationMs: number | undefin
     bridge().dispatch({ type: "seekTo", data: { position_ms: Math.round(to) } });
   };
 
-  const { stroke, gap, height } = WAVE;
+  const { stroke, gap, height } = geo;
   const mid = height / 2;
   const x0 = stroke / 2;
   const xEnd = Math.max(x0, width - stroke / 2);
@@ -121,19 +136,19 @@ export function WavySeek({ durationMs, playing }: { durationMs: number | undefin
   const waving = playing && !dragging;
 
   // The wave's live state, read by the frame loop and by render.
-  const live = useRef({ amp: waving ? WAVE.amplitude : 0, vel: 0, phase: 0, x0, x1: playedEnd, mid });
+  const live = useRef({ amp: waving ? geo.amplitude : 0, vel: 0, phase: 0, x0, x1: playedEnd, mid });
   live.current.x0 = x0;
   live.current.x1 = playedEnd;
   live.current.mid = mid;
   if (reducedMotion) {
-    live.current.amp = waving ? WAVE.amplitude : 0;
+    live.current.amp = waving ? geo.amplitude : 0;
     live.current.vel = 0;
   }
-  const d = wavePath(x0, playedEnd, mid, live.current.amp, live.current.phase);
+  const d = wavePath(x0, playedEnd, mid, live.current.amp, live.current.phase, geo.wavelength);
 
   useEffect(() => {
     if (reducedMotion || stopped) return;
-    const target = waving ? WAVE.amplitude : 0;
+    const target = waving ? geo.amplitude : 0;
     const s = live.current;
     if (!waving && Math.abs(s.amp) < 0.01 && Math.abs(s.vel) < 0.01) return;
     let raf = 0;
@@ -143,46 +158,60 @@ export function WavySeek({ durationMs, playing }: { durationMs: number | undefin
       last = now;
       s.vel += (-STIFFNESS * (s.amp - target) - DAMPING * s.vel) * dt;
       s.amp += s.vel * dt;
-      s.phase = (s.phase + (WAVE.wavelength / WAVE.period) * dt) % WAVE.wavelength;
-      path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase));
+      s.phase = (s.phase + (geo.wavelength / geo.period) * dt) % geo.wavelength;
+      path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase, geo.wavelength));
       const settled = !waving && Math.abs(s.amp) < 0.01 && Math.abs(s.vel) < 0.01;
       if (settled) {
         s.amp = 0;
         s.vel = 0;
-        path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, 0, s.phase));
+        path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, 0, s.phase, geo.wavelength));
         return;
       }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [waving, reducedMotion, stopped]);
+  }, [waving, reducedMotion, stopped, geo]);
 
   const bubble = dragging || focused;
-  return (
-    <div className="np-seek" data-testid="fs-seek">
-      <div ref={bar} className={`np-seek-bar ${dragging ? "dragging" : ""} ${waving ? "playing" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
-        onKeyDown={onKey}
-        onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
-        onBlur={() => setFocused(false)}
-        onPointerDown={(e) => { if (!dur || e.button !== 0) return; e.preventDefault(); e.currentTarget.focus({ preventScroll: true }); setDrag(frac(e.clientX)); }}
-        onPointerMove={(e) => setHover(frac(e.clientX))}
-        onPointerLeave={() => setHover(undefined)}
-        data-testid="fs-seek-slider">
-        {width ? (
-          <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true" focusable="false">
-            <defs><clipPath id={clipId}><rect x={0} y={0} width={Math.max(0, playedEnd + stroke / 2)} height={height} /></clipPath></defs>
-            {restStart < xEnd ? <line className="rest" x1={restStart} y1={mid} x2={xEnd} y2={mid} /> : null}
-            {restStart < xEnd - stroke * 2 ? <circle className="stop" cx={xEnd} cy={mid} r={2} /> : null}
-            {playedEnd > x0 ? <path ref={path} className="played" d={d} clipPath={`url(#${clipId})`} /> : null}
-            <rect className="thumb" x={x - 2.5} y={mid - 14} width={5} height={28} rx={2.5} />
-          </svg>
-        ) : null}
-        {hover !== undefined && dur && !dragging ? <div className="hover-time" style={{ left: `${hover * 100}%` }}>{fmtTime(hover * dur)}</div> : null}
-        {bubble && dur ? <div className="value-bubble" style={{ left: x }}>{fmtTime(shown)}</div> : null}
+  const thumbH = variant === "bar" ? 18 : 28;
+  const thumbW = variant === "bar" ? 4 : 5;
+  const slider = (
+    <div ref={bar} className={`np-seek-bar ${dragging ? "dragging" : ""} ${waving ? "playing" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
+      onKeyDown={onKey}
+      onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
+      onBlur={() => setFocused(false)}
+      onPointerDown={(e) => { if (!dur || e.button !== 0) return; e.preventDefault(); e.currentTarget.focus({ preventScroll: true }); setDrag(frac(e.clientX)); }}
+      onPointerMove={(e) => setHover(frac(e.clientX))}
+      onPointerLeave={() => setHover(undefined)}
+      data-testid={ids.slider}>
+      {width ? (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true" focusable="false">
+          <defs><clipPath id={clipId}><rect x={0} y={0} width={Math.max(0, playedEnd + stroke / 2)} height={height} /></clipPath></defs>
+          {restStart < xEnd ? <line className="rest" x1={restStart} y1={mid} x2={xEnd} y2={mid} /> : null}
+          {restStart < xEnd - stroke * 2 ? <circle className="stop" cx={xEnd} cy={mid} r={variant === "bar" ? 1.5 : 2} /> : null}
+          {playedEnd > x0 ? <path ref={path} className="played" d={d} clipPath={`url(#${clipId})`} /> : null}
+          <rect className="thumb" x={x - thumbW / 2} y={mid - thumbH / 2} width={thumbW} height={thumbH} rx={thumbW / 2} />
+        </svg>
+      ) : null}
+      {hover !== undefined && dur && !dragging ? <div className="hover-time" style={{ left: `${hover * 100}%` }}>{fmtTime(hover * dur)}</div> : null}
+      {bubble && dur ? <div className="value-bubble" style={{ left: x }}>{fmtTime(shown)}</div> : null}
+    </div>
+  );
+  if (variant === "bar") {
+    return (
+      <div className="np-seek bar-seek" data-testid={ids.root}>
+        <span className="time" data-testid={ids.position} aria-hidden="true">{fmtTime(shown)}</span>
+        {slider}
+        <span className="time" aria-hidden="true">{fmtTime(dur)}</span>
       </div>
+    );
+  }
+  return (
+    <div className="np-seek" data-testid={ids.root}>
+      {slider}
       <div className="np-seek-times" aria-hidden="true">
-        <span className="time" data-testid="fs-seek-position">{fmtTime(shown)}</span>
+        <span className="time" data-testid={ids.position}>{fmtTime(shown)}</span>
         <span className="time">-{fmtTime(Math.max(0, dur - shown))}</span>
       </div>
     </div>

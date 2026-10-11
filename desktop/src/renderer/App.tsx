@@ -12,7 +12,7 @@ import { resolveArtwork } from "./components/Artwork";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
-import { RightPanel } from "./components/RightPanel";
+import { NowPlayingSidebar } from "./components/NowPlayingSidebar";
 import { ContextMenu } from "./components/ContextMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toasts } from "./components/Toasts";
@@ -62,7 +62,7 @@ export function App() {
         <main className="content" id="main" tabIndex={-1} data-testid="content">
           <Router />
         </main>
-        <RightPanel />
+        <NowPlayingSidebar />
       </div>
       <PlayerBar inert={modal} />
       <NowPlayingAnnouncer />

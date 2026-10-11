@@ -25,12 +25,13 @@ export interface Route {
 export type NowPlayingMode = "art" | "lyrics" | "queue" | "about";
 const NOW_PLAYING_MODES: readonly NowPlayingMode[] = ["art", "lyrics", "queue", "about"];
 
+/** What the now playing side panel shows: the scrolling overview, or one of its drill-ins. */
+export type SideView = "overview" | "lyrics" | "queue" | "about" | "recent";
+const SIDE_VIEWS: readonly SideView[] = ["overview", "lyrics", "queue", "about", "recent"];
+
 export interface PanelState {
   rightOpen: boolean;
-  queueCollapsed: boolean;
-  lyricsCollapsed: boolean;
-  /** Fraction of the right panel height given to the queue (0.15–0.85). */
-  splitRatio: number;
+  rightView: SideView;
   rightWidth: number;
   sidebarWidth: number;
 }
@@ -74,7 +75,6 @@ export interface UiState {
   pageVisible: boolean;
   /** Renderer performance mode derived from visibility/focus/battery. */
   perf: "full" | "background" | "stopped";
-  queueTab: "queue" | "recent";
   /** Remembered on this device across closing and reopening the player. */
   nowPlayingMode: NowPlayingMode;
   prefs: AppPrefs;
@@ -105,7 +105,6 @@ export interface AppStore extends CoreState, UiState {
   setMeta(meta: AppMeta): void;
   setWindowState(state: WindowState): void;
   setPageVisible(visible: boolean): void;
-  setQueueTab(tab: "queue" | "recent"): void;
   setNowPlayingMode(mode: NowPlayingMode): void;
   setPrefs(patch: Partial<AppPrefs>): void;
   setDrawerOpen(open: boolean): void;
@@ -114,7 +113,18 @@ export interface AppStore extends CoreState, UiState {
   runAction(actionId: string, target?: ActionTarget): void;
 }
 
-const defaultPanels: PanelState = { rightOpen: true, queueCollapsed: false, lyricsCollapsed: false, splitRatio: 0.55, rightWidth: 340, sidebarWidth: 220 };
+const defaultPanels: PanelState = { rightOpen: true, rightView: "overview", rightWidth: 360, sidebarWidth: 220 };
+
+/** The remembered panels, minus anything an older build stored (the queue/lyrics split). */
+function loadPanels(): PanelState {
+  const saved = loadLocal<Partial<PanelState> & Record<string, unknown>>("panels", {});
+  const panels: PanelState = { ...defaultPanels };
+  if (typeof saved.rightOpen === "boolean") panels.rightOpen = saved.rightOpen;
+  if (typeof saved.rightWidth === "number") panels.rightWidth = saved.rightWidth;
+  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = saved.sidebarWidth;
+  if (SIDE_VIEWS.includes(saved.rightView as SideView)) panels.rightView = saved.rightView as SideView;
+  return panels;
+}
 
 export const useApp = create<AppStore>((set, get) => ({
   ...initialCoreState,
@@ -123,7 +133,7 @@ export const useApp = create<AppStore>((set, get) => ({
   route: { view: "home" },
   history: [],
   future: [],
-  panels: { ...defaultPanels, ...loadLocal<Partial<PanelState>>("panels", {}) },
+  panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
   contextMenu: undefined,
@@ -135,7 +145,6 @@ export const useApp = create<AppStore>((set, get) => ({
   accent: undefined,
   pageVisible: true,
   perf: "full",
-  queueTab: "queue",
   nowPlayingMode: loadNowPlayingMode(),
   prefs: { closeToTray: true },
   drawerOpen: false,
@@ -172,10 +181,6 @@ export const useApp = create<AppStore>((set, get) => ({
     const panels = { ...get().panels, ...patch };
     saveLocal("panels", panels);
     set({ panels });
-    // The divider ratio is also a registry setting (device-local) so the core can back it up.
-    if (patch.splitRatio !== undefined && get().ready) {
-      bridge().dispatch({ type: "setSetting", data: { key: SK.displayQueuePanelSplit, value: JSON.stringify(Math.round(patch.splitRatio * 100) / 100) } });
-    }
   },
   setFullscreen(on) {
     set({ fullscreen: on, contextMenu: undefined });
@@ -221,9 +226,6 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ pageVisible });
     recomputePerf();
   },
-  setQueueTab(queueTab) {
-    set({ queueTab });
-  },
   setNowPlayingMode(nowPlayingMode) {
     saveLocal("nowPlayingMode", nowPlayingMode);
     set({ nowPlayingMode });
@@ -249,9 +251,10 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 }));
 
+/** The mode the player was last left in; the queue the first time. */
 function loadNowPlayingMode(): NowPlayingMode {
-  const v = loadLocal<string>("nowPlayingMode", "art");
-  return (NOW_PLAYING_MODES as readonly string[]).includes(v) ? (v as NowPlayingMode) : "art";
+  const v = loadLocal<string>("nowPlayingMode", "queue");
+  return (NOW_PLAYING_MODES as readonly string[]).includes(v) ? (v as NowPlayingMode) : "queue";
 }
 
 /** Whether the window is in the narrow layout (lib/media.ts NARROW). */
@@ -259,11 +262,43 @@ export function isNarrow(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches;
 }
 
-/** Show or hide the side panel: the in-flow panel normally, the drawer when narrow. */
-export function toggleSidePanel(open?: boolean): void {
+/** Whether the side panel is showing: the in-flow panel normally, the drawer when narrow. */
+export function sidePanelOpen(): boolean {
   const app = useApp.getState();
-  if (isNarrow()) app.setDrawerOpen(open ?? !app.drawerOpen);
-  else app.setPanels({ rightOpen: open ?? !app.panels.rightOpen });
+  return isNarrow() ? app.drawerOpen : app.panels.rightOpen;
+}
+
+function setSidePanelOpen(open: boolean): void {
+  const app = useApp.getState();
+  if (isNarrow()) app.setDrawerOpen(open);
+  else if (app.panels.rightOpen !== open) app.setPanels({ rightOpen: open });
+}
+
+/** Show or hide the side panel; showing it starts on the overview. */
+export function toggleSidePanel(open?: boolean): void {
+  const next = open ?? !sidePanelOpen();
+  if (next) useApp.getState().setPanels({ rightView: "overview" });
+  setSidePanelOpen(next);
+}
+
+/**
+ * The player bar's lyrics and queue buttons (and L / Q): show the side panel straight on that
+ * view, or close it when it is already showing it.
+ */
+export function toggleSideView(view: SideView): void {
+  const app = useApp.getState();
+  if (sidePanelOpen() && app.panels.rightView === view) {
+    setSidePanelOpen(false);
+    return;
+  }
+  app.setPanels({ rightView: view });
+  setSidePanelOpen(true);
+}
+
+/** Show the side panel on `view` (a drill-in, or back to the overview). */
+export function showSideView(view: SideView): void {
+  useApp.getState().setPanels({ rightView: view });
+  setSidePanelOpen(true);
 }
 
 /** Typed query helper: `await queryAs({ type: "album", data: { id } }, "albumDetail")`. */
@@ -300,12 +335,7 @@ export function connectStore(): () => void {
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
     if (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps")) recomputePerf();
-    if (snapshot) {
-      recomputePerf();
-      // Use the core's remembered split when this browser profile has none yet.
-      const split = settingValue(useApp.getState(), SK.displayQueuePanelSplit, undefined as number | undefined);
-      if (split !== undefined && loadLocal<Partial<PanelState>>("panels", {}).splitRatio === undefined) useApp.setState((st) => ({ panels: { ...st.panels, splitRatio: Math.max(0.15, Math.min(0.85, split)) } }));
-    }
+    if (snapshot) recomputePerf();
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));
