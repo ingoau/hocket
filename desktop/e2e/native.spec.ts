@@ -70,6 +70,9 @@ test.describe("real core against a fake Navidrome", () => {
       await expect(page.getByTestId("view-album")).toBeVisible();
       await expect(page.getByTestId("track-row")).toHaveCount(6);
       await page.getByTestId("album-play").click();
+      // The side panel opens on its overview; its queue button shows the queue.
+      await page.getByTestId("toggle-queue").click();
+      await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
       await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
       await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
@@ -103,7 +106,9 @@ test.describe("real core against a fake Navidrome", () => {
       await page.keyboard.press("Control+z");
       await expect(row.locator(".stars .star.on")).toHaveCount(0, { timeout: 10_000 });
 
-      // Lyrics from getLyricsBySongId render (line tier) in the right panel.
+      // Lyrics from getLyricsBySongId render (line tier) in the side panel's lyrics view.
+      await page.getByTestId("toggle-lyrics").click();
+      await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "lyrics");
       await expect(page.getByTestId("lyrics-view")).toBeVisible({ timeout: 20_000 });
       await expect(page.getByTestId("lyrics-view")).toHaveAttribute("data-tier", "line");
       expect(server.callsTo("getLyricsBySongId").length).toBeGreaterThan(0);

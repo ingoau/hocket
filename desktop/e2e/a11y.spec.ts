@@ -2,21 +2,23 @@
 // both themes, against the FakeCore (which serves syllable lyrics). Zero
 // violations of any impact; see a11y-helpers.ts for the (empty) exemptions.
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, showSideView, test } from "./fixtures";
 import { expectNoViolations, playShowcase, serverId, setTheme } from "./a11y-helpers";
 
 const THEMES = ["light", "dark"] as const;
 
-/** Something in every panel: an album queue with the syllable-lyrics track current, and a saved queue in Recent. */
+/** Something in every panel: an album queue with the syllable-lyrics track current, and a saved queue in Recent. Leaves the side panel on the lyrics. */
 async function populate(page: Page): Promise<void> {
   await page.getByTestId("nav-albums").click();
   await page.getByTestId("grid-tile").nth(1).dblclick();
   await page.getByTestId("album-play").click();
+  await showSideView(page, "queue");
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
   await playShowcase(page);
   const sid = await serverId(page);
   await page.evaluate((s) => window.hocket.dispatch({ type: "playNext", data: { server_id: s, track_ids: ["tr-2", "tr-3"] } }), sid);
   await expect(page.getByTestId("queue-row-next").first()).toBeVisible();
+  await showSideView(page, "lyrics");
   // The first syllable line is active from 1.5 s.
   await expect(page.locator('[data-testid="lyrics-sr-list"] li[aria-current="true"]')).toHaveCount(1, { timeout: 10_000 });
 }
@@ -77,11 +79,28 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("view-search")).toBeVisible();
       await page.waitForTimeout(300);
       await expectNoViolations(page, `${theme} search results`);
-      // The Recent tab of the side panel (saved queues).
-      await page.getByTestId("tab-recent").click();
+      // Every view of the side panel: the overview, the queue and its selector, Recent queues, About.
+      const panel = page.getByTestId("right-panel");
+      await page.getByTestId("sidebar-back").click();
+      await expect(panel).toHaveAttribute("data-view", "overview");
+      await expect(page.getByTestId("sidebar-lyrics-card")).toBeVisible();
+      await expectNoViolations(page, `${theme} side panel overview`);
+      await page.getByTestId("sidebar-upnext-card-link").click();
+      await expect(panel.getByTestId("queue-row-current")).toBeVisible();
+      await expectNoViolations(page, `${theme} side panel queue`);
+      await panel.getByTestId("queue-selector").click();
+      await expect(page.getByTestId("queue-selector-menu")).toBeVisible();
+      await expectNoViolations(page, `${theme} queue selector`);
+      await page.getByTestId("queue-selector-all").click();
       await expect(page.getByTestId("saved-queues").or(page.getByTestId("saved-queues-empty"))).toBeVisible();
-      await expectNoViolations(page, `${theme} recent tab`);
-      await page.getByTestId("tab-queue").click();
+      await expectNoViolations(page, `${theme} recent queues`);
+      await page.getByTestId("sidebar-back").click();
+      await page.getByTestId("sidebar-back").click();
+      await page.getByTestId("sidebar-about-card-link").click();
+      await expect(panel.getByTestId("np-about")).toContainText("Duration");
+      await expectNoViolations(page, `${theme} side panel about`);
+      await page.getByTestId("sidebar-back").click();
+      await showSideView(page, "lyrics");
     }
   });
 
@@ -106,18 +125,31 @@ test.describe("axe: no violations anywhere", () => {
     await populate(page);
     for (const theme of THEMES) {
       await setTheme(page, theme);
-      // Fullscreen player: the artwork, then each pane.
+      // Fullscreen player: the artwork, then each view (it opens on the one it was left on, the queue the first time).
       await page.getByTestId("toggle-fullscreen").click();
-      await expect(page.getByTestId("fullscreen-player")).toBeVisible();
+      const fs = page.getByTestId("fullscreen-player");
+      await expect(fs).toBeVisible();
+      const opened = await fs.getAttribute("data-mode");
+      if (opened !== "art") await page.getByTestId(`fs-mode-${opened}`).click();
+      await expect(fs).toHaveAttribute("data-mode", "art");
       await page.waitForTimeout(700);
       await expectNoViolations(page, `${theme} fullscreen/artwork`);
+      await page.getByTestId("fs-pill-volume").click();
+      await expect(page.getByTestId("fs-volume-popover")).toBeVisible();
+      await expectNoViolations(page, `${theme} fullscreen/volume`);
+      await page.keyboard.press("Escape");
       for (const mode of ["lyrics", "queue", "about"]) {
         await page.getByTestId(`fs-mode-${mode}`).click();
         await page.waitForTimeout(700);
         await expectNoViolations(page, `${theme} fullscreen/${mode}`);
       }
+      await page.getByTestId("fs-mode-queue").click();
+      await fs.getByTestId("queue-selector").click();
+      await expect(page.getByTestId("queue-selector-menu")).toBeVisible();
+      await expectNoViolations(page, `${theme} fullscreen/queue selector`);
+      await page.keyboard.press("Escape");
       // Back to the artwork for the next theme.
-      await page.getByTestId("fs-mode-about").click();
+      await page.getByTestId("fs-mode-queue").click();
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
       // Command palette with results and actions.
@@ -186,6 +218,7 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("toast").first()).toBeVisible();
       await expectNoViolations(page, `${theme} toast`);
       await page.evaluate(() => window.hocket.dispatch({ type: "undo" }));
+      await showSideView(page, "queue");
       await expect(page.getByTestId("queue-row-current")).toHaveCount(1);
     }
   });

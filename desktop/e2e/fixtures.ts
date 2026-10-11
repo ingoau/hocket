@@ -58,6 +58,7 @@ export async function completeSetup(page: Page): Promise<void> {
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 
+/** Plays the first album and shows the queue in the side panel (its overview is the default view). */
 export async function playFirstAlbum(page: Page): Promise<void> {
   await page.getByTestId("nav-albums").click();
   const tile = page.getByTestId("grid-tile").first();
@@ -65,7 +66,16 @@ export async function playFirstAlbum(page: Page): Promise<void> {
   await tile.dblclick();
   await expect(page.getByTestId("view-album")).toBeVisible();
   await page.getByTestId("album-play").click();
+  await showSideView(page, "queue");
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
+}
+
+/** Shows the side panel on `view` with the player bar's buttons, as a user would. */
+export async function showSideView(page: Page, view: "lyrics" | "queue"): Promise<void> {
+  const panel = page.getByTestId("right-panel");
+  if ((await panel.count()) && (await panel.getAttribute("data-view")) === view) return;
+  await page.getByTestId(view === "queue" ? "toggle-queue" : "toggle-lyrics").click();
+  await expect(panel).toHaveAttribute("data-view", view);
 }
 
 /** Pick `value` in one of the app's Select comboboxes (components/controls.tsx) by pointer, like a user. */

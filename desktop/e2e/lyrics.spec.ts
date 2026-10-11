@@ -2,13 +2,14 @@
 // background-vocal agent) document for one track; the AMLL renderer must sweep
 // word by word, show the background line as a sub-line, and size itself from
 // the device-local preference.
-import { completeSetup, expect, test, chooseOption } from "./fixtures";
+import { completeSetup, expect, test, chooseOption, showSideView } from "./fixtures";
 
 async function playShowcase(page: import("@playwright/test").Page): Promise<void> {
   const servers = await page.evaluate(async () => (await window.hocket.query({ type: "servers" })) as { type: string; data: { id: string }[] });
   const serverId = servers.data[0]!.id;
   await page.evaluate((sid) => window.hocket.dispatch({ type: "playTracks", data: { server_id: sid, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } }), serverId);
-  await expect(page.getByTestId("queue-row-current")).toContainText("Word by Word");
+  await expect(page.getByTestId("player-bar").locator(".now .title")).toContainText("Word by Word");
+  await showSideView(page, "lyrics");
 }
 
 test.describe("lyrics", () => {
@@ -68,12 +69,13 @@ test.describe("lyrics", () => {
     const fontPx = () => player.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
     const vh = await page.evaluate(() => window.innerHeight);
     const medium = await fontPx();
-    // Far below AMLL's own 5vh default and never below 13px.
+    // Far below AMLL's own 5vh default and never below 13px (the side panel's lyrics view has the
+    // pane's whole height, so its lines are a little larger than the old half-height pane's).
     expect(medium).toBeLessThan(vh * 0.05);
     expect(medium).toBeGreaterThanOrEqual(13);
-    expect(medium).toBeLessThanOrEqual(19);
+    expect(medium).toBeLessThanOrEqual(24);
     await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "medium");
-    await page.getByTestId("lyrics-pane").hover();
+    await page.getByTestId("lyrics-view").hover();
     await page.getByTestId("lyrics-size-small").click();
     await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "small");
     const small = await fontPx();
@@ -92,7 +94,7 @@ test.describe("lyrics", () => {
     // The fullscreen player keeps its large layout regardless.
     await page.getByTestId("content").click();
     await page.keyboard.press("f");
-    // It opens on the artwork; L shows the lyrics in its place.
+    // It opens on the queue (the first time); L shows the lyrics instead.
     await page.keyboard.press("l");
     const fs = page.getByTestId("fullscreen-player").locator(".amll-lyric-player").first();
     await expect(fs).toBeVisible();

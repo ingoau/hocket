@@ -4,7 +4,7 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { completeSetup, expect, test, chooseOption } from "./fixtures";
+import { completeSetup, expect, test, chooseOption, showSideView } from "./fixtures";
 import { expectNoViolations, serverId, setTheme } from "./a11y-helpers";
 
 interface Prime { kind: string; id: string; trackId: string; outcome: string }
@@ -178,6 +178,7 @@ test.describe("cached and downloaded badges", () => {
     await gotoAlbum(app, page, await albumWhere(page, "none"));
     await expect(page.getByTestId("album-tracks").getByTestId("offline-badge")).toHaveCount(0);
     await page.getByTestId("album-play").click();
+    await showSideView(page, "queue");
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
     await expect(page.getByTestId("queue-row-current").locator('[data-testid="offline-badge"][data-state="cached"]')).toBeVisible({ timeout: 12_000 });
     await expect(page.getByTestId("queue-row-upcoming").nth(1).locator('[data-state="cached"]')).toBeVisible();
@@ -248,6 +249,7 @@ test.describe("available offline", () => {
     await expect(page.getByTestId("available-offline")).toBeVisible();
     // Playing from what's available works offline: no skipping notice.
     await page.getByTestId("available-offline-table").getByTestId("track-row").first().locator(".td.title").dblclick();
+    await showSideView(page, "queue");
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
     await expect(page.getByTestId("offline-banner-text")).toHaveText("Offline");
     // Back online: the core's NetworkChanged takes the banner away.
