@@ -19,6 +19,7 @@ import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
+import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { Select, Slider, Switch } from "../components/controls";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
@@ -488,9 +489,25 @@ function Appearance() {
         <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
       </Row>
       <Toggle settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} />
+      <IdleHideRow />
       <LyricsSizeRow />
       <LyricsAnimatedRow />
     </>
+  );
+}
+
+function IdleHideRow() {
+  const on = useIdleHide();
+  return (
+    <div className="setting-row">
+      <div className="label">
+        <div className="title">{t("settings.fullscreenIdleHide")}<span className="badge">{t("settings.scope.local")}</span></div>
+        <div className="desc" id="idle-hide-desc">{t("settings.fullscreenIdleHideDesc")}</div>
+      </div>
+      <div className="control">
+        <Switch checked={on} onChange={(checked) => setIdleHide(checked)} aria-label={t("settings.fullscreenIdleHide")} aria-describedby="idle-hide-desc" data-testid="setting-fullscreen-idle-hide" />
+      </div>
+    </div>
   );
 }
 
