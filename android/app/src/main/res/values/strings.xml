@@ -426,6 +426,8 @@
     <string name="settings_immersive_automatic">Automatic</string>
     <string name="settings_immersive_always">Always</string>
     <string name="settings_immersive_never">Never</string>
+    <string name="settings_player_rating">Rating in the player</string>
+    <string name="settings_player_rating_body">Show the star rating under the song. Off leaves it in the song\'s menu and details.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_replay_gain">ReplayGain</string>
     <string name="settings_rg_off">Off</string>

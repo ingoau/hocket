@@ -128,6 +128,8 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         val immersiveOptions = listOf("automatic" to stringResource(R.string.settings_immersive_automatic), "always" to stringResource(R.string.settings_immersive_always), "never" to stringResource(R.string.settings_immersive_never))
         SettingRow(stringResource(R.string.settings_immersive), stringResource(R.string.settings_immersive_body), scope = immersive.scope, tag = "display.immersiveArtwork")
         ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+        val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
+        SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, stringResource(R.string.settings_player_rating_body), playerRating.scope, tag = "display.playerRating")
     }
 }
 

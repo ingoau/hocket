@@ -391,6 +391,7 @@ const STRINGS = {
   "settings.immersiveArtwork.automatic": "Automatic",
   "settings.immersiveArtwork.always": "Always",
   "settings.immersiveArtwork.never": "Never",
+  "settings.playerRating": "Show the rating in the player",
   "settings.closeToTray": "Keep running in the tray when the window is closed",
   "settings.sidebarItems": "Sidebar items",
   "settings.contextMenuItems": "Context menu items",

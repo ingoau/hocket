@@ -487,6 +487,7 @@ function Appearance() {
       <Row title={t("settings.immersiveArtwork")} settingKey={SK.displayImmersiveArtwork}>
         <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
       </Row>
+      <Toggle settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} />
       <LyricsSizeRow />
       <LyricsAnimatedRow />
     </>

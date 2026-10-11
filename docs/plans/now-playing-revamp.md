@@ -201,6 +201,14 @@ Main files: `ui/player/NowPlayingPage.kt`, `NowPlayingSheet.kt`, `Transport.kt`,
 
 The user wants the prototypes' vibe kept: shapes, proportions and spacing. **The user also said (10 Oct): "if you think something is better, use it instead. you don't need to follow exactly."** So the numbers below are a reference. Where something is better, do that instead and say why in the final summary.
 
+**The user also said (12 Oct): "this is a material 3 expressive styled app. Prioritise its standards over that prototype unless it significantly changes it."** So follow M3 Expressive wherever it differs from the prototype:
+- component specs: button groups and connected button groups, split buttons, FAB and toolbar sizes, shape morphing on press, the shape scale;
+- motion: spring tokens;
+- type: the emphasized type scale;
+- touch targets.
+
+Keep the prototype's structure and overall feel.
+
 Deviations already planned:
 - Mobile bottom-row buttons are 48 dp (Material's minimum touch target), not 44 dp.
 - Desktop sizes snap to the app's existing radius and spacing tokens rather than the exact measured values.

@@ -17,6 +17,8 @@ export const SK = {
   displayQueuePanelSplit: "display.queuePanelSplit",
   /** "automatic" | "always" | "never": the fullscreen player's immersive artwork. */
   displayImmersiveArtwork: "display.immersiveArtwork",
+  /** Whether the player shows the star rating (bar, sidebar, fullscreen). Synced. */
+  displayPlayerRating: "display.playerRating",
   syncEnabled: "sync.enabled",
   connectCoordinatorUrl: "connect.coordinatorUrl",
   connectLanDiscovery: "connect.lanDiscovery",
