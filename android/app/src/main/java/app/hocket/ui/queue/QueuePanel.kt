@@ -122,29 +122,25 @@ fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
  * only (e.g. room for controls drawn over its bottom edge).
  *
  * The toggles head the list, or with [controlsAtBottom] (the full player's queue, #40) float at its
- * bottom on a gradient of the backdrop the list scrolls under, fading out before them.
+ * bottom straight on the backdrop, the list fading out before them (nothing is drawn behind them).
  */
 @Composable
 fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier, controlsAtBottom: Boolean = false) {
     val dir = LocalLayoutDirection.current
     if (controlsAtBottom) {
         val strip = QUEUE_CONTROLS_STRIP
-        // The player's backdrop (dark, from the artwork) faded in under the toggles and out again
-        // at the slot's bottom, which has no edge of its own now.
-        val fade = MaterialTheme.colorScheme.surface
         Box(modifier) {
             QueueTimeline(
                 Modifier.fillMaxSize().then(listModifier).fadeUnder(strip).testTag("queue.timeline"),
                 PaddingValues(
                     start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
-                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 24.dp,
+                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp,
                 ),
             )
             QueueModeHeader(
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to fade.copy(alpha = 0f), 0.45f to fade.copy(alpha = 0.38f), 0.8f to fade.copy(alpha = 0.38f), 1f to fade.copy(alpha = 0f)))
                     .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = STRIP_TOP_PAD, bottom = 12.dp)
                     .testTag("queue.controls"),
                 labels = true,
@@ -177,7 +173,8 @@ private fun Modifier.fadeUnder(strip: androidx.compose.ui.unit.Dp): Modifier = t
         val gone = (size.height - strip.toPx() + STRIP_TOP_PAD.toPx() - 6.dp.toPx()).coerceIn(0f, size.height)
         val from = (gone - FADE.toPx()).coerceAtLeast(0f)
         drawRect(
-            Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = from, endY = gone),
+            // Eased like the lyrics' edges: mostly gone over the last half.
+            Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = from, endY = gone),
             topLeft = androidx.compose.ui.geometry.Offset(0f, from),
             size = size.copy(height = gone - from),
             blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
@@ -186,7 +183,7 @@ private fun Modifier.fadeUnder(strip: androidx.compose.ui.unit.Dp): Modifier = t
     }
 
 /** How far the list fades out above the toggles' backing, and the room above the toggles in their strip. */
-private val FADE = 36.dp
+private val FADE = 56.dp
 private val STRIP_TOP_PAD = 20.dp
 
 /**

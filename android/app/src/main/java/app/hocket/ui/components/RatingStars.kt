@@ -49,7 +49,9 @@ import kotlin.math.roundToInt
  * For a screen reader the stars are ONE adjustable control, "Rating, 3 of 5 stars": swipe up/down
  * (or the volume keys) steps it through 0..5 (`setProgress` over a 0..5 range with whole steps), and
  * a "Clear rating" action resets it. The single node is at least 48 dp tall; the individual stars
- * are pointer targets only. [spacing] is the gap between stars (their touch cells share it).
+ * are pointer targets only. [spacing] is the gap between stars (their touch cells share it);
+ * [verticalAlignment] places them in that 48 dp row (the player tops them, so the row's touch area
+ * hangs below the stars rather than spacing them off the text above).
  */
 @Composable
 fun RatingStars(
@@ -60,6 +62,7 @@ fun RatingStars(
     tint: Color = MaterialTheme.colorScheme.primary,
     spacing: Dp = 12.dp,
     emptyTint: Color = MaterialTheme.colorScheme.outline,
+    verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
 ) {
     val haptics = LocalHapticFeedback.current
     val resources = androidx.compose.ui.platform.LocalResources.current
@@ -114,7 +117,7 @@ fun RatingStars(
                 }
             },
         horizontalArrangement = Arrangement.spacedBy(spacing),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = verticalAlignment,
     ) {
         for (i in 1..5) {
             val filled = i <= shown

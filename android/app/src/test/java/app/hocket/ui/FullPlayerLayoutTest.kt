@@ -206,8 +206,12 @@ class FullPlayerLayoutTest {
         val thumb = bounds("player.artwork")
         val capTop = baseline(track.title) - titleCapHeight()
         val stars = bounds("rating")
-        // The star glyphs' bottom: the 48 dp row less half its slack and the glyph's own inset.
-        val starBottom = stars.bottom - ((48f - 20f) / 2f + 20f * 4.05f / 24f) * dp
+        // The star glyphs' bottom: the stars sit at the top of their 48 dp row; the glyph ends
+        // above its 20 dp icon's bottom by its own inset.
+        val starBottom = stars.top + (20f - 20f * 4.05f / 24f) * dp
+        // Right under the artist line, touching but not overlapping the title block (whose taps
+        // open the details).
+        assertEquals("stars right under the title block", bounds("player.title").bottom + 1f * dp, stars.top, 1f)
         assertEquals("thumbnail top on the title's cap height", capTop, thumb.top, 2f)
         assertEquals("thumbnail bottom on the star glyphs' bottom", starBottom, thumb.bottom, 2f)
         assertEquals("square", thumb.width, thumb.height, 1f)

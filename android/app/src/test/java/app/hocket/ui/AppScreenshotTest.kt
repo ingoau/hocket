@@ -35,6 +35,8 @@ import java.io.File
  *
  *     HOCKET_SCREENSHOT_DIR=/tmp/shots ./gradlew :app:testDebugUnitTest --tests '*AppScreenshotTest*' --rerun
  *
+ * (`HOCKET_SCREENSHOT_ONLY=11-queue,12-lyrics` writes only the shots whose names contain one of those.)
+ *
  * The debug build's "Core not built" banner (Robolectric can only run the fake core) is switched off
  * here ([LocalFakeCoreBanner]), so the captures show the screens as a user sees them.
  */
@@ -279,7 +281,12 @@ class AppScreenshotTest {
      * Robolectric's capture draws a sheet's window blank, so those are drawn here with the view's
      * own draw, which renders Compose's layers under Robolectric's native graphics.
      */
+    /** `HOCKET_SCREENSHOT_ONLY=11-queue,12-lyrics`: write only the shots whose names contain one of these. */
+    private val only: List<String>? = (System.getProperty("hocket.screenshotOnly") ?: System.getenv("HOCKET_SCREENSHOT_ONLY"))
+        ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.takeIf { it.isNotEmpty() }
+
     private fun shot(dir: File, name: String) {
+        if (only != null && only.none { name.contains(it) }) return
         val bitmap = compose.onAllNodes(isRoot())[0].captureToImage().asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, true)
         val canvas = android.graphics.Canvas(bitmap)
         val activityDecor = compose.activity.window.decorView

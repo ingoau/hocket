@@ -99,6 +99,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -579,7 +580,16 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                             spacing = 8.dp,
                             tint = MaterialTheme.colorScheme.primary,
                             emptyTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) },
+                            // Right under the artist line: the stars at the top of their 48 dp row, whose
+                            // touch area hangs below them past the room it takes in the layout.
+                            verticalAlignment = Alignment.Top,
+                            modifier = Modifier
+                                .layout { m, c ->
+                                    val p = m.measure(c)
+                                    val gap = STAR_GAP.roundToPx()
+                                    layout(p.width, p.height - STAR_TOUCH_OVERHANG.roundToPx() + gap) { p.place(0, gap) }
+                                }
+                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) },
                         )
                     }
                 }
@@ -606,8 +616,9 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val first = t[FirstBaseline]
         val last = t[LastBaseline]
         val top = if (first == AlignmentLine.Unspecified) 0 else (first - capHeight).roundToInt().coerceAtLeast(0)
-        // The stars' row is 48 dp tall around 20 dp icons, whose star glyph ends ~17% above the icon's bottom.
-        val starsSlack = ((48.dp - STAR_SIZE) / 2 + STAR_SIZE * STAR_GLYPH_BOTTOM_INSET).roundToPx()
+        // The stars sit at the top of their row (48 dp less what hangs below the layout); the
+        // star glyph ends ~17% above its icon's bottom.
+        val starsSlack = (48.dp - STAR_TOUCH_OVERHANG - STAR_SIZE + STAR_SIZE * STAR_GLYPH_BOTTOM_INSET).roundToPx()
         val bottom = when {
             showRating -> t.height - starsSlack
             last != AlignmentLine.Unspecified -> last
@@ -630,6 +641,13 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
 
 /** The stars' size in the title block. */
 private val STAR_SIZE = 20.dp
+/**
+ * How much of the stars' 48 dp touch row hangs below the room it takes in the layout: the title
+ * row's bottom padding and the seek bar's least gap, so it never reaches the seek bar.
+ */
+private val STAR_TOUCH_OVERHANG = 8.dp
+/** The room between the artist line (trimmed to its text) and the stars' icons. */
+private val STAR_GAP = 1.dp
 /** How far above its icon's bottom the star glyph ends (Material Symbols "star": 4 of 24 units). */
 private const val STAR_GLYPH_BOTTOM_INSET = 4.05f / 24f
 /** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
@@ -665,7 +683,8 @@ private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 private fun TrackLines(track: TrackSummary, compact: Boolean, tagged: Boolean = true) {
     Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.ExtraBold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        val sub = MaterialTheme.typography.bodyLarge
+        // The line box trimmed under the text, so the stars sit just below its descenders.
+        val sub = MaterialTheme.typography.bodyLarge.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.LastLineBottom))
         val subColor = MaterialTheme.colorScheme.onSurfaceVariant
         Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false).then(if (tagged) Modifier.testTag("player.artist") else Modifier))
