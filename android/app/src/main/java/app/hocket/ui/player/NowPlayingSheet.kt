@@ -103,9 +103,10 @@ import kotlin.math.sqrt
 enum class SheetValue { Collapsed, Expanded }
 
 /**
- * What fills the full player's big area: the artwork, or lyrics, the queue or the song's details in
- * its place (the artwork then sits small beside the title). Kept across collapsing and expanding
- * the player and across rotation (Apple Music).
+ * What fills the full player's big area: the artwork, or lyrics or the queue in its place (the
+ * artwork then sits small beside the title). Kept across collapsing and expanding the player and
+ * across rotation (Apple Music). [About] is no longer shown in the area (the song's details are a
+ * sheet from the title); it stays so a saved state that names it still restores (to [Artwork]).
  */
 enum class PlayerMode { Artwork, Lyrics, Queue, About }
 
@@ -173,7 +174,8 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
                 val parts = saved.split("|")
                 NowPlayingSheetState(
                     SheetValue.valueOf(parts[0]),
-                    parts.getOrNull(1)?.let { m -> PlayerMode.entries.firstOrNull { it.name == m } } ?: PlayerMode.Artwork,
+                    // About is a sheet now (from the title): a saved About mode opens on the artwork.
+                    parts.getOrNull(1)?.let { m -> PlayerMode.entries.firstOrNull { it.name == m } }?.takeIf { it != PlayerMode.About } ?: PlayerMode.Artwork,
                 )
             },
         )

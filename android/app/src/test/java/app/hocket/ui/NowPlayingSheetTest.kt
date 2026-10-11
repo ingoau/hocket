@@ -401,5 +401,7 @@ class NowPlayingSheetTest {
         assertEquals(app.hocket.ui.player.SheetValue.Expanded, restored.draggable.currentValue)
         // A value saved before modes existed restores to the artwork.
         assertEquals(app.hocket.ui.player.PlayerMode.Artwork, saver.restore("Collapsed")!!.mode)
+        // About became a sheet: a state saved in About opens on the artwork.
+        assertEquals(app.hocket.ui.player.PlayerMode.Artwork, saver.restore("Expanded|About")!!.mode)
     }
 }

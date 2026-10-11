@@ -387,9 +387,8 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
             modifier = Modifier.fillMaxSize(),
         ) { m ->
             when (m) {
-                PlayerMode.Artwork -> Spacer(Modifier.fillMaxSize())
-                // About is the info sheet now; an old saved mode shows the queue.
-                PlayerMode.Queue, PlayerMode.About -> ModePanel(hero) { QueueList(Modifier.fillMaxSize(), controlsAtBottom = true, listModifier = Modifier.fadingEdges()) }
+                PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
+                PlayerMode.Queue -> ModePanel(hero) { QueueList(Modifier.fillMaxSize(), controlsAtBottom = true, listModifier = Modifier.fadingEdges()) }
                 PlayerMode.Lyrics -> ModePanel(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize().fadingEdges(), embedded = true) }
             }
         }
