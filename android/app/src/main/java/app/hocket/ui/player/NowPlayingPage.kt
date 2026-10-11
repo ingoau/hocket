@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -130,12 +131,12 @@ import kotlin.math.roundToInt
  * The full player (#40's prototypes, made Material 3 Expressive). Top to bottom:
  *
  * - the drag handle (a tap collapses the player);
- * - the mode area: the big artwork in [PlayerMode.Artwork], or a rounded tonal panel in its place
- *   holding the lyrics or the queue (the artwork then sits small beside the title);
+ * - the mode area: the big artwork in [PlayerMode.Artwork], or the lyrics or the queue in its place,
+ *   straight on the player's backdrop (the artwork then sits small beside the title);
  * - the title row: a thumbnail slot (lyrics / queue), title and "artist · album" (a tap opens the
  *   song's details in a sheet), the star rating (draggable; hidden by `display.playerRating`) and a
  *   tonal add-to-playlist button;
- * - spread over what is left: a resume offer when there is one, the wavy seek bar with elapsed and
+ * - spread over what is left: the wavy seek bar with elapsed and
  *   remaining time and, between them, "Playing on <device>" (only while another device plays) or
  *   the current notice; the transport button group (play/pause shows a loading indicator while
  *   buffering); and the action row: the queue's name as a split button (the name opens the queue,
@@ -181,6 +182,10 @@ internal fun FullPlayer(
     var queues by remember { mutableStateOf(false) }
     var sleepSheet by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var lyricsTiming by remember { mutableStateOf(false) }
+    // While the lyrics show, the song menu offers their timing (the row that sat under them).
+    val lyricsDoc = if (mode == PlayerMode.Lyrics) app.hocket.ui.lyrics.rememberCurrentLyrics().lyrics else null
+    val timingLabel = stringResource(R.string.player_lyrics_timing)
     val songMenu = app.hocket.ui.components.rememberSongMenu()
     val sleepLabel = stringResource(R.string.player_sleep_timer)
     val resources = androidx.compose.ui.platform.LocalResources.current
@@ -194,7 +199,11 @@ internal fun FullPlayer(
         val sleep = client.sleepTimer.value
         val sleepState = sleep?.let { t -> t.endsAt?.let { resources.getString(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: resources.getString(R.string.sleep_active_end_of_track) }
         track?.let {
-            songMenu.open(it, extras = listOf(app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
+            val timing = lyricsDoc?.let { doc ->
+                app.hocket.ui.components.SongMenuExtra(timingLabel, HocketIcons.Filled.Tune, onClick = { lyricsTiming = true },
+                    supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming")
+            }
+            songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
                 onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")))
         }
         Unit
@@ -214,7 +223,6 @@ internal fun FullPlayer(
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onAddTo = { addTo = true }) },
                 items = listOf(
-                    { ResumeOfferLine() },
                     { PlayerSeek(position) },
                     {
                         val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -273,6 +281,7 @@ internal fun FullPlayer(
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
     if (queues) QueueSwitcherSheet(onDismiss = { queues = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
+    if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
@@ -286,8 +295,8 @@ private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
 private val TRANSPORT_HEIGHT = 84.dp
 
-/** The least gap above each of the [PlayerLayout] items (resume offer, seek bar, transport, actions). */
-private val ITEM_GAPS = listOf(0.dp, 4.dp, 12.dp, 16.dp)
+/** The least gap above each of the [PlayerLayout] items (seek bar, transport, actions). */
+private val ITEM_GAPS = listOf(4.dp, 12.dp, 16.dp)
 
 /**
  * The page's layout: the header, the mode area at the artwork's size (as large as the width
@@ -369,9 +378,9 @@ private val HANDLE_AREA = 48.dp
 
 /**
  * The mode area: empty in artwork mode (the one artwork is drawn over it), else Lyrics or the Queue
- * on a rounded tonal panel exactly where the artwork was, crossfading with a slight grow as the
- * artwork shrinks away. Its bounds go to [hero] (the big artwork sits at their top). Lists fade out
- * at the panel's top and bottom edges.
+ * in the artwork's slot ([ModeSlot]), crossfading with a slight grow as the artwork shrinks away.
+ * Its bounds go to [hero] (the big artwork sits at their top). Lists fade out at the slot's top and
+ * bottom edges.
  */
 @Composable
 private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean) {
@@ -388,20 +397,24 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
         ) { m ->
             when (m) {
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
-                PlayerMode.Queue -> ModePanel(hero) { QueueList(Modifier.fillMaxSize(), controlsAtBottom = true, listModifier = Modifier.fadingEdges()) }
-                PlayerMode.Lyrics -> ModePanel(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
+                // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
+                PlayerMode.Queue -> ModeSlot(hero) {
+                    QueueList(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
+                }
+                PlayerMode.Lyrics -> ModeSlot(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
             }
         }
     }
 }
 
 /**
- * The tonal panel lyrics and the queue sit on: the artwork's square, same corners (with an
- * immersive artwork, the area under the handle with the usual margins), a light wash over the
- * player's moving backdrop so it still shows through.
+ * Where lyrics and the queue sit: the artwork's slot (its top and bottom; with an immersive
+ * artwork, the area under the handle less the usual margin), across the page's full width, straight
+ * on the player's backdrop with no container. Content is clipped to the slot; the lists fade at its
+ * edges.
  */
 @Composable
-private fun ModePanel(hero: HeroGeometry, content: @Composable () -> Unit) {
+private fun ModeSlot(hero: HeroGeometry, content: @Composable () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
@@ -409,37 +422,30 @@ private fun ModePanel(hero: HeroGeometry, content: @Composable () -> Unit) {
                 val w = constraints.maxWidth
                 val h = constraints.maxHeight
                 val pad = ART_PAD.roundToPx()
-                val inset = PAGE_PADDING.roundToPx()
                 val side = hero.artSide.roundToInt()
-                val pw = if (hero.immersive || side <= 0) w - 2 * inset else minOf(side, w - 2 * inset)
-                val ph = if (hero.immersive || side <= 0) h - 2 * pad else minOf(side, h - 2 * pad)
-                val p = measurable.measure(Constraints.fixed(pw.coerceAtLeast(0), ph.coerceAtLeast(0)))
-                layout(w, h) { p.place((w - pw) / 2, pad) }
+                val sh = if (hero.immersive || side <= 0) h - 2 * pad else minOf(side, h - 2 * pad)
+                val p = measurable.measure(Constraints.fixed(w, sh.coerceAtLeast(0)))
+                layout(w, h) { p.place(0, pad) }
             }
-            .clip(RoundedCornerShape(HeroGeometry.HERO_CORNER))
-            .background(panelColor())
+            .clipToBounds()
             .testTag("player.panel"),
     ) { content() }
 }
 
-/** How far the lyric lines fade in and out at the panel's top and at the offset controls under them. */
+/** How far the lyric lines fade in and out at the slot's top and bottom. */
 private val LYRICS_FADE = 72.dp
 
-/** The mode panel's wash: the content colour, faint, over the player's backdrop. */
-@Composable
-private fun panelColor(): Color = LocalContentColor.current.copy(alpha = 0.10f)
-
 /**
- * Content scrolling out of the mode panel fades at its top and bottom edges instead of being cut:
+ * Content scrolling out of the mode slot fades at its top and bottom edges instead of being cut:
  * over [top] and [bottom] (the lyrics' big lines need the longer fade to dissolve rather than be
- * sliced by the panel's edge).
+ * sliced by the slot's edge).
  */
 private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
-        val top = top.toPx()
-        val bottom = bottom.toPx()
+        val top = top.toPx().coerceAtLeast(1f)
+        val bottom = bottom.toPx().coerceAtLeast(1f)
         // Eased: mostly gone over the outer half, so a line there dissolves rather than reads cut.
         drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Black, startY = 0f, endY = top), blendMode = BlendMode.DstIn, size = size.copy(height = top))
         drawRect(Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = size.height - bottom, endY = size.height), blendMode = BlendMode.DstIn, topLeft = Offset(0f, size.height - bottom), size = size.copy(height = bottom))
@@ -460,22 +466,6 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
         } else {
             TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onAddTo)
         }
-    }
-}
-
-/**
- * A resume offer from another device ("Laptop was playing …"): Resume here, or dismiss. Nothing
- * at all when there is none (the layout then gives it no gap).
- */
-@Composable
-private fun ResumeOfferLine() {
-    val client = LocalCoreClient.current
-    val resume by client.resumeOffer.collectAsStateWithLifecycle()
-    val offer = resume ?: return
-    Row(Modifier.fillMaxWidth().padding(start = PAGE_PADDING, end = PAGE_PADDING - 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(R.string.player_resume_offer, offer.deviceName, offer.track.title), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        TextButton(onClick = { client.dispatch(Command.ResumeHere) }, modifier = Modifier.testTag("player.resumeHere")) { Text(stringResource(R.string.player_resume_here)) }
-        IconButton(onClick = { client.dispatch(Command.DismissResumeOffer) }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_dismiss)) }
     }
 }
 

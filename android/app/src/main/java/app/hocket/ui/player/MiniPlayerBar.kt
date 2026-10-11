@@ -90,7 +90,6 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val transport by client.transport.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
-    val resume by client.resumeOffer.collectAsStateWithLifecycle()
     val track = entry?.track
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -100,11 +99,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val title = track?.title ?: ""
     val artist = track?.artist ?: stringResource(R.string.unknown_artist)
     val nowPlayingDesc = stringResource(R.string.player_mini_a11y, title, artist)
-    val sub = when {
-        notice != null -> notice
-        resume != null -> stringResource(R.string.player_resume_offer, resume!!.deviceName, resume!!.track.title)
-        else -> artist
-    }
+    val sub = notice ?: artist
     val desc = if (sub != artist) "$nowPlayingDesc. $sub" else nowPlayingDesc
     val expandLabel = stringResource(R.string.player_expand)
     val nextLabel = stringResource(R.string.action_next)

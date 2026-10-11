@@ -182,6 +182,17 @@ class AppScreenshotTest {
             click("player.mode.lyrics")
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
             shot(dir, "$prefix-12-lyrics")
+            // The lyrics' timing, from the song menu while they show.
+            click("player.more")
+            repeat(60) { compose.mainClock.advanceTimeByFrame() }
+            click("player.lyricsTiming")
+            // The sheet's window animates in on the looper's clock as well as the test's.
+            repeat(30) {
+                compose.mainClock.advanceTimeByFrame()
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50))
+            }
+            shot(dir, "$prefix-12b-lyrics-timing-sheet")
+            dismissSheet(frames = true)
             click("player.mode.lyrics")
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
             compose.mainClock.autoAdvance = true
@@ -223,14 +234,14 @@ class AppScreenshotTest {
     }
 
     /** Closes the sheet on top with its own back handling (the activity's dispatcher would not reach it). */
-    private fun dismissSheet() {
+    private fun dismissSheet(frames: Boolean = false) {
         val views = rootViews().filter { it !== compose.activity.window.decorView }
         views.lastOrNull()?.let { v ->
             val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK)
             val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK)
             compose.runOnUiThread { v.dispatchKeyEvent(down); v.dispatchKeyEvent(up) }
         }
-        settle()
+        if (frames) repeat(60) { compose.mainClock.advanceTimeByFrame() } else settle()
     }
 
     /** A semantics click, its state handed to composition even while the clock is stepped by hand. */

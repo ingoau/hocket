@@ -121,14 +121,16 @@ fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
  * from [LocalContentColor] and the (artwork-derived) [MaterialTheme]. [contentPadding] pads the list
  * only (e.g. room for controls drawn over its bottom edge).
  *
- * The toggles head the list, or with [controlsAtBottom] (the full player's queue panel, #40) float
- * at its bottom on a gradient the list scrolls under, fading out behind them.
+ * The toggles head the list, or with [controlsAtBottom] (the full player's queue, #40) float at its
+ * bottom on a gradient of the backdrop the list scrolls under, fading out before them.
  */
 @Composable
 fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier, controlsAtBottom: Boolean = false) {
     val dir = LocalLayoutDirection.current
     if (controlsAtBottom) {
         val strip = QUEUE_CONTROLS_STRIP
+        // The player's backdrop (dark, from the artwork) faded in under the toggles and out again
+        // at the slot's bottom, which has no edge of its own now.
         val fade = MaterialTheme.colorScheme.surface
         Box(modifier) {
             QueueTimeline(
@@ -142,8 +144,8 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to fade.copy(alpha = 0f), 0.45f to fade.copy(alpha = 0.28f), 1f to fade.copy(alpha = 0.42f)))
-                    .padding(start = 12.dp, end = 12.dp, top = STRIP_TOP_PAD, bottom = 12.dp)
+                    .background(Brush.verticalGradient(0f to fade.copy(alpha = 0f), 0.45f to fade.copy(alpha = 0.38f), 0.8f to fade.copy(alpha = 0.38f), 1f to fade.copy(alpha = 0f)))
+                    .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = STRIP_TOP_PAD, bottom = 12.dp)
                     .testTag("queue.controls"),
                 labels = true,
             )

@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -84,26 +85,21 @@ import app.hocket.ui.icons.HocketIcons
  * highlight of the lit line, blur and line scaling are off, the list jumps instead of scrolling
  * smoothly, the fluid background stands still and the position is sampled 4 times a second.
  *
- * [listModifier] applies to the lines only, not the offset controls under them (the full player
- * fades the lines out at its panel's edges).
+ * [listModifier] applies to the lines only (the full player fades them out at its slot's edges).
+ * [embedded] (the full player) also leaves out the tier, source and timing row under the lines: the
+ * player offers it from the song menu ([LyricsTimingSheet]).
  */
 @Composable
 fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val lyricsMap by client.lyrics.collectAsStateWithLifecycle()
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
     val reducedMotion = LocalReducedMotion.current
     val settings by client.settings.collectAsStateWithLifecycle()
     val animatedSetting = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false"
-    val trackId = entry?.track?.id
-    var fetched by remember { mutableStateOf<Lyrics?>(null) }
-    var fetchedFor by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(trackId) {
-        fetched = null; fetchedFor = null
-        if (trackId != null) { fetched = (client.query(Queries.lyrics(trackId)) as? QueryResult.LyricsResult)?.data; fetchedFor = trackId }
-    }
-    val lyrics: Lyrics? = if (trackId != null && lyricsMap.containsKey(trackId)) lyricsMap[trackId] else if (fetchedFor == trackId) fetched else null
+    val current = rememberCurrentLyrics()
+    val trackId = current.trackId
+    val lyrics = current.lyrics
 
     // Position at frame rate; 30 fps in battery saver; 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible.
@@ -126,7 +122,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         // Inside the full player (embedded) the player's own artwork gradient shows through.
         if (!embedded) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
         if (trackId == null) { EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body)); return@Box }
-        if (fetchedFor == trackId && lyrics == null) {
+        if (current.loaded && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 EmptyState(stringResource(R.string.empty_lyrics_title), stringResource(R.string.empty_lyrics_body))
                 val external = settings[SettingKeys.LYRICS_EXTERNAL_ENABLED]?.value?.trim() == "true"
@@ -139,23 +135,95 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         Column(Modifier.fillMaxSize()) {
             LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f).then(listModifier),
                 padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
-            OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) }, systemBarPadding = !embedded)
+            // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
+            if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
         }
     }
 }
 
+/**
+ * The current track's lyrics: the core's live copy once it has one, else fetched once per track.
+ * [CurrentLyrics.loaded] tells "none" (loaded, null) from "still asking" (not loaded).
+ */
 @Composable
-private fun OffsetControl(doc: Lyrics, onOffset: (Int) -> Unit, systemBarPadding: Boolean = true) {
-    Row(Modifier.fillMaxWidth().then(if (systemBarPadding) Modifier.navigationBarsPadding() else Modifier).padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+internal fun rememberCurrentLyrics(): CurrentLyrics {
+    val client = LocalCoreClient.current
+    val entry by client.nowPlaying.collectAsStateWithLifecycle()
+    val lyricsMap by client.lyrics.collectAsStateWithLifecycle()
+    val trackId = entry?.track?.id
+    var fetched by remember { mutableStateOf<Lyrics?>(null) }
+    var fetchedFor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(trackId) {
+        fetched = null; fetchedFor = null
+        if (trackId != null) { fetched = (client.query(Queries.lyrics(trackId)) as? QueryResult.LyricsResult)?.data; fetchedFor = trackId }
+    }
+    val live = trackId != null && lyricsMap.containsKey(trackId)
+    val lyrics: Lyrics? = if (live) lyricsMap[trackId] else if (fetchedFor == trackId) fetched else null
+    return CurrentLyrics(trackId, lyrics, loaded = live || (trackId != null && fetchedFor == trackId))
+}
+
+/** See [rememberCurrentLyrics]. */
+@androidx.compose.runtime.Immutable
+internal data class CurrentLyrics(val trackId: String?, val lyrics: Lyrics?, val loaded: Boolean)
+
+/**
+ * The lyrics' tier and source, and (synced lyrics) the timing offset with earlier / reset / later as
+ * labelled 48 dp buttons. Under the standalone page, over its dark backdrop ([LyricsContrast]); in
+ * the [LyricsTimingSheet] in the sheet's own colours.
+ */
+@Composable
+internal fun OffsetControl(
+    doc: Lyrics,
+    onOffset: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    systemBarPadding: Boolean = true,
+    secondary: Color = LyricsContrast.secondary,
+    active: Color = LyricsContrast.active,
+    padding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+) {
+    Row(modifier.fillMaxWidth().then(if (systemBarPadding) Modifier.navigationBarsPadding() else Modifier).padding(padding), verticalAlignment = Alignment.CenterVertically) {
         val tier = stringResource(when (doc.tier) { LyricsTier.Syllable -> R.string.lyrics_tier_syllable; LyricsTier.Line -> R.string.lyrics_tier_line; LyricsTier.Unsynced -> R.string.lyrics_tier_unsynced })
         val source = stringResource(when (doc.source) { LyricsSource.Server -> R.string.lyrics_source_server; LyricsSource.External -> R.string.lyrics_source_external; LyricsSource.Embedded -> R.string.lyrics_source_embedded })
-        Text("$tier${stringResource(R.string.dot_separator)}$source", style = MaterialTheme.typography.labelSmall, color = LyricsContrast.secondary, modifier = Modifier.weight(1f))
+        Text("$tier${stringResource(R.string.dot_separator)}$source", style = MaterialTheme.typography.labelSmall, color = secondary, modifier = Modifier.weight(1f))
         if (doc.tier != LyricsTier.Unsynced) {
-            Text(stringResource(R.string.lyrics_offset_value, doc.offsetMs), style = MaterialTheme.typography.labelMedium, color = LyricsContrast.active, modifier = Modifier.padding(end = 4.dp))
+            Text(stringResource(R.string.lyrics_offset_value, doc.offsetMs), style = MaterialTheme.typography.labelMedium, color = active, modifier = Modifier.padding(end = 4.dp))
             // Labelled 48 dp buttons (a "−" glyph alone reads as "minus").
-            IconButton(onClick = { onOffset(doc.offsetMs - 100) }, modifier = Modifier.testTag("lyrics.offset.earlier")) { Icon(HocketIcons.Filled.Remove, stringResource(R.string.lyrics_offset_earlier_a11y), tint = LyricsContrast.active) }
-            IconButton(onClick = { onOffset(0) }, modifier = Modifier.testTag("lyrics.offset.reset")) { Icon(HocketIcons.Filled.RestartAlt, stringResource(R.string.lyrics_offset_reset_a11y), tint = LyricsContrast.active) }
-            IconButton(onClick = { onOffset(doc.offsetMs + 100) }, modifier = Modifier.testTag("lyrics.offset.later")) { Icon(HocketIcons.Filled.Add, stringResource(R.string.lyrics_offset_later_a11y), tint = LyricsContrast.active) }
+            IconButton(onClick = { onOffset(doc.offsetMs - 100) }, modifier = Modifier.testTag("lyrics.offset.earlier")) { Icon(HocketIcons.Filled.Remove, stringResource(R.string.lyrics_offset_earlier_a11y), tint = active) }
+            IconButton(onClick = { onOffset(0) }, modifier = Modifier.testTag("lyrics.offset.reset")) { Icon(HocketIcons.Filled.RestartAlt, stringResource(R.string.lyrics_offset_reset_a11y), tint = active) }
+            IconButton(onClick = { onOffset(doc.offsetMs + 100) }, modifier = Modifier.testTag("lyrics.offset.later")) { Icon(HocketIcons.Filled.Add, stringResource(R.string.lyrics_offset_later_a11y), tint = active) }
+        }
+    }
+}
+
+/**
+ * "Lyrics timing" from the full player's song menu (while the lyrics show): what the lyrics are
+ * (word-, line- or unsynced, and where they came from) and, for synced lyrics, the timing offset,
+ * as under the standalone lyrics page.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun LyricsTimingSheet(onDismiss: () -> Unit) {
+    val client = LocalCoreClient.current
+    val doc = rememberCurrentLyrics().lyrics
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("lyrics.timing")) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 16.dp)) {
+            Text(
+                stringResource(R.string.player_lyrics_timing),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() },
+            )
+            if (doc == null) {
+                Text(stringResource(R.string.empty_lyrics_title), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
+            } else {
+                OffsetControl(
+                    doc,
+                    onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) },
+                    systemBarPadding = false,
+                    secondary = MaterialTheme.colorScheme.onSurfaceVariant,
+                    active = MaterialTheme.colorScheme.onSurface,
+                    padding = PaddingValues(start = 24.dp, end = 12.dp, top = 8.dp),
+                )
+            }
         }
     }
 }
@@ -272,15 +340,26 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
         val style = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
         when {
             tier == LyricsTier.Syllable && line.syllables.isNotEmpty() -> {
+                // Wrapped by word: a word's syllables (joined ones) stay together on one line.
+                val words = remember(line) {
+                    buildList<List<Int>> {
+                        var word = mutableListOf<Int>()
+                        line.syllables.forEachIndexed { si, syl -> word += si; if (!syl.joined) { add(word); word = mutableListOf() } }
+                        if (word.isNotEmpty()) add(word)
+                    }
+                }
                 FlowRow(horizontalArrangement = if (side == 1) Arrangement.End else Arrangement.Start) {
-                    line.syllables.forEachIndexed { si, s ->
-                        val progress = sweep.getOrElse(si) { 0f }
-                        val brush = when (progress) {
-                            0f -> Brush.horizontalGradient(listOf(inactiveColor, inactiveColor))
-                            1f -> Brush.horizontalGradient(listOf(activeColor, activeColor))
-                            else -> Brush.horizontalGradient(0f to activeColor, (progress - 0.12f).coerceAtLeast(0f) to activeColor, (progress + 0.12f).coerceAtMost(1f) to inactiveColor, 1f to inactiveColor)
+                    for (word in words) Row {
+                        for (si in word) {
+                            val s = line.syllables[si]
+                            val progress = sweep.getOrElse(si) { 0f }
+                            val brush = when (progress) {
+                                0f -> Brush.horizontalGradient(listOf(inactiveColor, inactiveColor))
+                                1f -> Brush.horizontalGradient(listOf(activeColor, activeColor))
+                                else -> Brush.horizontalGradient(0f to activeColor, (progress - 0.12f).coerceAtLeast(0f) to activeColor, (progress + 0.12f).coerceAtMost(1f) to inactiveColor, 1f to inactiveColor)
+                            }
+                            Text(s.text + if (s.joined) "" else " ", style = style.copy(brush = brush))
                         }
-                        Text(s.text + if (s.joined) "" else " ", style = style.copy(brush = brush))
                     }
                 }
             }

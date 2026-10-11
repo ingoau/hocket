@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -168,6 +169,66 @@ class FullPlayerLayoutTest {
         assertTrue("an opaque accent fill", android.graphics.Color.alpha(primary) == 255)
         tap("player.connect")
         compose.waitUntil(5_000) { exists("handoff.sheet") }
+    }
+
+    @Test
+    fun anotherDevicesResumeOfferIsNotShownInThePlayer() {
+        startExpanded()
+        assertTrue("the fake core offers a resume", core.client.resumeOffer.value != null)
+        assertFalse(exists("player.resumeHere"))
+        assertTrue(compose.onAllNodesWithText("was playing", substring = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(compose.onAllNodesWithText("Resume here").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun lyricsAndTheQueueSitInTheArtworksSlotAcrossThePage() {
+        startExpanded()
+        val art = bounds("player.artwork")
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.waitForIdle()
+        val slot = bounds("player.panel")
+        val page = compose.onNodeWithTag("player.page").fetchSemanticsNode().boundsInRoot
+        assertEquals("the page's width", page.width, slot.width, 1f)
+        assertEquals("the artwork's top", art.top, slot.top, 2f)
+        assertEquals("the artwork's height", art.height, slot.height, 2f)
+    }
+
+    /**
+     * The timing row under the lyrics lives in the song menu while the lyrics show: "Lyrics timing"
+     * opens a sheet with the tier and source and the offset buttons, which work as before.
+     */
+    @Test
+    fun theLyricsTimingIsInTheSongMenuWhileTheLyricsShow() {
+        startExpanded()
+        // Not offered over the artwork.
+        tap("player.more")
+        compose.waitUntil(5_000) { exists("songMenu.header") }
+        assertFalse(exists("player.lyricsTiming"))
+        compose.onNodeWithTag("songMenu.header").performTouchInput { swipe(start = center, end = center + Offset(0f, 1200f), durationMillis = 100) }
+        compose.waitUntil(5_000) { !exists("songMenu.header") }
+        val trackId = core.client.nowPlaying.value!!.track.id
+        // The lyrics animate every frame while shown: step the clock by hand.
+        compose.mainClock.autoAdvance = false
+        try {
+            tap("player.mode.lyrics")
+            compose.mainClock.advanceTimeBy(1_500)
+            assertTrue(exists("lyrics.list"))
+            assertFalse("no timing row under the lyrics", exists("lyrics.offset.later"))
+            tap("player.more")
+            repeat(60) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue(exists("player.lyricsTiming"))
+            tap("player.lyricsTiming")
+            repeat(90) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue(exists("lyrics.timing"))
+            val before = core.client.lyrics.value[trackId]?.offsetMs ?: 0
+            tap("lyrics.offset.later")
+            repeat(30) { compose.mainClock.advanceTimeByFrame() }
+            assertEquals(before + 100, core.client.lyrics.value[trackId]?.offsetMs)
+            assertEquals("Show lyrics 0.1 seconds later", compose.onNodeWithTag("lyrics.offset.later").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single())
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
     }
 
     @Test
