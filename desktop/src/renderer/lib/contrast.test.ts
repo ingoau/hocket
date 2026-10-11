@@ -69,6 +69,13 @@ describe("theme tokens in global.css", () => {
       }
     });
 
+    it(`${theme}: the side panel's lyrics (--lyrics-muted) reach 4.5:1 on the pane and stay lighter than muted text`, () => {
+      const lyrics = P(c["lyrics-muted"] as string);
+      const pane = P(c["bg-elev"] as string);
+      expect(contrast(lyrics, pane)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(lyrics, pane)).toBeLessThan(contrast(P(c["fg-muted"] as string), pane));
+    });
+
     it(`${theme}: status colours read at 4.5:1 as text on the surfaces and on their own 14% badge tint`, () => {
       for (const status of ["danger", "warn", "ok"]) {
         const col = P(c[status] as string);

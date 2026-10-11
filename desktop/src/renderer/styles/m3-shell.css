@@ -191,10 +191,10 @@
 .side-drill-lyrics .lyrics-static { font-size: 17px; font-weight: 600; }
 /* AMLL dims lines with a word mask tuned for white text on a dark blur (20% for the lines around
    the current one), which on the theme's surface reads as nearly invisible grey. In the side panel
-   the lines are unmasked muted text instead (the muted token eased toward the surface, still 4.5:1)
+   the lines are unmasked --lyrics-muted (lighter than muted text, still 4.5:1 on the pane)
    and the current one is the on-surface colour, whole; the word sweep stays in the fullscreen
    player, which keeps AMLL's own look over its blur. */
-.amll-host.compact [class*="_lyricLine"] { --bright-mask-alpha: 1 !important; --dark-mask-alpha: 1 !important; color: color-mix(in srgb, var(--fg-muted) 82%, var(--bg-elev)); }
+.amll-host.compact [class*="_lyricLine"] { --bright-mask-alpha: 1 !important; --dark-mask-alpha: 1 !important; color: var(--lyrics-muted); }
 .amll-host.compact [class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"]) { color: var(--fg); }
 .amll-host.compact :is([class*="_lyricBgLine"], [class*="_lyricSubLine"]) { opacity: 1; }
 /* AMLL also fades lines by distance and once the song has ended (inline opacity): never here. */
