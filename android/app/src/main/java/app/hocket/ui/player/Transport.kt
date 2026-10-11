@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -84,6 +85,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
+import androidx.compose.material3.ButtonGroup
 import app.hocket.R
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.a11y.Spoken
@@ -119,8 +121,8 @@ fun rememberPressScale(interactionSource: InteractionSource): State<Float> {
 }
 
 /**
- * A filled transport button drawn in one graphics layer: the press bounce, its shape (from
- * [shapeFor], given the layer's size) and the clip all change without recomposition or relayout.
+ * A filled transport button drawn in one graphics layer: its shape (from [shapeFor], given the
+ * layer's size) and the clip change without recomposition or relayout.
  */
 @Composable
 private fun TransportButton(
@@ -133,12 +135,9 @@ private fun TransportButton(
     shapeFor: GraphicsLayerScope.() -> Shape,
     icon: @Composable () -> Unit,
 ) {
-    val scale by rememberPressScale(interactionSource)
     Box(
         modifier
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
                 shape = shapeFor()
                 clip = true
             }
@@ -152,9 +151,26 @@ private fun TransportButton(
 }
 
 /**
- * Play/pause as a big filled button whose outline morphs (Material 3 Expressive): a soft
- * nine-sided cookie while paused, a rounded square while playing, on a springy spec. The icon
- * crossfades with a little scale; haptics are toggle on/off. While [buffering] a loading
+ * How pressed a button looks, 0 (rest) to 1 (held), on the expressive morph spring: the button group
+ * squishes its corners while a finger is down and springs back on release.
+ */
+@Composable
+private fun rememberPressFraction(source: InteractionSource): State<Float> {
+    val reduced = LocalReducedMotion.current
+    val pressed by source.collectIsPressedAsState()
+    val f = remember { Animatable(0f) }
+    LaunchedEffect(pressed, reduced) {
+        val target = if (pressed && !reduced) 1f else 0f
+        if (reduced) f.snapTo(target) else f.animateTo(target, Motion.morph)
+    }
+    return f.asState()
+}
+
+/**
+ * Play/pause, the wide middle of the transport's button group (Material 3 Expressive): a filled
+ * pill while paused that turns into a rounded rectangle while playing (the toggle button's
+ * unchecked and checked shapes), its corners tightening further while pressed, on springy specs.
+ * The icon crossfades with a little scale; haptics are toggle on/off. While [buffering] a loading
  * indicator takes the icon's place (the button still toggles, and says it is buffering).
  */
 @Composable
@@ -165,25 +181,32 @@ fun PlayPauseButton(
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     iconSize: Dp = 40.dp,
     buffering: Boolean = false,
+    playingCorner: Dp = 28.dp,
 ) {
     val reduced = LocalReducedMotion.current
-    // 0 = paused (cookie), 1 = playing (rounded square).
+    // 0 = paused (a pill), 1 = playing (rounded rectangle).
     val morphProgress = remember { Animatable(if (playing) 1f else 0f) }
     LaunchedEffect(playing, reduced) {
         val target = if (playing) 1f else 0f
         if (reduced) morphProgress.snapTo(target) else morphProgress.animateTo(target, Motion.morph)
     }
-    val morph = remember { Morph(MaterialShapes.Cookie9Sided, MaterialShapes.Square) }
+    val press by rememberPressFraction(interactionSource)
     val haptics = LocalHapticFeedback.current
     val label = stringResource(if (playing) R.string.action_pause else R.string.action_play)
     val bufferingLabel = stringResource(R.string.player_buffering)
+    val density = LocalDensity.current
+    val playingPx = with(density) { playingCorner.toPx() }
+    val pressedPx = with(density) { PRESSED_CORNER.toPx() }
     TransportButton(
         onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); onToggle() },
         label = label,
         container = MaterialTheme.colorScheme.primary,
         content = MaterialTheme.colorScheme.onPrimary,
         interactionSource = interactionSource,
-        shapeFor = { MorphShape(morph, morphProgress.value) },
+        shapeFor = {
+            val rest = lerp(size.height / 2f, playingPx.coerceAtMost(size.height / 2f), morphProgress.value.coerceIn(0f, 1f))
+            RoundedCornerShape(lerp(rest, pressedPx, press.coerceIn(0f, 1f)))
+        },
         modifier = modifier.testTag("player.playPause").semantics { if (buffering) stateDescription = bufferingLabel },
     ) {
         AnimatedContent(
@@ -200,57 +223,76 @@ fun PlayPauseButton(
     }
 }
 
-/**
- * A [Morph] between two of [MaterialShapes] (normalised to a unit square) at [progress], scaled to
- * the outline's size. Cheap to create: a graphics layer builds one per frame while it animates.
- */
-private class MorphShape(private val morph: Morph, private val progress: Float) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val path = morph.toPath(progress, Path())
-        path.transform(Matrix().apply { scale(size.width, size.height) })
-        return Outline.Generic(path)
-    }
-}
+/** The corner every transport button tightens to while pressed. */
+private val PRESSED_CORNER = 12.dp
 
 /**
- * Previous, play/pause and next (Material 3 Expressive): tonal round skip buttons either side of a
- * larger shape-morphing play/pause. A pressed skip button widens and squishes towards a rounded
- * square while its neighbours give way a little, on springy specs; every button bounces on press.
- * [height] is the play button's size; the skip buttons are a little smaller. While [buffering] the
- * play button shows a loading indicator.
+ * Previous, play/pause and next as one Material 3 Expressive button group: tonal previous and next
+ * squares with "leaf" corners (round on the outside, tighter towards play/pause) either side of a
+ * filled play/pause that takes the rest of the row. A pressed button widens while its neighbours
+ * give way ([ButtonGroup]'s `animateWidth`) and its corners squish, on springy specs. [height] is
+ * the row's height (and the skip buttons' width). While [buffering] play/pause shows a loading
+ * indicator.
  */
 @Composable
 fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier, buffering: Boolean = false) {
-    val reduced = LocalReducedMotion.current
     val prevSource = remember { MutableInteractionSource() }
     val playSource = remember { MutableInteractionSource() }
     val nextSource = remember { MutableInteractionSource() }
-    val prevPressed by prevSource.collectIsPressedAsState()
-    val playPressed by playSource.collectIsPressedAsState()
-    val nextPressed by nextSource.collectIsPressedAsState()
-    val skip = height * 0.8f
-    fun width(pressed: Boolean, otherPressed: Boolean) = if (reduced) skip else if (pressed) skip * 1.35f else if (otherPressed) skip * 0.92f else skip
-    val prevWidth by animateDpAsState(width(prevPressed, playPressed || nextPressed), Motion.pressDp, label = "prevWidth")
-    val nextWidth by animateDpAsState(width(nextPressed, playPressed || prevPressed), Motion.pressDp, label = "nextWidth")
     val tonal = MaterialTheme.colorScheme.secondaryContainer
     val onTonal = MaterialTheme.colorScheme.onSecondaryContainer
-    Row(modifier.fillMaxWidth().height(height), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        SkipButton(onPrevious, stringResource(R.string.action_previous), HocketIcons.Filled.SkipPrevious, tonal, onTonal, prevSource, prevPressed, Modifier.size(prevWidth, skip).testTag("player.previous"))
-        PlayPauseButton(playing, onToggle, Modifier.size(height), playSource, iconSize = height * 0.45f, buffering = buffering)
-        SkipButton(onNext, stringResource(R.string.action_next), HocketIcons.Filled.SkipNext, tonal, onTonal, nextSource, nextPressed, Modifier.size(nextWidth, skip).testTag("player.next"))
+    val previousLabel = stringResource(R.string.action_previous)
+    val nextLabel = stringResource(R.string.action_next)
+    ButtonGroup(
+        overflowIndicator = { },
+        modifier = modifier.fillMaxWidth().height(height),
+        horizontalArrangement = Arrangement.spacedBy(TRANSPORT_GAP),
+    ) {
+        customItem(
+            buttonGroupContent = {
+                SkipButton(onPrevious, previousLabel, HocketIcons.Filled.SkipPrevious, tonal, onTonal, prevSource, leading = true,
+                    Modifier.animateWidth(prevSource).size(height).testTag("player.previous"))
+            },
+            menuContent = { },
+        )
+        customItem(
+            buttonGroupContent = {
+                PlayPauseButton(playing, onToggle, Modifier.animateWidth(playSource).weight(1f).height(height), playSource, iconSize = height * 0.4f, buffering = buffering)
+            },
+            menuContent = { },
+        )
+        customItem(
+            buttonGroupContent = {
+                SkipButton(onNext, nextLabel, HocketIcons.Filled.SkipNext, tonal, onTonal, nextSource, leading = false,
+                    Modifier.animateWidth(nextSource).size(height).testTag("player.next"))
+            },
+            menuContent = { },
+        )
     }
 }
 
+/** The gap between the transport's buttons. */
+private val TRANSPORT_GAP = 10.dp
+
+/**
+ * A skip button: a tonal square with leaf corners (about 3/8 of its height on the outer side, 1/6
+ * towards play/pause), squishing towards [PRESSED_CORNER] while pressed.
+ */
 @Composable
-private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, pressed: Boolean, modifier: Modifier) {
-    val reduced = LocalReducedMotion.current
-    // Round at rest, squishing to a rounded square while pressed.
-    val corner = remember { Animatable(0.5f) }
-    LaunchedEffect(pressed, reduced) {
-        val target = if (pressed && !reduced) 0.28f else 0.5f
-        if (reduced) corner.snapTo(target) else corner.animateTo(target, Motion.morph)
-    }
-    TransportButton(onClick, label, container, content, source, modifier, shapeFor = { RoundedCornerShape(size.height * corner.value.coerceIn(0f, 0.5f)) }) {
+private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, leading: Boolean, modifier: Modifier) {
+    val press by rememberPressFraction(source)
+    val density = LocalDensity.current
+    val pressedPx = with(density) { PRESSED_CORNER.toPx() }
+    TransportButton(onClick, label, container, content, source, modifier, shapeFor = {
+        val p = press.coerceIn(0f, 1f)
+        val outer = lerp(size.height * 0.36f, pressedPx, p)
+        val inner = lerp(size.height * 0.17f, pressedPx, p)
+        // Outer is the side away from play/pause: the start for previous, the end for next (the
+        // shape follows the layout direction).
+        val startSide = if (leading) outer else inner
+        val endSide = if (leading) inner else outer
+        RoundedCornerShape(topStart = startSide, bottomStart = startSide, topEnd = endSide, bottomEnd = endSide)
+    }) {
         Icon(icon, null, Modifier.size(32.dp))
     }
 }
@@ -259,7 +301,8 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * Wavy progress with tap- and drag-to-seek (Metrolist/Navic): the wave's amplitude eases to flat
  * while paused or dragging, the thumb follows the finger, and after a release (or a tap) the bar
  * holds the new position until the core reports it (or [SEEK_HOLD_MS] passes) instead of snapping
- * back to the old one. Elapsed and total time sit underneath.
+ * back to the old one. Elapsed and remaining time sit underneath, with [centre] (a status line)
+ * between them.
  *
  * [position] is read in the draw phase only; the rest of the bar changes once a second at most.
  *
@@ -268,7 +311,7 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * and `setProgress` for the screen reader's adjust gestures.
  */
 @Composable
-fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier) {
+fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, centre: (@Composable () -> Unit)? = null) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val currentPosition by rememberUpdatedState(position)
@@ -296,8 +339,9 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
     val state = remember(positionS, durationS) { Spoken.position(resources, positionS * 1000, durationS * 1000) }
     val active = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-    Column(
-        modifier.fillMaxWidth().testTag("player.seekBar").clearAndSetSemantics {
+    Column(modifier.fillMaxWidth()) {
+    Box(
+        Modifier.fillMaxWidth().testTag("player.seekBar").clearAndSetSemantics {
             contentDescription = label
             stateDescription = state
             progressBarRangeInfo = ProgressBarRangeInfo(positionS.toFloat().coerceAtMost(durationS.toFloat()), 0f..durationS.toFloat().coerceAtLeast(1f), steps = 0)
@@ -311,7 +355,8 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(36.dp)
+                // A 48 dp touch target; the times tuck up into its slack below the wave.
+                .height(48.dp)
                 .testTag("player.seek")
                 .pointerInput(durationMs) {
                     detectTapGestures(onTap = { o ->
@@ -358,17 +403,31 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
                 wavelength = 32.dp,
             )
         }
-        SeekTimes(positionS * 1000, durationMs)
+    }
+    SeekTimes(positionS * 1000, durationMs, centre)
     }
 }
 
+/**
+ * Elapsed at the start, remaining ("−0:47") at the end, [centre] between them, kept clear of both.
+ * The times are read by the seek bar's own node, so they stay out of the accessibility tree.
+ */
 @Composable
-private fun SeekTimes(positionMs: Long, durationMs: Long) {
+private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable () -> Unit)?) {
     val style = MaterialTheme.typography.labelMedium
     val color = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
-        Text(formatClock(positionMs), style = style, color = color, modifier = Modifier.weight(1f))
-        Text(formatClock(durationMs.coerceAtLeast(0)), style = style, color = color)
+    val remaining = stringResource(R.string.player_remaining, formatClock((durationMs - positionMs).coerceAtLeast(0)))
+    Row(
+        Modifier.fillMaxWidth().layout { m, c ->
+            val p = m.measure(c)
+            val pull = 8.dp.roundToPx()
+            layout(p.width, (p.height - pull).coerceAtLeast(0)) { p.place(0, -pull) }
+        },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(formatClock(positionMs), style = style, color = color, modifier = Modifier.clearAndSetSemantics { }, maxLines = 1)
+        Box(Modifier.weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { centre?.invoke() }
+        Text(remaining, style = style, color = color, modifier = Modifier.clearAndSetSemantics { }, maxLines = 1)
     }
 }
 

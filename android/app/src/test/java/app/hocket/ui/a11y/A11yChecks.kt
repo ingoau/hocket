@@ -141,9 +141,11 @@ object A11yChecks {
     /**
      * Clipped or overlapping controls and clipped text (text shortened with an ellipsis is fine).
      * Content scrolled under a floating [overlays] surface (the mini player sheet, the navigation
-     * bar: the bottom inset lets it scroll clear) is not an overlap; controls within one are.
+     * bar: the bottom inset lets it scroll clear; the full player's queue toggles, floating over the
+     * bottom of the queue panel with the list scrolling under them) is not an overlap; controls
+     * within one are.
      */
-    fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar")): List<Issue> {
+    fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar", "queue.controls")): List<Issue> {
         val merged = roots(rule)
         val unmergedRoots = roots(rule, unmerged = true)
         return merged.indices.flatMap { i -> layoutIssues(merged[i], unmergedRoots.getOrNull(i) ?: merged[i], rule.density.density, overlays) }

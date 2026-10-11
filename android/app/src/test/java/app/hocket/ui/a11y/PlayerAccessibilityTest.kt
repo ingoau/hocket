@@ -6,6 +6,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -158,8 +159,7 @@ class PlayerAccessibilityTest {
     fun theRatingIsOneAdjustableControlThatSaysHowManyStars() {
         start()
         expand()
-        // The rating lives in the About mode.
-        compose.onNodeWithTag("player.mode.about").performSemanticsAction(SemanticsActions.OnClick)
+        // The rating sits under the title (display.playerRating, on by default).
         compose.waitUntil(5_000) { exists("rating") }
         compose.waitForIdle()
         val id = core.client.nowPlaying.value!!.track.id
@@ -194,18 +194,29 @@ class PlayerAccessibilityTest {
     }
 
     @Test
-    fun theModePillsAreTabsWithASelectedState() {
+    fun theActionRowSaysWhatEachControlIsAndWhetherItsModeIsOn() {
         start()
         expand()
-        for (mode in listOf("lyrics", "queue", "about")) {
-            val pill = node("player.mode.$mode")
-            assertEquals(androidx.compose.ui.semantics.Role.Tab, pill.config[SemanticsProperties.Role])
-            assertEquals(false, pill.config[SemanticsProperties.Selected])
-        }
+        // The queue's name: a button that says it is the queue, selected while the queue shows.
+        val queue = node("player.mode.queue")
+        assertEquals(androidx.compose.ui.semantics.Role.Button, queue.config[SemanticsProperties.Role])
+        assertTrue(queue.desc()!!.startsWith("Queue: "))
+        assertEquals(false, queue.config[SemanticsProperties.Selected])
+        assertEquals("Switch queue", node("player.switchQueue").desc())
+        // Lyrics: a toggle.
+        assertEquals("Lyrics", node("player.mode.lyrics").desc())
+        assertEquals(ToggleableState.Off, node("player.mode.lyrics").config[SemanticsProperties.ToggleableState])
+        // The device switcher: its long press pulls playback here, and it is labelled.
+        val device = node("player.connect")
+        assertEquals("Play on another device", device.desc())
+        assertEquals("Play here", device.config[SemanticsActions.OnLongClick].label)
+        // The title opens the details.
+        assertEquals("About this song", node("player.title").config[SemanticsActions.OnClick].label)
+
         compose.onNodeWithTag("player.mode.queue").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals(true, node("player.mode.queue").config[SemanticsProperties.Selected])
-        assertEquals(false, node("player.mode.lyrics").config[SemanticsProperties.Selected])
+        assertEquals(ToggleableState.Off, node("player.mode.lyrics").config[SemanticsProperties.ToggleableState])
         // The artwork, now a thumbnail, offers the way back as a labelled click.
         assertEquals("Show artwork", node("player.artwork").config[SemanticsActions.OnClick].label)
         assertEquals("one live region: the page title", 1, liveRegions().size)

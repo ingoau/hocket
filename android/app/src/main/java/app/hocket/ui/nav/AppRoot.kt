@@ -153,7 +153,7 @@ fun AppRoot(
         val server = servers.firstOrNull()
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
-        val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake
+        val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
         val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
@@ -174,6 +174,13 @@ fun AppRoot(
         }
     }
 }
+
+/**
+ * Whether debug builds on the fake core show [FakeCoreBanner]. Always on in the app; screenshot
+ * tests (which can only run the fake core under Robolectric) switch it off so the captures show
+ * the screens as a user sees them.
+ */
+val LocalFakeCoreBanner = androidx.compose.runtime.staticCompositionLocalOf { true }
 
 /** The status bar and the top/side display cutout: what the banner pads for and consumes. */
 private val BannerInsets: WindowInsets

@@ -233,6 +233,8 @@ internal class HeroGeometry {
     var immersive by mutableStateOf(false)
     /** The header's height (px) as the page laid it out: the immersive artwork starts this far above the area. */
     var headerHeight = 0f
+    /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
+    var swipe: () -> Float = { 0f }
 
     fun measure(coordinates: LayoutCoordinates): Rect {
         val r = root ?: return Rect.Zero
@@ -267,6 +269,36 @@ internal class HeroGeometry {
     /** The visible corner radius at mode fraction [f]. */
     fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, smallCorner, f.coerceIn(0f, 1f))
 
+    /**
+     * Where the artwork in flight is at sheet progress [p] (0 = the mini player's thumbnail, 1 =
+     * landed on [playerArt]). A card follows the progress; an immersive artwork stays at its full
+     * size, sliding down with the sheet, until [SHRINK_FROM], and only then shrinks into the
+     * thumbnail (Apple Music), so the scene never shrinks beside a continuation laid out for it.
+     */
+    fun flightRect(p: Float, f: Float, pausedScale: Float, fallbackThumb: Rect): Rect {
+        val from = thumb.takeIf { it.width > 0f } ?: fallbackThumb
+        val target = playerArt(f, pausedScale)
+        val to = if (target.width > 0f) target else from
+        val t = flightFraction(p)
+        return Rect(lerpF(from.left, to.left, t), lerpF(from.top, to.top, t), lerpF(from.right, to.right, t), lerpF(from.bottom, to.bottom, t))
+    }
+
+    /**
+     * What puts content laid out for the landed artwork ([bigSlot]: the immersive continuation) onto
+     * the artwork in flight at sheet progress [p]: a scale about the top-left corner, then a
+     * translation, so the two move and shrink as one unit.
+     */
+    fun flightTransform(p: Float, f: Float, pausedScale: Float, fallbackThumb: Rect): FlightTransform {
+        val big = bigSlot()
+        if (big.width <= 0f) return FlightTransform(1f, 0f, 0f)
+        val r = flightRect(p, f, pausedScale, fallbackThumb)
+        val k = r.width / big.width
+        return FlightTransform(k, r.left - big.left * k, r.top - big.top * k)
+    }
+
+    /** How far the artwork in flight is from the thumbnail (0) to landed (1) at sheet progress [p]. */
+    fun flightFraction(p: Float): Float = if (immersive) (p / SHRINK_FROM).coerceIn(0f, 1f) else p.coerceIn(0f, 1f)
+
     /** The artwork's shadow (px) at mode fraction [f]: none while immersive and big. */
     fun elevationFor(f: Float, density: Density): Float = with(density) {
         lerpF(if (immersive) 0f else HERO_ELEVATION.toPx(), 2.dp.toPx(), f.coerceIn(0f, 1f))
@@ -290,6 +322,17 @@ internal class HeroGeometry {
         val MINI_MAX_WIDTH: Dp = 600.dp
         /** How much the artwork shrinks while paused (Navic). */
         const val PAUSED_SCALE = 0.86f
+        /** Sheet progress above which an immersive artwork in flight keeps its full size ([flightRect]). */
+        const val SHRINK_FROM = 0.6f
+
+        /** The immersive continuation while the sheet moves: gone before the artwork starts shrinking. */
+        fun continuationAlpha(p: Float): Float = ((p - 0.45f) / 0.45f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+
+        /** The immersive artwork's seam fade in flight: the landed one until the continuation has gone. */
+        fun seamFraction(p: Float): Float = ((p - 0.3f) / 0.15f).coerceIn(0f, 1f)
+
+        /** The handle (and the immersive header scrim) fade out first, so nothing hangs over the art. */
+        fun headerAlpha(p: Float): Float = ((p - 0.85f) / 0.1f).coerceIn(0f, 1f)
     }
 }
 
@@ -405,6 +448,17 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val immersiveEdge = artworkLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
         val hero = remember { HeroGeometry() }
         hero.immersive = immersiveEdge != null
+        // The skip swipe's neighbours, with their immersive layouts worked out ahead (cached by the
+        // classifier) so a neighbour slides in in its own style and the commit is instant.
+        val carousel = remember { SkipCarousel() }
+        val neighbours by rememberNeighbours()
+        val previousCover = neighbours.previous?.track?.coverArt
+        val nextCover = neighbours.next?.track?.coverArt
+        val previousLayout by rememberArtworkLayout(previousCover, preference, dark = appDark)
+        val nextLayout by rememberArtworkLayout(nextCover, preference, dark = appDark)
+        val previousEdge = previousLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
+        val nextEdge = nextLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
+        val swiping by remember(carousel) { derivedStateOf { carousel.offset.value != 0f } }
         // The full player is dark (it sits on darkened artwork), themed from the artwork, except in
         // artwork mode over a light immersive continuation (a white cover carried on in white): dark
         // controls there. The scheme crossfades on a track or mode change while the player is
@@ -488,9 +542,17 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // tenth, then quickly opaque).
                 PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
                 // An immersive artwork's continuation (reflection or colours) below it, fading out as
-                // the artwork shrinks to a thumbnail for lyrics, the queue or the details.
+                // the artwork shrinks to a thumbnail for lyrics or the queue. While the sheet moves
+                // it is one unit with the artwork in flight (the same transform), fading out before
+                // the artwork shrinks; while the artwork is swiped it slides with it, and the
+                // neighbours' continuations slide in beside it.
                 if (immersiveEdge != null) {
-                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (1f - modeAnim.value) })
+                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 0f))
+                    if (swiping) {
+                        val previousShown = if (carousel.restartPeek) coverArt to immersiveEdge else previousCover to previousEdge
+                        previousShown.second?.let { ImmersiveContinuation(previousShown.first, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = -1f)) }
+                        nextEdge?.let { ImmersiveContinuation(nextCover, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 1f)) }
+                    }
                 }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.
@@ -516,6 +578,10 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 lyricsVisible = expanded && settledOpen && mode == PlayerMode.Lyrics,
                                 onPreviewToggle = { seed -> seedState.seed = if (seedState.seed == null) seed else null },
                                 immersive = artworkLayout?.takeIf { immersiveEdge != null },
+                                carousel = carousel,
+                                neighbours = neighbours,
+                                neighbourEdges = previousEdge to nextEdge,
+                                headerAlpha = { HeroGeometry.headerAlpha(state.progress) },
                             )
                         }
                     }
@@ -524,13 +590,13 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // player is what accessibility sees).
                 if (!fullPlayerAccessible) {
                     Box(Modifier.fillMaxWidth().height(miniHeight).graphicsLayer { alpha = 1f - (state.progress * 4f).coerceAtMost(1f) }) {
-                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying })
+                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, neighbours = neighbours)
                     }
                 }
                 // The one artwork that flies from the mini player's thumbnail to the full player's
                 // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
                 // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge)
+                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout?.takeIf { immersiveEdge != null })
             }
         }
     }
@@ -559,21 +625,65 @@ private class SheetShape(private val inset: Float, private val corner: Float, pr
     override fun hashCode(): Int = (31 * inset.hashCode() + corner.hashCode()) * 31 + bottom.hashCode()
 }
 
+/** A scale about the top-left corner, then a translation (px). */
+internal data class FlightTransform(val scale: Float, val x: Float, val y: Float)
+
+/** Where the mini player's thumbnail is before it has been measured. */
+private fun fallbackThumb(density: Density): Rect = with(density) {
+    val thumbSizePx = HeroGeometry.THUMB_SIZE.toPx()
+    val margin = HeroGeometry.MINI_MARGIN.toPx() + 10.dp.toPx()
+    Rect(Offset(margin, (NowPlayingSheetState.MINI_HEIGHT.toPx() - thumbSizePx) / 2), Size(thumbSizePx, thumbSizePx))
+}
+
+/**
+ * The layer an immersive continuation is drawn in (laid out for the landed artwork,
+ * [HeroGeometry.bigSlot]): at rest it follows the full player's skip swipe, [offsetSpans] slots
+ * along (a neighbour's continuation: -1 the previous, 1 the next); while the sheet moves it takes
+ * the artwork in flight's transform ([HeroGeometry.flightRect]), so the two stay one unit, and
+ * fades out ([HeroGeometry.continuationAlpha]) before the artwork shrinks. It fades with the mode
+ * too (lyrics / queue).
+ */
+private fun Modifier.continuationLayer(
+    hero: HeroGeometry,
+    state: NowPlayingSheetState,
+    flying: () -> Boolean,
+    modeFraction: () -> Float,
+    scale: () -> Float,
+    density: Density,
+    offsetSpans: Float,
+): Modifier = graphicsLayer {
+    val p = state.progress
+    val big = hero.bigSlot()
+    alpha = HeroGeometry.continuationAlpha(p) * (1f - modeFraction())
+    transformOrigin = TransformOrigin(0f, 0f)
+    if (flying() && big.width > 0f) {
+        val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
+        scaleX = t.scale
+        scaleY = t.scale
+        translationX = t.x + offsetSpans * big.width * t.scale
+        translationY = t.y
+    } else {
+        translationX = hero.swipe() + offsetSpans * big.width
+    }
+}
+
 /**
  * The artwork in flight: laid out at the big artwork's size and moved/scaled in a graphics layer
  * from the mini player's thumbnail to wherever the full player's artwork is (the big slot, or on
- * its way to the thumbnail beside the title if the mode is changing; measured, so it lands exactly however the
- * page is scrolled or the status bar is sized). Its corners go from the thumbnail's to the target's,
- * and it gains the target's shadow. With nothing measured yet it just fades out from the thumbnail.
+ * its way to the thumbnail beside the title if the mode is changing; measured, so it lands exactly
+ * however the page is scrolled or the status bar is sized), along [HeroGeometry.flightRect]. Its
+ * corners go from the thumbnail's to the target's, and it gains the target's shadow. With nothing
+ * measured yet it just fades out from the thumbnail.
+ *
+ * Immersive: it stays edge to edge and full size for the first part of a dismiss (sliding down with
+ * the sheet, its continuation moving with it), keeps the landed seam until the continuation has
+ * faded, then shrinks into the thumbnail, its corners rounding as it leaves the edges.
  */
 @Composable
-private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float, immersiveEdge: app.hocket.core.api.ArtworkEdge? = null) {
+private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () -> Float, flying: () -> Boolean, modeFraction: () -> Float, scale: () -> Float, immersiveEdge: app.hocket.core.api.ArtworkEdge? = null, immersiveLayout: app.hocket.core.api.ArtworkLayout? = null) {
     val density = LocalDensity.current
     val thumbSizePx = with(density) { HeroGeometry.THUMB_SIZE.toPx() }
-    val fallbackThumb = with(density) {
-        val margin = HeroGeometry.MINI_MARGIN.toPx() + 10.dp.toPx()
-        Rect(Offset(margin, (NowPlayingSheetState.MINI_HEIGHT.toPx() - thumbSizePx) / 2), Size(thumbSizePx, thumbSizePx))
-    }
+    val fallback = fallbackThumb(density)
     Box(
         Modifier
             // Laid out at the big artwork's size (re-laid out only when that changes).
@@ -585,33 +695,35 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
             .graphicsLayer {
                 if (!flying()) { alpha = 0f; return@graphicsLayer }
                 val p = progress()
+                val t = hero.flightFraction(p)
                 val f = modeFraction()
-                val from = hero.thumb.takeIf { it.width > 0f } ?: fallbackThumb
-                val target = hero.playerArt(f, scale())
-                val landed = target.width > 0f
-                val to = if (landed) target else from
+                val landed = hero.playerArt(f, scale()).width > 0f
+                val r = hero.flightRect(p, f, scale(), fallback)
                 val base = hero.bigSlot().width.takeIf { it > 0f } ?: thumbSizePx
-                val left = lerpF(from.left, to.left, p)
-                val top = lerpF(from.top, to.top, p)
-                val sizePx = lerpF(from.width, to.width, p)
-                val k = sizePx / base
+                val k = r.width / base
                 transformOrigin = TransformOrigin(0f, 0f)
-                translationX = left
-                translationY = top
+                translationX = r.left
+                translationY = r.top
                 scaleX = k
                 scaleY = k
                 val fromRadius = HeroGeometry.THUMB_CORNER.toPx()
-                val visibleRadius = lerpF(fromRadius, if (landed) hero.cornerFor(f, to.width) else fromRadius, p)
+                val visibleRadius = when {
+                    !landed -> fromRadius
+                    // Square while edge to edge; rounding quickly to a card's corners once it leaves them.
+                    hero.immersive -> lerpF(fromRadius, HeroGeometry.HERO_CORNER.toPx(), t) * ((1f - t) / 0.15f).coerceIn(0f, 1f)
+                    else -> lerpF(fromRadius, hero.cornerFor(f, r.width), t)
+                }
                 shape = RoundedCornerShape(visibleRadius / k.coerceAtLeast(0.01f))
                 clip = true
-                shadowElevation = if (landed) hero.elevationFor(f, this) * p else 0f
+                shadowElevation = if (landed) hero.elevationFor(f, this) * t else 0f
                 alpha = if (landed) 1f else (1f - p * 4f).coerceIn(0f, 1f)
             }
             .clearAndSetSemantics { },
     ) {
-        // Immersive: its bottom fades into the continuation as the sheet opens (and back as it
-        // closes), so the seam is the same in flight as landed; the corners go thumbnail to square.
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersiveEdge, fraction = progress), RectangleShape)
+        // Immersive: the landed seam (its bottom fading into the continuation) while the
+        // continuation shows, square once it has gone.
+        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersiveEdge, fraction = { HeroGeometry.seamFraction(progress()) }), RectangleShape)
+        if (immersiveLayout != null) ImmersiveArtworkOverlay(immersiveLayout, fraction = { HeroGeometry.headerAlpha(progress()) })
     }
 }
 

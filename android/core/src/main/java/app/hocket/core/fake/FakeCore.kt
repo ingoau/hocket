@@ -416,7 +416,9 @@ class FakeCore(
     private fun contextItem(pos: Int): QueueItem? = order.getOrNull(pos)?.let { idx -> QueueItem(newKey(), contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false) }
 
     private fun previous() {
-        if (positionNow() > 3_000 && history.isEmpty()) { startPlayback(0, stamp.isPlaying); return }
+        // The core's rule (session::reducer::previous_should_restart): from 3 s in, or with nothing
+        // before it, Previous restarts the track.
+        if (positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
         val prev = history.removeLastOrNull() ?: run { startPlayback(0, stamp.isPlaying); return }
         current?.let { cur ->
             when (cur.source) {
