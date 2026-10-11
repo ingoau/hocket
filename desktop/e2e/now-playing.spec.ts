@@ -53,6 +53,39 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "lyrics");
     await expect(panel.getByTestId("lyrics-view")).toBeVisible();
     await expect(page.getByTestId("toggle-lyrics")).toHaveAttribute("aria-pressed", "true");
+    // In both themes the current line is the on-surface colour and the others a muted one, each
+    // at 4.5:1 on the pane (not AMLL's faint mask for dark backdrops), the current line mid-view.
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      const active = panel.locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])').first();
+      await expect(active).toBeVisible({ timeout: 10_000 });
+      await page.waitForTimeout(600);
+      const look = await panel.evaluate((root) => {
+        // rgb(r, g, b), or color(srgb r g b) for a color-mix().
+        const rgb = (c: string) => {
+          const srgb = /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)/.exec(c);
+          if (srgb) return srgb.slice(1, 4).map((v) => Number(v) * 255);
+          return (/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/.exec(c) ?? []).slice(1, 4).map(Number);
+        };
+        const lum = (c: number[]) => { const l = c.map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * l[0]! + 0.7152 * l[1]! + 0.0722 * l[2]!; };
+        const ratio = (a: string, b: string) => { const [x, y] = [lum(rgb(a)), lum(rgb(b))]; return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+        const bg = getComputedStyle(root.querySelector(".side-pane")!).backgroundColor;
+        const host = root.querySelector(".amll-host")!.getBoundingClientRect();
+        const cur = root.querySelector('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])')!;
+        const other = Array.from(root.querySelectorAll('[class*="_lyricLine"]:not([class*="_active"]):not([class*="_lyricLineWrapper"]):not([class*="_bottomLine"])'))[0]!;
+        const r = cur.getBoundingClientRect();
+        const cs = getComputedStyle(cur);
+        return { current: ratio(cs.color, bg), other: ratio(getComputedStyle(other).color, bg), mask: Number(cs.getPropertyValue("--bright-mask-alpha")), otherMask: Number(getComputedStyle(other).getPropertyValue("--dark-mask-alpha")), at: (r.top + r.height / 2 - host.top) / host.height, differs: cs.color !== getComputedStyle(other).color };
+      });
+      expect(look.current, `${theme}: current line`).toBeGreaterThanOrEqual(4.5);
+      expect(look.other, `${theme}: other lines`).toBeGreaterThanOrEqual(4.5);
+      expect(look.differs, `${theme}: current line stands out`).toBe(true);
+      expect(look.mask).toBe(1);
+      expect(look.otherMask).toBe(1);
+      expect(look.at, `${theme}: current line near the middle`).toBeGreaterThan(0.3);
+      expect(look.at, `${theme}: current line near the middle`).toBeLessThan(0.7);
+    }
     await page.getByTestId("sidebar-back").click();
     await expect(panel).toHaveAttribute("data-view", "overview");
     // Open queue → the queue view with its selector, Autoplay and the timeline.

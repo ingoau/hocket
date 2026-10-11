@@ -111,7 +111,17 @@ test("now playing surfaces", async () => {
       await shot("bar-sidebar-closed");
       await page.getByTestId("toggle-lyrics").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "lyrics");
-      await shot("sidebar-lyrics");
+      // Shoot on a sung line, not in a gap between two (where no line is current): retake until
+      // a line was current both before and after the shot.
+      await settle(page);
+      const current = page.getByTestId("right-panel").locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])');
+      for (let i = 0; i < 20; i++) {
+        await expect(current.first()).toBeVisible({ timeout: 15_000 });
+        await page.waitForTimeout(400);
+        if (!(await current.count())) continue;
+        await page.screenshot({ path: join(out!, `desktop-${theme}-sidebar-lyrics.png`) });
+        if (await current.count()) break;
+      }
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("sidebar-queue");

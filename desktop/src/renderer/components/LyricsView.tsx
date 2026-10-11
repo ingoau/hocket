@@ -49,7 +49,8 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     p.setEnableBlur(variant === "large");
     p.setEnableSpring(variant === "large" && !batterySaver);
     p.setEnableScale(true);
-    p.setAlignPosition(variant === "large" ? 0.5 : 0.3);
+    // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
+    p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
     p.setWordFadeWidth(0.5);
     host.current.replaceChildren(p.getElement());
     player.current = p;
