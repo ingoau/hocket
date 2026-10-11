@@ -15,7 +15,9 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -57,10 +59,8 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
 /** The current queue's [Neighbours], recomputed only when the queue changes. */
 @Composable
 internal fun rememberNeighbours(): State<Neighbours> {
-    val client = LocalCoreClient.current
-    return produceState(Neighbours.of(client.queue.value), client) {
-        client.queue.collect { value = Neighbours.of(it) }
-    }
+    val queue = LocalCoreClient.current.queue.collectAsStateWithLifecycle()
+    return remember(queue) { derivedStateOf { Neighbours.of(queue.value) } }
 }
 
 /**
@@ -81,7 +81,7 @@ internal const val PREVIOUS_RESTART_MS = 3_000L
 @Stable
 internal class SkipCarousel {
     val offset = Animatable(0f)
-    var span by mutableStateOf(1f)
+    var span by mutableFloatStateOf(1f)
     var restartPeek by mutableStateOf(false)
         private set
 

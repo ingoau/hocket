@@ -791,7 +791,7 @@ internal fun PlayerArtwork(
             .layout { measurable, constraints ->
                 val r = hero.playerArt(modeFraction(), scale())
                 val side = r.width.roundToInt().coerceAtLeast(1)
-                carousel.span = (hero.bigSlot().width + gapPx).coerceAtLeast(1f)
+                carousel.span = neighbourSpan(hero, gapPx)
                 val placeable = measurable.measure(Constraints.fixed(side, side))
                 layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(r.left.roundToInt(), r.top.roundToInt()) }
             }
@@ -837,6 +837,16 @@ internal fun PlayerArtwork(
     }
 }
 
+/**
+ * How far a neighbour sits from the current artwork (px): a slot's width plus [gapPx] (the side
+ * margin), or, where the artwork is narrower than the page allows (short screens, large fonts),
+ * far enough to wait off screen.
+ */
+private fun neighbourSpan(hero: HeroGeometry, gapPx: Float): Float {
+    val big = hero.bigSlot()
+    return maxOf(big.width + gapPx, hero.area.width - big.left, big.right).coerceAtLeast(1f)
+}
+
 /** A neighbour's cover and, when it is shown immersive, its bottom edge. */
 private data class PeekCover(val coverArt: String?, val edge: ArtworkEdge?)
 
@@ -868,7 +878,7 @@ private fun NeighbourCover(cover: PeekCover, hero: HeroGeometry, scale: () -> Fl
                 }
                 val w = target.width.roundToInt().coerceAtLeast(1)
                 val p = measurable.measure(Constraints.fixed(w, target.height.roundToInt().coerceAtLeast(1)))
-                val dx = (target.left - side * (big.width + gapPx) - r.left).roundToInt()
+                val dx = (target.left - side * neighbourSpan(hero, gapPx) - r.left).roundToInt()
                 val dy = (target.top - r.top).roundToInt()
                 layout(constraints.maxWidth, constraints.maxHeight) { p.place(dx, dy) }
             }

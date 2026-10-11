@@ -135,7 +135,7 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
                 Modifier.fillMaxSize().then(listModifier).fadeUnder(strip).testTag("queue.timeline"),
                 PaddingValues(
                     start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
-                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip,
+                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 12.dp,
                 ),
             )
             QueueModeHeader(
@@ -168,7 +168,7 @@ private fun Modifier.fadeUnder(strip: androidx.compose.ui.unit.Dp): Modifier = t
     .drawWithContent {
         drawContent()
         val s = strip.toPx()
-        val from = (size.height - s - 16.dp.toPx()).coerceAtLeast(0f)
+        val from = (size.height - s - 8.dp.toPx()).coerceAtLeast(0f)
         drawRect(
             Brush.verticalGradient(0f to Color.Black, 0.4f to Color.Black.copy(alpha = 0.15f), 0.65f to Color.Transparent, startY = from, endY = size.height),
             topLeft = androidx.compose.ui.geometry.Offset(0f, from),

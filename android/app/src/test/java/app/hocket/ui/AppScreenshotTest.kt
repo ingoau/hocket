@@ -56,6 +56,34 @@ class AppScreenshotTest {
     @Config(qualifiers = "+notnight")
     fun light() = captureAll("light")
 
+    /** The player on a narrow phone (display size "largest") at font scale 1.5. */
+    @Test
+    @Config(qualifiers = "w360dp-h760dp-night-xxhdpi")
+    fun largeFont() {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
+        dir!!.mkdirs()
+        val core = TestCore(startPlaying = true)
+        compose.setContent {
+            val base = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(base.density, fontScale = 1.5f)) {
+                app.hocket.ui.theme.HocketTheme(client = core.client) {
+                    CompositionLocalProvider(LocalCoreClient provides core.client, LocalFakeCoreBanner provides false) { AppRoot(core.client) }
+                }
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        awaitTag("miniPlayer")
+        compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
+        awaitTag("player.playPause")
+        settle()
+        shot(dir, "android-dark-14-player-narrow-font-1.5")
+        click("player.mode.queue")
+        settle()
+        shot(dir, "android-dark-15-queue-narrow-font-1.5")
+    }
+
     private fun captureAll(theme: String) {
         val dir = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
@@ -81,7 +109,7 @@ class AppScreenshotTest {
 
         step {
             // The mini player half-way through a skip swipe: the next song sliding in.
-            halfSwipe("miniPlayer", fraction = 0.45f) { shot(dir, "$prefix-03-mini-swipe-next-peek") }
+            halfSwipe("miniPlayer", fraction = 0.3f) { shot(dir, "$prefix-03-mini-swipe-next-peek") }
         }
 
         step {
@@ -205,8 +233,10 @@ class AppScreenshotTest {
         settle()
     }
 
+    /** A semantics click, its state handed to composition even while the clock is stepped by hand. */
     private fun click(tag: String) {
         compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick)
+        compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
     }
 
     private fun back() {

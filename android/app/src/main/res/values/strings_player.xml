@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The full player's header, mode pills and About view. -->
+<!-- The full player: its action row, status line and the song's details. -->
 <resources>
-    <string name="player_playing_from">Playing from</string>
     <string name="player_playing_from_autoplay">Autoplay</string>
-    <string name="player_playing_from_a11y">Playing from %1$s</string>
     <string name="player_switch_queue">Switch queue</string>
     <string name="player_mode_lyrics">Lyrics</string>
     <string name="player_mode_queue">Queue</string>
-    <string name="player_mode_about">About</string>
     <string name="player_show_artwork">Show artwork</string>
     <string name="player_add_to_playlist">Add to playlist</string>
     <string name="player_sleep_active_a11y">On</string>
