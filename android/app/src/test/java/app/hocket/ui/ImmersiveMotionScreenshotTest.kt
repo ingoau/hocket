@@ -98,6 +98,13 @@ class ImmersiveMotionScreenshotTest {
             val context = compose.activity
             for (cover in covers.take(4)) coil3.SingletonImageLoader.get(context).execute(coil3.request.ImageRequest.Builder(context).data(cover).size(ArtworkSizes.FULL).build())
         }
+        // What the classifier made of each cover (named for the style it was drawn to get).
+        kotlinx.coroutines.runBlocking {
+            for (cover in covers.take(4)) {
+                val layout = app.hocket.ui.player.ImmersiveArtwork.analyse(cover.absolutePath, app.hocket.core.api.ImmersiveArtwork.Automatic, dark = theme == "dark")
+                println("classifier: ${cover.name} -> ${layout?.bottom?.style} (${layout?.bottom?.reason})")
+            }
+        }
         fun track(album: Int) = fake.library.albumTracks(albums[album].id).first().id
         fun name(i: Int) = covers[i].nameWithoutExtension
         for ((current, next) in listOf(1 to 0, 0 to 1, 2 to 3)) {

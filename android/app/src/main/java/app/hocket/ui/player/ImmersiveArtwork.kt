@@ -288,10 +288,11 @@ private const val BOTTOM_FADE = 0.6f
 /**
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as
  * much as [fraction] (1 in artwork mode, 0 as a thumbnail). Not for a flat extension, which stays
- * crisp to its edge.
+ * crisp to its edge, unless [evenFlat] (the artwork in flight, whose flat continuation fades out
+ * under it: its edge fades with it rather than standing as a hard line).
  */
-internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float): Modifier =
-    if (edge == null || edge.isFlat()) this else this
+internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false): Modifier =
+    if (edge == null || (edge.isFlat() && !evenFlat)) this else this
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithContent {
             drawContent()

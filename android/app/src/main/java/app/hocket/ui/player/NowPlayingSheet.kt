@@ -721,8 +721,18 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
             .clearAndSetSemantics { },
     ) {
         // Immersive: the landed seam (its bottom fading into the continuation) while the
-        // continuation shows, square once it has gone.
-        Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersiveEdge, fraction = { HeroGeometry.seamFraction(progress()) }), RectangleShape)
+        // continuation shows, square once it has gone. A flat extension has no seam (the colour
+        // carries on crisply): its edge fades as the continuation does instead, so the opaque
+        // artwork never ends in a hard line over a half-faded continuation.
+        val flat = immersiveEdge?.isFlat() == true
+        Artwork(
+            coverArt, ArtworkSizes.FULL, null,
+            Modifier.fillMaxSize().immersiveFade(immersiveEdge, evenFlat = flat, fraction = {
+                val p = progress()
+                if (flat) (1f - HeroGeometry.continuationAlpha(p)) * HeroGeometry.seamFraction(p) else HeroGeometry.seamFraction(p)
+            }),
+            RectangleShape,
+        )
         if (immersiveLayout != null) ImmersiveArtworkOverlay(immersiveLayout, fraction = { HeroGeometry.headerAlpha(progress()) })
     }
 }
