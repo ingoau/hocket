@@ -4,7 +4,8 @@
 // folder. With HOCKET_FAKE_COVERS (a folder of covers; album n wears cover
 // n - 1, so put a busy card cover first, then one with a flat edge and one to
 // mirror) it also shoots the immersive layouts, against a native addon built
-// with `pnpm gen` (the fake core borrows its classifier):
+// with `pnpm gen` (the fake core borrows its classifier). HOCKET_SCREENSHOT_ONLY limits which
+// shots are written (comma-separated name fragments):
 //
 //   pnpm build && HOCKET_SCREENSHOT_DIR=/tmp/shots HOCKET_FAKE_COVERS=/path/to/covers \
 //     xvfb-run -a -s "-screen 0 2000x1600x24" pnpm test:e2e now-playing-screenshots
@@ -17,6 +18,9 @@ import { completeSetup, expect, launchFake } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
 const covers = process.env.HOCKET_FAKE_COVERS;
+/** HOCKET_SCREENSHOT_ONLY=fs-card,sidebar-lyrics: write only the shots whose names contain one of these. */
+const only = process.env.HOCKET_SCREENSHOT_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
+const wanted = (name: string) => !only?.length || only.some((f) => name.includes(f));
 
 test.use({ trace: "off" });
 
@@ -89,6 +93,7 @@ test("now playing surfaces", async () => {
     const userData = mkdtempSync(join(tmpdir(), "hocket-np-shots-"));
     const { app, page } = await launchFake(userData, covers ? { HOCKET_FAKE_COVERS: covers } : {});
     const shot = async (name: string) => {
+      if (!wanted(name)) return;
       await settle(page);
       await page.screenshot({ path: join(out!, `desktop-${theme}-${name}.png`) });
     };
