@@ -136,6 +136,15 @@ test("now playing surfaces", async () => {
       await settle(page);
       await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-local.png`) });
 
+      // Narrow: the bar's two rows, the side panel a drawer.
+      await size(app, 860, 760);
+      await shot("narrow-bar");
+      await page.getByTestId("toggle-queue").click();
+      await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
+      await shot("narrow-drawer-queue");
+      await page.keyboard.press("Escape");
+      await size(app, 1456, 912);
+
       // Fullscreen, card layout (cover 0 is busy: a card; "never" makes sure).
       await setSetting(page, "display.immersiveArtwork", "never");
       await page.getByTestId("toggle-fullscreen").click();

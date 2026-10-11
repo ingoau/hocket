@@ -206,7 +206,7 @@
    carried on to the right), or its full width on top ("bottom": carried on
    below). The continuation is a still canvas over the fluid background. */
 .np-continuation { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; animation: np-scene-in 500ms var(--ease) both; }
-.np[data-immersive] .np-fade { display: none; }
+.np[data-immersive="bottom"] .np-fade { display: none; }
 .np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
 .np[data-immersive] .np-art-button:focus-visible { outline-offset: -6px; border-radius: 0; }
 /* The artwork's last 30% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
@@ -233,7 +233,10 @@
   mask-image: linear-gradient(to right, #000 var(--np-solid), transparent var(--np-clear));
   transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized);
 }
-.np[data-immersive="right"]:not([data-mode="art"]) .np-continuation { --np-solid: 100vh; --np-clear: calc(100vh + 22vw); }
+.np[data-immersive="right"]:not([data-mode="art"]) .np-continuation { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
+/* And a scrim comes in beside the artwork, so the view's white text holds 4.5:1 over what is left of a light continuation. */
+.np[data-layout="immersive"] .np-fade { display: block; opacity: 0; background: linear-gradient(to right, transparent calc(100vh - 8vw), rgba(0, 0, 0, 0.4) calc(100vh + 2vw)); transition: opacity 700ms var(--ease-emphasized); }
+.np[data-layout="immersive"]:not([data-mode="art"]) .np-fade { opacity: 1; }
 
 /* Tall: the artwork full width on top, carried on below; the controls under it. */
 .np[data-immersive="bottom"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vw; height: 100vw; z-index: 1; }
@@ -245,30 +248,32 @@
 .np[data-immersive="bottom"][data-top-light] .np-head .np-round { background: rgba(0, 0, 0, 0.08); }
 .np[data-immersive="bottom"]:not([data-top-light]) .np-head { color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --focus-ring: #fff; }
 
-/* Over a light continuation (a white cover carried on in white): dark text and controls, light glass. */
-.np[data-light] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
-.np[data-light] .np-controls { background: rgba(255, 255, 255, 0.72); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 12px 40px rgba(0, 0, 0, 0.12); }
-.np[data-light] .np-pill { background: rgba(255, 255, 255, 0.62); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); }
-.np[data-light] .np-pill-divider { background: rgba(0, 0, 0, 0.18); }
-.np[data-light] .np-play { background: #1c1b1f; color: #fff; }
-.np[data-light] .np-play:focus-visible { outline-color: #1c1b1f; }
-.np[data-light] .np-icon-btn:hover, .np[data-light] .np-skip:hover, .np[data-light] .np-mode:hover, .np[data-light] .np-tonal.np-flank:hover { background: rgba(0, 0, 0, 0.08); }
-.np[data-light] .np-icon-btn.np-round, .np[data-light] .connect-pill, .np[data-light] .autoplay-pill, .np[data-light] .about-chip { background: rgba(0, 0, 0, 0.08); color: #1c1b1f; }
-.np[data-light] .np-icon-btn.np-round:hover, .np[data-light] .connect-pill:hover { background: rgba(0, 0, 0, 0.14); }
-.np[data-light] .connect-pill.remote { background: var(--accent); color: var(--accent-fg); }
-.np[data-light] .np-mode.on, .np[data-light] .np-tonal.np-flank.on, .np[data-light] .autoplay-pill.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
-.np[data-light] .np-mode.on:hover { background: #1c1b1f; }
-.np[data-light] .np-seek-bar .played, .np[data-light] .np-seek-bar .stop, .np[data-light] .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
-.np[data-light] .np-seek-bar .played { fill: none; }
-.np[data-light] .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
-.np[data-light] .np-seek-bar .value-bubble { background: #1c1b1f; color: #fff; }
-.np[data-light] .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
-.np[data-light] .np-volume-pop .m3-slider { --active: #fff; --handle: #fff; --stop: #fff; --inactive: rgba(255, 255, 255, 0.28); }
-.np[data-light] .queue-section { background: rgba(255, 255, 255, 0.55); color: #1c1b1f; }
-.np[data-light] .queue-section-sub { color: rgba(28, 27, 31, 0.8); }
-.np[data-light] .qrow.current { background: rgba(0, 0, 0, 0.08); }
-.np[data-light] .queue-clear { color: #1c1b1f; }
-.np[data-light] .about-path-text { background: rgba(0, 0, 0, 0.06); }
+/* Over a light continuation (a white cover carried on in white): dark text and controls, light glass.
+   The whole player with the artwork alone; with a view open (the view and the header then sit on
+   the moving blur, white text) only the card and the pill, which keep their light glass. */
+.np[data-light], .np .light-glass { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
+.np .np-controls.light-glass { background: rgba(255, 255, 255, 0.72); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 12px 40px rgba(0, 0, 0, 0.12); }
+.np-pill.light-glass { background: rgba(255, 255, 255, 0.62); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .np-pill-divider { background: rgba(0, 0, 0, 0.18); }
+:is(.np[data-light], .np .light-glass) .np-play { background: #1c1b1f; color: #fff; }
+:is(.np[data-light], .np .light-glass) .np-play:focus-visible { outline-color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-icon-btn:hover, :is(.np[data-light], .np .light-glass) .np-skip:hover, :is(.np[data-light], .np .light-glass) .np-mode:hover, :is(.np[data-light], .np .light-glass) .np-tonal.np-flank:hover { background: rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .np-icon-btn.np-round, :is(.np[data-light], .np .light-glass) .connect-pill, :is(.np[data-light], .np .light-glass) .autoplay-pill, :is(.np[data-light], .np .light-glass) .about-chip { background: rgba(0, 0, 0, 0.08); color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-icon-btn.np-round:hover, :is(.np[data-light], .np .light-glass) .connect-pill:hover { background: rgba(0, 0, 0, 0.14); }
+:is(.np[data-light], .np .light-glass) .connect-pill.remote { background: var(--accent); color: var(--accent-fg); }
+:is(.np[data-light], .np .light-glass) .np-mode.on, :is(.np[data-light], .np .light-glass) .np-tonal.np-flank.on, :is(.np[data-light], .np .light-glass) .autoplay-pill.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
+:is(.np[data-light], .np .light-glass) .np-mode.on:hover { background: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .played, :is(.np[data-light], .np .light-glass) .np-seek-bar .stop, :is(.np[data-light], .np .light-glass) .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .played { fill: none; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .value-bubble { background: #1c1b1f; color: #fff; }
+:is(.np[data-light], .np .light-glass) .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
+:is(.np[data-light], .np .light-glass) .np-volume-pop .m3-slider { --active: #fff; --handle: #fff; --stop: #fff; --inactive: rgba(255, 255, 255, 0.28); }
+:is(.np[data-light], .np .light-glass) .queue-section { background: rgba(255, 255, 255, 0.55); color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .queue-section-sub { color: rgba(28, 27, 31, 0.8); }
+:is(.np[data-light], .np .light-glass) .qrow.current { background: rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .queue-clear { color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .about-path-text { background: rgba(0, 0, 0, 0.06); }
 @media (prefers-reduced-motion: reduce) { .np-continuation { animation: none; } }
 
 @media (forced-colors: active) {

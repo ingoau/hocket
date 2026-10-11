@@ -468,7 +468,7 @@ h3 { font-size: var(--fs-lg); }
 .player .now .artist a, .player .now .title a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
 .player .now .artist a:hover, .player .now .title a:hover { text-decoration: underline; }
 .player .now .stars { margin-top: 3px; display: inline-flex; gap: 2px; }
-.player .now-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; margin-left: auto; }
+.player .now-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .player .center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
 .transport { display: flex; align-items: center; gap: 8px; }
 .player .btn {

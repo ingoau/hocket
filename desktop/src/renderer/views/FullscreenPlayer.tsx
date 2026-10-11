@@ -184,6 +184,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   };
   const immersive = immersiveOf(scene);
   const shape: FullscreenLayout = immersive?.orientation === "right" ? "immersive" : columns ? "columns" : "stacked";
+  /** Dark controls on light glass over a light continuation; they keep it when a view opens. */
+  const lightGlass = !!immersive?.edge.light;
   /** The scenes on screen: the current one last, over the one it is fading in from. */
   const [shown, setShown] = useState<Scene[]>([]);
   if (scene ? shown.at(-1) !== scene : shown.length > 0) setShown(scene ? [...shown.slice(-1), scene] : []);
@@ -306,7 +308,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
 
   return (
-    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-layout={shape} data-immersive={immersive?.orientation} data-light={immersive?.edge.light ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} data-idle={idle ? "" : undefined}
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-layout={shape} data-immersive={immersive?.orientation} data-light={immersive?.edge.light && (mode === "art" || immersive.orientation === "bottom") ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} data-idle={idle ? "" : undefined}
       style={{ ...MOTION, "--np-glass": glass } as CSSProperties} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={scene?.coverArt ?? track?.coverArt} />
       {layers.map((s) => {
@@ -336,7 +338,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             </div>
           ) : null}
 
-          <div ref={controls} className="np-controls np-chrome" role="group" aria-label={t("nowPlaying.controls")} data-testid="fs-controls">
+          <div ref={controls} className={`np-controls np-chrome ${lightGlass ? "light-glass" : ""}`} role="group" aria-label={t("nowPlaying.controls")} data-testid="fs-controls">
             <div className="np-info">
               {thumbByTitle ? <button ref={thumbArt} type="button" className="np-thumb" aria-label={t("nowPlaying.showArtwork")} title={t("nowPlaying.showArtwork")} onClick={() => setMode("art")} data-testid="np-thumb">{smallArt}</button> : null}
               <div className="np-text info">
@@ -388,7 +390,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         ) : null}
       </div>
 
-      <div ref={pill} className="np-pill np-chrome" role="toolbar" aria-label={t("nowPlaying.viewsAndDevice")} data-testid="fs-pill">
+      <div ref={pill} className={`np-pill np-chrome ${lightGlass ? "light-glass" : ""}`} role="toolbar" aria-label={t("nowPlaying.viewsAndDevice")} data-testid="fs-pill">
         <ConnectPill testId="fs-connect" dropdown iconSize={20} />
         <span className="np-pill-divider" aria-hidden="true" />
         <div className="np-modes" role="group" aria-label={t("nowPlaying.views")}>
