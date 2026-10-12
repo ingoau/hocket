@@ -129,12 +129,15 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
     val dir = LocalLayoutDirection.current
     if (controlsAtBottom) {
         val strip = QUEUE_CONTROLS_STRIP
+        // The list ends a little above the toggles (where it used to be masked away): rows never
+        // sit behind them, so none takes their taps or accessibility focus.
+        val under = strip - STRIP_TOP_PAD + 6.dp
         Box(modifier) {
             QueueTimeline(
-                Modifier.fillMaxSize().then(listModifier).fadeUnder(strip).testTag("queue.timeline"),
+                Modifier.fillMaxSize().padding(bottom = under).then(listModifier).fadeOut().testTag("queue.timeline"),
                 PaddingValues(
                     start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
-                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp,
+                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp - under,
                 ),
             )
             QueueModeHeader(
@@ -160,29 +163,22 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
 /** The height of the toggles' strip at the bottom of the player's queue panel (the list scrolls under it). */
 val QUEUE_CONTROLS_STRIP = 72.dp
 
-/**
- * The list under the bottom toggles' strip ([strip] tall): gone entirely from a little above the
- * toggles' top down to the bottom (so the panel's own fill backs them and nothing reads through
- * or between them), fading out over [FADE] above that.
- */
-private fun Modifier.fadeUnder(strip: androidx.compose.ui.unit.Dp): Modifier = this
+/** The list's last [FADE] fading out (above the bottom toggles, where it ends). */
+private fun Modifier.fadeOut(): Modifier = this
     .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
-        // The toggles start [STRIP_TOP_PAD] below the strip's top; the list is gone a little above them.
-        val gone = (size.height - strip.toPx() + STRIP_TOP_PAD.toPx() - 6.dp.toPx()).coerceIn(0f, size.height)
-        val from = (gone - FADE.toPx()).coerceAtLeast(0f)
+        val from = (size.height - FADE.toPx()).coerceAtLeast(0f)
         drawRect(
             // Eased like the lyrics' edges: mostly gone over the last half.
-            Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = from, endY = gone),
+            Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = from, endY = size.height),
             topLeft = androidx.compose.ui.geometry.Offset(0f, from),
-            size = size.copy(height = gone - from),
+            size = size.copy(height = size.height - from),
             blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
         )
-        drawRect(Color.Transparent, topLeft = androidx.compose.ui.geometry.Offset(0f, gone), size = size.copy(height = size.height - gone), blendMode = androidx.compose.ui.graphics.BlendMode.Clear)
     }
 
-/** How far the list fades out above the toggles' backing, and the room above the toggles in their strip. */
+/** How far the list fades out above the toggles, and the room above the toggles in their strip. */
 private val FADE = 56.dp
 private val STRIP_TOP_PAD = 20.dp
 
