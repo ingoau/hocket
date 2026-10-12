@@ -905,4 +905,40 @@ test.describe("immersive artwork from the classifier", () => {
       rmSync(userData, { recursive: true, force: true });
     }
   });
+  test("the fullscreen views are one width whatever the layout, beside the artwork and its card", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
+    try {
+      await completeSetup(page);
+      await playCover(page, 1);
+      await page.getByTestId("toggle-fullscreen").click();
+      const fs = page.getByTestId("fullscreen-player");
+      for (const [w, h] of [[1456, 912], [1280, 800]] as const) {
+        await app.evaluate(({ BrowserWindow }, s) => { BrowserWindow.getAllWindows()[0]?.setContentSize(s.w, s.h); return true; }, { w, h });
+        const widths: Record<string, number> = {};
+        // A card cover (columns), one carried on both ways (centred) and one to the right only.
+        for (const [n, layout, sides] of [[3, "columns", undefined], [1, "immersive", "both"], [2, "immersive", undefined]] as const) {
+          await playCover(page, n);
+          if ((await fs.getAttribute("data-mode")) !== "queue") await fs.getByTestId("fs-mode-queue").click();
+          await expect(fs).toHaveAttribute("data-layout", layout);
+          if (sides) await expect(fs).toHaveAttribute("data-sides", sides);
+          else await expect(fs).not.toHaveAttribute("data-sides", "both");
+          const pane = fs.getByTestId("np-pane-queue");
+          await expect(pane).toBeVisible();
+          await page.waitForTimeout(900);
+          const box = await pane.boundingBox();
+          const card = await fs.getByTestId("fs-controls").boundingBox();
+          widths[`${layout}${sides ? `-${sides}` : ""}`] = Math.round(box!.width);
+          // It fits: inside the window, clear of the controls card.
+          expect(box!.x + box!.width).toBeLessThanOrEqual(w);
+          expect(card!.x + card!.width, `${w}×${h} ${layout}: the card clears the view`).toBeLessThanOrEqual(box!.x);
+        }
+        const values = Object.values(widths);
+        expect(Math.max(...values) - Math.min(...values), `${w}×${h}: ${JSON.stringify(widths)}`).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      await app.close().catch(() => undefined);
+      rmSync(userData, { recursive: true, force: true });
+    }
+  });
 });

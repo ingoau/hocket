@@ -21,7 +21,9 @@
    right), "immersive" (the artwork full height on the left, the card floating
    over it as glass) and "stacked" (narrow and tall windows). The header and
    the bottom-right pill are absolutely placed in all three. */
-.fullscreen.np { display: block; overflow: hidden; --np-col-w: clamp(260px, min(38vw, calc(100vh - 500px)), 480px); --np-glass: 0.5; }
+/* --np-pane-w: the view's (lyrics, queue, about) width beside the artwork, one rule for every wide
+   layout, so the lines are as long whatever the cover. */
+.fullscreen.np { display: block; overflow: hidden; --np-col-w: clamp(260px, min(38vw, calc(100vh - 500px)), 480px); --np-pane-w: clamp(400px, 36vw, 640px); --np-glass: 0.5; }
 .np-fade { position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.12) 40%, rgba(0, 0, 0, 0.62) 100%); }
 
 /* The chrome (header, controls card, pill) fades out over the immersive artwork while the mouse rests. */
@@ -187,7 +189,7 @@
 .np .about-icon-btn:hover { background: rgba(255, 255, 255, 0.14); }
 
 /* ---- Columns: the artwork and its card in a column, centred alone, on the left beside a view. */
-.np[data-layout="columns"] .np-stage { display: grid; grid-template-columns: var(--np-col-w) minmax(0, 1fr); column-gap: clamp(48px, 6vw, 96px); align-items: center; padding: 80px clamp(40px, 4vw, 64px) 100px clamp(48px, 8vw, 128px); }
+.np[data-layout="columns"] .np-stage { display: grid; grid-template-columns: var(--np-col-w) var(--np-pane-w); justify-content: center; column-gap: clamp(48px, 8vw, 160px); align-items: center; padding: 80px clamp(40px, 4vw, 64px) 100px; }
 .np[data-layout="columns"][data-mode="art"] .np-stage { grid-template-columns: var(--np-col-w); justify-content: center; padding-left: clamp(40px, 4vw, 64px); }
 .np[data-layout="columns"] .np-pane { align-self: stretch; }
 .np[data-layout="columns"] .np-pane-about { padding-top: 32px; }
@@ -253,7 +255,7 @@
 }
 .np[data-sides="both"][data-centred] .np-art-slot { --np-left-solid: 0; }
 .np[data-sides="both"][data-left-flat] .np-art-slot { mask-image: none; }
-.np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; left: calc(100vh + 40px); right: 40px; top: 88px; bottom: 104px; }
+.np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; right: 40px; width: var(--np-pane-w); top: 88px; bottom: 104px; }
 /* With a view open, the carried-on part shortens and dissolves into the moving blur, and the view sits on that. */
 @property --np-solid { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
 @property --np-clear { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
