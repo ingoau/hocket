@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { AlbumPage, ServerInfo, Snapshot } from "../src/core/api";
-import { completeSetup, launchFake } from "./fixtures";
+import { completeSetup, launchFake, resizeWindow } from "./fixtures";
 
 const covers = process.env.HOCKET_FAKE_COVERS;
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -73,7 +73,7 @@ test("fullscreen player with real covers", async () => {
           })
           .toBe(true);
         for (const shape of SHAPES) {
-          await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), shape);
+          await resizeWindow(app, page, shape.width, shape.height);
           // The new cover's scene (artwork, layout, continuation) on screen on its own, then settled.
           await page.locator(`[data-testid="np-artwork"][data-cover="${cover}"]`).waitFor();
           await page.waitForTimeout(300);

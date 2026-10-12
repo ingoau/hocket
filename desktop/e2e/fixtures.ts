@@ -23,6 +23,28 @@ export async function launchFake(userData: string, extraEnv: Record<string, stri
   return { app, page };
 }
 
+/**
+ * Resize the window's content area to `width`×`height` and wait until the renderer sees it.
+ * Through the window's own handle; Playwright's main-process evaluation can lose its result to a
+ * garbage collection in the main process ("Resulting promise was garbage collected"), which
+ * leaves the resize done or not, so it is retried (setting the same size again is harmless), and
+ * the renderer's size, not the call, is what the spec waits on.
+ */
+export async function resizeWindow(app: ElectronApplication, page: Page, width: number, height: number): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const bw = await app.browserWindow(page);
+      await bw.evaluate((w, s) => w.setContentSize(s[0], s[1]), [width, height] as const);
+      await bw.dispose().catch(() => undefined);
+      break;
+    } catch (error) {
+      if (attempt >= 4 || !/garbage collected|Target closed|Execution context/i.test(String(error))) throw error;
+      await page.waitForTimeout(100);
+    }
+  }
+  await page.waitForFunction((s) => window.innerWidth === s[0] && window.innerHeight === s[1], [width, height] as const, { timeout: 10_000 });
+}
+
 export const test = base.extend<{ hocket: AppFixture }>({
   hocket: async ({}, use) => { // eslint-disable-line no-empty-pattern
     const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));

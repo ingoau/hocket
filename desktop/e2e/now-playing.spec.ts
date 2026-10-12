@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import type { Page } from "@playwright/test";
 import type { DeviceInfo } from "../src/core/api";
 import { encodePng } from "../src/main/png";
-import { completeSetup, expect, launchFake, playFirstAlbum, test } from "./fixtures";
+import { completeSetup, expect, launchFake, playFirstAlbum, resizeWindow, test } from "./fixtures";
 import { readPng } from "./png-read";
 
 /** Plays the `nth` album from its page, as a user does (which keeps the outgoing queue in Recent). */
@@ -454,7 +454,7 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
+      await resizeWindow(app, page, 1456, 912);
       await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("always") } }));
       await page.evaluate(async () => {
         const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
@@ -714,7 +714,7 @@ test.describe("immersive artwork from the classifier", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
+      await resizeWindow(app, page, 1456, 912);
       await playCover(page, 1);
       await page.getByTestId("toggle-fullscreen").click();
       const fs = page.getByTestId("fullscreen-player");
@@ -764,7 +764,7 @@ test.describe("immersive artwork from the classifier", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
+      await resizeWindow(app, page, 1456, 912);
       const panel = page.getByTestId("right-panel");
       const overview = page.getByTestId("side-overview");
       const art = page.getByTestId("sidebar-art");
@@ -848,7 +848,7 @@ test.describe("immersive artwork from the classifier", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
+      await resizeWindow(app, page, 1456, 912);
       const panel = page.getByTestId("right-panel");
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
@@ -914,7 +914,7 @@ test.describe("immersive artwork from the classifier", () => {
       await page.getByTestId("toggle-fullscreen").click();
       const fs = page.getByTestId("fullscreen-player");
       for (const [w, h] of [[1456, 912], [1280, 800]] as const) {
-        await app.evaluate(({ BrowserWindow }, s) => { BrowserWindow.getAllWindows()[0]?.setContentSize(s.w, s.h); return true; }, { w, h });
+        await resizeWindow(app, page, w, h);
         const widths: Record<string, number> = {};
         // A card cover (columns), one carried on both ways (centred) and one to the right only.
         for (const [n, layout, sides] of [[3, "columns", undefined], [1, "immersive", "both"], [2, "immersive", undefined]] as const) {

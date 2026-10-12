@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type ElectronApplication, type Page } from "@playwright/test";
 import type { DeviceInfo, ServerInfo } from "../src/core/api";
-import { completeSetup, expect, launchFake } from "./fixtures";
+import { completeSetup, expect, launchFake, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
 const covers = process.env.HOCKET_FAKE_COVERS;
@@ -28,7 +28,7 @@ const wanted = (name: string) => !only?.length || only.some((f) => name.includes
 test.use({ trace: "off" });
 
 async function size(app: ElectronApplication, width: number, height: number): Promise<void> {
-  await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), { width, height });
+  await resizeWindow(app, app.windows()[0]!, width, height);
 }
 
 /** Waits for the finite animations to finish, so a shot is never caught mid-transition. */
