@@ -541,14 +541,25 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
     }
 }
 
-/** The device holding the transport lease (playing), when it is not this one. */
+/**
+ * Whether another device holds the transport lease. Not when nobody does (a cold start with a
+ * restored queue, or after Stop): this device is then simply not playing.
+ */
+@Composable
+private fun anotherDevicePlays(): Boolean {
+    val client = LocalCoreClient.current
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
+    val transport by client.transport.collectAsStateWithLifecycle()
+    return !owns && transport.lease.owner != null
+}
+
+/** The device holding the transport lease (playing), when it is another one ([anotherDevicePlays]). */
 @Composable
 private fun remoteDevice(): DeviceInfo? {
     val client = LocalCoreClient.current
-    val owns by client.ownsTransport.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
     val transport by client.transport.collectAsStateWithLifecycle()
-    if (owns) return null
+    if (!anotherDevicePlays()) return null
     val owner = transport.lease.owner
     return devices.firstOrNull { it.id == owner && !it.isSelf } ?: devices.firstOrNull { it.playing && !it.isSelf }
 }
@@ -579,13 +590,13 @@ private fun SeekStatus() {
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val remote = remoteDevice()
-    val owns by client.ownsTransport.collectAsStateWithLifecycle()
+    val elsewhere = anotherDevicePlays()
     val style = MaterialTheme.typography.labelLarge
     @Composable fun line(text: String, color: Color, tag: String, weight: FontWeight? = null) =
         Text(text, style = style, color = color, fontWeight = weight, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.testTag(tag))
     when {
         notice != null -> line(notice, MaterialTheme.colorScheme.error, "player.notice")
-        !owns -> line(stringResource(R.string.player_playing_on, remote?.name ?: stringResource(R.string.player_another_device)), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
+        elsewhere -> line(stringResource(R.string.player_playing_on, remote?.name ?: stringResource(R.string.player_another_device)), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
         sleep != null -> {
             val t = sleep!!
             line(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track), MaterialTheme.colorScheme.onSurfaceVariant, "player.sleepLine")
@@ -953,7 +964,7 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
 @Composable
 private fun DeviceButton(onConnect: () -> Unit) {
     val client = LocalCoreClient.current
-    val owns by client.ownsTransport.collectAsStateWithLifecycle()
+    val elsewhere = anotherDevicePlays()
     val devices by client.devices.collectAsStateWithLifecycle()
     val remote = remoteDevice()
     val haptics = LocalHapticFeedback.current
@@ -961,10 +972,10 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val corner by animateFloatAsState(if (pressed) 0.25f else 0.5f, Motion.morph, label = "deviceCorner")
-    val container by animateColorAsState(if (!owns) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
-    val content by animateColorAsState(if (!owns) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
+    val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
+    val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
     val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
-    val icon = remote?.let { deviceIcon(it.platform) } ?: if (!owns) HocketIcons.Filled.Devices else HocketIcons.Filled.PhoneAndroid
+    val icon = remote?.let { deviceIcon(it.platform) } ?: if (elsewhere) HocketIcons.Filled.Devices else HocketIcons.Filled.PhoneAndroid
     Box(
         Modifier
             .size(48.dp)
@@ -978,7 +989,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
                 onLongClickLabel = takeOverLabel,
                 onLongClick = {
                     val self = devices.firstOrNull { it.isSelf }
-                    if (!owns && self != null) {
+                    if (elsewhere && self != null) {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         client.dispatch(Commands.handoffTo(self.id))
                     } else onConnect()
