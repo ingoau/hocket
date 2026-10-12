@@ -45,10 +45,12 @@ import app.hocket.ui.icons.HocketIcons
 internal data class TrackArtist(val id: String?, val name: String)
 
 /**
- * The song's artists, in the order the server lists them. Until the core sends the full list,
- * the one artist the summary names (its `artistId` and its artist string).
+ * The song's artists, in the order the server lists them (the core's `artists`), or without that
+ * list the one artist the summary names (its `artistId` and its artist string).
  */
-internal fun TrackSummary.trackArtists(): List<TrackArtist> = listOfNotNull(artist?.takeIf { it.isNotBlank() }?.let { TrackArtist(artistId, it) })
+internal fun TrackSummary.trackArtists(): List<TrackArtist> =
+    artists?.filter { it.name.isNotBlank() }?.takeIf { it.isNotEmpty() }?.map { TrackArtist(it.id, it.name) }
+        ?: listOfNotNull(artist?.takeIf { it.isNotBlank() }?.let { TrackArtist(artistId, it) })
 
 /**
  * The artist line's sheet: every artist on the song (avatar, name; a tap opens the artist's page),

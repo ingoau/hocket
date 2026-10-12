@@ -85,6 +85,39 @@ class AppScreenshotTest {
         shot(dir, "android-dark-17-queue-$size")
     }
 
+    /** A song by two artists: its artist line, and the sheet listing both. */
+    @Test
+    @Config(qualifiers = "+night")
+    fun duetDark() = captureDuet("dark")
+
+    @Test
+    @Config(qualifiers = "+notnight")
+    fun duetLight() = captureDuet("light")
+
+    private fun captureDuet(theme: String) {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
+        dir!!.mkdirs()
+        val core = TestCore(startPlaying = true)
+        val lib = core.fake.library
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
+        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(duet.id), 0, "Duet"))
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
+        awaitTag("miniPlayer")
+        compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
+        awaitTag("player.playPause")
+        settle()
+        shot(dir, "android-$theme-06c-player-two-artists")
+        click("player.artistLine")
+        awaitTag("player.artists.artist.1")
+        settle()
+        shot(dir, "android-$theme-06d-artists-sheet-two-artists")
+        dismissSheet()
+    }
+
     /** A title too long for the line: one line, ellipsis-free, scrolling after a pause. */
     @Test
     @Config(qualifiers = "+night")

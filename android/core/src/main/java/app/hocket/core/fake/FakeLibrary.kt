@@ -58,9 +58,13 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
                     dur += duration
                     val rating = if (rng.nextInt(3) == 0) (1 + rng.nextInt(5)).toUInt() else 0u
                     val plays = if (rng.nextInt(4) == 0) rng.nextInt(60).toUInt() else 0u
+                    // Every ninth song features the next artist, as a server sends it: the tagged
+                    // string ("A feat. B") and each artist in the list.
+                    val featured = if (trackNo % 9 == 4) artists[(a + 1) % artists.size] else null
+                    val songArtists = listOfNotNull(ArtistRef("ar$a", artists[a].name), featured?.let { ArtistRef(it.id, it.name) })
                     tracks += Track(
                         id = id, serverId = serverId, title = trackTitle(trackNo), albumId = albumId, album = albumTitle(albumNo),
-                        artistId = "ar$a", artist = artists[a].name, albumArtist = artists[a].name, trackNumber = (t + 1).toUInt(),
+                        artistId = "ar$a", artist = songArtists.joinToString(" feat. ") { it.name }, albumArtist = artists[a].name, trackNumber = (t + 1).toUInt(),
                         discNumber = 1u, year = year.toUInt(), genre = genre, durationMs = duration, bitRate = if (rng.nextBoolean()) 320u else 1000u,
                         sampleRate = 44100u, bitDepth = 16u, channels = 2u, suffix = if (rng.nextInt(3) == 0) "mp3" else "flac",
                         contentType = null, sizeBytes = duration.toDouble() * 40, path = null, coverArt = albumId, rating = rating,
@@ -69,7 +73,7 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
                         created = now - rng.nextInt(900) * 86_400_000.0, replayGain = ReplayGain(-6.0 + rng.nextDouble() * 4, 0.98, -5.5, 0.99),
                         sonic = SonicAttributes(70.0 + rng.nextInt(110), listOf("C", "D", "F#", "A", "Bb")[rng.nextInt(5)], rng.nextDouble(), listOf("calm", "bright", "dark", "warm")[rng.nextInt(4)], rng.nextDouble(), rng.nextDouble()),
                         offline = when (rng.nextInt(10)) { 0 -> OfflineState.Downloaded; 1 -> OfflineState.Cached; else -> OfflineState.None },
-                        musicBrainzId = null, explicit = rng.nextInt(12) == 0, comment = null,
+                        musicBrainzId = null, explicit = rng.nextInt(12) == 0, comment = null, artists = songArtists,
                     )
                     trackIndex[id] = tracks.size - 1
                     list += tracks.size - 1

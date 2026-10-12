@@ -262,6 +262,33 @@ class FullPlayerLayoutTest {
     @Config(qualifiers = "w411dp-h960dp")
     fun onATallPhoneTheControlsIgnoreTheArtworksStyle() = assertControlsIgnoreTheArtworksStyle()
 
+    /**
+     * A song by two artists: the line under the title is its artist string as tagged ("A feat.
+     * B"), and the sheet lists each artist (the second one's page from its row).
+     */
+    @Test
+    fun aSongBySeveralArtistsListsEachInTheSheet() {
+        startExpanded()
+        val lib = core.fake.library
+        val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
+        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(duet.id), 0, "Duet"))
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
+        compose.waitForIdle()
+        val (first, second) = duet.artists!!
+        assertEquals("${first.name} feat. ${second.name}", duet.artist)
+        val line = compose.onAllNodesWithTag("player.artist", useUnmergedTree = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].joinToString { it.text }
+        assertEquals(duet.artist, line)
+        tap("player.artistLine")
+        compose.waitUntil(5_000) { exists("player.artists.artist.1") }
+        assertFalse(exists("player.artists.artist.2"))
+        for ((i, a) in listOf(first, second).withIndex()) {
+            assertTrue("${a.name} in row $i", compose.onAllNodes(androidx.compose.ui.test.hasTestTag("player.artists.artist.$i") and androidx.compose.ui.test.hasText(a.name, substring = true)).fetchSemanticsNodes().isNotEmpty())
+        }
+        tap("player.artists.artist.1")
+        compose.waitUntil(5_000) { !exists("player.artists") }
+        compose.waitUntil(5_000) { exists("detail.header") && compose.onAllNodesWithText(second.name).fetchSemanticsNodes().isNotEmpty() }
+    }
+
     /** Opens the player on a song whose title is far too long for the line. */
     private fun startWithLongTitle(reducedMotion: Boolean) {
         val lib = core.fake.library
@@ -376,7 +403,7 @@ class FullPlayerLayoutTest {
         val artist = compose.onNodeWithTag("player.artists.artist.0").fetchSemanticsNode()
         assertEquals("Go to artist", artist.config[SemanticsActions.OnClick].label)
         assertTrue(compose.onAllNodesWithText(track.artist!!, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
-        assertFalse("one artist until the core sends the list", exists("player.artists.artist.1"))
+        assertFalse("a one-artist song", exists("player.artists.artist.1"))
         assertEquals("Go to album", compose.onNodeWithTag("player.artists.album").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
         tap("player.artists.artist.0")
         compose.waitUntil(5_000) { !exists("player.artists") }
