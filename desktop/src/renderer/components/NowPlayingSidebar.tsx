@@ -10,13 +10,13 @@
 // selector, Autoplay and the timeline), About this song, and Recent queues.
 // The player bar's lyrics and queue buttons open those views directly.
 // Resizable by its left edge; below 900px it is a drawer over the content.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track } from "@core/api";
 import { t } from "@shared/strings";
 import { SK } from "@shared/settings-keys";
 import { showSideView, useApp, useSetting, type Route, type SideView } from "../store/app";
 import { useQuery } from "../store/queries";
-import { usePosition } from "../store/position";
+import { usePositionValue } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
@@ -324,10 +324,11 @@ function LyricsCard({ trackId, durationMs }: { trackId: string; durationMs: numb
   const lyrics = useApp((s) => (s.lyrics && s.lyrics.trackId === trackId ? s.lyrics.lyrics : undefined));
   const mapped = useMemo(() => (lyrics ? mapLyrics(lyrics) : undefined), [lyrics]);
   const lines = useMemo(() => mapped?.lines.filter((l) => !l.isBG && l.words.some((w) => w.word.trim())) ?? [], [mapped]);
+  const peekLines = useMemo(() => lines.map((l) => ({ text: l.words.map((w) => w.word).join(""), start: l.startTime })), [lines]);
   if (!mapped || !lines.length) return null;
   return (
     <Card id="lyrics" title={t("lyrics.title")} link={t("nowPlaying.showLyrics")} onLink={() => showSideView("lyrics")} drill="lyrics" testId="sidebar-lyrics-card">
-      {mapped.synced ? <SyncedPeek lines={lines.map((l) => ({ text: l.words.map((w) => w.word).join(""), start: l.startTime }))} durationMs={durationMs} /> : (
+      {mapped.synced ? <SyncedPeek lines={peekLines} durationMs={durationMs} /> : (
         <ol className="lyrics-peek" aria-label={t("lyrics.title")}>
           {lines.slice(0, 3).map((l, i) => <li key={i} className="peek-line">{l.words.map((w) => w.word).join("")}</li>)}
         </ol>
@@ -339,13 +340,19 @@ function LyricsCard({ trackId, durationMs }: { trackId: string; durationMs: numb
 function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: number }[]; durationMs: number | undefined }) {
   const stamp = useApp((s) => s.transport.position);
   const offset = useApp((s) => s.connection.clockOffsetMs);
-  const pos = usePosition(stamp, durationMs, offset);
+  // Behind the fullscreen player nothing here shows: no need to follow the frames.
+  const covered = useApp((s) => s.fullscreen);
+  const lineAt = useCallback((pos: number) => {
+    let at = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if ((lines[i]?.start ?? 0) <= pos) at = i;
+      else break;
+    }
+    return at;
+  }, [lines]);
+  // Re-renders only when the current line changes, and follows playback only while it plays.
+  const active = usePositionValue(stamp, durationMs, offset, lineAt, !covered);
   const reduced = usePrefersReducedMotion();
-  let active = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if ((lines[i]?.start ?? 0) <= pos) active = i;
-    else break;
-  }
   // Before the first line: the first two, still to come.
   const shown = active < 0 ? [undefined, 0, 1] : [active - 1, active, active + 1];
   return (
