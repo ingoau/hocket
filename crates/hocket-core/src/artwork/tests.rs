@@ -259,6 +259,65 @@ fn the_left_edge_colours_run_top_to_bottom() {
 }
 
 #[test]
+fn the_top_edge_is_decided_on_its_own() {
+    // Busy everywhere but a plain band across the top.
+    let mut c = noise();
+    c.fill(0, 0, S, 60, [30, 60, 120]);
+    let l = c.auto();
+    assert_eq!(l.top.style, ArtworkStyle::Extend, "{:?}", l.top);
+    assert_eq!(l.top.reason, "extend:flat");
+    assert_eq!(l.bottom.style, ArtworkStyle::Card, "{:?}", l.bottom);
+    assert!(l.top.edge_colors.iter().all(|&c| c == l.top.edge_colors[0]));
+}
+
+#[test]
+fn the_top_edge_colours_run_left_to_right() {
+    // Dark at the left of the top edge, light at the right; a busy bottom.
+    let mut c = noise();
+    c.fill(0, 0, S / 2, 60, [20, 20, 30]);
+    c.fill(S / 2, 0, S / 2, 60, [230, 225, 215]);
+    let l = c.layout(ImmersiveArtwork::Always, vec![]);
+    let (first, last) = (l.top.edge_colors[0], *l.top.edge_colors.last().unwrap());
+    assert!(
+        first & 0xff < 0x40 && last & 0xff > 0xc0,
+        "{first:06x} .. {last:06x}"
+    );
+}
+
+#[test]
+fn a_cover_flipped_top_to_bottom_swaps_its_top_and_bottom_edges() {
+    let l = soft_texture().auto();
+    let flipped = {
+        let c = soft_texture();
+        let mut m = Canvas::new(S, S, [0; 3]);
+        for y in 0..S {
+            for x in 0..S {
+                let i = ((S - 1 - y) * S + x) * 4;
+                m.set(x, y, [c.px[i], c.px[i + 1], c.px[i + 2]]);
+            }
+        }
+        m.auto()
+    };
+    for (a, b) in [(&l.top, &flipped.bottom), (&l.bottom, &flipped.top)] {
+        assert_eq!(
+            (a.style, &a.reason, &a.edge_colors),
+            (b.style, &b.reason, &b.edge_colors)
+        );
+    }
+}
+
+#[test]
+fn a_layout_without_a_top_edge_decodes_to_a_card() {
+    let c = soft_texture();
+    let out = layout_json(&c.px, S as u32, S as u32, "").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&out).unwrap();
+    value.as_object_mut().unwrap().remove("top");
+    let back: ArtworkLayout = serde_json::from_value(value).unwrap();
+    assert_eq!(back.top.style, ArtworkStyle::Card);
+    assert_eq!(back.bottom.style, ArtworkStyle::Mirror);
+}
+
+#[test]
 fn a_symmetric_cover_decides_both_sides_alike() {
     let l = soft_texture().auto();
     let mirrored = {

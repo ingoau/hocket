@@ -114,6 +114,14 @@ pub fn layout(
             ..*f
         })
         .collect();
+    // The top edge is the bottom of the image flipped top to bottom.
+    let flipped_faces: Vec<FaceRect> = faces
+        .iter()
+        .map(|f| FaceRect {
+            y: 1.0 - f.y - f.h,
+            ..*f
+        })
+        .collect();
     let top = img.median(0..TOP_ROWS);
     let decide =
         |img: &Img, faces: &[FaceRect]| edge(img, faces, square, request.preference, request.theme);
@@ -121,6 +129,7 @@ pub fn layout(
         bottom: decide(&img, &faces),
         right: decide(&img.transposed(), &transposed_faces),
         left: decide(&img.mirrored().transposed(), &mirrored_faces),
+        top: decide(&img.flipped(), &flipped_faces),
         top_light: luminance(top) > 0.4,
         top_marks: img.marks(0..TOP_ROWS) >= MARKS_MAX,
     }
@@ -146,13 +155,15 @@ fn card_layout(reason: &str) -> ArtworkLayout {
     ArtworkLayout {
         bottom: edge.clone(),
         right: edge.clone(),
-        left: edge,
+        left: edge.clone(),
+        top: edge,
         top_light: false,
         top_marks: false,
     }
 }
 
-/// A card along an edge, for `reason` (also what an [`ArtworkLayout`] without a left edge decodes to).
+/// A card along an edge, for `reason` (also what an [`ArtworkLayout`] without a left or top edge
+/// decodes to).
 pub(crate) fn card_edge(reason: &str) -> ArtworkEdge {
     ArtworkEdge {
         style: ArtworkStyle::Card,
@@ -166,7 +177,8 @@ pub(crate) fn card_edge(reason: &str) -> ArtworkEdge {
 }
 
 /// The decision for the bottom edge of `img` (the right edge is the bottom of the transposed image,
-/// the left edge the bottom of the mirrored one transposed).
+/// the left edge the bottom of the mirrored one transposed, the top edge the bottom of the flipped
+/// one).
 fn edge(
     img: &Img,
     faces: &[FaceRect],
@@ -395,6 +407,15 @@ impl Img {
             for x in 0..N {
                 lab[x * N + y] = self.lab[y * N + x];
             }
+        }
+        Img { lab }
+    }
+
+    /// Flipped top to bottom.
+    fn flipped(&self) -> Img {
+        let mut lab = vec![[0f32; 3]; N * N];
+        for y in 0..N {
+            lab[y * N..(y + 1) * N].copy_from_slice(&self.lab[(N - 1 - y) * N..(N - y) * N]);
         }
         Img { lab }
     }

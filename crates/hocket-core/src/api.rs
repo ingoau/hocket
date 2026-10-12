@@ -911,6 +911,11 @@ pub struct ArtworkLayout {
     /// decode to a card.
     #[serde(default = "default_left_edge")]
     pub left: ArtworkEdge,
+    /// Art at the bottom, continued upwards (the room under a phone's status bar and the player's
+    /// handle). Its [`ArtworkEdge::edge_colors`] run left to right. Layouts from before it existed
+    /// decode to a card.
+    #[serde(default = "default_top_edge")]
+    pub top: ArtworkEdge,
     /// The top strip (under the status bar and the player's header) is light: dark icons there.
     pub top_light: bool,
     /// Text or a logo sits in the top strip: start the artwork below the status bar.
@@ -918,6 +923,10 @@ pub struct ArtworkLayout {
 }
 
 fn default_left_edge() -> ArtworkEdge {
+    crate::artwork::card_edge("card:none")
+}
+
+fn default_top_edge() -> ArtworkEdge {
     crate::artwork::card_edge("card:none")
 }
 
