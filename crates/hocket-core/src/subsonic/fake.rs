@@ -119,6 +119,17 @@ impl FakeServer {
                 ..Default::default()
             });
         }
+        // A song's other artists (OpenSubsonic `artists`) are library artists too.
+        for a in &c.artists {
+            if a.id.is_empty() || a.name.is_empty() {
+                continue;
+            }
+            st.artists.entry(a.id.clone()).or_insert_with(|| ArtistId3 {
+                id: a.id.clone(),
+                name: a.name.clone(),
+                ..Default::default()
+            });
+        }
         st.songs.insert(c.id.clone(), c);
         self
     }
@@ -139,6 +150,32 @@ impl FakeServer {
             created: Some("2024-01-01T00:00:00Z".into()),
             cover_art: Some(format!("al-{album_id}")),
             ..Default::default()
+        }
+    }
+
+    /// [`FakeServer::song`] by several artists, the way OpenSubsonic servers send it: the artist
+    /// string as tagged ("Artist ar0 feat. Artist ar1"), the first artist's id, and each one in
+    /// `artists`.
+    pub fn song_by(
+        id: &str,
+        title: &str,
+        album_id: &str,
+        artists: &[(&str, &str)],
+        duration_s: f64,
+    ) -> Child {
+        let (first_id, _) = artists[0];
+        let names: Vec<&str> = artists.iter().map(|(_, n)| *n).collect();
+        Child {
+            artist: Some(names.join(" feat. ")),
+            artist_id: Some(first_id.into()),
+            artists: artists
+                .iter()
+                .map(|(id, name)| ItemArtist {
+                    id: (*id).into(),
+                    name: (*name).into(),
+                })
+                .collect(),
+            ..Self::song(id, title, album_id, first_id, duration_s)
         }
     }
 

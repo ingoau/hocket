@@ -56,6 +56,20 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         .clone()
         .or_else(|| c.display_artist.clone())
         .filter(|s| !s.is_empty());
+    let artist_id = c.artist_id.clone().filter(|s| !s.is_empty());
+    // Every artist on the song (OpenSubsonic `artists`); without the list, the one the song names.
+    let mut artists: Vec<api::ArtistRef> = c
+        .artists
+        .iter()
+        .filter(|a| !a.name.trim().is_empty())
+        .map(|a| api::ArtistRef {
+            id: Some(a.id.clone()).filter(|id| !id.is_empty()),
+            name: a.name.clone(),
+        })
+        .collect();
+    if artists.is_empty() {
+        artists = fallback_artists(&artist_id, &artist);
+    }
     let sonic = if c.bpm.is_some_and(|b| b > 0.0) || !c.moods.is_empty() {
         Some(api::SonicAttributes {
             bpm: c.bpm.filter(|b| *b > 0.0),
@@ -74,7 +88,7 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         title: c.title.clone(),
         album_id: c.album_id.clone().filter(|s| !s.is_empty()),
         album: c.album.clone().filter(|s| !s.is_empty()),
-        artist_id: c.artist_id.clone().filter(|s| !s.is_empty()),
+        artist_id,
         artist,
         album_artist,
         track_number: c.track.filter(|n| *n > 0),
@@ -105,6 +119,7 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         music_brainz_id: c.music_brainz_id.clone().filter(|s| !s.is_empty()),
         explicit: c.explicit_status.as_deref() == Some("explicit"),
         comment: c.comment.clone().filter(|s| !s.is_empty()),
+        artists,
     }
 }
 
@@ -194,6 +209,24 @@ pub fn genre_from_body(g: &GenreBody) -> api::Genre {
     }
 }
 
+/// A song's one artist, from its `artistId` and artist string: what [`api::Track::artists`] holds
+/// when the server sends no list.
+pub fn fallback_artists(
+    artist_id: &Option<String>,
+    artist: &Option<String>,
+) -> Vec<api::ArtistRef> {
+    artist
+        .as_ref()
+        .filter(|a| !a.trim().is_empty())
+        .map(|name| {
+            vec![api::ArtistRef {
+                id: artist_id.clone().filter(|id| !id.is_empty()),
+                name: name.clone(),
+            }]
+        })
+        .unwrap_or_default()
+}
+
 pub fn summary_of(t: &api::Track) -> api::TrackSummary {
     api::TrackSummary {
         id: t.id.clone(),
@@ -208,5 +241,6 @@ pub fn summary_of(t: &api::Track) -> api::TrackSummary {
         rating: t.rating,
         loved: t.loved,
         offline: t.offline,
+        artists: t.artists.clone(),
     }
 }

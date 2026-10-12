@@ -30,6 +30,7 @@ const NATIVE_LOGIN: &str = include_str!("fixtures/native_login.json");
 const ARTISTS: &str = include_str!("fixtures/artists.json");
 const ALBUM_LIST2: &str = include_str!("fixtures/album_list2.json");
 const GENRES: &str = include_str!("fixtures/genres.json");
+const SONG_FEATURING: &str = include_str!("fixtures/song_featuring.json");
 
 fn ok_empty() -> FakeReply {
     FakeReply::Json(PING.to_string())
@@ -247,6 +248,50 @@ async fn search3_parses_navidrome_sample_and_converts() {
     assert!(a.loved);
     assert_eq!(a.replay_gain.as_ref().unwrap().album_gain_db, Some(-7.5));
     assert_eq!(r.artist[0].name, "Boards of Canada");
+}
+
+/// A song by two artists: the artist string stays as tagged ("A feat. B", not the server's
+/// `displayArtist`), and `artists` lists both, in order, with their ids.
+#[tokio::test]
+async fn a_song_by_several_artists_keeps_its_artist_string_and_lists_each() {
+    let t = FakeTransport::new();
+    t.on_endpoint("getSong", FakeReply::Json(SONG_FEATURING.into()));
+    let c = client(&t);
+    let song = c.song("s9").await.unwrap();
+    let track = track_from_child("srv1", &song);
+    assert_eq!(track.artist.as_deref(), Some("Marlowe Reed feat. Juno"));
+    assert_eq!(track.artist_id.as_deref(), Some("ar7"));
+    assert_eq!(
+        track.artists,
+        vec![
+            crate::api::ArtistRef {
+                id: Some("ar7".into()),
+                name: "Marlowe Reed".into()
+            },
+            crate::api::ArtistRef {
+                id: Some("ar8".into()),
+                name: "Juno".into()
+            },
+        ]
+    );
+    assert_eq!(super::convert::summary_of(&track).artists, track.artists);
+}
+
+/// Without an `artists` list (plain Subsonic), the song's one artist: its id and artist string.
+#[tokio::test]
+async fn a_song_without_an_artists_list_names_its_one_artist() {
+    let t = FakeTransport::new();
+    t.on_endpoint("search3", FakeReply::Json(SEARCH3.into()));
+    let c = client(&t);
+    let r = c.search3("", Search3Page::songs(500, 0)).await.unwrap();
+    let track = track_from_child("srv1", &r.song[1]);
+    assert_eq!(
+        track.artists,
+        vec![crate::api::ArtistRef {
+            id: Some("ar1".into()),
+            name: "Boards of Canada".into()
+        }]
+    );
 }
 
 #[tokio::test]
