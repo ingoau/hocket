@@ -20,8 +20,9 @@ import app.hocket.R
 import app.hocket.ui.queue.RecentQueuesList
 
 /**
- * The queue switcher, from "Playing from" in the full player: the recent and pinned queues (the
- * same list as the Recent queues screen); picking one restores it and closes the sheet.
+ * The queue switcher, from the chevron of the full player's queue split button
+ * (`player.switchQueue`): the recent and pinned queues (the same list as the Recent queues screen);
+ * picking one restores it and closes the sheet.
  */
 @Composable
 fun QueueSwitcherSheet(onDismiss: () -> Unit) {
