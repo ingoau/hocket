@@ -93,7 +93,7 @@ test("fullscreen player with real covers", async () => {
           await page.evaluate(() => {
             const set = (sel: string, text: string) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
             set("#fs-title", "Song Name");
-            set(".np-text .t2", "Artist • Album");
+            set(".np-text .t2 .artist-chooser", "Artist");
           });
           await page.screenshot({ path: join(out!, `${String(offset + i).padStart(3, "0")}-${shape.name}.png`) });
         }

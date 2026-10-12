@@ -30,6 +30,7 @@ import { LyricsView } from "./LyricsView";
 import { EmptyState } from "./EmptyState";
 import { Artwork } from "./Artwork";
 import { AboutSong, formatLine } from "./AboutSong";
+import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
 import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Scene } from "../lib/immersive";
@@ -159,7 +160,7 @@ function Overview() {
       <div className="side-title-row">
         <div className="side-titles">
           <h2 className="side-title" title={track.title}>{track.albumId ? <button type="button" className="side-text-link" onClick={() => navigate({ view: "album", id: track.albumId as string })}>{track.title}</button> : track.title}</h2>
-          <div className="side-artist" title={track.artist}>{track.artistId ? <button type="button" className="side-text-link" onClick={() => navigate({ view: "artist", id: track.artistId as string })}>{track.artist ?? t("misc.unknownArtist")}</button> : (track.artist ?? t("misc.unknownArtist"))}</div>
+          <div className="side-artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="sidebar-artist" /></div>
         </div>
         <button type="button" className="side-icon-btn" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={() => void executeAction("addToPlaylist")} data-testid="sidebar-add"><Icon name="playlistAdd" size={22} /></button>
         <button type="button" className="side-icon-btn" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="sidebar-more"><Icon name="more" size={22} /></button>

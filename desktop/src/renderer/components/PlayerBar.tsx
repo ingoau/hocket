@@ -21,6 +21,7 @@ import { openContextMenu, openMenuFromButton } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { isOfflineNotice, noticeText } from "../lib/notice";
+import { ArtistChooser } from "./ArtistChooser";
 import { Stars } from "./Stars";
 import { Slider } from "./controls";
 import { WavySeek } from "./WavySeek";
@@ -58,7 +59,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
           {track ? (
             <>
               <div className="title" title={track.title}><a href="#" onClick={(e) => { e.preventDefault(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }}>{track.title}</a></div>
-              <div className="artist" title={track.artist}><a href="#" onClick={(e) => { e.preventDefault(); if (track.artistId) navigate({ view: "artist", id: track.artistId }); }}>{track.artist ?? t("misc.unknownArtist")}</a></div>
+              <div className="artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="bar-artist" /></div>
               {showRating ? <Stars value={track.rating} size={14} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /> : null}
             </>
           ) : (

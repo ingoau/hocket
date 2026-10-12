@@ -1,7 +1,7 @@
 // The fullscreen "Now playing" view (F), docs/design.md "Desktop layout".
 //
 // On the blurred, artwork-coloured background (FluidBackground): the artwork,
-// a controls card (title, artist • album, love / add to playlist / More, the
+// a controls card (title, artist, love / add to playlist / More, the
 // rating, the wavy seek bar and the transport), the collapse and window
 // fullscreen buttons top right, and a pill bottom right with the Connect
 // device and the Lyrics / Queue / About toggles (choosing the one that is on
@@ -45,6 +45,7 @@ import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/NowPlayingSidebar";
 import { AboutSong } from "../components/AboutSong";
 import { ConnectPill } from "../components/ConnectPill";
+import { ArtistChooser } from "../components/ArtistChooser";
 import { LyricsOptionsButton } from "../components/LyricsOptions";
 import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
@@ -369,14 +370,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
               {thumbByTitle ? <button ref={thumbArt} type="button" className="np-thumb" aria-label={t("nowPlaying.showArtwork")} title={t("nowPlaying.showArtwork")} onClick={() => setMode("art")} data-testid="np-thumb">{smallArt}</button> : null}
               <div className="np-text info">
                 <h2 className="t1" id="fs-title" title={track?.title}>{track?.title ?? t("player.nothingPlaying")}</h2>
-                <div className="t2">
-                  {track ? (
-                    <>
-                      {track.artistId ? <button type="button" className="np-link" onClick={() => go({ view: "artist", id: track.artistId })}>{track.artist ?? t("misc.unknownArtist")}</button> : <span>{track.artist ?? t("misc.unknownArtist")}</span>}
-                      {track.album ? <><span className="np-dot" aria-hidden="true"> • </span>{track.albumId ? <button type="button" className="np-link" onClick={() => go({ view: "album", id: track.albumId })}>{track.album}</button> : <span>{track.album}</span>}</> : null}
-                    </>
-                  ) : null}
-                </div>
+                <div className="t2">{track ? <ArtistChooser track={track} className="artist-chooser" onNavigate={go} testId="fs-artist" /> : null}</div>
               </div>
               {track ? (
                 <div className="np-actions">

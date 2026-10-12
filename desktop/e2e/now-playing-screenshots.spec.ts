@@ -113,6 +113,13 @@ test("now playing surfaces", async () => {
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "overview");
       await shot("sidebar-overview");
       await shot("sidebar-overview-immersive-card");
+      if (wanted("sidebar-artist-menu")) {
+        await page.getByTestId("sidebar-artist").click();
+        await expect(page.getByTestId("artist-menu")).toBeVisible();
+        await shot("sidebar-artist-menu");
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("artist-menu")).toHaveCount(0);
+      }
       await page.getByTestId("toggle-side-panel").click();
       await expect(page.getByTestId("right-panel")).toHaveCount(0);
       await shot("bar-sidebar-closed");
@@ -189,6 +196,13 @@ test("now playing surfaces", async () => {
       await page.getByTestId("fs-pill-volume").click();
       await shot("fs-card-volume");
       await page.keyboard.press("Escape");
+      if (wanted("fs-card-artist-menu")) {
+        await page.getByTestId("fs-artist").click();
+        await expect(page.getByTestId("artist-menu")).toBeVisible();
+        await shot("fs-card-artist-menu");
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("artist-menu")).toHaveCount(0);
+      }
       await size(app, 1600, 1000);
       await shot("fs-card-art-1600");
       await fsMode(page, "lyrics");

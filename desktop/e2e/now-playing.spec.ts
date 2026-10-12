@@ -320,6 +320,59 @@ test.describe("now playing", () => {
   });
 });
 
+test.describe("the artist in the now playing subtitle", () => {
+  test("shows the artist alone and opens a menu of the track's artists and its album, from the bar, the side panel and the fullscreen player", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const track = ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { artist?: string; album?: string } } } } }).data.queue.current!.track;
+    const menu = page.getByTestId("artist-menu");
+    // The bar: the artist string as given, no album.
+    const bar = page.getByTestId("bar-artist");
+    await expect(page.getByTestId("player-bar").locator(".now .artist")).toHaveText(track.artist!);
+    await bar.click();
+    await expect(menu).toBeVisible();
+    await expect(menu.getByTestId("artist-menu-artist")).toHaveText([track.artist!]);
+    await expect(menu.getByTestId("artist-menu-album")).toContainText(track.album!);
+    // Escape closes it, back on the artist.
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(bar).toBeFocused();
+    // From the keyboard: Enter opens it on the first artist, the arrows move, Enter opens the album.
+    await page.keyboard.press("Enter");
+    await expect(menu.getByTestId("artist-menu-artist").first()).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByTestId("artist-menu-album")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("view-album").locator("h1").first()).toHaveText(track.album!);
+    // The side panel's overview: an artist opens the artist's page.
+    const panel = page.getByTestId("right-panel");
+    if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
+    await expect(panel).toHaveAttribute("data-view", "overview");
+    await expect(page.getByTestId("sidebar-artist")).toHaveText(track.artist!);
+    await page.getByTestId("sidebar-artist").click();
+    await menu.getByTestId("artist-menu-artist").first().click();
+    await expect(page.getByTestId("view-artist")).toBeVisible();
+    // The fullscreen card: the artist alone; an artist leaves the player for the artist's page.
+    await page.getByTestId("nav-albums").click();
+    await page.getByTestId("toggle-fullscreen").click();
+    const fs = page.getByTestId("fullscreen-player");
+    await expect(fs.locator(".np-text .t2")).toHaveText(track.artist!);
+    await fs.getByTestId("fs-artist").click();
+    await expect(fs.getByTestId("artist-menu")).toBeVisible();
+    await expect(fs.getByTestId("artist-menu-album")).toContainText(track.album!);
+    // Escape closes the menu, not the player.
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(fs).toBeVisible();
+    await fs.getByTestId("fs-artist").click();
+    await menu.getByTestId("artist-menu-artist").first().click();
+    await expect(fs).toHaveCount(0);
+    await expect(page.getByTestId("view-artist")).toBeVisible();
+  });
+});
+
 // Immersive artwork needs the classifier, which the fake core borrows from the native addon.
 const addonBuilt = existsSync(join(resolve(__dirname, ".."), "native", "index.js"));
 

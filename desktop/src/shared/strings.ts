@@ -190,6 +190,7 @@ const STRINGS = {
   "nowPlaying.openQueue": "Open queue",
   "nowPlaying.moreAbout": "More",
   "nowPlaying.upNext": "Up next",
+  "nowPlaying.artistMenu": "Artists and album",
   "nowPlaying.nothingNext": "Nothing up next.",
   "nowPlaying.back": "Back",
   "nowPlaying.connectOn": "Playing on {device}. Choose a device",
