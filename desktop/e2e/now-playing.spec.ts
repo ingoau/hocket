@@ -239,11 +239,14 @@ test.describe("now playing", () => {
     const fs = page.getByTestId("fullscreen-player");
     await expect(fs).toHaveAttribute("data-mode", "queue");
     await expect(fs.getByTestId("fs-pill").getByTestId("lyrics-options")).toHaveCount(0);
+    // (Once the player's opening motion has settled.)
+    const settled = () => fs.evaluate((el) => Promise.race([Promise.all(el.getAnimations({ subtree: true }).filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY).map((a) => a.finished.catch(() => undefined))), new Promise((r) => setTimeout(r, 3000))]));
     const positions = () => fs.getByTestId("fs-pill").locator("button").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return `${el.getAttribute("data-testid")}@${Math.round(r.x)},${Math.round(r.y)}`; }));
+    await settled();
     const before = await positions();
     await fs.getByTestId("fs-mode-lyrics").click();
     await expect(fs).toHaveAttribute("data-mode", "lyrics");
-    await page.waitForTimeout(400);
+    await settled();
     expect(await positions()).toEqual(before);
     await expect(fs.getByTestId("fs-pill").getByTestId("lyrics-options")).toHaveCount(0);
     // A right-click on the pill's lyrics toggle opens the options, rising above the pill.
