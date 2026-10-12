@@ -123,6 +123,8 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
   );
 }
 
+/** Without a Lyrics card, how long the fade back into the pane runs below the title (the stylesheet's gap there matches). */
+const NO_LYRICS_FADE = 180;
 /** Muted text's opacity over the continuation (--fg-muted there): the scrim is sized for it. */
 const MUTED_ALPHA = 0.8;
 
@@ -133,14 +135,21 @@ function Overview() {
   const scene = useOverviewScene(track?.coverArt);
   const overview = useRef<HTMLDivElement>(null);
   const immersive = !!scene.edge;
-  // The continuation fades back into the pane below the Lyrics card (or the title, without one):
-  // its offset, kept on the overview for the stylesheet as the content's height changes.
+  // The continuation fades back into the pane behind the Lyrics card: from the title row's bottom
+  // to the next card's top (without lyrics, over as long below the title, which the stylesheet
+  // leaves clear). Kept on the overview for the stylesheet as the content and the width change.
   useLayoutEffect(() => {
     const el = overview.current;
     if (!el || !immersive) return;
     const place = () => {
-      const anchor = el.querySelector<HTMLElement>('[data-card="lyrics"]') ?? el.querySelector<HTMLElement>(".side-title-row");
-      if (anchor) el.style.setProperty("--side-fade-at", `${anchor.offsetTop + anchor.offsetHeight}px`);
+      const title = el.querySelector<HTMLElement>(".side-title-row");
+      if (!title) return;
+      const start = title.offsetTop + title.offsetHeight;
+      const lyrics = el.querySelector<HTMLElement>('[data-card="lyrics"]');
+      const after = (lyrics ?? title).nextElementSibling as HTMLElement | null;
+      const end = after ? after.offsetTop : start + NO_LYRICS_FADE;
+      el.style.setProperty("--side-fade-at", `${start}px`);
+      el.style.setProperty("--side-fade-len", `${Math.max(1, end - start)}px`);
     };
     place();
     const ro = new ResizeObserver(place);
@@ -153,7 +162,11 @@ function Overview() {
   return (
     <div className="side-scroll" data-testid="sidebar-scroll">
       <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} style={style} data-testid="side-overview">
-      {edge ? layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null)) : null}
+      {edge ? (
+        <div className="side-backdrop" aria-hidden="true">
+          {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
+        </div>
+      ) : null}
       <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined}>
         {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={l.scene.coverArt} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={l.scene.coverArt} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
       </div>

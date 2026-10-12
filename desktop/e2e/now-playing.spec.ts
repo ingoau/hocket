@@ -9,6 +9,7 @@ import type { Page } from "@playwright/test";
 import type { DeviceInfo } from "../src/core/api";
 import { encodePng } from "../src/main/png";
 import { completeSetup, expect, launchFake, playFirstAlbum, test } from "./fixtures";
+import { readPng } from "./png-read";
 
 /** Plays the `nth` album from its page, as a user does (which keeps the outgoing queue in Recent). */
 async function playAlbum(page: Page, nth: number): Promise<string> {
@@ -474,9 +475,9 @@ async function playCover(page: Page, n: number): Promise<void> {
 
 /**
  * The lowest contrast of the text over the continuation (the title row and the Lyrics card) against
- * what is behind it: sampled across each text element, the continuation canvas's pixels over the
- * overview's own background (the base colour under the scrim), with the card's translucent fill
- * on top, and the text's colour over that.
+ * what is behind it: sampled across each text element, the backdrop as the stylesheet builds it
+ * (the canvas's pixels settling into the base colour, the whole fading back into the pane behind
+ * the Lyrics card), the card's fill on top, and the text's colour over that.
  */
 async function overviewContrast(page: Page): Promise<{ min: number; worst: string }> {
   return page.getByTestId("side-overview").evaluate((root) => {
@@ -498,6 +499,14 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const ratio = (a: C, b: C) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
     const style = getComputedStyle(root);
     const base = parse(`rgb(${style.getPropertyValue("--side-fill")})`);
+    const panel = parse(getComputedStyle(root.closest(".side-pane")!).backgroundColor);
+    const at = Number.parseFloat(style.getPropertyValue("--side-fade-at"));
+    const len = Number.parseFloat(style.getPropertyValue("--side-fade-len"));
+    const top0 = root.getBoundingClientRect().top;
+    const ss = (t: number) => {
+      const u = Math.max(0, Math.min(1, t));
+      return u * u * (3 - 2 * u);
+    };
     const canvas = root.querySelector<HTMLCanvasElement>("canvas.side-continuation:last-of-type")!;
     const ctx = canvas.getContext("2d")!;
     const box = canvas.getBoundingClientRect();
@@ -515,11 +524,13 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
         for (let j = 1; j <= 3; j++) {
           const x = r.left + (r.width * i) / 6;
           const y = r.top + (r.height * j) / 4;
-          let bg = base;
+          const local = y - top0;
+          let back = base;
           if (y < box.bottom) {
             const d = ctx.getImageData(Math.floor((x - box.left) * sx), Math.floor((y - box.top) * sx), 1, 1).data;
-            bg = over([d[0]!, d[1]!, d[2]!, d[3]! / 255], base);
+            back = over([d[0]!, d[1]!, d[2]!, (d[3]! / 255) * (1 - ss((local - (at - 64)) / 64))], base);
           }
+          let bg = over([back[0], back[1], back[2], 1 - ss((local - at) / len)], panel);
           if (fill) bg = over(fill, bg);
           const c = ratio(over(fg, bg), bg);
           if (c < min) {
@@ -531,6 +542,65 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     }
     return { min, worst };
   });
+}
+
+/** Skips to a track of the current context with (or without) lyrics. */
+async function toTrackWithLyrics(page: Page, want: boolean): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    const has = await page.evaluate(async () => {
+      const snap = (await window.hocket.query({ type: "snapshot" })) as { data: { queue: { current?: { track: { id: string } } } } };
+      const id = snap.data.queue.current?.track.id;
+      const r = (await window.hocket.query({ type: "lyrics", data: { track_id: id! } })) as { data?: { tier?: string } | null };
+      return !!r.data?.tier;
+    });
+    if (has === want) return;
+    await page.evaluate(() => window.hocket.dispatch({ type: "next" }));
+    await page.waitForTimeout(300);
+  }
+  throw new Error(`no track ${want ? "with" : "without"} lyrics`);
+}
+
+/**
+ * The fade from the continuation back to the pane, measured on screen: a column in the overview's
+ * margin (outside the cards) from the top of the fade to below the top of Up next, and the middle
+ * of the gap above Up next. The fade must run one way with no step above 6 levels per pixel, and
+ * Up next must sit on the plain pane.
+ */
+async function checkFade(page: Page, label: string): Promise<void> {
+  const overview = page.getByTestId("side-overview");
+  const geo = await overview.evaluate((el) => {
+    const pane = el.closest(".side-pane")!.getBoundingClientRect();
+    const upNext = el.querySelector('[data-card="upnext"]')!.getBoundingClientRect();
+    const top = el.getBoundingClientRect().top;
+    const s = getComputedStyle(el);
+    const bg = getComputedStyle(el.closest(".side-pane")!).backgroundColor.match(/\d+/g)!.map(Number);
+    return { pane: { x: pane.x, y: pane.y, w: pane.width, h: pane.height }, upTop: upNext.top, upBottom: upNext.bottom, fadeAt: top + Number.parseFloat(s.getPropertyValue("--side-fade-at")), bg };
+  });
+  const shot = readPng(await page.screenshot({ clip: { x: geo.pane.x, y: geo.pane.y, width: geo.pane.w, height: geo.pane.h } }));
+  const px = (x: number, y: number) => {
+    const i = (Math.round(y - geo.pane.y) * shot.width + Math.round(x - geo.pane.x)) * 4;
+    return [shot.data[i]!, shot.data[i + 1]!, shot.data[i + 2]!];
+  };
+  const level = (c: number[]) => (c[0]! + c[1]! + c[2]!) / 3;
+  const run = (x: number, from: number, to: number, what: string) => {
+    const v: number[] = [];
+    for (let y = Math.ceil(from); y < Math.min(to, geo.pane.y + geo.pane.h - 1); y++) v.push(level(px(x, y)));
+    const dir = Math.sign(v.at(-1)! - v[0]!);
+    for (let i = 1; i < v.length; i++) {
+      const d = v[i]! - v[i - 1]!;
+      expect(Math.abs(d), `${label}, ${what}: step of ${d.toFixed(1)} at ${i} px`).toBeLessThanOrEqual(6);
+      expect(d * dir, `${label}, ${what}: turns back at ${i} px`).toBeGreaterThanOrEqual(-1);
+    }
+  };
+  const margin = geo.pane.x + 6;
+  run(margin, geo.fadeAt - 8, geo.upTop + 24, "margin");
+  run(geo.pane.x + geo.pane.w / 2, geo.upTop - 11, geo.upTop - 1, "gap above Up next");
+  // Up next on the plain pane: its margin is the pane's own colour, top to bottom.
+  // (Clear of the pane's rounded bottom corners.)
+  for (let y = geo.upTop; y < Math.min(geo.upBottom, geo.pane.y + geo.pane.h - 32); y += 4) {
+    const c = px(margin, y);
+    for (let k = 0; k < 3; k++) expect(Math.abs(c[k]! - geo.bg[k]!), `${label}: beside Up next at ${Math.round(y - geo.upTop)} px`).toBeLessThanOrEqual(2);
+  }
 }
 
 test.describe("immersive artwork from the classifier", () => {
@@ -628,13 +698,16 @@ test.describe("immersive artwork from the classifier", () => {
           expect(Math.abs(box!.y - pane!.y)).toBeLessThan(1.5);
           expect(Math.abs(box!.x - pane!.x)).toBeLessThan(1.5);
           expect(await art.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe("0px");
-          // The continuation fades back into the pane right below the Lyrics card (the title
-          // without one), so the cards after it are the usual ones.
+          // The continuation fades back into the pane behind the Lyrics card, from the title row
+          // to Up next, so the cards after it are the usual ones.
           const fade = await overview.evaluate((el) => {
-            const anchor = el.querySelector<HTMLElement>('[data-card="lyrics"]') ?? el.querySelector<HTMLElement>(".side-title-row")!;
-            return { at: el.style.getPropertyValue("--side-fade-at"), want: `${anchor.offsetTop + anchor.offsetHeight}px`, upNextGlass: getComputedStyle(el.querySelector('[data-card="upnext"]')!).backdropFilter };
+            const title = el.querySelector<HTMLElement>(".side-title-row")!;
+            const upNext = el.querySelector<HTMLElement>('[data-card="upnext"]')!;
+            const start = title.offsetTop + title.offsetHeight;
+            return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px`, upNextGlass: getComputedStyle(upNext).backdropFilter };
           });
           expect(fade.at).toBe(fade.want);
+          expect(fade.len).toBe(fade.wantLen);
           expect(fade.upNextGlass).toBe("none");
           // No scrollbar: the content is as wide as the pane whether or not it overflows.
           expect(await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).offsetWidth - el.clientWidth)).toBe(0);
@@ -653,6 +726,45 @@ test.describe("immersive artwork from the classifier", () => {
       await expect(overview).toHaveClass(/immersive/);
       await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("never") } }));
       await expect(overview).not.toHaveClass(/immersive/);
+    } finally {
+      await app.close().catch(() => undefined);
+      rmSync(userData, { recursive: true, force: true });
+    }
+  });
+  test("the side panel's continuation fades back into the pane behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
+    try {
+      await completeSetup(page);
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      const panel = page.getByTestId("right-panel");
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
+        for (const [n, name] of [[1, "extend"], [5, "mirror"]] as const) {
+          await playCover(page, n);
+          await toTrackWithLyrics(page, true);
+          if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
+          await expect(panel).toHaveAttribute("data-view", "overview");
+          await expect(page.getByTestId("sidebar-lyrics-card")).toBeVisible();
+          await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
+          await page.waitForTimeout(800);
+          await checkFade(page, `${theme} ${name}`);
+        }
+      }
+      // Narrower and wider, the fade follows.
+      const handle = page.getByTestId("side-panel-resize");
+      await handle.focus();
+      for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(400);
+      await checkFade(page, "narrower");
+      for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowLeft");
+      await page.waitForTimeout(400);
+      await checkFade(page, "wider");
+      // Without lyrics, the fade runs below the title, Up next after it.
+      await toTrackWithLyrics(page, false);
+      await expect(page.getByTestId("sidebar-lyrics-card")).toHaveCount(0);
+      await page.waitForTimeout(800);
+      await checkFade(page, "no lyrics");
     } finally {
       await app.close().catch(() => undefined);
       rmSync(userData, { recursive: true, force: true });

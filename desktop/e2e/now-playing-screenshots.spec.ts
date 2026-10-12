@@ -229,6 +229,22 @@ test("now playing surfaces", async () => {
             if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
             await expect(panel).toHaveAttribute("data-view", "overview");
             await shot(`sidebar-overview-immersive-${name}`);
+            if (name === "mirror" && wanted("sidebar-overview-immersive-mirror-nolyrics")) {
+              // A song without lyrics: the fade runs below the title instead.
+              for (let i = 0; i < 12; i++) {
+                const tier = await page.evaluate(async () => {
+                  const snap = (await window.hocket.query({ type: "snapshot" })) as { data: { queue: { current?: { track: { id: string } } } } };
+                  const r = (await window.hocket.query({ type: "lyrics", data: { track_id: snap.data.queue.current!.track.id } })) as { data?: { tier?: string } | null };
+                  return r.data?.tier;
+                });
+                if (!tier) break;
+                await page.evaluate(() => window.hocket.dispatch({ type: "next" }));
+                await page.waitForTimeout(300);
+              }
+              await expect(page.getByTestId("sidebar-lyrics-card")).toHaveCount(0);
+              await shot("sidebar-overview-immersive-mirror-nolyrics");
+              await playAlbum(page, index, "Road trip");
+            }
           }
           await page.getByTestId("toggle-fullscreen").click();
           const fs = page.getByTestId("fullscreen-player");
