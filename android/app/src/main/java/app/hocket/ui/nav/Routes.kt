@@ -37,6 +37,7 @@ sealed interface Route {
     @Serializable data object SettingsLibrary : Route
     @Serializable data object SettingsBattery : Route
     @Serializable data object SettingsBackup : Route
+    @Serializable data object SettingsPebble : Route
 }
 
 /**
