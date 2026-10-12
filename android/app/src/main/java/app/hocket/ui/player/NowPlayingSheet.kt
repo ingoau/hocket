@@ -525,7 +525,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val artworkMode = state.mode == PlayerMode.Artwork
         val lightPlayer = immersiveEdge?.light == true && artworkMode
         val targetScheme = remember(seed, lightPlayer) { playerSchemeFor(seed, lightPlayer) }
-        val playerScheme0 = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion && !carousel.busy)
+        // Read as derived state: the swipe's offset changes every frame, the flag only twice a swipe.
+        val carouselBusy by remember(carousel) { derivedStateOf { carousel.busy } }
+        val playerScheme0 = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion && !carouselBusy)
         val neighbourShown = when {
             towards > 0f -> previousShown.let { (c, l, sd) -> Triple(sd ?: c?.let { ArtworkColors.seedFor(it) }, l, c) }
             towards < 0f -> Triple(nextSeed ?: nextCover?.let { ArtworkColors.seedFor(it) }, nextLayout, nextCover)
