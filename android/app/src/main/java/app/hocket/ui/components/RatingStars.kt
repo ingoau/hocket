@@ -102,10 +102,19 @@ fun RatingStars(
                 }
             }
             .pointerInput(cellPx) {
+                // What the drag rates: the item (and its rating) it began on, even if another takes
+                // its place under the finger (the player moving on to the next song mid-drag).
+                var target = rate
+                var from = current
                 detectHorizontalDragGestures(
-                    onDragStart = { o -> dragged = valueAt(o.x); haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                    onDragStart = { o ->
+                        target = rate
+                        from = current
+                        dragged = valueAt(o.x)
+                        haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                    },
                     onDragEnd = {
-                        dragged?.let { if (it != current) rate(it) }
+                        dragged?.let { if (it != from) target(it) }
                         dragged = null
                         haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
                     },
