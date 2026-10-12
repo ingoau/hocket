@@ -42,6 +42,26 @@
             android:name="app.hocket.playback.ArtworkProvider"
             android:authorities="${applicationId}.artwork"
             android:exported="true" />
+        <!-- The Pebble watchapp's messages (PebbleKit 2). Exported for the Pebble app; PebbleKit itself
+             ignores callers other than the selected Pebble app. -->
+        <service
+            android:name="app.hocket.playback.pebble.PebbleListenerService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
+            </intent-filter>
+        </service>
+        <!-- The bundled watchapp, handed to the Pebble app to install (read grant per intent only). -->
+        <provider
+            android:name="app.hocket.playback.pebble.PebbleFileProvider"
+            android:authorities="${applicationId}.pebble"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/pebble_paths" />
+        </provider>
         <!-- Media buttons: Media3 declares its own androidx.media3.session.MediaButtonReceiver (it
              FGS-starts the service only for a PLAY key while nothing plays). The legacy
              androidx.media.session.MediaButtonReceiver must not be declared as well: exported with a

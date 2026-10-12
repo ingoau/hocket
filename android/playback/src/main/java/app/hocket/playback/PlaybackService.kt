@@ -13,6 +13,7 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
+import app.hocket.playback.pebble.PebbleBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,8 @@ import kotlinx.coroutines.launch
  *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself; a player that is still buffering
  *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says.
+ * - Owns the [PebbleBridge] (the Pebble watchapp's phone side), fed the same events; the watch's
+ *   messages reach it through [app.hocket.playback.pebble.PebbleListenerService], which binds here.
  * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
  *   app's own bind counts as a UI client: the service is exported for Media3, so the bind intent
  *   carries [CoreHost.bindToken], which no other process can know.
@@ -80,6 +83,8 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var bridge: MediaSessionBridge
     private lateinit var network: NetworkMonitor
     private lateinit var battery: BatterySaverMonitor
+    lateinit var pebble: PebbleBridge
+        private set
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
     private var idleJob: Job? = null
@@ -100,6 +105,7 @@ class PlaybackService : MediaLibraryService() {
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
         battery = BatterySaverMonitor(this, ::dispatch)
+        pebble = PebbleBridge(this, { core }, { serverId }, scope)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
         network.start()
@@ -115,6 +121,7 @@ class PlaybackService : MediaLibraryService() {
     private fun dispatch(command: Command) = core.dispatch(command)
 
     private fun onEvent(event: Event) {
+        pebble.onEvent(event)
         when (event) {
             is Event.Backend -> if (core.kind == app.hocket.core.CoreKind.Native) backend.handle(event.data.command) else Unit
             is Event.MediaSession -> {
@@ -222,6 +229,7 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.clear()
         backend.release()
         bridge.release()
+        pebble.release()
         scope.cancel()
         // Detaches the core and flushes it on a worker thread (the flush blocks; never on main).
         CoreHost.shutdown()
