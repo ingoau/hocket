@@ -477,6 +477,22 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
       await expect(fs).toHaveAttribute("data-idle", "", { timeout: 8000 });
       await page.keyboard.press("Shift");
       await expect(fs).not.toHaveAttribute("data-idle", "");
+      // An open popover of the player's keeps them up (the artist menu, the lyrics options), with
+      // the mouse resting; they fade once it closes.
+      await fs.getByTestId("fs-artist").click();
+      await expect(fs.getByTestId("artist-menu")).toBeVisible();
+      await page.waitForTimeout(4500);
+      await expect(fs).not.toHaveAttribute("data-idle", "");
+      await page.keyboard.press("Escape");
+      await expect(fs.getByTestId("artist-menu")).toHaveCount(0);
+      await fs.getByTestId("fs-mode-lyrics").click({ button: "right" });
+      await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
+      await page.waitForTimeout(4500);
+      await expect(fs).not.toHaveAttribute("data-idle", "");
+      await page.keyboard.press("Escape");
+      await expect(fs.getByTestId("lyrics-tools")).toHaveCount(0);
+      await expect(fs).toHaveAttribute("data-idle", "", { timeout: 8000 });
+      await page.mouse.move(420, 330);
       // A view keeps them up.
       await fs.getByTestId("fs-mode-lyrics").click();
       await page.waitForTimeout(4000);

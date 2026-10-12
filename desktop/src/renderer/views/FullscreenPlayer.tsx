@@ -98,6 +98,8 @@ function flyFrom(el: HTMLElement, from: DOMRect, fromRadius: number, toRadius: n
   return to;
 }
 
+/** The player's popovers, portalled into it, that keep its controls up while open. */
+const POPOVERS = ":is(.artist-menu, .lyrics-options-pop, .np-volume-pop):not(.closing)";
 /** The latest a new cover's scene has faded in over the last (np-scene-in takes 500ms). */
 const SCENE_FADE_MS = 2000;
 /** Room for the controls beside a full-height artwork: at least 3:2. */
@@ -301,6 +303,9 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         if (keyboard && root.current?.querySelector(".np-chrome :focus")) return arm();
+        // A popover of the player's own (the artist menu, the lyrics options, volume) keeps the
+        // controls up while it is open, whatever has focus.
+        if (root.current?.querySelector(POPOVERS)) return arm();
         setIdle(true);
       }, IDLE_HIDE_MS);
     };
