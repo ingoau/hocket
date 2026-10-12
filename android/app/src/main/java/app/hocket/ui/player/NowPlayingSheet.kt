@@ -486,6 +486,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // one gives up waiting after [SCENE_HOLD_MS] and shows as a card until it is known.
         val trackLayout by rememberArtworkLayout(trackCover, preference, dark = appDark)
         val trackSeed by artworkSeed(trackCover)
+        val carousel = remember { SkipCarousel() }
         val ready = trackLayout != null && (trackSeed != null || trackCover == null)
         var held by remember { mutableStateOf<Scene?>(null) }
         var holdOver by remember(trackCover) { mutableStateOf(false) }
@@ -504,7 +505,6 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         hero.immersive = immersiveEdge != null
         // The skip swipe's neighbours, with their layouts and colours worked out ahead (cached), so
         // a neighbour slides in in its own style and the commit changes nothing on screen.
-        val carousel = remember { SkipCarousel() }
         val neighbours by rememberNeighbours()
         val previousCover = neighbours.previous?.track?.coverArt
         val nextCover = neighbours.next?.track?.coverArt
@@ -536,9 +536,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val neighbourScheme = remember(neighbourShown != null, neighbourSeed, neighbourLight) { if (neighbourShown != null) playerSchemeFor(neighbourSeed, neighbourLight) else null }
         val playerScheme = if (neighbourScheme != null) lerpScheme(playerScheme0, neighbourScheme, abs(towards)) else playerScheme0
         val lightShown = if (neighbourShown != null && abs(towards) >= 0.5f) neighbourLight else lightPlayer
-        // Over an immersive artwork's top strip, the status bar's icons follow the strip's colour
-        // while the player is open (in artwork mode), and go back to the app's when it closes.
-        StatusBarOver(if (scrimTappable && artworkMode) artworkLayout?.let { stripLight(it) } else null)
+        // The open player is dark (its backdrop, the queue, the lyrics): light icons over it, on a
+        // light system theme too; over an immersive artwork's top strip they follow the strip.
+        StatusBarOver(if (scrimTappable) (if (artworkMode) artworkLayout?.let { stripLight(it) } ?: false else false) else null)
         val artScale = animateFloatAsState(if (playing || reducedMotion) 1f else HeroGeometry.PAUSED_SCALE, Motion.artwork, label = "artworkScale")
         hero.bigCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
