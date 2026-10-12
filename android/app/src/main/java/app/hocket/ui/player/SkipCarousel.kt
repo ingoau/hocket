@@ -26,6 +26,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
+import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.CoreClient
@@ -40,8 +41,11 @@ import kotlin.math.sign
 
 /**
  * What a skip swipe peeks at: the next item (the first of "playing next", else the first upcoming,
- * autoplay's included; with repeat on, the queue's start again) and the previous one (the last of
- * the history). No next at the end of a queue that does not repeat: the swipe then rubber-bands.
+ * autoplay's included) and the previous one (the last of the history). At the end of the queue, as
+ * the core (`session::reducer`'s `candidate`): with Repeat All it wraps to the context's first item
+ * in play order, which unshuffled is the context's item 0 (found in the history or current); with
+ * shuffle that is the shuffled order's first, which the queue view does not tell, so no peek (the
+ * swipe rubber-bands, and still skips). Nothing for Repeat One or Off.
  */
 @Immutable
 internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?) {
@@ -49,9 +53,14 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
         val None = Neighbours(null, null)
 
         fun of(queue: QueueView): Neighbours {
-            val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull()
-                ?: if (queue.repeat != RepeatMode.Off) queue.history.firstOrNull() ?: queue.current else null
+            val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull() ?: wrap(queue)
             return Neighbours(previous = queue.history.lastOrNull(), next = next)
+        }
+
+        private fun wrap(queue: QueueView): QueueEntry? {
+            if (queue.repeat != RepeatMode.All || queue.shuffle) return null
+            fun first(e: QueueEntry) = (e.item.source as? QueueSource.Context)?.data?.index == 0u
+            return queue.current?.takeIf(::first) ?: queue.history.lastOrNull(::first)
         }
     }
 }
@@ -68,6 +77,15 @@ internal fun rememberNeighbours(): State<Neighbours> {
  * track from this far in, and when there is nothing before it.
  */
 internal const val PREVIOUS_RESTART_MS = 3_000L
+
+/**
+ * Whether Previous restarts the current track rather than going back (the swipe then peeks at it
+ * again), as the core (`handlers::session::previous`): [PREVIOUS_RESTART_MS] into a track loaded
+ * here (this device holds the transport: not while another device plays, nor before anything has
+ * loaded, as on a cold start or after Stop), or with nothing before it.
+ */
+internal fun previousRestarts(ownsTransport: Boolean, positionMs: Long, historyEmpty: Boolean): Boolean =
+    (ownsTransport && positionMs >= PREVIOUS_RESTART_MS) || historyEmpty
 
 /**
  * A three-slot carousel (previous, current, next) under the finger: [offset] follows it 1:1 (px,
@@ -138,7 +156,7 @@ internal class SkipCarousel {
                 offset.stop()
                 drag.raw = offset.value
                 drag.crossed = false
-                restartPeek = client.positionNow() >= PREVIOUS_RESTART_MS || client.queue.value.history.isEmpty()
+                restartPeek = previousRestarts(client.ownsTransport.value, client.positionNow(), client.queue.value.history.isEmpty())
             },
             onDragStopped = { v ->
                 val shown = offset.value
