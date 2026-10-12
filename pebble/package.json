@@ -1,0 +1,71 @@
+{
+  "name": "hocket",
+  "author": "Hocket",
+  "version": "1.0.0",
+  "private": true,
+  "pebble": {
+    "displayName": "Hocket",
+    "uuid": "2447e130-2efa-41b2-a729-e57ee2f531b2",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["basalt", "chalk", "diorite", "emery", "flint", "gabbro"],
+    "watchapp": { "watchface": false },
+    "capabilities": [],
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/ingoau/hocket",
+        "apps": [{ "package": "app.hocket" }, { "package": "app.hocket.debug" }]
+      }
+    },
+    "messageKeys": {
+      "Type": 1,
+      "Proto": 2,
+      "Build": 3,
+      "Title": 10,
+      "Artist": 11,
+      "Album": 12,
+      "Duration": 13,
+      "Position": 14,
+      "Flags": 15,
+      "Repeat": 16,
+      "Rating": 17,
+      "ResumeLabel": 18,
+      "ArtGen": 19,
+      "Volume": 20,
+      "ReqId": 30,
+      "Offset": 31,
+      "Total": 32,
+      "Items": 33,
+      "ListTitle": 34,
+      "ArtOffset": 41,
+      "ArtData": 42,
+      "ArtSize": 43,
+      "ArtWidth": 44,
+      "ArtHeight": 45,
+      "ArtPalette": 46,
+      "Settings": 50,
+      "Cmd": 60,
+      "Arg": 61,
+      "Path": 62,
+      "Item": 63,
+      "Notice": 70
+    },
+    "resources": {
+      "media": [
+        { "type": "bitmap", "name": "ICON_SKIP_FORWARD", "file": "images/music_icon_skip_forward.png" },
+        { "type": "bitmap", "name": "ICON_SKIP_BACKWARD", "file": "images/music_icon_skip_backward.png" },
+        { "type": "bitmap", "name": "ICON_ELLIPSIS", "file": "images/music_icon_ellipsis.png" },
+        { "type": "bitmap", "name": "ICON_PAUSE", "file": "images/music_icon_pause.png" },
+        { "type": "bitmap", "name": "ICON_PLAY", "file": "images/music_icon_play.png" },
+        { "type": "bitmap", "name": "ICON_PLAY_PAUSE", "file": "images/music_icon_play_pause.png" },
+        { "type": "bitmap", "name": "ICON_VOLUME_UP", "file": "images/music_icon_volume_up.png" },
+        { "type": "bitmap", "name": "ICON_VOLUME_DOWN", "file": "images/music_icon_volume_down.png" },
+        { "type": "bitmap", "name": "LARGE_CASSETTE", "file": "images/music_small_cassette.png" },
+        { "type": "bitmap", "name": "LARGE_PAUSED", "file": "images/music_paused.png" },
+        { "type": "bitmap", "name": "LARGE_VOLUME_UP", "file": "images/volume_up_big.png" },
+        { "type": "bitmap", "name": "LARGE_VOLUME_DOWN", "file": "images/volume_down_big.png" },
+        { "type": "bitmap", "name": "NO_MUSIC", "file": "images/music_no_music.png" }
+      ]
+    }
+  }
+}
