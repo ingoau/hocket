@@ -4,6 +4,8 @@ A Pebble watchapp that controls Hocket from the wrist. Now Playing behaves exact
 
 Read alongside `docs/design.md` (decision record) and `docs/ARCHITECTURE.md` (layout and seams).
 
+**Status: implemented** (all four steps below). Code: `pebble/` (watchapp; `src/c/hocket.h` is the protocol), `android/playback/.../pebble/` (`PebbleBridge`, `PebbleListenerService`, `PebbleProtocol`, `PebbleInstaller`), Settings → Pebble watch. Screenshots: `docs/screenshots/pebble/`.
+
 
 ## The shape of it  
 *Status: decided*
@@ -16,7 +18,9 @@ Three pieces:
 
 We cannot replace the system music app; this is a separate "Hocket" watchapp in the launcher. No PebbleKit JS and no network hop: it works offline, and controls desktop playback through Connect like any other Hocket remote.
 
-`api.rs` is not expected to change: rating, love, shuffle, repeat, handoff, search and library queries already exist. Confirm when implementing.
+`api.rs` did not change: rating, love, shuffle, repeat, seek, handoff, search, lyrics and library queries already existed.
+
+**Protocol** (`pebble/src/c/hocket.h`, mirrored by `PebbleProtocol.kt`; bump `HOCKET_PROTO` on any incompatible change). Phone → watch: Now (state), List (one page of ≤ 12 packed rows), Art (chunks), Settings (a small blob the watch persists), HelloReply, Notice. Watch → phone: Hello (protocol + build), Cmd (command, argument, list path and row id), ListReq (path + offset), ArtReq. Lists are addressed by path: `queue`, `library`, `playlists`, `albums`, `artists`, `recent`, `downloads`, `devices`, `lyrics`, `album:<id>`, `playlist:<id>`, `artist:<id>`, `search:<text>`, `goAlbum`, `goArtist`; a browsable row's id is itself a path. The phone pushes Now (debounced) and Settings only while the watchapp is open.
 
 
 ## Watches  
@@ -58,7 +62,9 @@ Identical to the reference above, in both modes, with these differences:
 
 - **Touch gestures replace the system's swipe-to-button mapping** on Now Playing (the app opts out of touch navigation on this window and handles touch itself). Defaults: swipe **up** = Queue, swipe **left** = Library, swipe **right** = Back, swipe **down** = nothing, **press and hold** = Actions menu. All configurable (Settings).
 - **Nothing playing** shows a **Resume** option (the last queue) instead of a dead end.
-- **Volume: open.** Pending the Connect volume migration. Until decided, keep the reference behaviour's controls and decide what they drive later.
+- **Star rating replaces the cassette.** Five stars (filled up to the rating) sit under the progress bar, left-aligned at the text margin (inside the circle on round). The volume icon still flashes in that spot for 2 s after a volume change. There is no paused-cassette icon (the play/pause icon shows the state) and no cassette slide on skip. With album art the title scrolls on its own line over the foot of the cover.
+- **Colours from Hocket's logo.** One accent (lavender indigo, the closest Pebble colour to the logo's purple that still reads with white text) replaces the reference's red: list highlights, progress, stars. Black-and-white watches look as before.
+- **Volume: open.** Pending the Connect volume migration. The reference controls are kept; for now they drive the phone's music volume (as the official Pebble app does), through one placeholder in `PebbleBridge` (`changeVolume`).
 - The official app's three preferences (volume controls, progress bar, album art) are watch prefs a third-party app can't read, so Hocket has its own copies (Settings) with the same defaults, except **album art on** by default (Hocket already has the covers cached).
 
 
@@ -105,19 +111,31 @@ Press and hold on Now Playing (touch mode), or the lower half of the menu (butto
 - Go to album, Go to artist
 - Play on… (Connect handoff)
 
-Contents and order configurable.
+Contents and order configurable. Lyrics can be added (off by default).
+
+
+## Lyrics  
+*Status: implemented*
+
+A page of line-synced lyrics for the playing track (line timing only, no word timing; unsynced lyrics show as a static list). Off by default: no gesture opens it unless one is set to Lyrics in Settings; it can also be added to the buttons-only menu or the actions menu.
+
+- It follows the current line, which is shown large in the middle.
+- Up / down move the focus to other lines and stop following. Select seeks playback to the focused line's start and resumes following.
+- Back while browsing returns to the current line (following again); back while following closes the page.
+
+The phone sends the lines as the list `lyrics` (row id = start in ms with the track's timing offset applied, empty when unsynced).
 
 
 ## Queue  
 *Status: decided*
 
-Current track at the top, upcoming below; scrolling up reveals recent history. Selecting a track jumps to it.
+Current track at the top, upcoming below; scrolling up reveals recent history (the last few tracks). Selecting a track jumps to it; holding offers Play next / Add to queue.
 
 
 ## Library  
 *Status: decided*
 
-Sections (contents and order configurable): Playlists, Albums, Artists (artist → albums → tracks, plus recently added / played albums), a Downloads-only toggle, and Voice search.
+Sections (contents and order configurable): Playlists, Albums, Artists (artist → Play, Shuffle, then albums → tracks), Recently played (tracks), Downloads (the pinned albums, playlists and tracks, so it works offline), and Voice search.
 
 - **Track:** select plays it now; hold for Play next / Add to queue.
 - **Album and playlist screens are the same:** **Play** and **Shuffle** at the top, then the tracks.
@@ -131,14 +149,14 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 
 - Touch navigation: On / Off (default Off)
 - Buttons-only mode (Time 2)
-- Gestures: swipe up / down / left / right and press-and-hold, each one of Queue, Library, Actions, Back, Nothing. Defaults as in Now Playing. The back button always goes back, so no assignment can trap you.
-- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library), actions (Love, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
+- Gestures: swipe up / down / left / right and press-and-hold, each one of Queue, Library, Actions, Back, Lyrics, Nothing. Defaults as in Now Playing. The back button always goes back, so no assignment can trap you.
+- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
 - Actions menu: items and order
 - Library sections: items and order
 - Menu timeout: Off / 3 / 5 / 10 s (default 5)
 - Show volume controls (default on), Show progress bar (default on), Show album art (default on; Time 2 and Round 2)
 - Open on watch when playback starts (default off)
-- Install / update the watchapp, with installed-version status
+- Install / update the watchapp, with installed-version status (the version the watch last reported on connect)
 
 
 ## Distribution  
@@ -148,7 +166,8 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 
 - CI builds the `.pbw` and bundles it in the APK. Settings → Pebble → **Install on watch** hands it to Core's phone app (its manifest accepts `.pbw` via `ACTION_VIEW`, including `content://` URIs).
 - **Version handshake:** the watchapp reports its protocol and build version on connect. On mismatch the phone shows a notification with Install, and the watch shows "Update from Hocket on your phone" instead of half-working.
-- A sideloaded app doesn't follow you to a new phone or survive a watch reset. If PebbleKit 2 can report installed apps, Hocket offers the install when it's missing; otherwise the button is always there.
+- A sideloaded app doesn't follow you to a new phone or survive a watch reset. PebbleKit 2 cannot list installed apps, so the Install button is always there.
+- Build: `scripts/build-pebble.sh` stages `pebble/build/android-assets/hocket.pbw`, which the app module adds as an assets source when present. The bundled version (from `pebble/package.json`) is `BuildConfig.PEBBLE_WATCHAPP_VERSION` in the playback module.
 - Builds without the Pebble SDK hide the Install button.
 - The app UUID is fixed, so a store listing can be added later without breaking anything.
 
@@ -156,16 +175,16 @@ PebbleKit 2 works only with Core's phone app. A PebbleKit Classic fallback (for 
 
 
 ## Implementation order  
-*Status: proposed*
+*Status: done*
 
 1. Protocol, Android adapter, Now Playing parity in both modes (including the buttons-only menu and timeout).
 2. Actions menu.
 3. Queue and library, including album / playlist screens and the Downloads filter.
 4. Voice search, album art, auto-open, settings page, install flow and version check, CI job for the `.pbw`.
 
-Testing: Pebble emulator screenshot tests per platform (as PebbleOS does for its music app), JVM tests for the Android adapter.
+Testing: `HOCKET_DEMO=1 pebble build` gives the emulator sample state for screenshots (`docs/screenshots/pebble/`), and `PebbleProtocolTest` covers the byte layouts. Automated emulator screenshot tests per platform are still to do.
 
 
 ## Open  
 
-- **Volume:** what the volume controls drive (phone volume, or the playing Hocket device's volume). Waiting on the Connect volume migration.
+- **Volume:** what the volume controls drive (phone volume, or the playing Hocket device's volume). Waiting on the Connect volume migration. Today: the phone's music volume, via the placeholder in `PebbleBridge.changeVolume` / `volumePercent`.
