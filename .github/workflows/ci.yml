@@ -76,14 +76,16 @@ jobs:
 
   android:
     name: Android
-    # The weekly schedule exists for the fuzz job only.
-    if: github.event_name != 'schedule'
-    # The APK bundles the watchapp the pebble job built.
+    # The weekly schedule exists for the fuzz job only. Runs even when the pebble job failed (a
+    # Pebble SDK install problem shouldn't hide Android results); the APK then has no watchapp.
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    # The APK bundles the watchapp the pebble job built, when there is one.
     needs: pebble
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: needs.pebble.result == 'success'
         with:
           name: hocket-pbw
           path: pebble/build/android-assets
