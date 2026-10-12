@@ -66,12 +66,15 @@ class PebbleBridge(
         private const val TEXT_MAX = 95
         /** Played tracks before the current one: fewer than a page, so the first page holds it. */
         private const val QUEUE_HISTORY = 8
+        /** Page size when a held playlist row asks for all of its tracks. */
+        private const val PLAYLIST_PAGE = 500u
     }
 
     private val sender by lazy { DefaultPebbleSender(context) }
     private val sendLock = Mutex()
     private var nowJob: Job? = null
     private var artJob: Job? = null
+    private var artJobGen = -1
 
     /** The watchapp is open on a watch: state is pushed only then. */
     private var open = false
@@ -81,6 +84,8 @@ class PebbleBridge(
     private var devices: List<DeviceInfo> = emptyList()
     private var resumeOffer: ResumeOffer? = null
     private val settings = HashMap<String, String>()
+    /** [settings] holds the core's values (a snapshot arrived); until then the watch keeps its own. */
+    private var settingsLoaded = false
     private var lastSearch: Pair<String, SearchResults>? = null
 
     // -- core events (main thread) -----------------------------------------------------------------
@@ -95,7 +100,7 @@ class PebbleBridge(
             is Event.SettingChanged -> {
                 val s = event.data.setting
                 settings[s.key] = s.value
-                if (s.key.startsWith("pebble.") && open) scope.launch { send(settingsMessage()) }
+                if (s.key.startsWith("pebble.") && open && settingsLoaded) scope.launch { send(settingsMessage()) }
             }
             is Event.Started -> onSnapshot(event.data.snapshot)
             is Event.Snapshot -> onSnapshot(event.data.snapshot)
@@ -109,6 +114,8 @@ class PebbleBridge(
         devices = snapshot.devices
         resumeOffer = snapshot.resumeOffer
         snapshot.settings.forEach { settings[it.key] = it.value }
+        settingsLoaded = true
+        if (open) scope.launch { send(settingsMessage()) }
         onSession(snapshot.mediaSession)
     }
 
@@ -143,14 +150,16 @@ class PebbleBridge(
         when (num(data, Key.TYPE)) {
             Type.HELLO -> onHello(num(data, Key.PROTO), text(data, Key.BUILD))
             Type.CMD -> onCommand(num(data, Key.CMD), num(data, Key.ARG), text(data, Key.PATH), text(data, Key.ITEM))
-            Type.LIST_REQ -> onListRequest(num(data, Key.REQ_ID), text(data, Key.PATH), num(data, Key.OFFSET))
+            // Lists can take a while (a search, a long playlist): answer the watch's message first.
+            Type.LIST_REQ -> scope.launch { onListRequest(num(data, Key.REQ_ID), text(data, Key.PATH), num(data, Key.OFFSET)) }
             Type.ART_REQ -> onArtRequest(num(data, Key.ART_GEN), num(data, Key.ARG))
         }
     }
 
     private suspend fun onHello(proto: Int, build: String) {
         send(mapOf(Key.TYPE to u8(Type.HELLO_REPLY), Key.PROTO to u32(PebbleProtocol.PROTO), Key.BUILD to PebbleDictionaryItem.Text(PebbleInstaller.bundledVersion)))
-        send(settingsMessage())
+        // Before the core's settings have loaded these would be the defaults, wiping the watch's copy.
+        if (settingsLoaded) send(settingsMessage())
         send(nowMessage())
         if (build.isNotEmpty()) PebbleInstaller.recordWatchVersion(context, build)
         if (proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion) PebbleInstaller.notifyUpdate(context)
@@ -224,8 +233,11 @@ class PebbleBridge(
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
                 val server = serverId() ?: return
-                val ids = trackIds(path, item)
-                if (ids.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(server, ids) else Commands.playLater(server, ids))
+                // A whole playlist can take a few queries: off the watch's message.
+                scope.launch {
+                    val ids = trackIds(path, item)
+                    if (ids.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(server, ids) else Commands.playLater(server, ids))
+                }
             }
         }
         // The watch already changed its own state optimistically; this confirms it.
@@ -292,6 +304,8 @@ class PebbleBridge(
     /** The tracks a held row stands for (Play next / Add to queue). */
     private suspend fun trackIds(rawPath: String, item: String): List<String> {
         if (item.startsWith("track:")) return listOf(item.removePrefix("track:"))
+        if (item.startsWith("album:")) return albumTracks(item.removePrefix("album:")).map { it.id }
+        if (item.startsWith("playlist:")) return playlistTrackIds(item.removePrefix("playlist:"))
         val path = resolve(rawPath) ?: return emptyList()
         val (kind, id) = split(path)
         val index = item.removePrefix("t:").toIntOrNull()
@@ -301,6 +315,18 @@ class PebbleBridge(
             kind == "playlist" && index != null -> (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.map { it.id }.orEmpty()
             else -> emptyList()
         }
+    }
+
+    /** Every track of a playlist, page by page. */
+    private suspend fun playlistTrackIds(id: String): List<String> {
+        val ids = mutableListOf<String>()
+        while (true) {
+            val page = (query(Queries.playlistTracks(id, Page(ids.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data ?: break
+            if (page.items.isEmpty()) break
+            ids += page.items.map { it.id }
+            if (ids.size.toUInt() >= page.total) break
+        }
+        return ids
     }
 
     // -- lists ---------------------------------------------------------------------------------------
@@ -453,7 +479,10 @@ class PebbleBridge(
     private fun onArtRequest(gen: Int, size: Int) {
         val path = session?.metadata?.artworkPath ?: return
         if (gen != PebbleProtocol.artGeneration(path)) return
+        // The watch retries when chunks are slow; a transfer of this cover still going carries on.
+        if (artJob?.isActive == true && artJobGen == gen) return
         artJob?.cancel()
+        artJobGen = gen
         artJob = scope.launch {
             val art = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }.getOrNull()

@@ -13,6 +13,8 @@ import app.hocket.playback.BuildConfig
 import app.hocket.playback.R
 import io.rebble.pebblekit2.client.DefaultPebbleAndroidAppPicker
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Serves the bundled watchapp to the Pebble app (a subclass, so it cannot clash with another FileProvider). */
 class PebbleFileProvider : FileProvider()
@@ -46,10 +48,10 @@ object PebbleInstaller {
 
     /** `ACTION_VIEW` of a cached copy of the bundled `.pbw`, aimed at the selected Pebble app when there is one. */
     suspend fun installIntent(context: Context): Intent? {
-        if (!isBundled(context)) return null
-        val dir = File(context.cacheDir, "pebble").apply { mkdirs() }
+        if (!withContext(Dispatchers.IO) { isBundled(context) }) return null
+        val dir = File(context.cacheDir, "pebble")
         val file = File(dir, ASSET)
-        context.assets.open(ASSET).use { input -> file.outputStream().use { input.copyTo(it) } }
+        withContext(Dispatchers.IO) { dir.mkdirs(); context.assets.open(ASSET).use { input -> file.outputStream().use { input.copyTo(it) } } }
         val uri = FileProvider.getUriForFile(context, context.packageName + ".pebble", file)
         val pebbleApp = runCatching { DefaultPebbleAndroidAppPicker.getInstance(context).getCurrentlySelectedApp() }.getOrNull()
         return Intent(Intent.ACTION_VIEW)
