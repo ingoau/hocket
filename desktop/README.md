@@ -55,6 +55,9 @@ Environment variables:
 | `HOCKET_USER_DATA=<dir>` | Override Electron's userData dir (fresh profile per e2e test). |
 | `HOCKET_DEVICE_NAME` | Device name reported to the core (defaults to the hostname). |
 | `HOCKET_LOG=debug` | `tracing` filter for the native core. |
+| `HOCKET_SCREENSHOT_DIR=<dir>` | Where the screenshot specs (`now-playing-screenshots`, `immersive-screenshots`) write; without it they skip. |
+| `HOCKET_FAKE_COVERS=<dir>` | Screenshots only: a folder of cover images; the fake core's album n wears the (n − 1)th, and borrows the native addon's artwork classifier for the immersive layouts (`HOCKET_FAKE_COVERS_OFFSET` shifts which). |
+| `HOCKET_SCREENSHOT_ONLY=a,b` | `now-playing-screenshots`: write only the shots whose names contain one of these fragments. |
 | `HOCKET_DEV=1` | Set by `pnpm dev`: load the renderer from the Vite dev server. |
 
 ## Layout

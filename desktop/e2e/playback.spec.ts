@@ -102,7 +102,9 @@ test.describe("playback and queue", () => {
     await expect(fs.getByText("Playing from")).toHaveCount(0);
     await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
-    // Lyrics / Queue / About take the right; the artwork stays beside them, a button back to it alone.
+    // Lyrics / Queue / About take the right; the artwork stays beside them, now a button back to
+    // it alone (np-thumb: the big artwork here, in the columns layout; a thumbnail by the title
+    // only in the stacked one).
     await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
     await expect(fs.getByTestId("np-artwork")).toHaveCount(0);

@@ -918,7 +918,6 @@ test.describe("immersive artwork from the classifier", () => {
           // No scrollbar: the content is as wide as the pane whether or not it overflows.
           expect(await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).offsetWidth - el.clientWidth)).toBe(0);
           const { min, worst } = await overviewContrast(page);
-          console.log(`${theme} al-${n}: lowest contrast ${worst}`);
           expect(min, `${theme} theme, ${tone} continuation: ${worst}`).toBeGreaterThanOrEqual(4.5);
         }
         // A busy cover keeps the rounded card, inset.
@@ -960,7 +959,6 @@ test.describe("immersive artwork from the classifier", () => {
           await page.waitForTimeout(800);
           await checkFade(page, `${theme} ${name}`);
           const { min, worst } = await overviewContrast(page);
-          console.log(`${theme} ${name}: lowest contrast ${worst}`);
           expect(min, `${theme} theme, ${name}: ${worst}`).toBeGreaterThanOrEqual(4.5);
         }
       }
