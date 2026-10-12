@@ -350,7 +350,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         return im ? (
           <Fragment key={s.coverArt}>
             <ImmersiveContinuation img={s.img} edge={im.edge} orientation={im.orientation} controls={im.orientation === "right" ? pill : controls} split={!!im.left} />
-            {im.left ? <ImmersiveContinuation img={s.img} edge={im.left} orientation="left" controls={pill} split /> : null}
+            {im.left ? <ImmersiveContinuation img={s.img} edge={im.left} orientation="left" controls={pill} split shown={centred} /> : null}
           </Fragment>
         ) : null;
       })}
@@ -442,8 +442,27 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
  * (and wherever what sits on it, whose fade covers it, ends up: the pill beside a full-height
  * artwork, the controls under a full-width one).
  */
-function ImmersiveContinuation({ img, edge, orientation, controls, split = false }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null>; split?: boolean }) {
+function ImmersiveContinuation({ img, edge, orientation, controls, split = false, shown = true }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null>; split?: boolean; shown?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // Off screen (the left continuation once a view has slid the artwork left) it keeps no
+  // bitmap: released once the slide is over, drawn again as the artwork comes back.
+  const [kept, setKept] = useState(shown);
+  const drawn = shown || kept;
+  useEffect(() => {
+    if (shown) {
+      setKept(true);
+      return;
+    }
+    const id = window.setTimeout(() => setKept(false), SPRING_SPATIAL.duration + 100);
+    return () => window.clearTimeout(id);
+  }, [shown]);
+  // And none once gone.
+  useEffect(() => {
+    const el = ref.current;
+    return () => {
+      if (el) el.width = el.height = 0;
+    };
+  }, []);
   const [size, setSize] = useState({ w: 0, h: 0, top: 0, bottom: 0 });
   useLayoutEffect(() => {
     const el = ref.current;
@@ -461,13 +480,17 @@ function ImmersiveContinuation({ img, edge, orientation, controls, split = false
   // Before paint: the scene's artwork is already decoded, so the continuation lands with it.
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || !size.w || !size.h) return;
+    if (!el) return;
+    if (!drawn || !size.w || !size.h) {
+      el.width = el.height = 0;
+      return;
+    }
     const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(size.w * dpr);
     el.height = Math.round(size.h * dpr);
     drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined, { split });
-  }, [img, edge, orientation, size, split]);
-  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid={orientation === "left" ? "np-continuation-left" : "np-continuation"} data-side={orientation} data-style={edge.style} />;
+  }, [img, edge, orientation, size, split, drawn]);
+  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid={orientation === "left" ? "np-continuation-left" : "np-continuation"} data-side={orientation} data-style={edge.style} data-drawn={drawn ? "" : undefined} />;
 }
 
 /**

@@ -826,9 +826,13 @@ test.describe("immersive artwork from the classifier", () => {
       expect(during).toBeGreaterThan(0);
       await expect.poll(artX).toBe(0);
       await expect.poll(cardX).toBe(Math.round(h / 2));
+      // Slid off the edge, the left continuation lets its bitmap go.
+      await expect(fs.getByTestId("np-continuation-left")).not.toHaveAttribute("data-drawn", "");
+      expect(await fs.getByTestId("np-continuation-left").evaluate((c) => (c as HTMLCanvasElement).width)).toBe(0);
       await fs.getByTestId("fs-mode-queue").click();
       await expect(fs).toHaveAttribute("data-centred", "");
       await expect.poll(artX).toBe(Math.round((w - h) / 2));
+      expect(await fs.getByTestId("np-continuation-left").evaluate((c) => (c as HTMLCanvasElement).width)).toBeGreaterThan(0);
       // A track change mid-slide leaves no stale continuation: the right-only cover's layout wins.
       await fs.getByTestId("fs-mode-queue").click();
       await playCover(page, 2);
