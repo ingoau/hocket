@@ -43,6 +43,8 @@ export function ArtistChooser({ track, className, onNavigate, testId }: { track:
   const presence = usePresence(open ? at : undefined, menu);
   const shown = presence.value;
   const artists = trackArtists(track);
+  // The album's artist where the track names it, else its first artist (not a "feat." string).
+  const albumArtist = track.albumArtist ?? artists[0]?.name;
 
   const close = (refocus = true) => {
     setOpen(false);
@@ -130,7 +132,7 @@ export function ArtistChooser({ track, className, onNavigate, testId }: { track:
             <Artwork id={track.coverArt} size={96} className="am-art" />
             <span className="am-album-text">
               <span className="am-album-name truncate">{track.album ?? t("misc.unknownAlbum")}</span>
-              {track.albumArtist ?? track.artist ? <span className="am-album-artist truncate">{track.albumArtist ?? track.artist}</span> : null}
+              {albumArtist ? <span className="am-album-artist truncate">{albumArtist}</span> : null}
             </span>
           </button>
         </div>,

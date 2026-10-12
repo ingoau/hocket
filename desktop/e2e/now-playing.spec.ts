@@ -359,6 +359,26 @@ test.describe("now playing", () => {
 });
 
 test.describe("the artist in the now playing subtitle", () => {
+  test("a song with several artists shows the artist string as given and lists every artist, each opening its page", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.evaluate(async () => {
+      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
+    });
+    await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { id: string } } } } }).data.queue.current?.track.id).toBe("tr-1");
+    const track = ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { artist: string; artists?: { id?: string; name: string }[] } } } } }).data.queue.current!.track;
+    expect(track.artists?.length).toBe(2);
+    await expect(page.getByTestId("bar-artist")).toHaveText(track.artist);
+    expect(track.artist).toContain(" feat. ");
+    await page.getByTestId("bar-artist").click();
+    const menu = page.getByTestId("artist-menu");
+    await expect(menu.getByTestId("artist-menu-artist")).toHaveText(track.artists!.map((a) => a.name));
+    // The guest opens the guest's page.
+    await menu.getByTestId("artist-menu-artist").nth(1).click();
+    await expect(page.getByTestId("view-artist").locator("h1").first()).toHaveText(track.artists![1]!.name);
+  });
+
   test("shows the artist alone and opens a menu of the track's artists and its album, from the bar, the side panel and the fullscreen player", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
