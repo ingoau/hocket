@@ -6,7 +6,7 @@ import type { ActionTarget } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
-import { isNarrow, useApp, type DialogState, type ViewName } from "./app";
+import { isNarrow, showSideView, toggleSideView, useApp, type DialogState, type ViewName } from "./app";
 import { explicitIds } from "./selection";
 
 export interface ActionContext {
@@ -50,27 +50,14 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
         app.setNowPlayingMode(app.nowPlayingMode === "queue" ? "art" : "queue");
         return;
       }
-      if (isNarrow()) {
-        // The drawer: open it on the queue, or close it when the queue is already showing.
-        const showing = app.drawerOpen && !app.panels.queueCollapsed;
-        app.setDrawerOpen(!showing);
-        if (!showing) app.setPanels({ queueCollapsed: false });
-        return;
-      }
-      app.setPanels(app.panels.rightOpen && !app.panels.queueCollapsed ? { queueCollapsed: true } : { rightOpen: true, queueCollapsed: false });
+      toggleSideView("queue");
       return;
     case "toggleLyrics":
       if (app.fullscreen) {
         app.setNowPlayingMode(app.nowPlayingMode === "lyrics" ? "art" : "lyrics");
         return;
       }
-      if (isNarrow()) {
-        const showing = app.drawerOpen && !app.panels.lyricsCollapsed;
-        app.setDrawerOpen(!showing);
-        if (!showing) app.setPanels({ lyricsCollapsed: false });
-        return;
-      }
-      app.setPanels(app.panels.rightOpen && !app.panels.lyricsCollapsed ? { lyricsCollapsed: true } : { rightOpen: true, lyricsCollapsed: false });
+      toggleSideView("lyrics");
       return;
     case "toggleFullscreen":
       app.setFullscreen(!app.fullscreen);
@@ -79,9 +66,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       b.window.openMiniPlayer();
       return;
     case "navigateRecent":
-      if (isNarrow()) app.setDrawerOpen(true);
-      app.setPanels({ rightOpen: true, queueCollapsed: false });
-      app.setQueueTab("recent");
+      showSideView("recent");
       return;
     case "ui.back":
       app.back();

@@ -1,6 +1,6 @@
 // Shape of `window.hocket`, the contextBridge surface installed by the preload
 // script. Everything crossing it is structured-clone-safe JSON.
-import type { Command, Event, Query, QueryResult } from "@core/api";
+import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 
 export type WindowKind = "main" | "mini";
 
@@ -111,6 +111,11 @@ export interface HocketBridge {
     writeText(text: string): void;
   };
   onDeepLink(listener: (url: string) => void): () => void;
+  /**
+   * How the full player shows a cover (the core's immersive-artwork classifier): its pixels as
+   * RGBA8 (at most ARTWORK_LAYOUT_MAX_SIDE a side) and the request. Undefined without the native core.
+   */
+  artworkLayout(rgba: Uint8Array, width: number, height: number, request: ArtworkLayoutRequest): Promise<ArtworkLayout | undefined>;
   /** Tray/menu asks the renderer to run a UI action ("ui.palette" etc.). */
   onUiAction(listener: (actionId: string) => void): () => void;
 }
@@ -137,7 +142,11 @@ export const IPC = {
   prefsGet: "hocket:prefs:get",
   prefsSet: "hocket:prefs:set",
   uiAction: "hocket:ui-action",
+  artworkLayout: "hocket:artwork:layout",
 } as const;
+
+/** The largest cover (each side) the renderer may hand `artworkLayout`; it decodes to 256. */
+export const ARTWORK_LAYOUT_MAX_SIDE = 512;
 
 export type WindowControl =
   | "minimize"

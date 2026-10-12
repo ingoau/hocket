@@ -15,12 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +44,7 @@ import app.hocket.R
 import app.hocket.core.api.NetworkKind
 import app.hocket.core.api.ServerInfo
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 
 /** The user's (or else the server's) initial, for the avatar. */
 private fun initialOf(server: ServerInfo?): String =
@@ -94,7 +89,7 @@ fun OfflineIndicator(modifier: Modifier = Modifier) {
     if (network?.kind != NetworkKind.Offline) return
     val description = stringResource(R.string.offline_indicator)
     IconButton(onClick = shell.openAvailableOffline, modifier = modifier.semantics { contentDescription = description }.testTag("offline.indicator")) {
-        Icon(Icons.Outlined.CloudOff, contentDescription = null)
+        Icon(HocketIcons.Outlined.CloudOff, contentDescription = null)
     }
 }
 
@@ -144,9 +139,9 @@ fun AccountSheetContent(
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         )
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        SheetRow(Icons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
-        SheetRow(Icons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
-        SheetRow(Icons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
+        SheetRow(HocketIcons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
+        SheetRow(HocketIcons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
+        SheetRow(HocketIcons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
         val others = NavItem.entries.filter { it !in barItems && it != NavItem.Stats }
         if (others.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -155,7 +150,7 @@ fun AccountSheetContent(
             others.forEach { item -> SheetRow(item.icon(false), item.label(), "account.place.${item.id}") { onPlace(item) } }
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        SheetRow(Icons.Filled.Tune, stringResource(R.string.bottom_bar_edit), "account.editBar", onEditBar)
+        SheetRow(HocketIcons.Filled.Tune, stringResource(R.string.bottom_bar_edit), "account.editBar", onEditBar)
         Spacer(Modifier.height(8.dp))
     }
 }

@@ -26,6 +26,8 @@ export interface NativeModule {
   initLogging(level: string): void;
   coreVersion(): string;
   apiSchemaVersion(): number;
+  /** The immersive-artwork classifier (addons built before it existed lack it). */
+  artworkLayout?(rgba: Buffer, width: number, height: number, requestJson: string): string;
   mediaSessionAvailable(): boolean;
 }
 

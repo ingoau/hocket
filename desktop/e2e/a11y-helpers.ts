@@ -71,7 +71,7 @@ export async function serverId(page: Page): Promise<string> {
 export async function playShowcase(page: Page): Promise<void> {
   const sid = await serverId(page);
   await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } }), sid);
-  await expect(page.getByTestId("queue-row-current")).toContainText("Word by Word");
+  await expect(page.getByTestId("player-bar").locator(".now .title")).toContainText("Word by Word");
 }
 
 /** Setup with the keyboard only: the URL field has focus, Tab through the form, Enter submits. */

@@ -21,13 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DownloadForOffline
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.outlined.OfflineBolt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +61,7 @@ import app.hocket.core.api.Genre
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.TrackSummary
+import app.hocket.ui.icons.HocketIcons
 
 /**
  * Long-press enters selection mode; tap toggles while selection is active (design: lists).
@@ -232,7 +226,7 @@ fun TrackRow(
                     Box(Modifier.size(48.dp)) {
                         Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
                         if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
-                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                         }
                     }
                     Spacer(Modifier.width(14.dp))
@@ -240,7 +234,7 @@ fun TrackRow(
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (nowPlaying) {
-                            Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Icon(HocketIcons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                         }
                         Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -252,13 +246,13 @@ fun TrackRow(
                     }
                 }
                 if (track.loved) {
-                    Icon(Icons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                    Icon(HocketIcons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 trailing?.invoke()
                 if (onMore != null) {
-                    IconButton(onClick = onMore) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
+                    IconButton(onClick = onMore) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
                 }
             }
         }
@@ -278,8 +272,8 @@ fun TrackRow(
 @Composable
 fun OfflineBadge(state: OfflineState, describe: Boolean = true) {
     val (icon, text, tint) = when (state) {
-        OfflineState.Downloaded -> Triple(Icons.Filled.DownloadForOffline, R.string.badge_downloaded, MaterialTheme.colorScheme.primary)
-        OfflineState.Cached -> Triple(Icons.Outlined.OfflineBolt, R.string.badge_cached, MaterialTheme.colorScheme.onSurfaceVariant)
+        OfflineState.Downloaded -> Triple(HocketIcons.Filled.DownloadForOffline, R.string.badge_downloaded, MaterialTheme.colorScheme.primary)
+        OfflineState.Cached -> Triple(HocketIcons.Outlined.OfflineBolt, R.string.badge_cached, MaterialTheme.colorScheme.onSurfaceVariant)
         else -> return
     }
     Icon(icon, if (describe) stringResource(text) else null, tint = tint, modifier = Modifier.size(16.dp).testTag("offlineBadge.${state.string}"))
@@ -304,7 +298,7 @@ fun AlbumCard(
                 // The press ripple is drawn on the cover only (Navic): the text below stays calm.
                 Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 if (selected) Box(Modifier.padding(8.dp)) {
-                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -337,7 +331,7 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier
                 Text(artist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(stringResource(R.string.library_count_albums, artist.albumCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
+            if (selected) Icon(HocketIcons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -360,7 +354,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
                     if (playlist.isSmart) Badge(stringResource(R.string.badge_smart))
                 }
             }
-            if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
+            if (selected) Icon(HocketIcons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
         }
     }
 }

@@ -202,6 +202,42 @@ syllable lyrics and a streamed read with a ranged re-open against a real Navidro
 33+ needs `jdk.internal.ref`, which the JDK does not export. It is skipped when the host `.so` is
 absent.
 
+## Screenshots
+
+The screenshot tests are opt-in Robolectric tests: they write PNGs only when told where, and
+are skipped otherwise. Pass the settings as environment variables to Gradle (the tests also read
+the `-Dhocket.…` system properties named below, but Gradle does not forward `-D` from its own
+command line to the test JVM, so the environment is the way that works):
+
+- `HOCKET_SCREENSHOT_DIR` (`hocket.screenshotDir`): where to write them. Without it every
+  screenshot test is skipped.
+- `HOCKET_SCREENSHOT_ONLY` (`hocket.screenshotOnly`): `AppScreenshotTest` writes only the shots
+  whose names contain one of these comma-separated parts, e.g. `04-player,11-queue`.
+- `HOCKET_COVERS`: a folder of cover images for the immersive tests (`ImmersiveScreenshotTest`,
+  `ImmersiveMotionScreenshotTest`), handed to the fake library's albums in name order. The desktop's
+  equivalent is `HOCKET_FAKE_COVERS`.
+- `HOCKET_HOST_LIB`: the host build of the core (`cargo build -p hocket-android` →
+  `target/debug/libhocket_android.so`): the immersive tests classify covers with the real core.
+- `HOCKET_SCREENSHOT_THEME`: `light` renders the immersive tests in light mode (dark otherwise;
+  `AppScreenshotTest` shoots both themes itself).
+
+```
+HOCKET_SCREENSHOT_DIR=/tmp/shots HOCKET_SCREENSHOT_ONLY=04-player,11-queue \
+  ./gradlew :app:testDebugUnitTest --tests '*AppScreenshotTest*' --rerun
+HOCKET_SCREENSHOT_DIR=/tmp/shots HOCKET_COVERS=/path/to/covers \
+  HOCKET_HOST_LIB=$PWD/../target/debug/libhocket_android.so \
+  ./gradlew :app:testDebugUnitTest --tests '*ImmersiveMotionScreenshotTest*' --rerun
+```
+
+## Icons
+
+Icons are Material Symbols (rounded), the same glyphs as desktop, generated into
+`ui/icons/HocketIcons.kt` by `scripts/gen-android-icons.mjs` (from desktop's
+`@iconify-json/material-symbols` dev dependency, so `pnpm install` in `desktop/` first). The object
+mirrors androidx's `Icons` layout: `HocketIcons.Filled.Home`, `HocketIcons.Outlined.Home`,
+`HocketIcons.AutoMirrored.Filled.ArrowBack`. To add one, map its Compose-style name to a Material
+Symbols name in the script, list it under its group, and re-run; the output is committed.
+
 ## Gesture and motion conventions
 
 - Anything the finger drives settles with a spring (`ui/theme/Motion.kt`): low-bouncy for the

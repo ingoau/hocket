@@ -375,7 +375,8 @@
           "offline": "none",
           "musicBrainzId": null,
           "explicit": false,
-          "comment": null
+          "comment": null,
+          "artists": []
         }
       ],
       "offset": 0,
@@ -411,7 +412,13 @@
             "coverArt": "al1",
             "rating": 3,
             "loved": true,
-            "offline": "cached"
+            "offline": "cached",
+            "artists": [
+              {
+                "id": "ar1",
+                "name": "Artist"
+              }
+            ]
           }
         }
       ],
@@ -439,7 +446,13 @@
           "coverArt": "al1",
           "rating": 3,
           "loved": true,
-          "offline": "cached"
+          "offline": "cached",
+          "artists": [
+            {
+              "id": "ar1",
+              "name": "Artist"
+            }
+          ]
         }
       },
       "playingNext": [
@@ -464,7 +477,13 @@
             "coverArt": "al1",
             "rating": 3,
             "loved": true,
-            "offline": "cached"
+            "offline": "cached",
+            "artists": [
+              {
+                "id": "ar1",
+                "name": "Artist"
+              }
+            ]
           }
         }
       ],
@@ -495,7 +514,13 @@
             "coverArt": "al1",
             "rating": 3,
             "loved": true,
-            "offline": "cached"
+            "offline": "cached",
+            "artists": [
+              {
+                "id": "ar1",
+                "name": "Artist"
+              }
+            ]
           }
         }
       ],
@@ -574,7 +599,13 @@
               "coverArt": "al1",
               "rating": 3,
               "loved": true,
-              "offline": "cached"
+              "offline": "cached",
+              "artists": [
+                {
+                  "id": "ar1",
+                  "name": "Artist"
+                }
+              ]
             },
             "url": "https://nd.example/rest/stream?id=t1",
             "headers": {

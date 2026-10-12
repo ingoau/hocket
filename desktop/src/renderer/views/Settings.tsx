@@ -19,6 +19,7 @@ import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
+import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { Select, Slider, Switch } from "../components/controls";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
@@ -74,8 +75,9 @@ function Row({ title, desc, settingKey, children, stacked = false }: { title: st
   );
 }
 
-function Toggle({ settingKey, title, desc }: { settingKey: string; title: string; desc?: string }) {
-  const value = useSetting(settingKey, false);
+/** A switch for a boolean setting; `fallback` is what it shows before the setting has a value (the setting's own default). */
+function Toggle({ settingKey, title, desc, fallback = false }: { settingKey: string; title: string; desc?: string; fallback?: boolean }) {
+  const value = useSetting(settingKey, fallback);
   const set = useApp((s) => s.setSetting);
   return (
     <Row title={title} desc={desc} settingKey={settingKey}>
@@ -474,6 +476,7 @@ function LyricsSettings() {
 function Appearance() {
   const theme = useSetting(SK.displayTheme, "system");
   const accent = useSetting<string | null>(SK.displayAccent, null) || DEFAULT_ACCENT;
+  const immersive = useSetting(SK.displayImmersiveArtwork, "automatic");
   const set = useApp((s) => s.setSetting);
   return (
     <>
@@ -483,9 +486,29 @@ function Appearance() {
       <Row title={t("settings.accent")} settingKey={SK.displayAccent}><input type="color" value={accent} onChange={(e) => set(SK.displayAccent, e.target.value)} aria-label={t("settings.accent")} /></Row>
       <Toggle settingKey={SK.displayDynamicColour} title={t("settings.dynamicAccent")} />
       <Toggle settingKey={SK.displayAnimatedBackground} title={t("settings.animatedBackground")} />
+      <Row title={t("settings.immersiveArtwork")} settingKey={SK.displayImmersiveArtwork}>
+        <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
+      </Row>
+      <Toggle settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} fallback />
+      <IdleHideRow />
       <LyricsSizeRow />
       <LyricsAnimatedRow />
     </>
+  );
+}
+
+function IdleHideRow() {
+  const on = useIdleHide();
+  return (
+    <div className="setting-row">
+      <div className="label">
+        <div className="title">{t("settings.fullscreenIdleHide")}<span className="badge">{t("settings.scope.local")}</span></div>
+        <div className="desc" id="idle-hide-desc">{t("settings.fullscreenIdleHideDesc")}</div>
+      </div>
+      <div className="control">
+        <Switch checked={on} onChange={(checked) => setIdleHide(checked)} aria-label={t("settings.fullscreenIdleHide")} aria-describedby="idle-hide-desc" data-testid="setting-fullscreen-idle-hide" />
+      </div>
+    </div>
   );
 }
 

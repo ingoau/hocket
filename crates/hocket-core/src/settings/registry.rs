@@ -75,6 +75,12 @@ pub mod keys {
     pub const DISPLAY_ACCENT: &str = "display.accent";
     pub const DISPLAY_DYNAMIC_COLOUR: &str = "display.dynamicColour";
     pub const DISPLAY_QUEUE_PANEL_SPLIT: &str = "display.queuePanelSplit";
+    /// The full player's artwork: `automatic` (mirror or extend where the cover suits it, a card
+    /// otherwise), `always` (mirror or extend every square cover) or `never` (always a card).
+    pub const DISPLAY_IMMERSIVE_ARTWORK: &str = "display.immersiveArtwork";
+    /// The star rating in the player (the full player and the desktop's bar): shown, or left to
+    /// the song menu and the song's details. Synced: a preference, not a device's.
+    pub const DISPLAY_PLAYER_RATING: &str = "display.playerRating";
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
@@ -389,6 +395,15 @@ pub static REGISTRY: &[SettingDef] = &[
         },
         || json!(0.5),
     ),
+    def(
+        DISPLAY_IMMERSIVE_ARTWORK,
+        Local,
+        SettingKind::Enum(&["automatic", "always", "never"]),
+        || json!("automatic"),
+    ),
+    def(DISPLAY_PLAYER_RATING, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,
         Synced,

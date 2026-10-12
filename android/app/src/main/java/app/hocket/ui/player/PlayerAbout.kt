@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import app.hocket.ui.icons.HocketIcons
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,14 +42,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The player's About mode: the song's details on tonal cards over the player's gradient. The rating
+ * The song's details (the info sheet, from a tap on the player's title) on tonal cards. The rating
  * (one adjustable control, tag `rating`) comes first; then what the library knows of the track
  * (album, artists, year, genre, track and disc, duration, format, bitrate, sample rate, bit depth,
  * channels, plays, last played, file size and path, comment), fetched once per track. While that
- * loads, the summary's fields (album, artist, duration) show on their own.
+ * loads, the summary's fields (album, artist, duration) show on their own. The album and artist
+ * rows go to their pages ([onOpenAlbum], [onOpenArtist]) when given.
  */
 @Composable
-internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues()) {
+internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), onOpenAlbum: ((String) -> Unit)? = null, onOpenArtist: ((String) -> Unit)? = null) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val summary = entry?.track
@@ -56,6 +60,12 @@ internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingV
         value = id?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data }
     }
     val d = detail?.takeIf { it.id == id }
+    val links = buildMap {
+        val albumId = summary?.albumId
+        val artistId = summary?.artistId
+        if (onOpenAlbum != null && albumId != null) put(stringResource(R.string.player_about_album), stringResource(R.string.action_go_to_album) to { onOpenAlbum(albumId) })
+        if (onOpenArtist != null && artistId != null) put(stringResource(R.string.player_about_artist), stringResource(R.string.action_go_to_artist) to { onOpenArtist(artistId) })
+    }
     val rows = buildList {
         (d?.album ?: summary?.album)?.let { add(stringResource(R.string.player_about_album) to it) }
         (d?.artist ?: summary?.artist)?.let { add(stringResource(R.string.player_about_artist) to it) }
@@ -98,7 +108,7 @@ internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingV
                 Column(Modifier.padding(vertical = 8.dp)) {
                     rows.forEachIndexed { i, (label, value) ->
                         if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        DetailRow(label, value)
+                        DetailRow(label, value, links[label])
                     }
                     if (d == null && summary != null) {
                         Text(stringResource(R.string.player_about_loading), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
@@ -110,11 +120,18 @@ internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingV
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
-    // One item for a screen reader: "Album, Trench".
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) { }.padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun DetailRow(label: String, value: String, link: Pair<String, () -> Unit>? = null) {
+    // One item for a screen reader: "Album, Trench" (and "Go to album" where it links).
+    val base = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+    Row(
+        (if (link != null) base.clickable(onClickLabel = link.first, onClick = link.second) else base)
+            .semantics(mergeDescendants = true) { }
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.4f))
         Text(value, style = MaterialTheme.typography.bodyLarge, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(0.6f))
+        if (link != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
     }
 }
 

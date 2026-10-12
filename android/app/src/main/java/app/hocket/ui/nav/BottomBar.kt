@@ -10,34 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.automirrored.outlined.QueueMusic
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.RemoveCircleOutline
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.Album
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.Category
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.FilterAlt
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.MusicNote
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -86,6 +58,7 @@ import app.hocket.NavBarPrefs
 import app.hocket.R
 import app.hocket.SyncedNavBarPrefs
 import app.hocket.core.client.CoreClient
+import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -263,18 +236,18 @@ fun NavDestination.isSettings(): Boolean = listOf(
 ).any { hasRoute(it) }
 
 fun NavItem.icon(selected: Boolean): ImageVector = when (this) {
-    NavItem.Home -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
-    NavItem.Search -> if (selected) Icons.Filled.Search else Icons.Outlined.Search
-    NavItem.Library -> if (selected) Icons.Filled.LibraryMusic else Icons.Outlined.LibraryMusic
-    NavItem.Playlists -> if (selected) Icons.AutoMirrored.Filled.QueueMusic else Icons.AutoMirrored.Outlined.QueueMusic
-    NavItem.Artists -> if (selected) Icons.Filled.Person else Icons.Outlined.Person
-    NavItem.Albums -> if (selected) Icons.Filled.Album else Icons.Outlined.Album
-    NavItem.Songs -> if (selected) Icons.Filled.MusicNote else Icons.Outlined.MusicNote
-    NavItem.Genres -> if (selected) Icons.Filled.Category else Icons.Outlined.Category
-    NavItem.RecentQueues -> if (selected) Icons.Filled.History else Icons.Outlined.History
-    NavItem.Stats -> if (selected) Icons.Filled.BarChart else Icons.Outlined.BarChart
-    NavItem.Downloads -> if (selected) Icons.Filled.Download else Icons.Outlined.Download
-    NavItem.Filters -> if (selected) Icons.Filled.FilterAlt else Icons.Outlined.FilterAlt
+    NavItem.Home -> if (selected) HocketIcons.Filled.Home else HocketIcons.Outlined.Home
+    NavItem.Search -> if (selected) HocketIcons.Filled.Search else HocketIcons.Outlined.Search
+    NavItem.Library -> if (selected) HocketIcons.Filled.LibraryMusic else HocketIcons.Outlined.LibraryMusic
+    NavItem.Playlists -> if (selected) HocketIcons.AutoMirrored.Filled.QueueMusic else HocketIcons.AutoMirrored.Outlined.QueueMusic
+    NavItem.Artists -> if (selected) HocketIcons.Filled.Person else HocketIcons.Outlined.Person
+    NavItem.Albums -> if (selected) HocketIcons.Filled.Album else HocketIcons.Outlined.Album
+    NavItem.Songs -> if (selected) HocketIcons.Filled.MusicNote else HocketIcons.Outlined.MusicNote
+    NavItem.Genres -> if (selected) HocketIcons.Filled.Category else HocketIcons.Outlined.Category
+    NavItem.RecentQueues -> if (selected) HocketIcons.Filled.History else HocketIcons.Outlined.History
+    NavItem.Stats -> if (selected) HocketIcons.Filled.BarChart else HocketIcons.Outlined.BarChart
+    NavItem.Downloads -> if (selected) HocketIcons.Filled.Download else HocketIcons.Outlined.Download
+    NavItem.Filters -> if (selected) HocketIcons.Filled.FilterAlt else HocketIcons.Outlined.FilterAlt
 }
 
 @Composable
@@ -361,9 +334,9 @@ fun BottomBarEditor(modifier: Modifier = Modifier) {
                         IconButton(
                             onClick = { if (items.size <= NavItem.MIN) message = minimumMessage else update(items - item) },
                             modifier = Modifier.testTag("bottomBar.remove.${item.id}"),
-                        ) { Icon(Icons.Filled.RemoveCircleOutline, stringResource(R.string.bottom_bar_remove, label)) }
+                        ) { Icon(HocketIcons.Filled.RemoveCircleOutline, stringResource(R.string.bottom_bar_remove, label)) }
                         Box(Modifier.padding(12.dp).draggableHandle(onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) })) {
-                            Icon(Icons.Filled.DragHandle, null)
+                            Icon(HocketIcons.Filled.DragHandle, null)
                         }
                     }
                 }
@@ -376,7 +349,7 @@ fun BottomBarEditor(modifier: Modifier = Modifier) {
         FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
             Box {
                 OutlinedButton(onClick = { if (items.size >= NavItem.MAX) message = fullMessage else { message = null; adding = true } }, modifier = Modifier.testTag("bottomBar.add")) {
-                    Icon(Icons.Filled.Add, null)
+                    Icon(HocketIcons.Filled.Add, null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.bottom_bar_add))
                 }

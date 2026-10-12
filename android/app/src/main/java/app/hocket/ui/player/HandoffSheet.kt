@@ -9,11 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Speaker
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -39,6 +34,7 @@ import app.hocket.core.api.Platform
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.formatAgo
+import app.hocket.ui.icons.HocketIcons
 
 /**
  * The Connect picker. Opening it makes targets pre-buffer (the "ready" state); playback keeps going
@@ -67,7 +63,7 @@ fun HandoffSheet(onDismiss: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             devices.firstOrNull { it.isSelf }?.let { self ->
                 ListItem(headlineContent = { Text(stringResource(R.string.handoff_this_device)) }, supportingContent = { if (self.playing) Text(stringResource(R.string.handoff_playing)) },
-                    leadingContent = { Icon(Icons.Filled.PhoneAndroid, null) }, trailingContent = { if (self.playing) Icon(Icons.Filled.VolumeUp, null, tint = MaterialTheme.colorScheme.primary) },
+                    leadingContent = { Icon(HocketIcons.Filled.PhoneAndroid, null) }, trailingContent = { if (self.playing) Icon(HocketIcons.Filled.VolumeUp, null, tint = MaterialTheme.colorScheme.primary) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent), modifier = Modifier.clickable { if (!self.playing) client.dispatch(Commands.handoffTo(self.id)); onDismiss() })
             }
             if (targets.isEmpty()) {
@@ -77,8 +73,8 @@ fun HandoffSheet(onDismiss: () -> Unit) {
                     ListItem(
                         headlineContent = { Text(d.name) },
                         supportingContent = { Text(when { d.playing -> stringResource(R.string.handoff_playing); d.ready -> stringResource(R.string.handoff_ready); else -> stringResource(R.string.handoff_preparing) }) },
-                        leadingContent = { Icon(when (d.platform) { Platform.Android -> Icons.Filled.PhoneAndroid; Platform.Coordinator -> Icons.Filled.Speaker; else -> Icons.Filled.Computer }, null) },
-                        trailingContent = { if (d.playing) Icon(Icons.Filled.VolumeUp, null, tint = MaterialTheme.colorScheme.primary) else if (!d.ready) LoadingIndicator(Modifier.size(28.dp)) else Text(stringResource(R.string.handoff_last_seen, formatAgo(d.lastSeen)), style = MaterialTheme.typography.labelSmall) },
+                        leadingContent = { Icon(when (d.platform) { Platform.Android -> HocketIcons.Filled.PhoneAndroid; Platform.Coordinator -> HocketIcons.Filled.Speaker; else -> HocketIcons.Filled.Computer }, null) },
+                        trailingContent = { if (d.playing) Icon(HocketIcons.Filled.VolumeUp, null, tint = MaterialTheme.colorScheme.primary) else if (!d.ready) LoadingIndicator(Modifier.size(28.dp)) else Text(stringResource(R.string.handoff_last_seen, formatAgo(d.lastSeen)), style = MaterialTheme.typography.labelSmall) },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.clickable { client.dispatch(Commands.handoffTo(d.id)); onDismiss() }.testTag("handoff.device.${d.id}"),
                     )

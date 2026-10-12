@@ -1,5 +1,5 @@
-// Minimal PNG encoder (RGBA, 8-bit, zlib via node). Used for the tray icon and
-// the fake core's generated artwork so no binary assets need to be committed.
+// Minimal PNG encoder (RGBA, 8-bit, zlib via node). Used for the brand mark
+// (brand.ts) and the fake core's generated artwork so no binary assets need to be committed.
 import { deflateSync } from "node:zlib";
 
 const CRC_TABLE = new Int32Array(256).map((_, n) => {
@@ -100,37 +100,6 @@ export function coverPng(seed: number, size: number): Buffer {
       px[i] = r;
       px[i + 1] = g;
       px[i + 2] = bl;
-      px[i + 3] = 255;
-    }
-  }
-  return encodePng(size, size, px);
-}
-
-/** Tray/app icon: a rounded square with a play triangle. */
-export function appIconPng(size: number, accent: Rgb = { r: 111, g: 92, b: 255 }): Buffer {
-  const px = new Uint8Array(size * size * 4);
-  const rad = size * 0.22;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      // rounded rect coverage
-      const dx = Math.max(rad - x, 0, x - (size - 1 - rad));
-      const dy = Math.max(rad - y, 0, y - (size - 1 - rad));
-      const inside = Math.hypot(dx, dy) <= rad;
-      if (!inside) continue;
-      // triangle: vertices (0.34,0.26) (0.34,0.74) (0.76,0.5)
-      const tx = x / size;
-      const ty = y / size;
-      const inTri = tx >= 0.34 && tx <= 0.76 && Math.abs(ty - 0.5) <= ((0.76 - tx) / 0.42) * 0.24;
-      if (inTri) {
-        px[i] = 255;
-        px[i + 1] = 255;
-        px[i + 2] = 255;
-      } else {
-        px[i] = accent.r;
-        px[i + 1] = accent.g;
-        px[i + 2] = accent.b;
-      }
       px[i + 3] = 255;
     }
   }

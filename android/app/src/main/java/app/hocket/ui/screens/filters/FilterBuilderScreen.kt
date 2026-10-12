@@ -13,12 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -53,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -140,8 +135,8 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
         }
     }
     Scaffold(topBar = {
-        TopAppBar(title = { Text(filter.name) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-            actions = { IconButton(onClick = { client.dispatch(Commands.saveFilter(filter)) }) { Icon(Icons.Filled.Save, stringResource(R.string.filter_save)) } })
+        TopAppBar(title = { Text(filter.name) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+            actions = { IconButton(onClick = { client.dispatch(Commands.saveFilter(filter)) }) { Icon(HocketIcons.Filled.Save, stringResource(R.string.filter_save)) } })
     }) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset, start = 16.dp, end = 16.dp)) {
             item { OutlinedTextField(value = filter.name, onValueChange = { filter = filter.copy(name = it) }, label = { Text(stringResource(R.string.filter_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
@@ -177,9 +172,9 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     var menu by remember { mutableStateOf(false) }
                     SplitButtonLayout(
-                        leadingButton = { SplitButtonDefaults.LeadingButton(onClick = { sid?.let { client.dispatch(Commands.playContext(Commands.filterContext(it, filter))) } }) { Icon(Icons.Filled.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.filter_play)) } },
+                        leadingButton = { SplitButtonDefaults.LeadingButton(onClick = { sid?.let { client.dispatch(Commands.playContext(Commands.filterContext(it, filter))) } }) { Icon(HocketIcons.Filled.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.filter_play)) } },
                         trailingButton = {
-                            SplitButtonDefaults.TrailingButton(onClick = { menu = true }) { Icon(Icons.Filled.ArrowDropDown, stringResource(R.string.action_more)) }
+                            SplitButtonDefaults.TrailingButton(onClick = { menu = true }) { Icon(HocketIcons.Filled.ArrowDropDown, stringResource(R.string.action_more)) }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 DropdownMenuItem(text = { Text(stringResource(R.string.filter_save)) }, onClick = { client.dispatch(Commands.saveFilter(filter)); menu = false })
                                 DropdownMenuItem(text = { Text(stringResource(R.string.filter_create_smart)) }, enabled = smartOk, onClick = { namingFor = "smart"; menu = false })
@@ -227,7 +222,7 @@ private fun GroupEditor(node: FilterNode, depth: Int, onChange: (FilterNode) -> 
                     val group: FilterNode = FilterNode.Any(listOf(FilterNode.Rule(FilterRule(FilterField.Artist, FilterOp.Is, FilterValue.Text("")))))
                     onChange(rebuild(children + group))
                 }) { Text(stringResource(R.string.filter_add_group)) }
-                if (onRemove != null) IconButton(onClick = onRemove) { Icon(Icons.Filled.Close, stringResource(R.string.filter_remove_rule)) }
+                if (onRemove != null) IconButton(onClick = onRemove) { Icon(HocketIcons.Filled.Close, stringResource(R.string.filter_remove_rule)) }
             }
             children.forEachIndexed { i, child ->
                 Spacer(Modifier.height(6.dp))
@@ -248,7 +243,7 @@ private fun RuleEditor(rule: FilterRule, onChange: (FilterRule) -> Unit, onRemov
                 Spacer(Modifier.width(6.dp))
                 EnumPicker(stringResource(R.string.filter_op), rule.op.string, FilterText.opsFor(rule.field).map { it to it.string }) { op -> onChange(rule.copy(op = op, value = FilterText.defaultValue(rule.field, op))) }
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onRemove) { Icon(Icons.Filled.Close, stringResource(R.string.filter_remove_rule)) }
+                IconButton(onClick = onRemove) { Icon(HocketIcons.Filled.Close, stringResource(R.string.filter_remove_rule)) }
             }
             ValueEditor(rule.value, onChange = { onChange(rule.copy(value = it)) })
         }
@@ -276,7 +271,7 @@ private fun ValueEditor(value: FilterValue, onChange: (FilterValue) -> Unit) {
 fun <T> EnumPicker(label: String?, current: String, options: List<Pair<T, String>>, onPick: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     androidx.compose.foundation.layout.Box {
-        OutlinedButton(onClick = { open = true }, shapes = ButtonDefaults.shapes()) { Text(if (label != null) "$label: $current" else current); Icon(Icons.Filled.ArrowDropDown, null) }
+        OutlinedButton(onClick = { open = true }, shapes = ButtonDefaults.shapes()) { Text(if (label != null) "$label: $current" else current); Icon(HocketIcons.Filled.ArrowDropDown, null) }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { (v, text) -> DropdownMenuItem(text = { Text(text) }, onClick = { onPick(v); open = false }) }
         }

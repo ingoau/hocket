@@ -11,40 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.AllInclusive
-import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.ClearAll
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Lyrics
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistAdd
-import androidx.compose.material.icons.filled.PlaylistAddCheck
-import androidx.compose.material.icons.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.PlaylistRemove
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarOutline
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -78,43 +44,44 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 
 /** Material Symbols names the core's action registry emits (`actions/defs.rs`), mapped to icons. */
 fun actionIcon(name: String): ImageVector = when (name) {
-    "play_arrow" -> Icons.Filled.PlayArrow
-    "play_pause" -> Icons.Filled.PlayArrow
-    "pause" -> Icons.Filled.Pause
-    "stop" -> Icons.Filled.Stop
-    "skip_next" -> Icons.Filled.SkipNext
-    "skip_previous" -> Icons.Filled.SkipPrevious
-    "shuffle", "shuffle_on" -> Icons.Filled.Shuffle
-    "repeat" -> Icons.Filled.Repeat
-    "all_inclusive" -> Icons.Filled.AllInclusive
-    "playlist_play" -> Icons.Filled.PlaylistPlay
-    "playlist_add" -> Icons.Filled.PlaylistAdd
-    "playlist_add_check" -> Icons.Filled.PlaylistAddCheck
-    "playlist_remove", "remove_from_queue" -> Icons.Filled.PlaylistRemove
-    "queue_music" -> Icons.Filled.QueueMusic
-    "favorite" -> Icons.Filled.Favorite
-    "heart_minus", "heart_broken" -> Icons.Filled.FavoriteBorder
-    "star", "star_rate" -> Icons.Filled.Star
-    "star_outline" -> Icons.Filled.StarOutline
-    "download" -> Icons.Filled.Download
-    "download_done" -> Icons.Filled.DownloadDone
-    "delete", "delete_forever" -> Icons.Filled.Delete
-    "remove" -> Icons.Filled.Remove
-    "clear_all" -> Icons.Filled.ClearAll
-    "album" -> Icons.Filled.Album
-    "artist", "person" -> Icons.Filled.Person
-    "history" -> Icons.Filled.History
-    "push_pin" -> Icons.Filled.PushPin
-    "keep_off" -> Icons.Outlined.PushPin
-    "bedtime" -> Icons.Filled.Bedtime
-    "cast" -> Icons.Filled.Cast
-    "lyrics" -> Icons.Filled.Lyrics
-    "undo" -> Icons.AutoMirrored.Filled.Undo
-    "redo" -> Icons.AutoMirrored.Filled.Redo
-    else -> Icons.Filled.Add
+    "play_arrow" -> HocketIcons.Filled.PlayArrow
+    "play_pause" -> HocketIcons.Filled.PlayArrow
+    "pause" -> HocketIcons.Filled.Pause
+    "stop" -> HocketIcons.Filled.Stop
+    "skip_next" -> HocketIcons.Filled.SkipNext
+    "skip_previous" -> HocketIcons.Filled.SkipPrevious
+    "shuffle", "shuffle_on" -> HocketIcons.Filled.Shuffle
+    "repeat" -> HocketIcons.Filled.Repeat
+    "all_inclusive" -> HocketIcons.Filled.AllInclusive
+    "playlist_play" -> HocketIcons.Filled.PlaylistPlay
+    "playlist_add" -> HocketIcons.Filled.PlaylistAdd
+    "playlist_add_check" -> HocketIcons.Filled.PlaylistAddCheck
+    "playlist_remove", "remove_from_queue" -> HocketIcons.Filled.PlaylistRemove
+    "queue_music" -> HocketIcons.Filled.QueueMusic
+    "favorite" -> HocketIcons.Filled.Favorite
+    "heart_minus", "heart_broken" -> HocketIcons.Filled.FavoriteBorder
+    "star", "star_rate" -> HocketIcons.Filled.Star
+    "star_outline" -> HocketIcons.Filled.StarOutline
+    "download" -> HocketIcons.Filled.Download
+    "download_done" -> HocketIcons.Filled.DownloadDone
+    "delete", "delete_forever" -> HocketIcons.Filled.Delete
+    "remove" -> HocketIcons.Filled.Remove
+    "clear_all" -> HocketIcons.Filled.ClearAll
+    "album" -> HocketIcons.Filled.Album
+    "artist", "person" -> HocketIcons.Filled.Person
+    "history" -> HocketIcons.Filled.History
+    "push_pin" -> HocketIcons.Filled.PushPin
+    "keep_off" -> HocketIcons.Outlined.PushPin
+    "bedtime" -> HocketIcons.Filled.Bedtime
+    "cast" -> HocketIcons.Filled.Cast
+    "lyrics" -> HocketIcons.Filled.Lyrics
+    "undo" -> HocketIcons.AutoMirrored.Filled.Undo
+    "redo" -> HocketIcons.AutoMirrored.Filled.Redo
+    else -> HocketIcons.Filled.Add
 }
 
 /**

@@ -15,13 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.PlaylistAdd
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -50,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
@@ -104,10 +98,10 @@ private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> 
             Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgo(sq.lastInteractedAt)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconToggleButton(checked = sq.pinned, onCheckedChange = { client.dispatch(Commands.pinSavedQueue(sq.id, it)) }) {
-            Icon(if (sq.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, stringResource(if (sq.pinned) R.string.saved_unpin else R.string.saved_pin), tint = if (sq.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(if (sq.pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (sq.pinned) R.string.saved_unpin else R.string.saved_pin), tint = if (sq.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        IconButton(onClick = onSaveAs) { Icon(Icons.Filled.PlaylistAdd, stringResource(R.string.queue_save_as_playlist)) }
-        IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, stringResource(R.string.action_delete)) }
+        IconButton(onClick = onSaveAs) { Icon(HocketIcons.Filled.PlaylistAdd, stringResource(R.string.queue_save_as_playlist)) }
+        IconButton(onClick = onDelete) { Icon(HocketIcons.Filled.Delete, stringResource(R.string.action_delete)) }
     }
 }
 
@@ -126,7 +120,7 @@ fun UndoHistoryPanel(modifier: Modifier = Modifier) {
         LazyColumn(contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
             items(undo.history, key = { it.id }) { e ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(HocketIcons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(e.label, style = MaterialTheme.typography.bodyLarge)
@@ -151,10 +145,10 @@ fun SavedQueuesScreen(nav: NavHostController) {
         TopAppBar(
             title = { Text(stringResource(R.string.home_saved_queues)) },
             actions = {
-                IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(Icons.Filled.History, stringResource(R.string.queue_undo_history)) }
+                IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(HocketIcons.Filled.History, stringResource(R.string.queue_undo_history)) }
                 AccountButton()
             },
-            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
         )
     }) { padding ->
         RecentQueuesList(Modifier.fillMaxSize().padding(padding))

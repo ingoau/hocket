@@ -205,6 +205,23 @@ pub fn init_logging(level: String) {
         .try_init();
 }
 
+/// How the full player shows a cover (`hocket_core::artwork`): its pixels as tightly packed RGBA8
+/// plus an `ArtworkLayoutRequest` JSON (the faces found in it, the setting) in, an `ArtworkLayout`
+/// JSON out. Pure and quick (the cover is resampled to 128 px); call it off the main thread.
+#[uniffi::export]
+pub fn artwork_layout(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    request_json: String,
+) -> Result<String, HocketError> {
+    hocket_core::artwork::layout_json(&rgba, width, height, &request_json).map_err(|e| {
+        HocketError::Failed {
+            reason: e.to_string(),
+        }
+    })
+}
+
 #[uniffi::export]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

@@ -16,8 +16,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -51,6 +49,7 @@ import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import androidx.compose.runtime.rememberCoroutineScope
+import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.MapSerializer
@@ -335,7 +334,7 @@ internal fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled
                     Checkbox(checked = checked, onCheckedChange = null)
                     Spacer(Modifier.width(12.dp))
                     Text(label(id), modifier = Modifier.weight(1f))
-                    Icon(Icons.Filled.DragHandle, null, modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
+                    Icon(HocketIcons.Filled.DragHandle, null, modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
                 }
             }
         }

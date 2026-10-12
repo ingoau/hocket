@@ -19,11 +19,10 @@ import { extrapolate, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
 import { LYRICS_SCALE, LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
-import { Icon } from "./Icon";
 import { SK } from "@shared/settings-keys";
 import { usePlainLyrics } from "../lib/media";
 
-export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyrics; variant: "compact" | "large"; showTools?: boolean }) {
+export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "compact" | "large" }) {
   const stamp = useApp((s) => s.transport.position);
   const clockOffset = useApp((s) => s.connection.clockOffsetMs);
   const duration = useApp((s) => s.nowPlaying?.track.durationMs);
@@ -49,7 +48,8 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     p.setEnableBlur(variant === "large");
     p.setEnableSpring(variant === "large" && !batterySaver);
     p.setEnableScale(true);
-    p.setAlignPosition(variant === "large" ? 0.5 : 0.3);
+    // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
+    p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
     p.setWordFadeWidth(0.5);
     host.current.replaceChildren(p.getElement());
     player.current = p;
@@ -117,8 +117,6 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
     return () => cancelAnimationFrame(raf);
   }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration]);
 
-  const tierLabel = lyrics.tier === "syllable" ? t("lyrics.tier.syllable") : lyrics.tier === "line" ? t("lyrics.tier.line") : t("lyrics.tier.unsynced");
-  const sourceLabel = lyrics.source === "server" ? t("lyrics.source.server") : lyrics.source === "external" ? t("lyrics.source.external") : t("lyrics.source.embedded");
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
       {animated ? (
@@ -129,7 +127,6 @@ export function LyricsView({ lyrics, variant, showTools = true }: { lyrics: Lyri
       ) : (
         <LyricsList lines={mapped.lines} synced={mapped.synced} variant={variant} size={LYRICS_SCALE[size]} />
       )}
-      {showTools ? <LyricsTools lyrics={lyrics} tierLabel={tierLabel} sourceLabel={sourceLabel} /> : null}
     </div>
   );
 }
@@ -166,28 +163,6 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
 }
 
 const NO_LINES: AmllLine[] = [];
-
-function LyricsTools({ lyrics, tierLabel, sourceLabel }: { lyrics: Lyrics; tierLabel: string; sourceLabel: string }) {
-  const [offset, setOffset] = useState(lyrics.offsetMs);
-  useEffect(() => setOffset(lyrics.offsetMs), [lyrics.offsetMs, lyrics.trackId]);
-  const apply = (v: number) => {
-    setOffset(v);
-    bridge().dispatch({ type: "setLyricsOffset", data: { track_id: lyrics.trackId, offset_ms: v } });
-  };
-  return (
-    <div className="lyrics-tools" data-testid="lyrics-tools">
-      <span title={sourceLabel}>{tierLabel}</span>
-      <span aria-hidden="true">·</span>
-      <span>{t("lyrics.offset")}</span>
-      <button type="button" className="btn icon sm" aria-label={t("a11y.lyricsEarlier")} title={t("a11y.lyricsEarlier")} onClick={() => apply(offset - 100)}><Icon name="minimize" size={10} /></button>
-      <span className="mono" style={{ minWidth: 48, textAlign: "center" }}>{offset > 0 ? "+" : ""}{(offset / 1000).toFixed(1)}s</span>
-      <button type="button" className="btn icon sm" aria-label={t("a11y.lyricsLater")} title={t("a11y.lyricsLater")} onClick={() => apply(offset + 100)}><Icon name="plus" size={10} /></button>
-      {offset !== 0 ? <button type="button" className="btn sm ghost" onClick={() => apply(0)}>{t("lyrics.offsetReset")}</button> : null}
-      <span aria-hidden="true">·</span>
-      <LyricsSizeControl />
-    </div>
-  );
-}
 
 /** Small / medium / large, device-local; shared by every lyrics view in this window. */
 export function LyricsSizeControl() {

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="splash_background">#FF1B1B22</color>
-    <color name="ic_launcher_background">#FF1B1B22</color>
+    <!-- The Crescendo mark's Tonal Violet dark tile. -->
+    <color name="splash_background">#FF221D3A</color>
+    <color name="ic_launcher_background">#FF221D3A</color>
 </resources>

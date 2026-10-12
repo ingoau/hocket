@@ -1,7 +1,7 @@
 // Preload: installs the typed `window.hocket` bridge. contextIsolation is on,
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
-import type { Command, Event, Query, QueryResult } from "@core/api";
+import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 import type { AppMeta, AppPrefs, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
@@ -61,6 +61,8 @@ const bridge: HocketBridge = {
   },
   onDeepLink: (listener) => subscribe<string>(IPC.deepLink, listener),
   onUiAction: (listener) => subscribe<string>(IPC.uiAction, listener),
+  artworkLayout: (rgba: Uint8Array, width: number, height: number, request: ArtworkLayoutRequest) =>
+    ipcRenderer.invoke(IPC.artworkLayout, rgba, width, height, request) as Promise<ArtworkLayout | undefined>,
 };
 
 contextBridge.exposeInMainWorld("hocket", bridge);

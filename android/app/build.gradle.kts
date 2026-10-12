@@ -92,7 +92,6 @@ dependencies {
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material3.window.size)
-    implementation(libs.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.reorderable)
     implementation(libs.kotlinx.coroutines.android)

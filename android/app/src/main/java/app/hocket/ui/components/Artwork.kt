@@ -66,8 +66,10 @@ fun Artwork(
         if (coverArt == null || (r != null && r.path == null)) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
         val path = r?.path
         if (path != null) {
-            val request = remember(path) {
-                ImageRequest.Builder(platformContext).data(File(path.removePrefix("file://"))).crossfade(ARTWORK_CROSSFADE_MS).build()
+            val request = remember(path, requested) {
+                // Decoded at the requested artwork size, not the view's: a view that resizes (the
+                // player's artwork going edge to edge) keeps its image instead of reloading it.
+                ImageRequest.Builder(platformContext).data(File(path.removePrefix("file://"))).size(requested).crossfade(ARTWORK_CROSSFADE_MS).build()
             }
             AsyncImage(
                 model = request,

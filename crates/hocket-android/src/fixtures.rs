@@ -28,6 +28,10 @@ mod tests {
             rating: 3,
             loved: true,
             offline: OfflineState::Cached,
+            artists: vec![ArtistRef {
+                id: Some("ar1".into()),
+                name: "Artist".into(),
+            }],
         }
     }
 

@@ -28,6 +28,7 @@ protocols:
   - name: Hocket
     schemes: [hocket]
 linux:
+  icon: build/icons
   target:
     - AppImage
     - deb
@@ -47,6 +48,10 @@ mac:
   target:
     - dmg
   category: public.app-category.music
+  # The Liquid Glass icon, made in Icon Composer. electron-builder compiles it
+  # into Assets.car with actool and derives the flat icon.icns for macOS 15 and earlier from
+  # it, so packaging for macOS needs Xcode 26 or later.
+  icon: build/icon.icon
   # Signing and notarisation are deliberately not configured here (design.md:
   # "Still open → Code signing, blocked on distribution"). When a distribution
   # channel is chosen, fill these in and set APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
@@ -60,6 +65,7 @@ mac:
 dmg:
   sign: false
 win:
+  icon: build/icon.ico
   target:
     - nsis
   artifactName: "${productName}-${version}-${arch}.${ext}"

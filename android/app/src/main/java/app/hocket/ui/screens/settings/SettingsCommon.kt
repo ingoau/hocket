@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +47,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.api.SettingScope
@@ -181,7 +180,7 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(title, modifier = Modifier.semantics { heading() }.testTag("settings.title")) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )
         },

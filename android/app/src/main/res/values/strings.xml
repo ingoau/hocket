@@ -226,8 +226,6 @@
     <string name="player_sleep_timer">Sleep timer</string>
     <string name="player_connect">Play on another device</string>
     <string name="player_take_over">Play here</string>
-    <string name="player_resume_offer">%1$s was playing %2$s</string>
-    <string name="player_resume_here">Resume here</string>
     <string name="player_skipped">Skipped</string>
     <string name="player_autoplay_reason">Autoplay · %1$s</string>
     <string name="player_from_context">From %1$s</string>
@@ -419,8 +417,15 @@
     <string name="settings_accent">Accent colour</string>
     <string name="settings_accent_dynamic">Dynamic (wallpaper)</string>
     <string name="settings_accent_artwork">From artwork while playing</string>
-    <string name="settings_animated_background">Animated lyrics background</string>
-    <string name="settings_animated_background_body">Off keeps a still blurred artwork.</string>
+    <string name="settings_animated_background">Animated background</string>
+    <string name="settings_animated_background_body">The full player\'s blurred artwork moves slowly. Off keeps it still.</string>
+    <string name="settings_immersive">Immersive artwork</string>
+    <string name="settings_immersive_body">Run the artwork edge to edge, carried on below it by a reflection or its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours</string>
+    <string name="settings_immersive_automatic">Automatic</string>
+    <string name="settings_immersive_always">Always</string>
+    <string name="settings_immersive_never">Never</string>
+    <string name="settings_player_rating">Rating in the player</string>
+    <string name="settings_player_rating_body">Show the star rating under the song. Off leaves it in the song\'s menu and details.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_replay_gain">ReplayGain</string>
     <string name="settings_rg_off">Off</string>

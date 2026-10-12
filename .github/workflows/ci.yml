@@ -54,7 +54,9 @@ jobs:
         working-directory: desktop
       - run: pnpm typecheck && pnpm lint && pnpm test && pnpm build
         working-directory: desktop
-      - run: xvfb-run -a pnpm test:e2e
+      # A screen larger than the default 1280x1024: the immersive layout tests size the window to
+      # 1456x912 (3:2), which a smaller screen would clamp.
+      - run: xvfb-run -a -s "-screen 0 2000x1600x24" pnpm test:e2e
         working-directory: desktop
 
   android:

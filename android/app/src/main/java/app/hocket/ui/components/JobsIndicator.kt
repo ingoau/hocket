@@ -11,15 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,6 +35,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Job
 import app.hocket.core.api.JobState
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.icons.HocketIcons
 
 /**
  * The one progress indicator near search (design: job queue). Idle: a plain activity icon; running:
@@ -60,8 +52,8 @@ fun JobsIndicator(onClick: () -> Unit, modifier: Modifier = Modifier) {
     IconButton(onClick = onClick, modifier = modifier.semantics { contentDescription = desc }) {
         when {
             active.isNotEmpty() -> LoadingIndicator(modifier = Modifier.size(28.dp))
-            hasProblems -> Icon(Icons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
-            else -> Icon(Icons.Filled.Sync, null)
+            hasProblems -> Icon(HocketIcons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
+            else -> Icon(HocketIcons.Filled.Sync, null)
         }
     }
 }
@@ -100,14 +92,14 @@ fun JobsSheet(onDismiss: () -> Unit) {
                     }
                     items(problems, key = { it.id }) { p ->
                         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
+                            Icon(HocketIcons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
                             Spacer(Modifier.size(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(p.summary, style = MaterialTheme.typography.bodyLarge)
                                 p.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             }
-                            if (p.retryable) IconButton(onClick = { client.dispatch(Commands.retryProblem(p.id)) }) { Icon(Icons.Filled.Refresh, stringResource(R.string.action_retry)) }
-                            IconButton(onClick = { client.dispatch(Commands.dismissProblem(p.id)) }) { Icon(Icons.Filled.Close, stringResource(R.string.action_dismiss)) }
+                            if (p.retryable) IconButton(onClick = { client.dispatch(Commands.retryProblem(p.id)) }) { Icon(HocketIcons.Filled.Refresh, stringResource(R.string.action_retry)) }
+                            IconButton(onClick = { client.dispatch(Commands.dismissProblem(p.id)) }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_dismiss)) }
                         }
                     }
                 }
@@ -139,15 +131,15 @@ private fun JobRow(job: Job) {
             }
             when (job.state) {
                 JobState.Running -> {
-                    IconButton(onClick = { client.dispatch(Commands.pauseJob(job.id)) }) { Icon(Icons.Filled.Pause, stringResource(R.string.jobs_pause)) }
-                    if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(Icons.Filled.Cancel, stringResource(R.string.action_cancel)) }
+                    IconButton(onClick = { client.dispatch(Commands.pauseJob(job.id)) }) { Icon(HocketIcons.Filled.Pause, stringResource(R.string.jobs_pause)) }
+                    if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(HocketIcons.Filled.Cancel, stringResource(R.string.action_cancel)) }
                 }
                 JobState.Paused, JobState.Queued -> {
-                    IconButton(onClick = { client.dispatch(Commands.resumeJob(job.id)) }) { Icon(Icons.Filled.PlayArrow, stringResource(R.string.jobs_resume)) }
-                    if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(Icons.Filled.Cancel, stringResource(R.string.action_cancel)) }
+                    IconButton(onClick = { client.dispatch(Commands.resumeJob(job.id)) }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.jobs_resume)) }
+                    if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(HocketIcons.Filled.Cancel, stringResource(R.string.action_cancel)) }
                 }
-                JobState.Failed, JobState.Cancelled -> IconButton(onClick = { client.dispatch(Commands.retryJob(job.id)) }) { Icon(Icons.Filled.Refresh, stringResource(R.string.action_retry)) }
-                JobState.Done -> Icon(Icons.Filled.CheckCircle, stringResource(R.string.jobs_done), tint = MaterialTheme.colorScheme.primary)
+                JobState.Failed, JobState.Cancelled -> IconButton(onClick = { client.dispatch(Commands.retryJob(job.id)) }) { Icon(HocketIcons.Filled.Refresh, stringResource(R.string.action_retry)) }
+                JobState.Done -> Icon(HocketIcons.Filled.CheckCircle, stringResource(R.string.jobs_done), tint = MaterialTheme.colorScheme.primary)
             }
         }
         if (job.state == JobState.Running || job.state == JobState.Paused) {
