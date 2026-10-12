@@ -512,7 +512,6 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val nextLayout = rememberArtworkLayout(nextCover, preference, dark = appDark).value?.layout.immersiveOrNull()
         val previousSeed by artworkSeed(previousCover)
         val nextSeed by artworkSeed(nextCover)
-        val nextEdge = nextLayout?.bottom
         val swiping by remember(carousel) { derivedStateOf { carousel.offset.value != 0f } }
         // The swipe's fraction towards a neighbour in steps (1 = previous, -1 = next): the backdrop
         // and the colours follow it, recomposing a few times a swipe, not every frame.
@@ -537,6 +536,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val neighbourScheme = remember(neighbourShown != null, neighbourSeed, neighbourLight) { if (neighbourShown != null) playerSchemeFor(neighbourSeed, neighbourLight) else null }
         val playerScheme = if (neighbourScheme != null) lerpScheme(playerScheme0, neighbourScheme, abs(towards)) else playerScheme0
         val lightShown = if (neighbourShown != null && abs(towards) >= 0.5f) neighbourLight else lightPlayer
+        // Over an immersive artwork's top strip, the status bar's icons follow the strip's colour
+        // while the player is open (in artwork mode), and go back to the app's when it closes.
+        StatusBarOver(if (scrimTappable && artworkMode) artworkLayout?.let { stripLight(it) } else null)
         val artScale = animateFloatAsState(if (playing || reducedMotion) 1f else HeroGeometry.PAUSED_SCALE, Motion.artwork, label = "artworkScale")
         hero.bigCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
@@ -616,12 +618,18 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // immersive neighbour's continuation slides in beside it (whatever the current
                 // artwork's style: each page in its own).
                 val span = { carousel.span }
-                if (immersiveEdge != null) {
-                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 0f, span))
+                // Each with its top strip (the room under the status bar and the handle).
+                @Composable
+                fun Scene(cover: String?, layout: ArtworkLayout, offsetSpans: Float) {
+                    fun layer(feather: Boolean) = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans, span, feather)
+                    ImmersiveContinuation(cover, layout.bottom, hero, modifier = layer(feather = true))
+                    // Part of the artwork (it looks taller): crisp at a swipe's seam, as the artwork is.
+                    ImmersiveTopStrip(cover, layout, hero, modifier = layer(feather = false))
                 }
+                if (artworkLayout != null) Scene(coverArt, artworkLayout, 0f)
                 if (swiping) {
-                    previousShown.second?.bottom?.let { ImmersiveContinuation(previousShown.first, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = -1f, span)) }
-                    nextEdge?.let { ImmersiveContinuation(nextCover, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 1f, span)) }
+                    previousShown.second?.let { Scene(previousShown.first, it, -1f) }
+                    nextLayout?.let { Scene(nextCover, it, 1f) }
                 }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.
@@ -669,6 +677,25 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
             }
         }
+    }
+}
+
+/**
+ * Light status bar appearance (dark icons) when [light] is true, light icons when false, while the
+ * value is not null; the window's own appearance again once it is.
+ */
+@Composable
+private fun StatusBarOver(light: Boolean?) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(light, view) {
+        var context = view.context
+        while (context !is android.app.Activity && context is android.content.ContextWrapper) context = context.baseContext
+        val window = (context as? android.app.Activity)?.window
+        if (light == null || window == null) return@DisposableEffect onDispose { }
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, view)
+        val before = controller.isAppearanceLightStatusBars
+        controller.isAppearanceLightStatusBars = light
+        onDispose { controller.isAppearanceLightStatusBars = before }
     }
 }
 
@@ -781,13 +808,14 @@ private fun Modifier.continuationLayer(
     density: Density,
     offsetSpans: Float,
     span: () -> Float,
+    feather: Boolean = true,
 ): Modifier = graphicsLayer {
     val p = state.progress
     val big = hero.bigSlot()
     alpha = HeroGeometry.continuationAlpha(p) * (1f - modeFraction())
     transformOrigin = TransformOrigin(0f, 0f)
     // Offscreen only while a seam is feathered (below).
-    compositingStrategy = if (seamFeather(hero, offsetSpans, flying()) != 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    compositingStrategy = if (feather && seamFeather(hero, offsetSpans, flying()) != 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
     if (flying() && big.width > 0f) {
         val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
         scaleX = t.scale
@@ -803,7 +831,7 @@ private fun Modifier.continuationLayer(
     // the two pages' continuations and backdrops blend across the seam instead of meeting in a
     // hard line (the artwork above stays crisp). It eases in with the first [SEAM_FEATHER] of the
     // swipe, so nothing shows at the screen's edge as a swipe starts.
-    val f = seamFeather(hero, offsetSpans, flying())
+    val f = if (feather) seamFeather(hero, offsetSpans, flying()) else 0f
     if (f == 0f) return@drawWithContent
     val w = SEAM_FEATHER.toPx()
     val strength = (abs(hero.swipe()) / w).coerceIn(0f, 1f)
@@ -897,10 +925,9 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
             Modifier.fillMaxSize().immersiveFade(immersiveEdge, evenFlat = flat, fraction = {
                 val p = progress()
                 if (flat) (1f - HeroGeometry.continuationAlpha(p)) * HeroGeometry.seamFraction(p) else HeroGeometry.seamFraction(p)
-            }),
+            }, top = immersiveLayout?.top, topFraction = { HeroGeometry.continuationAlpha(progress()) }),
             RectangleShape,
         )
-        if (immersiveLayout != null) ImmersiveArtworkOverlay(immersiveLayout, fraction = { HeroGeometry.headerAlpha(progress()) })
     }
 }
 

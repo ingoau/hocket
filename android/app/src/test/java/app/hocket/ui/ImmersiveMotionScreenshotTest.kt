@@ -77,7 +77,7 @@ class ImmersiveMotionScreenshotTest {
     @Test
     fun styleSwipes() = run(tall = false, styles = true)
 
-    /** A tall phone: the immersive artwork stays at the top, the controls at the bottom, the continuation between. */
+    /** A tall phone: each immersive artwork under its top strip, the controls at the bottom, the continuation between. */
     @Test
     @Config(qualifiers = "w411dp-h960dp-night-xxhdpi")
     fun tall() = run(tall = true)
@@ -117,7 +117,7 @@ class ImmersiveMotionScreenshotTest {
         kotlinx.coroutines.runBlocking {
             for (cover in covers.take(4)) {
                 val layout = app.hocket.ui.player.ImmersiveArtwork.analyse(cover.absolutePath, app.hocket.core.api.ImmersiveArtwork.Automatic, dark = theme == "dark")
-                println("classifier: ${cover.name} -> ${layout?.bottom?.style} (${layout?.bottom?.reason})")
+                println("classifier: ${cover.name} -> ${layout?.bottom?.style} (${layout?.bottom?.reason}), top ${layout?.top?.style} (${layout?.top?.reason}) ${layout?.top?.edgeColors?.take(3)?.map { it.toString(16) }}")
             }
         }
         fun track(album: Int) = fake.library.albumTracks(albums[album].id).first().id
@@ -191,7 +191,9 @@ class ImmersiveMotionScreenshotTest {
             awaitStill()
             if (tall) {
                 shot(File(dir, "$prefix-artwork-w411dp-h960dp.png"))
-                return
+                compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Collapse)
+                settle()
+                continue
             }
             shot(File(dir, "$prefix-artwork.png"))
             if (current == 1) {

@@ -214,10 +214,12 @@ class FullPlayerLayoutTest {
     }
 
     /** An immersive layout (a mirrored cover) for the classifier to hand out in tests. */
-    private fun immersiveLayout(): app.hocket.core.api.ArtworkLayout {
+    private fun immersiveLayout(whiteTop: Boolean = false): app.hocket.core.api.ArtworkLayout {
         val metrics = app.hocket.core.api.ArtworkMetrics(flat = 0.1, drift = 0.1, rough = 0.1, marks = 0u, busy = 0.1, faces = 0u)
         val edge = app.hocket.core.api.ArtworkEdge(style = app.hocket.core.api.ArtworkStyle.Mirror, edgeColors = List(8) { 0x335577u }, baseColor = 0x223344u, light = false, scrim = 0.3, reason = "mirror", metrics = metrics)
-        return app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, topLight = false, topMarks = false)
+        // A white cover's top: a flat colour carried on upwards.
+        val white = app.hocket.core.api.ArtworkEdge(style = app.hocket.core.api.ArtworkStyle.Extend, edgeColors = List(8) { 0xFFFFFFu }, baseColor = 0xFFFFFFu, light = true, scrim = 0.0, reason = "extend:flat", metrics = metrics)
+        return app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, top = if (whiteTop) white else edge, topLight = whiteTop, topMarks = false)
     }
 
     private val controls = listOf("player.title", "player.artistLine", "player.addToPlaylist", "rating", "player.seekBar", "player.playPause", "player.mode.queue", "player.more")
@@ -257,6 +259,44 @@ class FullPlayerLayoutTest {
 
     @Test
     fun theControlsIgnoreTheArtworksStyle() = assertControlsIgnoreTheArtworksStyle()
+
+    /**
+     * An immersive artwork starts under the status bar and the handle (its top strip above it),
+     * where the area leaves the room, and never runs into the title; the status bar's icons follow
+     * the strip's colour while the player is open, and go back when it closes.
+     */
+    private fun assertImmersiveArtworkUnderTheHandle(room: Boolean) {
+        startExpanded()
+        val first = core.client.nowPlaying.value!!.track
+        val next = core.fake.library.tracks.first { it.coverArt != null && it.coverArt != first.coverArt && it.id != first.id }
+        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = { cover -> if (cover == next.coverArt) immersiveLayout(whiteTop = true) else null }
+        val controller = androidx.core.view.WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+        controller.isAppearanceLightStatusBars = false
+        try {
+            core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(next.id), 0, "Style"))
+            compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == next.id }
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.waitForIdle()
+            val art = bounds("player.artwork")
+            val handle = bounds("player.collapse")
+            val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
+            assertEquals("edge to edge", root.width, art.width, 0.5f)
+            if (room) assertEquals("under the status bar and the handle", handle.bottom, art.top, 0.5f)
+            assertTrue("never into the title ($art)", art.bottom <= bounds("player.title").top + 0.5f)
+            assertTrue("dark icons over the white strip", controller.isAppearanceLightStatusBars)
+            compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Collapse)
+            compose.waitUntil(5_000) { !controller.isAppearanceLightStatusBars }
+        } finally {
+            app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = null
+        }
+    }
+
+    @Test
+    fun anImmersiveArtworkSitsUnderTheHandleWithoutReachingTheTitle() = assertImmersiveArtworkUnderTheHandle(room = false)
+
+    @Test
+    @Config(qualifiers = "w411dp-h960dp")
+    fun onATallPhoneAnImmersiveArtworkStartsUnderTheHandle() = assertImmersiveArtworkUnderTheHandle(room = true)
 
     @Test
     @Config(qualifiers = "w411dp-h960dp")

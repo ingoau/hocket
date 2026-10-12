@@ -342,7 +342,8 @@ private val MAX_GAP = 40.dp
  * [minHeight] (on top of [TRANSPORT_GAP] and [ACTIONS_GAP]) up to [MAX_GAP]. Past that, the controls
  * stay packed at the bottom and the mode area takes the rest, the artwork centred in it
  * ([HeroGeometry.artTop]; an immersive artwork stays at the top, its continuation filling the gap:
- * [HeroGeometry.immersiveTop]).
+ * [HeroGeometry.immersiveTop]; the room above it, under the status bar and the handle, is its top
+ * strip).
  * The same in every mode: lyrics and the queue take the artwork's place, so nothing below moves when
  * the mode changes. Inside the page's vertical scroll, so it can be taller than the screen. The
  * artwork's side goes to [HeroGeometry.artSide].
@@ -404,8 +405,9 @@ private fun PlayerLayout(
         val extra = (spare.roundToInt() - 3 * share - seekGap).coerceAtLeast(0)
         val areaH = baseArea + extra
         hero.artTop = (pad + extra / 2).toFloat()
-        // An immersive artwork from the top of the page, its bottom no lower than the area's.
-        hero.immersiveTop = minOf(-hh, areaH - w).toFloat()
+        // An immersive artwork from the top of the area (under the status bar and the handle: the
+        // room there is its top strip), raised only as far as it must be to end above the title.
+        hero.immersiveTop = minOf(0, areaH - w).toFloat()
         val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
         val titleTop = hh + areaH + fold
         val seekTop = hh + areaH + th + seekGap
@@ -1083,8 +1085,7 @@ internal fun PlayerArtwork(
                 shadowElevation = hero.elevationFor(f, this)
             },
         ) {
-            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersive?.bottom, fraction = { 1f - modeFraction() }), RectangleShape)
-            if (immersive != null) ImmersiveArtworkOverlay(immersive, fraction = { 1f - modeFraction() })
+            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().immersiveFade(immersive?.bottom, fraction = { 1f - modeFraction() }, top = immersive?.top), RectangleShape)
         }
         // The neighbours, off screen at rest (so their covers are loaded before a swipe shows them).
         if (!thumbMode && !reduced) {
@@ -1140,7 +1141,6 @@ private fun NeighbourCover(cover: PeekCover, hero: HeroGeometry, scale: () -> Fl
             .testTag(tag)
             .clearAndSetSemantics { },
     ) {
-        Artwork(cover.coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().then(if (immersive != null) Modifier.immersiveFade(immersive.bottom, fraction = { 1f }) else Modifier), RectangleShape)
-        if (immersive != null) ImmersiveArtworkOverlay(immersive, fraction = { 1f })
+        Artwork(cover.coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().then(if (immersive != null) Modifier.immersiveFade(immersive.bottom, fraction = { 1f }, top = immersive.top) else Modifier), RectangleShape)
     }
 }

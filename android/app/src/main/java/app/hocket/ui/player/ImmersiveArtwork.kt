@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -324,38 +325,129 @@ private const val BOTTOM_FADE = 0.6f
 
 /**
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as
- * much as [fraction] (1 in artwork mode, 0 as a thumbnail). Not for a flat extension, which stays
+ * much as [fraction] (1 in artwork mode, 0 as a thumbnail), and, where its [top] strip is not a
+ * flat colour, its first [FEATHER] fading in from that strip's blurred copy as much as [topFraction]. Not for a flat extension, which stays
  * crisp to its edge, unless [evenFlat] (the artwork in flight, whose flat continuation fades out
  * under it: its edge fades with it rather than standing as a hard line).
  */
-internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false): Modifier =
-    if (edge == null || (edge.isFlat() && !evenFlat)) this else this
+internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction): Modifier {
+    val bottom = edge != null && (!edge.isFlat() || evenFlat)
+    // The top fades onto [ImmersiveTopStrip]'s blurred copy, unless that is a crisp flat colour.
+    val fadeTop = edge != null && top != null && !top.isFlat()
+    if (!bottom && !fadeTop) return this
+    return this
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithContent {
             drawContent()
             val f = fraction().coerceIn(0f, 1f)
-            if (f <= 0f) return@drawWithContent
-            val from = size.height * (1f - FEATHER)
-            drawRect(
-                Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - f), startY = from, endY = size.height),
-                topLeft = androidx.compose.ui.geometry.Offset(0f, from),
-                size = size.copy(height = size.height - from),
-                blendMode = BlendMode.DstIn,
-            )
+            if (bottom && f > 0f) {
+                val from = size.height * (1f - FEATHER)
+                drawRect(
+                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - f), startY = from, endY = size.height),
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                    size = size.copy(height = size.height - from),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+            val t = topFraction().coerceIn(0f, 1f)
+            if (fadeTop && t > 0f) {
+                val to = size.height * FEATHER
+                drawRect(
+                    Brush.verticalGradient(0f to Color.Black.copy(alpha = 1f - t), 1f to Color.Black, startY = 0f, endY = to),
+                    size = size.copy(height = to),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
         }
-
-/**
- * Drawn over the immersive artwork itself, fading with [fraction] (1 in artwork mode): under the
- * header, where light header text sits on a dark top, a soft dark scrim for busy covers. Never a
- * light one: over a light top the header turns dark instead ([immersiveHeaderColor]).
- */
-@Composable
-internal fun ImmersiveArtworkOverlay(layout: ArtworkLayout, fraction: () -> Float) {
-    if (layout.topLight) return
-    Box(Modifier.fillMaxSize().graphicsLayer { alpha = fraction() }.clearAndSetSemantics { }) {
-        Box(Modifier.fillMaxWidth().fillMaxHeight(0.22f).background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent)))
-    }
 }
 
-/** The header's text over an immersive artwork: from the artwork's top, not from the controls' colour below. */
-internal fun immersiveHeaderColor(layout: ArtworkLayout): Color = if (layout.topLight) Color(0xFF1C1B1F) else Color.White
+/** The colour of the strip above an immersive artwork ([ImmersiveTopStrip]): its top edge's colours, averaged. */
+internal fun stripColor(layout: ArtworkLayout): Color {
+    val colors = layout.top.edgeColors.map(::argb).ifEmpty { listOf(argb(layout.top.baseColor)) }
+    return Color(colors.map { it.red }.average().toFloat(), colors.map { it.green }.average().toFloat(), colors.map { it.blue }.average().toFloat())
+}
+
+/** Whether the strip above an immersive artwork is light: dark status bar icons and handle over it. */
+internal fun stripLight(layout: ArtworkLayout): Boolean = stripColor(layout).luminance() > 0.4f
+
+/** The handle over an immersive artwork's strip: from the strip's colour, not from the controls' below. */
+internal fun immersiveHeaderColor(layout: ArtworkLayout): Color = if (stripLight(layout)) Color(0xFF1C1B1F) else Color.White
+
+/**
+ * The room above an immersive artwork (under the status bar and the player's handle,
+ * [HeroGeometry.immersiveSlot]'s top down to the page's), filled from the artwork's top edge
+ * ([ArtworkLayout.top]): a flat edge (a white cover, say) carries on upwards in its colour with a
+ * crisp edge, so the cover just looks taller; any other fades the artwork's top ([immersiveFade])
+ * onto a blurred copy of itself that carries on upwards as calm, blurred colour (never a sharp
+ * mirror). Drawn in the continuation's layer, so it moves with the artwork in flight and in a swipe.
+ */
+@Composable
+internal fun ImmersiveTopStrip(coverArt: String?, layout: ArtworkLayout, hero: HeroGeometry, modifier: Modifier = Modifier) {
+    val edge = layout.top
+    val flat = edge.isFlat()
+    val colors = edge.edgeColors.map(::argb)
+    val density = LocalDensity.current
+    val far = with(density) { (hero.immersiveSlot().width * BLUR_FAR).toDp() }
+    /** The artwork's top in this box, and how far under it its fading top runs. */
+    val artTop = { hero.immersiveSlot().top }
+    val under = { if (flat) 0f else hero.immersiveSlot().width * FEATHER }
+    Box(
+        modifier
+            .clearAndSetSemantics { }
+            .layout { m, c ->
+                val h = (artTop() + under()).roundToInt().coerceIn(0, c.maxHeight)
+                val p = m.measure(Constraints.fixed(c.maxWidth, h))
+                layout(c.maxWidth, c.maxHeight) { p.place(0, 0) }
+            },
+    ) {
+        if (flat) {
+            // The edge's colour, then the cover's own first rows stretched upwards over it: they
+            // meet the artwork's top exactly (a flat edge is rarely one colour to the last level).
+            Box(Modifier.fillMaxSize().background(colors.firstOrNull() ?: argb(edge.baseColor)))
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                Artwork(
+                    coverArt, ArtworkSizes.FULL, null,
+                    Modifier
+                        .layout { m, c ->
+                            val side = hero.immersiveSlot().width.roundToInt().coerceAtLeast(1)
+                            val p = m.measure(Constraints.fixed(c.maxWidth, side))
+                            layout(c.maxWidth, c.maxHeight) { p.place(0, 0) }
+                        }
+                        .graphicsLayer {
+                            // The first two of the cover's ArtworkSizes.FULL rows, over the whole strip.
+                            val rows = 2f * hero.immersiveSlot().width / ArtworkSizes.FULL
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
+                            scaleY = (artTop() / rows.coerceAtLeast(1f)).coerceAtLeast(1f)
+                        },
+                    RectangleShape,
+                )
+            }
+            return@Box
+        }
+        // Calm colour: the edge's colours, softened sideways.
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(soften(colors.ifEmpty { listOf(argb(edge.baseColor)) }, 6))))
+        // The artwork and its reflection above it, blurred as one image (its top edge on the
+        // artwork's), fading out upwards into the colour.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val seam = artTop()
+                    drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, startY = 0f, endY = seam.coerceAtLeast(1f)), blendMode = BlendMode.DstIn)
+                }
+                .clipToBounds()
+                .layout { m, c ->
+                    val side = hero.immersiveSlot().width.roundToInt().coerceAtLeast(1)
+                    val p = m.measure(Constraints.fixed(c.maxWidth, 2 * side))
+                    layout(c.maxWidth, c.maxHeight) { p.place(0, (artTop() - side).roundToInt()) }
+                },
+        ) {
+            Column(Modifier.fillMaxSize().let { if (far > 0.dp) it.blur(far, BlurredEdgeTreatment.Rectangle) else it }) {
+                Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f).graphicsLayer { scaleY = -1f }, RectangleShape)
+                Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f), RectangleShape)
+            }
+        }
+    }
+}
