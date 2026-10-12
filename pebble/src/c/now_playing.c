@@ -354,6 +354,10 @@ static void prv_rating_update(Layer *layer, GContext *ctx) {
   const int16_t step = r * 2 + 4;
   const int16_t x0 = r + 1;
   for (int i = 0; i < 5; i++) {
+#ifndef PBL_COLOR
+    // Black and white: only the filled stars, so the count reads at a glance.
+    if (i >= g_now.rating) break;
+#endif
     prv_draw_star(ctx, GPoint(x0 + i * step, b.size.h / 2), r, i < g_now.rating);
   }
 }
