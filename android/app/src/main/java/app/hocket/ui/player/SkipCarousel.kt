@@ -92,7 +92,8 @@ internal fun previousRestarts(ownsTransport: Boolean, positionMs: Long, historyE
  * negative towards next). Released past half of [span] (the slot's width plus the gap to its
  * neighbour) or flung, it settles on the neighbour, sends Next / Previous (unless the song changed
  * meanwhile), and once the new track is current snaps back to 0, the neighbour now being the
- * current one; otherwise it springs back. While it settles a new drag is not taken.
+ * current one; otherwise it springs back. A new drag while it settles sends the skip at once and
+ * carries on from its page (so N quick swipes skip N songs).
  * Where there is no neighbour it rubber-bands as the old skip swipe did (and still skips past
  * [rubberThreshold], so a swipe past the end of the queue ends it). [restartPeek] says the previous
  * slot shows the current track again (Previous will restart it).
@@ -152,43 +153,50 @@ internal class SkipCarousel {
         return draggable(
             state = state,
             orientation = Orientation.Horizontal,
-            // Not while a skip settles: a second drag would stop it half way, and the skip with it.
-            enabled = enabled && !committing,
+            enabled = enabled,
             onDragStarted = {
+                // A skip still settling: it is done now (sent once), and this drag carries on
+                // from its page.
+                pending?.let { finishNow(client, scope, drag, it) }
                 offset.stop()
                 drag.raw = offset.value
                 drag.crossed = false
                 restartPeek = previousRestarts(client.ownsTransport.value, client.positionNow(), client.queue.value.history.isEmpty())
             },
             onDragStopped = { v ->
-                val shown = offset.value
-                val raw = drag.raw
-                val d = if (reduced) raw else shown
-                val slot = slotFor(d)
-                val flung = abs(v) > fling && sign(v) == sign(d) && abs(d) > minFling
                 scope.launch {
+                    // A finished skip's page becomes the current one first (see [finishNow]).
+                    rebase?.join()
+                    val shown = offset.value
+                    val raw = drag.raw
+                    val d = if (reduced) raw else shown
+                    val slot = slotFor(d)
+                    val flung = abs(v) > fling && sign(v) == sign(d) && abs(d) > minFling
                     when {
                         reduced -> if (abs(raw) > rubberThreshold || flung) dispatch(client, forward = raw < 0f)
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
-                            // The song the skip is from: if another takes its place while the
-                            // swipe settles (it ended, or another device skipped), that was the skip.
-                            val before = client.nowPlaying.value?.item?.key
+                            // The song the skip is from: if another takes its place before the
+                            // skip is sent (it ended, or another device skipped), that was the skip.
+                            val commit = Pending(forward, client.nowPlaying.value?.item?.key, restart = !forward && restartPeek)
+                            commit.job = coroutineContext[kotlinx.coroutines.Job]
+                            pending = commit
                             committing = true
                             try {
                                 offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
                                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                                if (client.nowPlaying.value?.item?.key == before) {
-                                    val restart = !forward && restartPeek
-                                    dispatch(client, forward)
-                                    if (!restart) withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != before } }
-                                }
+                                send(client, commit)
+                                if (!commit.restart) withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != commit.before } }
                                 // Let the new track's cover compose before the strip jumps back under it.
                                 withFrameNanos { }
                                 withFrameNanos { }
                                 offset.snapTo(0f)
                             } finally {
-                                committing = false
+                                // Done, or finished early by a new drag ([finishNow]).
+                                if (pending === commit) {
+                                    pending = null
+                                    committing = false
+                                }
                             }
                         }
                         !slot && abs(shown) > rubberThreshold -> {
@@ -201,6 +209,45 @@ internal class SkipCarousel {
                 }
             },
         )
+    }
+
+    /** A skip settling: its direction, the song it is from, whether it restarts that song, and whether it was sent. */
+    private class Pending(val forward: Boolean, val before: String?, val restart: Boolean) {
+        var sent = false
+        var job: kotlinx.coroutines.Job? = null
+    }
+
+    private var pending: Pending? = null
+
+    /** While a finished skip's page waits to become the current one (the strip shifting by a page). */
+    private var rebase: kotlinx.coroutines.Job? = null
+
+    /** Sends [commit]'s Next / Previous, once, unless its song has already been replaced. */
+    private fun send(client: CoreClient, commit: Pending) {
+        if (commit.sent) return
+        commit.sent = true
+        if (client.nowPlaying.value?.item?.key == commit.before) dispatch(client, commit.forward)
+    }
+
+    /**
+     * A new drag while [commit] settles: the skip is sent now, the strip snaps to its page, and once
+     * that song is current the strip (and the drag under way) shift back by a page, so the finger
+     * carries on from the new song. N swipes, N skips.
+     */
+    private suspend fun finishNow(client: CoreClient, scope: CoroutineScope, drag: DragTrack, commit: Pending) {
+        pending = null
+        committing = false
+        commit.job?.cancel()
+        val page = if (commit.forward) -span else span
+        offset.snapTo(page)
+        send(client, commit)
+        rebase?.cancel()
+        rebase = scope.launch {
+            if (!commit.restart) withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != commit.before } }
+            withFrameNanos { }
+            drag.raw -= page
+            offset.snapTo(offset.value - page)
+        }
     }
 
     /** The finger's own travel in this drag (px), and whether it is past the commit point. */

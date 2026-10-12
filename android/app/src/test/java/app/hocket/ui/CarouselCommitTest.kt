@@ -31,23 +31,30 @@ class CarouselCommitTest : PlayerRulesTestBase() {
         compose.waitForIdle()
     }
 
-    @Test
-    fun aSecondSwipeWhileTheFirstSettlesNeitherStopsItNorLeavesItHanging() {
+    /** [n] swipes, each started a few frames into the previous one's settle: n skips, never more. */
+    private fun rapidSwipes(n: Int) {
         val core = TestCore()
         startExpanded(core)
         val order = keys(core)
         compose.mainClock.autoAdvance = false
-        swipeToNext()
-        // A few frames into the settle, a short drag (it would spring back).
-        repeat(3) { compose.mainClock.advanceTimeByFrame() }
-        swipeToNext(share = 0.1f)
+        repeat(n) {
+            swipeToNext()
+            repeat(3) { compose.mainClock.advanceTimeByFrame() }
+        }
         settle()
-        assertEquals("the first skip went through", order[1], core.client.nowPlaying.value?.track?.id)
-        // And the carousel takes swipes again: the next one skips once more.
+        assertEquals("$n skips", order[n], core.client.nowPlaying.value?.track?.id)
+        // And it takes swipes again afterwards: one more, one more skip.
+        compose.mainClock.autoAdvance = false
         swipeToNext()
         settle()
-        assertEquals(order[2], core.client.nowPlaying.value?.track?.id)
+        assertEquals(order[n + 1], core.client.nowPlaying.value?.track?.id)
     }
+
+    @Test
+    fun twoSwipesWithinTheSettleSkipTwice() = rapidSwipes(2)
+
+    @Test
+    fun threeRapidSwipesSkipThrice() = rapidSwipes(3)
 
     @Test
     fun aSongChangeWhileTheSwipeSettlesIsTheSkip() {
