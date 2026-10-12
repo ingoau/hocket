@@ -322,6 +322,8 @@ class NowPlayingSheetTest {
         val hero = app.hocket.ui.player.HeroGeometry().apply {
             immersive = true
             headerHeight = 80f
+            // The page puts the immersive artwork at its top (the header's height above the area).
+            immersiveTop = -80f
             area = androidx.compose.ui.geometry.Rect(0f, 80f, 1080f, 1080f)
             thumb = androidx.compose.ui.geometry.Rect(46f, 30f, 172f, 156f)
         }

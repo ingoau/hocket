@@ -213,6 +213,55 @@ class FullPlayerLayoutTest {
         check("no stars")
     }
 
+    /** An immersive layout (a mirrored cover) for the classifier to hand out in tests. */
+    private fun immersiveLayout(): app.hocket.core.api.ArtworkLayout {
+        val metrics = app.hocket.core.api.ArtworkMetrics(flat = 0.1, drift = 0.1, rough = 0.1, marks = 0u, busy = 0.1, faces = 0u)
+        val edge = app.hocket.core.api.ArtworkEdge(style = app.hocket.core.api.ArtworkStyle.Mirror, edgeColors = List(8) { 0x335577u }, baseColor = 0x223344u, light = false, scrim = 0.3, reason = "mirror", metrics = metrics)
+        return app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, topLight = false, topMarks = false)
+    }
+
+    private val controls = listOf("player.title", "player.artistLine", "player.addToPlaylist", "rating", "player.seekBar", "player.playPause", "player.mode.queue", "player.more")
+
+    /**
+     * Skipping between a card and an immersive cover (and back) moves no control by a pixel: the
+     * artwork's area is the same rect for both styles.
+     */
+    private fun assertControlsIgnoreTheArtworksStyle() {
+        startExpanded()
+        val first = core.client.nowPlaying.value!!.track
+        val next = core.fake.library.tracks.first { it.coverArt != null && it.coverArt != first.coverArt && it.id != first.id }
+        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = { cover -> if (cover == next.coverArt) immersiveLayout() else null }
+        try {
+            val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
+            fun snapshot() = controls.associateWith(::bounds)
+            fun play(id: String) {
+                core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(id), 0, "Style"))
+                compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == id }
+                compose.mainClock.advanceTimeBy(1_000)
+                compose.waitForIdle()
+            }
+            play(first.id)
+            assertTrue("a card first", bounds("player.artwork").width < root.width - 1f)
+            val card = snapshot()
+            play(next.id)
+            assertEquals("then immersive, edge to edge", root.width, bounds("player.artwork").width, 0.5f)
+            val immersive = snapshot()
+            controls.forEach { assertEquals("$it with an immersive cover", card.getValue(it), immersive.getValue(it)) }
+            play(first.id)
+            assertTrue("a card again", bounds("player.artwork").width < root.width - 1f)
+            controls.forEach { assertEquals("$it back on a card", card.getValue(it), bounds(it)) }
+        } finally {
+            app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = null
+        }
+    }
+
+    @Test
+    fun theControlsIgnoreTheArtworksStyle() = assertControlsIgnoreTheArtworksStyle()
+
+    @Test
+    @Config(qualifiers = "w411dp-h960dp")
+    fun onATallPhoneTheControlsIgnoreTheArtworksStyle() = assertControlsIgnoreTheArtworksStyle()
+
     /** Opens the player on a song whose title is far too long for the line. */
     private fun startWithLongTitle(reducedMotion: Boolean) {
         val lib = core.fake.library

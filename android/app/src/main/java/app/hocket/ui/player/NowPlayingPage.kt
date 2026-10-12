@@ -180,7 +180,8 @@ internal fun FullPlayer(
     immersive: ArtworkLayout? = null,
     carousel: SkipCarousel = remember { SkipCarousel() },
     neighbours: Neighbours = Neighbours.None,
-    neighbourEdges: Pair<ArtworkEdge?, ArtworkEdge?> = null to null,
+    coverArt: String?,
+    neighbourLayouts: Pair<ArtworkLayout?, ArtworkLayout?> = null to null,
     headerAlpha: () -> Float = { 1f },
 ) {
     val client = LocalCoreClient.current
@@ -229,9 +230,16 @@ internal fun FullPlayer(
             PlayerLayout(
                 minHeight = viewport,
                 hero = hero,
-                // An immersive artwork runs under the handle, and the artwork is drawn over the
-                // page: the page keeps the handle's room (invisible) and the real one goes on top.
-                header = { if (immersive != null) Box(Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics { }) { header() } else Box(Modifier.graphicsLayer { alpha = headerAlpha() }) { header() } },
+                // The artwork is drawn over the page: under an immersive one (or one sliding in
+                // during a skip swipe) the page keeps the handle's room (invisible) and the real one
+                // goes on top.
+                header = {
+                    Box(
+                        Modifier
+                            .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) 0f else headerAlpha() }
+                            .then(if (immersive != null) Modifier.clearAndSetSemantics { } else Modifier),
+                    ) { header() }
+                },
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
                 seek = { PlayerSeek(position) },
@@ -263,7 +271,8 @@ internal fun FullPlayer(
             )
         }
         PlayerArtwork(
-            coverArt = track?.coverArt,
+            // The scene's cover: it changes with its layout and colours (the sheet's scene).
+            coverArt = coverArt,
             title = track?.title,
             hero = hero,
             modeFraction = modeFraction,
@@ -275,16 +284,21 @@ internal fun FullPlayer(
             immersive = immersive,
             carousel = carousel,
             neighbours = neighbours,
-            neighbourEdges = neighbourEdges,
+            neighbourLayouts = neighbourLayouts,
         )
-        if (immersive != null) {
-            // Its colours follow the artwork's top (dark over a light top), not the controls below.
-            val fg = immersiveHeaderColor(immersive)
-            val scheme = MaterialTheme.colorScheme.copy(onSurface = fg, onSurfaceVariant = fg.copy(alpha = 0.8f))
-            MaterialTheme(colorScheme = scheme) {
-                androidx.compose.runtime.CompositionLocalProvider(LocalContentColor provides fg) {
-                    Box(Modifier.offset { IntOffset(0, -scroll.value) }.graphicsLayer { alpha = headerAlpha() }) { header() }
-                }
+        // The handle over the artwork: over an immersive one (its colours following the artwork's
+        // top, dark over a light top, not the controls below), and over a card's page while a skip
+        // swipe can bring an artwork under it.
+        val fg = immersive?.let { immersiveHeaderColor(it) } ?: LocalContentColor.current
+        val scheme = MaterialTheme.colorScheme.copy(onSurface = fg, onSurfaceVariant = fg.copy(alpha = 0.8f))
+        MaterialTheme(colorScheme = scheme) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalContentColor provides fg) {
+                Box(
+                    Modifier
+                        .offset { IntOffset(0, -scroll.value) }
+                        .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) headerAlpha() else 0f }
+                        .then(if (immersive == null) Modifier.clearAndSetSemantics { } else Modifier),
+                ) { header() }
             }
         }
     }
@@ -317,16 +331,18 @@ private val ACTIONS_GAP = 16.dp
 private val MAX_GAP = 40.dp
 
 /**
- * The page's layout: the header, the mode area at the artwork's size (as large as the width
- * allows, up to [MAX_ART], shrinking on short screens but never below what [MIN_AREA] leaves; an
- * immersive artwork the full width from the top of the page, under the header), then the controls:
+ * The page's layout: the header, the mode area at a card artwork's size (as large as the width
+ * allows, up to [MAX_ART], shrinking on short screens but never below what [MIN_AREA] leaves; the
+ * same whatever the artwork's style, so the controls never move between a card and an immersive
+ * artwork, which takes the area's full width from the top of the page), then the controls:
  * the title, the seek bar, the transport and the actions. The gap from the title block's visual
  * bottom ([TitleBottom]: the stars, or the artist line) to the wave ([SeekWaveTop]) is the same as
  * from the times ([SeekTimesBaseline]) to the transport (unless that would bring the stars' touch
  * area onto the seek bar's); those and the gaps around the action row share what is left of
  * [minHeight] (on top of [TRANSPORT_GAP] and [ACTIONS_GAP]) up to [MAX_GAP]. Past that, the controls
  * stay packed at the bottom and the mode area takes the rest, the artwork centred in it
- * ([HeroGeometry.artTop]; an immersive artwork stays at the top, its continuation filling the gap).
+ * ([HeroGeometry.artTop]; an immersive artwork stays at the top, its continuation filling the gap:
+ * [HeroGeometry.immersiveTop]).
  * The same in every mode: lyrics and the queue take the artwork's place, so nothing below moves when
  * the mode changes. Inside the page's vertical scroll, so it can be taller than the screen. The
  * artwork's side goes to [HeroGeometry.artSide].
@@ -374,10 +390,11 @@ private fun PlayerLayout(
         val pad = ART_PAD.roundToPx()
         val minArea = MIN_AREA.roundToPx()
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
-        val side = if (hero.immersive) w else (view - hh - th - rest - maxOf(c, 0) - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
+        // The same for a card and an immersive artwork: the controls never move between the two.
+        val side = (view - hh - th - rest - maxOf(c, 0) - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
         hero.artSide = side.toFloat()
         hero.headerHeight = hh.toFloat()
-        val baseArea = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
+        val baseArea = side + 2 * pad
         val spare = (view - hh - baseArea - th - rest).coerceAtLeast(0).toFloat()
         // Three shares, plus the seek bar's gap once it is above nothing (c + s > 0).
         val most = (MAX_GAP.toPx() - (sh - times) - gapX).coerceAtLeast(0f)
@@ -387,6 +404,8 @@ private fun PlayerLayout(
         val extra = (spare.roundToInt() - 3 * share - seekGap).coerceAtLeast(0)
         val areaH = baseArea + extra
         hero.artTop = (pad + extra / 2).toFloat()
+        // An immersive artwork from the top of the page, its bottom no lower than the area's.
+        hero.immersiveTop = minOf(-hh, areaH - w).toFloat()
         val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
         val titleTop = hh + areaH + fold
         val seekTop = hh + areaH + th + seekGap
@@ -460,8 +479,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
 
 /**
  * Where lyrics and the queue sit: the artwork's slot (its top, down to the title row, which gives it
- * the room its folded stars took; with an immersive artwork, the area under the handle less the
- * usual margin), across the page's full width, straight
+ * the room its folded stars took; the same with an immersive artwork), across the page's full width, straight
  * on the player's backdrop with no container. Content is clipped to the slot; the lists fade at its
  * edges.
  */
@@ -1003,7 +1021,7 @@ internal fun PlayerArtwork(
     immersive: ArtworkLayout? = null,
     carousel: SkipCarousel = remember { SkipCarousel() },
     neighbours: Neighbours = Neighbours.None,
-    neighbourEdges: Pair<ArtworkEdge?, ArtworkEdge?> = null to null,
+    neighbourLayouts: Pair<ArtworkLayout?, ArtworkLayout?> = null to null,
 ) {
     val client = LocalCoreClient.current
     val scope = rememberCoroutineScope()
@@ -1020,7 +1038,10 @@ internal fun PlayerArtwork(
     val togglePreview = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onPreviewToggle(seed ?: ArtworkColors.seedFor(coverArt)) }
     val currentThumbMode = androidx.compose.runtime.rememberUpdatedState(thumbMode)
     val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
-    val gapPx = if (hero.immersive) 0f else hero.artInset
+    // Pages one span apart: a card's width and margin between cards, the full width where an
+    // immersive artwork is one of them (it fills the page edge to edge).
+    val anyImmersive = immersive != null || neighbourLayouts.first != null || neighbourLayouts.second != null
+    val span = { pageSpan(hero, anyImmersive) }
     hero.swipe = { carousel.offset.value * (1f - modeFraction()) }
     Box(
         Modifier
@@ -1029,7 +1050,7 @@ internal fun PlayerArtwork(
             .layout { measurable, constraints ->
                 val r = hero.playerArt(modeFraction(), scale())
                 val side = r.width.roundToInt().coerceAtLeast(1)
-                carousel.span = neighbourSpan(hero, gapPx)
+                carousel.span = span()
                 val placeable = measurable.measure(Constraints.fixed(side, side))
                 layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(r.left.roundToInt(), r.top.roundToInt()) }
             }
@@ -1067,66 +1088,59 @@ internal fun PlayerArtwork(
         }
         // The neighbours, off screen at rest (so their covers are loaded before a swipe shows them).
         if (!thumbMode && !reduced) {
-            val previous = if (carousel.restartPeek) PeekCover(coverArt, immersive?.bottom) else neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourEdges.first) }
-            val next = neighbours.next?.let { PeekCover(it.track.coverArt, neighbourEdges.second) }
-            previous?.let { NeighbourCover(it, hero, scale, side = 1f, gapPx, tag = "player.artwork.previous") }
-            next?.let { NeighbourCover(it, hero, scale, side = -1f, gapPx, tag = "player.artwork.next") }
+            val previous = if (carousel.restartPeek) PeekCover(coverArt, immersive) else neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourLayouts.first) }
+            val next = neighbours.next?.let { PeekCover(it.track.coverArt, neighbourLayouts.second) }
+            previous?.let { NeighbourCover(it, hero, scale, side = 1f, span, tag = "player.artwork.previous") }
+            next?.let { NeighbourCover(it, hero, scale, side = -1f, span, tag = "player.artwork.next") }
         }
     }
 }
 
 /**
- * How far a neighbour sits from the current artwork (px): a slot's width plus [gapPx] (the side
- * margin), or, where the artwork is narrower than the page allows (short screens, large fonts),
- * far enough to wait off screen.
+ * How far apart the swipe's pages are (px): with an immersive artwork among them, the page's width
+ * (edge to edge, side by side); with cards only, a card's width plus the side margin, or, where the
+ * card is narrower than the page allows (short screens, large fonts), far enough to wait off screen.
  */
-private fun neighbourSpan(hero: HeroGeometry, gapPx: Float): Float {
-    val big = hero.bigSlot()
-    return maxOf(big.width + gapPx, hero.area.width - big.left, big.right).coerceAtLeast(1f)
+internal fun pageSpan(hero: HeroGeometry, anyImmersive: Boolean): Float {
+    val a = hero.area
+    if (anyImmersive) return a.width.coerceAtLeast(1f)
+    val card = hero.cardSlot()
+    return maxOf(card.width + hero.artInset, a.width - card.left, card.right).coerceAtLeast(1f)
 }
 
-/** A neighbour's cover and, when it is shown immersive, its bottom edge. */
-private data class PeekCover(val coverArt: String?, val edge: ArtworkEdge?)
+/** A neighbour's cover and, when it is shown immersive, its layout. */
+private data class PeekCover(val coverArt: String?, val immersive: ArtworkLayout?)
 
 /**
- * A neighbour beside the player's artwork, a slot's span away on [side] (1 = before it, the
- * previous; -1 = after it, the next), in its own style: in an immersive scene an immersive
- * neighbour fills the same edge-to-edge square (its own continuation is drawn under the page by the
- * sheet) and a card neighbour is a card in the area under the handle; in a card scene, a card in
- * the same slot.
+ * A neighbour beside the player's artwork, a page's [span] away on [side] (1 = before it, the
+ * previous; -1 = after it, the next), always in its own style: an immersive neighbour fills its
+ * edge-to-edge square (its continuation is drawn under the page by the sheet), a card is a card in
+ * the card's slot, whatever the current artwork is.
  */
 @Composable
-private fun NeighbourCover(cover: PeekCover, hero: HeroGeometry, scale: () -> Float, side: Float, gapPx: Float, tag: String) {
+private fun NeighbourCover(cover: PeekCover, hero: HeroGeometry, scale: () -> Float, side: Float, span: () -> Float, tag: String) {
     val density = LocalDensity.current
     val cardCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
-    val immersiveNeighbour = hero.immersive && cover.edge != null
+    val immersive = cover.immersive
     Box(
         Modifier
             .layout { measurable, constraints ->
-                val big = hero.bigSlot()
                 val r = hero.playerArt(0f, scale())
-                val target: Rect = when {
-                    !hero.immersive || immersiveNeighbour -> big
-                    else -> {
-                        // A card in the immersive scene: the area under the handle, with margins.
-                        val a = hero.area
-                        val s = minOf(a.width - 2 * hero.artInset, a.height - 2 * hero.artPad).coerceAtLeast(1f)
-                        Rect(Offset(a.center.x - s / 2, a.top + hero.artPad), androidx.compose.ui.geometry.Size(s, s))
-                    }
-                }
+                val target = if (immersive != null) hero.immersiveSlot() else hero.cardSlot()
                 val w = target.width.roundToInt().coerceAtLeast(1)
                 val p = measurable.measure(Constraints.fixed(w, target.height.roundToInt().coerceAtLeast(1)))
-                val dx = (target.left - side * neighbourSpan(hero, gapPx) - r.left).roundToInt()
+                val dx = (target.left - side * span() - r.left).roundToInt()
                 val dy = (target.top - r.top).roundToInt()
                 layout(constraints.maxWidth, constraints.maxHeight) { p.place(dx, dy) }
             }
             .graphicsLayer {
-                shape = RoundedCornerShape(if (immersiveNeighbour) 0f else cardCorner)
+                shape = RoundedCornerShape(if (immersive != null) 0f else cardCorner)
                 clip = true
             }
             .testTag(tag)
             .clearAndSetSemantics { },
     ) {
-        Artwork(cover.coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().then(if (immersiveNeighbour) Modifier.immersiveFade(cover.edge, fraction = { 1f }) else Modifier), RectangleShape)
+        Artwork(cover.coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxSize().then(if (immersive != null) Modifier.immersiveFade(immersive.bottom, fraction = { 1f }) else Modifier), RectangleShape)
+        if (immersive != null) ImmersiveArtworkOverlay(immersive, fraction = { 1f })
     }
 }

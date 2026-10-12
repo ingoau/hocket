@@ -13,7 +13,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import app.hocket.ui.components.ArtworkPathCache
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -65,6 +68,30 @@ object ImmersiveArtwork {
     const val MAX_WIDTH_SHARE = 0.62f
 
     private val cache = LruCache<String, ArtworkLayout>(64)
+    /** Covers worked out to no layout (undecodable, or no native core): known without asking again. */
+    private val none = LruCache<String, Boolean>(64)
+
+    /** Tests only: a layout per cover id, in place of decoding and classifying (null: a card). */
+    @androidx.annotation.VisibleForTesting
+    internal var layoutsForTest: ((String) -> ArtworkLayout?)? = null
+
+    private fun key(path: String, preference: Preference, dark: Boolean) = "$path|${preference.string}|$dark"
+
+    /**
+     * The layout already worked out for [coverArt] (its path known to [ArtworkPathCache]), at once:
+     * null when it has not been (yet), else [Resolved] (whose layout is null for a card).
+     */
+    fun cached(coverArt: String?, preference: Preference, dark: Boolean): Resolved? {
+        if (coverArt == null) return Resolved(null)
+        layoutsForTest?.let { return Resolved(it(coverArt)) }
+        val path = ArtworkPathCache.get(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID)) ?: return null
+        val k = key(path, preference, dark)
+        cache.get(k)?.let { return Resolved(it) }
+        return if (none.get(k) == true) Resolved(null) else null
+    }
+
+    /** A worked-out layout: [layout] null means a card. */
+    class Resolved(val layout: ArtworkLayout?)
 
     /** The `display.immersiveArtwork` setting from its stored JSON value. */
     fun preference(json: String?): Preference {
@@ -74,8 +101,9 @@ object ImmersiveArtwork {
 
     /** The layout for the cover at [path], or null when it cannot be decoded or classified. */
     suspend fun analyse(path: String, preference: Preference, dark: Boolean): ArtworkLayout? = withContext(Dispatchers.Default) {
-        val key = "$path|${preference.string}|$dark"
+        val key = key(path, preference, dark)
         cache.get(key)?.let { return@withContext it }
+        if (none.get(key) == true) return@withContext null
         val file = File(path.removePrefix("file://"))
         if (!file.exists()) return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -101,7 +129,8 @@ object ImmersiveArtwork {
                 rgba[i * 4 + 2] = c.toByte()
                 rgba[i * 4 + 3] = (c ushr 24).toByte()
             }
-            ArtworkLayouts.layout(rgba, w, h, ArtworkLayoutRequest(faces = faces(bitmap), preference = preference, theme = if (dark) ArtworkTheme.Dark else ArtworkTheme.Light))?.also { cache.put(key, it) }
+            ArtworkLayouts.layout(rgba, w, h, ArtworkLayoutRequest(faces = faces(bitmap), preference = preference, theme = if (dark) ArtworkTheme.Dark else ArtworkTheme.Light))
+                .also { if (it != null) cache.put(key, it) else none.put(key, true) }
         } finally {
             if (bitmap !== decoded) bitmap.recycle()
             decoded.recycle()
@@ -130,15 +159,22 @@ object ImmersiveArtwork {
 }
 
 /**
- * The layout for [coverArt] (null while it is worked out, without a cover, or without the native
- * core). [dark] is the app's theme: the controls follow it unless the cover is almost all dark or light.
+ * The layout for [coverArt]: null while it is worked out, else [ImmersiveArtwork.Resolved] (its
+ * layout null for a card, without a cover, or without the native core). One already worked out (a
+ * neighbour's, say) is there from the first frame. [dark] is the app's theme: the controls follow it
+ * unless the cover is almost all dark or light.
  */
 @Composable
-fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ArtworkLayout?> {
+fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ImmersiveArtwork.Resolved?> {
     val client = LocalCoreClient.current
-    return produceState<ArtworkLayout?>(initialValue = null, coverArt, preference, dark) {
-        value = coverArt?.let { client.artworkPath(it, ArtworkSizes.GRID) }?.let { ImmersiveArtwork.analyse(it, preference, dark) }
+    val state = remember(coverArt, preference, dark) { mutableStateOf(ImmersiveArtwork.cached(coverArt, preference, dark)) }
+    LaunchedEffect(state) {
+        if (state.value != null || coverArt == null) return@LaunchedEffect
+        val path = client.artworkPath(coverArt, ArtworkSizes.GRID)
+        if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
+        state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
     }
+    return state
 }
 
 private fun argb(c: UInt): Color = Color(c.toInt() or 0xFF000000.toInt())
@@ -174,7 +210,7 @@ private const val BLUR_FAR = 0.1f
 
 /**
  * What carries the immersive artwork on below it, between the player's backdrop and the page, laid
- * out from [FEATHER] above the big artwork's bottom edge ([HeroGeometry.bigSlot]) down. The seam
+ * out from [FEATHER] above the immersive artwork's bottom edge ([HeroGeometry.immersiveSlot]) down. The seam
  * never cuts over: the artwork fades out over its last [FEATHER] ([immersiveFade]) onto a blurred
  * copy of itself drawn here, and the continuation starts at that same blur:
  *
@@ -196,9 +232,9 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
     val base = argb(edge.baseColor)
     val colors = edge.edgeColors.map(::argb)
     val flat = edge.isFlat()
-    val side = { hero.bigSlot().width }
+    val side = { hero.immersiveSlot().width }
     val density = LocalDensity.current
-    val sidePx = hero.bigSlot().width
+    val sidePx = hero.immersiveSlot().width
     val near = with(density) { (sidePx * BLUR_NEAR).toDp() }
     val far = with(density) { (sidePx * BLUR_FAR).toDp() }
     /** Where the seam (the artwork's bottom edge) is in this box: [FEATHER] of the side below its top. */
@@ -231,7 +267,8 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
         modifier
             .clearAndSetSemantics { }
             .layout { measurable, constraints ->
-                val slot = hero.bigSlot()
+                // Laid out for an immersive artwork's square, whatever the current one's style.
+                val slot = hero.immersiveSlot()
                 val top = (slot.bottom - if (flat) 0f else slot.width * FEATHER).roundToInt().coerceIn(0, constraints.maxHeight)
                 val h = (constraints.maxHeight - top).coerceAtLeast(0)
                 val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, h))

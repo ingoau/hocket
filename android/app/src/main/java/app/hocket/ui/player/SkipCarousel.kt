@@ -84,6 +84,11 @@ internal class SkipCarousel {
     var span by mutableFloatStateOf(1f)
     var restartPeek by mutableStateOf(false)
         private set
+    /** Settling on a neighbour and handing over to it (the new track's scene takes over at once). */
+    var committing by mutableStateOf(false)
+        private set
+    /** Under the finger, or settling a skip: the scene follows the swipe rather than animating. */
+    val busy: Boolean get() = committing || offset.value != 0f
 
     /** -1..1: how far towards the previous (positive) or next (negative) neighbour. */
     fun fraction(): Float = if (span <= 1f) 0f else (offset.value / span).coerceIn(-1f, 1f)
@@ -146,6 +151,7 @@ internal class SkipCarousel {
                         reduced -> if (abs(raw) > rubberThreshold || flung) dispatch(client, forward = raw < 0f)
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
+                            committing = true
                             offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                             val restart = !forward && restartPeek
@@ -156,6 +162,7 @@ internal class SkipCarousel {
                             withFrameNanos { }
                             withFrameNanos { }
                             offset.snapTo(0f)
+                            committing = false
                         }
                         !slot && abs(shown) > rubberThreshold -> {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)

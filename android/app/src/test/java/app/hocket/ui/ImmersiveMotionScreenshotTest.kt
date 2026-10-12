@@ -69,12 +69,20 @@ class ImmersiveMotionScreenshotTest {
     @Test
     fun motion() = run(tall = false)
 
+    /**
+     * Swipes between a card and an immersive cover (each way, and immersive to immersive), held at
+     * a quarter, half and three quarters: each page in its own style, the backdrop and colours
+     * following the swipe, and the controls never moving.
+     */
+    @Test
+    fun styleSwipes() = run(tall = false, styles = true)
+
     /** A tall phone: the immersive artwork stays at the top, the controls at the bottom, the continuation between. */
     @Test
     @Config(qualifiers = "w411dp-h960dp-night-xxhdpi")
     fun tall() = run(tall = true)
 
-    private fun run(tall: Boolean) {
+    private fun run(tall: Boolean, styles: Boolean = false) {
         val dir = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
         val covers = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.sortedBy { f -> f.name } }.orEmpty()
         val lib = env("HOCKET_HOST_LIB")?.let(::File)?.takeIf { it.exists() }
@@ -114,6 +122,62 @@ class ImmersiveMotionScreenshotTest {
         }
         fun track(album: Int) = fake.library.albumTracks(albums[album].id).first().id
         fun name(i: Int) = covers[i].nameWithoutExtension
+        if (styles) {
+            // d (a card) -> b (immersive), b -> d, and b -> a (immersive to immersive).
+            val controls = listOf("player.title", "player.addToPlaylist", "player.seekBar", "player.playPause", "player.mode.queue", "player.more")
+            for ((current, next) in listOf(3 to 1, 1 to 3, 1 to 0)) {
+                client.dispatch(Commands.setAutoplay(false))
+                client.dispatch(Commands.playTracks(fake.library.serverId, listOf(track(current), track(next)), 0, "Pair"))
+                settle()
+                compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
+                settle()
+                awaitStill()
+                val prefix = "android-$theme-style-${name(current)}-to-${name(next)}"
+                shot(File(dir, "$prefix-0.00.png"))
+                val rest = controls.associateWith { compose.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot }
+                val pageWidth = compose.onRoot().fetchSemanticsNode().size.width.toFloat()
+                var moved = 0f
+                compose.onNodeWithTag("player.artwork").performTouchInput {
+                    down(Offset(width * 0.8f, height * 0.4f))
+                    moveBy(Offset(-viewConfiguration.touchSlop - 1f, 0f))
+                }
+                for (f in listOf(0.25f, 0.5f, 0.75f)) {
+                    val to = f * pageWidth
+                    compose.onNodeWithTag("player.artwork").performTouchInput { repeat(4) { moveBy(Offset(-(to - moved) / 4f, 0f)) } }
+                    moved = to
+                    idle()
+                    shot(File(dir, "$prefix-%.2f.png".format(f)))
+                    controls.forEach { tag ->
+                        val now = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+                        check(now == rest.getValue(tag)) { "$tag moved at $f of $prefix: ${rest.getValue(tag)} -> $now" }
+                    }
+                }
+                if (current == 3) {
+                    // Released at three quarters: it settles on the immersive song and hands over
+                    // without a jump (frames every 48 ms, then at rest).
+                    compose.mainClock.autoAdvance = false
+                    compose.onNodeWithTag("player.artwork").performTouchInput { up() }
+                    for (i in 1..6) {
+                        compose.mainClock.advanceTimeBy(48)
+                        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(48))
+                        shot(File(dir, "$prefix-release-$i.png"))
+                    }
+                    compose.mainClock.autoAdvance = true
+                    settle()
+                    shot(File(dir, "$prefix-committed.png"))
+                    controls.filter { it != "player.title" }.forEach { tag ->
+                        val now = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+                        check(now == rest.getValue(tag)) { "$tag moved after the commit of $prefix: ${rest.getValue(tag)} -> $now" }
+                    }
+                } else {
+                    compose.onNodeWithTag("player.artwork").performTouchInput { cancel() }
+                    settle()
+                }
+                compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Collapse)
+                settle()
+            }
+            return
+        }
         for ((current, next) in listOf(1 to 0, 0 to 1, 2 to 3)) {
             client.dispatch(Commands.setAutoplay(false))
             client.dispatch(Commands.playTracks(fake.library.serverId, listOf(track(current), track(next)), 0, "Pair"))

@@ -34,6 +34,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -95,10 +96,12 @@ import app.hocket.ui.theme.LocalArtworkSeedState
 import app.hocket.ui.theme.LocalDarkTheme
 import app.hocket.ui.theme.Motion
 import app.hocket.core.api.ArtworkStyle
+import app.hocket.core.api.ArtworkLayout
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.abs
 
 enum class SheetValue { Collapsed, Expanded }
 
@@ -238,8 +241,14 @@ internal class HeroGeometry {
      * has more height than the artwork needs and the artwork is centred in it.
      */
     var artTop = 0f
-    /** The header's height (px) as the page laid it out: the immersive artwork starts this far above the area. */
+    /** The header's height (px) as the page laid it out. */
     var headerHeight = 0f
+    /**
+     * Where an immersive artwork's top is from the area's top (px, set by the page's layout): at the
+     * top of the page (under the header), or higher where the area is shorter than the artwork, so
+     * that its bottom never runs past the area into the controls.
+     */
+    var immersiveTop = 0f
     /** How much the title row's stars have folded away (px; they show in artwork mode only): the mode area takes it. */
     var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
@@ -251,18 +260,31 @@ internal class HeroGeometry {
         return r.localBoundingBoxOf(coordinates, clipBounds = false)
     }
 
+    /** The big artwork's square in the current track's style: [immersiveSlot] or [cardSlot]. */
+    fun bigSlot(): Rect = if (immersive) immersiveSlot() else cardSlot()
+
     /**
-     * The big artwork's square, centred across the top of its area ([artTop] down): [artSide] (the
-     * same in every mode, so the artwork does not resize while the area grows for lyrics or the
-     * queue), or before that is known as large as the area allows (up to [artMax]).
+     * A card's square, centred in its area ([artTop] down): [artSide] (the same in every mode, so the
+     * artwork does not resize while the area grows for lyrics or the queue), or before that is known
+     * as large as the area allows (up to [artMax]).
      */
-    fun bigSlot(): Rect {
+    fun cardSlot(): Rect {
         val a = area
         if (a.width <= 0f || a.height <= 0f) return Rect.Zero
-        if (immersive) return Rect(Offset(a.left, a.top - headerHeight), Size(a.width, a.width))
         val side = if (artSide > 0f) minOf(artSide, a.width - 2 * artInset) else minOf(a.width - 2 * artInset, a.height - 2 * artPad, artMax)
         if (side <= 0f) return Rect.Zero
         return Rect(Offset(a.center.x - side / 2, a.top + maxOf(artTop, artPad)), Size(side, side))
+    }
+
+    /**
+     * An immersive artwork's square: the area's full width, from the top of the page (under the
+     * header; [immersiveTop]), its continuation running down behind the controls. The same area as
+     * a card's, so the controls never move between the two styles.
+     */
+    fun immersiveSlot(): Rect {
+        val a = area
+        if (a.width <= 0f || a.height <= 0f) return Rect.Zero
+        return Rect(Offset(a.left, a.top + immersiveTop), Size(a.width, a.width))
     }
 
     /** Where the full player's artwork is at mode fraction [f], shrunk to [pausedScale] while big (not when immersive). */
@@ -449,45 +471,69 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val seedState = LocalArtworkSeedState.current
         // The app's own theme (the player overrides it for its subtree, below).
         val appDark = LocalDarkTheme.current
-        val coverArt = entry?.track?.coverArt
-        val artworkSeed by artworkSeed(coverArt)
-        val seed = artworkSeed ?: coverArt?.let { ArtworkColors.seedFor(it) }
+        val trackCover = entry?.track?.coverArt
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
         val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
-        val artworkLayout by rememberArtworkLayout(coverArt, preference, dark = appDark)
         val portrait = constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
-        val immersiveEdge = artworkLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
+        fun ArtworkLayout?.immersiveOrNull() = this?.takeIf { portrait && it.bottom.style != ArtworkStyle.Card }
+        // The scene (the cover, its layout and its colours) changes as one: a new cover waits until
+        // its layout and seed are known (at once for one already worked out, a neighbour's, say),
+        // so it never shows as a card and then turns immersive, or in the wrong colours. A slow
+        // one gives up waiting after [SCENE_HOLD_MS] and shows as a card until it is known.
+        val trackLayout by rememberArtworkLayout(trackCover, preference, dark = appDark)
+        val trackSeed by artworkSeed(trackCover)
+        val ready = trackLayout != null && (trackSeed != null || trackCover == null)
+        var held by remember { mutableStateOf<Scene?>(null) }
+        var holdOver by remember(trackCover) { mutableStateOf(false) }
+        LaunchedEffect(trackCover) { kotlinx.coroutines.delay(SCENE_HOLD_MS); holdOver = true }
+        val scene = when {
+            ready -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
+            !holdOver && held != null -> held!!
+            else -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
+        }
+        SideEffect { if (ready) held = scene }
+        val coverArt = scene.coverArt
+        val seed = scene.seed ?: coverArt?.let { ArtworkColors.seedFor(it) }
+        val artworkLayout = scene.layout
+        val immersiveEdge = artworkLayout?.bottom
         val hero = remember { HeroGeometry() }
         hero.immersive = immersiveEdge != null
-        // The skip swipe's neighbours, with their immersive layouts worked out ahead (cached by the
-        // classifier) so a neighbour slides in in its own style and the commit is instant.
+        // The skip swipe's neighbours, with their layouts and colours worked out ahead (cached), so
+        // a neighbour slides in in its own style and the commit changes nothing on screen.
         val carousel = remember { SkipCarousel() }
         val neighbours by rememberNeighbours()
         val previousCover = neighbours.previous?.track?.coverArt
         val nextCover = neighbours.next?.track?.coverArt
-        val previousLayout by rememberArtworkLayout(previousCover, preference, dark = appDark)
-        val nextLayout by rememberArtworkLayout(nextCover, preference, dark = appDark)
-        val previousEdge = previousLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
-        val nextEdge = nextLayout?.bottom?.takeIf { portrait && it.style != ArtworkStyle.Card }
+        val previousLayout = rememberArtworkLayout(previousCover, preference, dark = appDark).value?.layout.immersiveOrNull()
+        val nextLayout = rememberArtworkLayout(nextCover, preference, dark = appDark).value?.layout.immersiveOrNull()
+        val previousSeed by artworkSeed(previousCover)
+        val nextSeed by artworkSeed(nextCover)
+        val nextEdge = nextLayout?.bottom
         val swiping by remember(carousel) { derivedStateOf { carousel.offset.value != 0f } }
+        // The swipe's fraction towards a neighbour in steps (1 = previous, -1 = next): the backdrop
+        // and the colours follow it, recomposing a few times a swipe, not every frame.
+        val towards by remember(carousel) { derivedStateOf { (carousel.fraction() * SCHEME_STEPS).roundToInt() / SCHEME_STEPS.toFloat() } }
+        // What the previous slot shows: the current song again when Previous will restart it.
+        val previousShown = if (carousel.restartPeek) Triple(coverArt, artworkLayout, scene.seed) else Triple(previousCover, previousLayout, previousSeed)
         // The full player is dark (it sits on darkened artwork), themed from the artwork, except in
         // artwork mode over a light immersive continuation (a white cover carried on in white): dark
         // controls there. The scheme crossfades on a track or mode change while the player is
-        // showing, and snaps while hidden.
-        val lightPlayer = immersiveEdge?.light == true && state.mode == PlayerMode.Artwork
-        val targetScheme = remember(seed, lightPlayer) {
-            val scheme = seed?.let { ArtworkColors.scheme(it, dark = !lightPlayer) } ?: darkColorScheme()
-            // Over a light continuation the text sits on the cover's colour, not on the scheme's
-            // near-white surfaces: the one dark the core checked 4.5:1 for, and translucent dark
-            // tonal buttons that take on the colour beneath instead of a pale container.
-            if (!lightPlayer) scheme else scheme.copy(
-                onSurface = IMMERSIVE_DARK, onSurfaceVariant = IMMERSIVE_DARK, onBackground = IMMERSIVE_DARK,
-                secondaryContainer = IMMERSIVE_DARK.copy(alpha = 0.12f), onSecondaryContainer = IMMERSIVE_DARK,
-                surfaceContainerHighest = IMMERSIVE_DARK.copy(alpha = 0.12f),
-            )
+        // showing, snaps while hidden, and follows a skip swipe towards the neighbour's.
+        val artworkMode = state.mode == PlayerMode.Artwork
+        val lightPlayer = immersiveEdge?.light == true && artworkMode
+        val targetScheme = remember(seed, lightPlayer) { playerSchemeFor(seed, lightPlayer) }
+        val playerScheme0 = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion && !carousel.busy)
+        val neighbourShown = when {
+            towards > 0f -> previousShown.let { (c, l, sd) -> Triple(sd ?: c?.let { ArtworkColors.seedFor(it) }, l, c) }
+            towards < 0f -> Triple(nextSeed ?: nextCover?.let { ArtworkColors.seedFor(it) }, nextLayout, nextCover)
+            else -> null
         }
-        val playerScheme = animateColorScheme(targetScheme, animate = fullPlayerAccessible && !reducedMotion)
+        val neighbourLight = neighbourShown?.second?.bottom?.light == true && artworkMode
+        val neighbourSeed = neighbourShown?.first
+        val neighbourScheme = remember(neighbourShown != null, neighbourSeed, neighbourLight) { if (neighbourShown != null) playerSchemeFor(neighbourSeed, neighbourLight) else null }
+        val playerScheme = if (neighbourScheme != null) lerpScheme(playerScheme0, neighbourScheme, abs(towards)) else playerScheme0
+        val lightShown = if (neighbourShown != null && abs(towards) >= 0.5f) neighbourLight else lightPlayer
         val artScale = animateFloatAsState(if (playing || reducedMotion) 1f else HeroGeometry.PAUSED_SCALE, Motion.artwork, label = "artworkScale")
         hero.bigCorner = with(density) { HeroGeometry.HERO_CORNER.toPx() }
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
@@ -555,23 +601,29 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
                 // tenth, then quickly opaque).
                 PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                // While the artwork is swiped, the neighbour's backdrop fades in with the swipe.
+                if (swiping && neighbourShown != null) {
+                    val sign = if (towards > 0f) 1f else -1f
+                    PlayerBackground(neighbourShown.third, neighbourSeed, moving = false, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) * (carousel.fraction() * sign).coerceIn(0f, 1f) })
+                }
                 // An immersive artwork's continuation (reflection or colours) below it, fading out as
                 // the artwork shrinks to a thumbnail for lyrics or the queue. While the sheet moves
                 // it is one unit with the artwork in flight (the same transform), fading out before
-                // the artwork shrinks; while the artwork is swiped it slides with it, and the
-                // neighbours' continuations slide in beside it.
+                // the artwork shrinks; while the artwork is swiped it slides with it, and an
+                // immersive neighbour's continuation slides in beside it (whatever the current
+                // artwork's style: each page in its own).
+                val span = { carousel.span }
                 if (immersiveEdge != null) {
-                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 0f))
-                    if (swiping) {
-                        val previousShown = if (carousel.restartPeek) coverArt to immersiveEdge else previousCover to previousEdge
-                        previousShown.second?.let { ImmersiveContinuation(previousShown.first, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = -1f)) }
-                        nextEdge?.let { ImmersiveContinuation(nextCover, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 1f)) }
-                    }
+                    ImmersiveContinuation(coverArt, immersiveEdge, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 0f, span))
+                }
+                if (swiping) {
+                    previousShown.second?.bottom?.let { ImmersiveContinuation(previousShown.first, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = -1f, span)) }
+                    nextEdge?.let { ImmersiveContinuation(nextCover, it, hero, modifier = Modifier.fillMaxSize().continuationLayer(hero, state, { flying }, { modeAnim.value }, { artScale.value }, density, offsetSpans = 1f, span)) }
                 }
                 // One theme call, always: the subtree (modes, queue, lyrics, scroll positions) is
                 // never rebuilt when the colours change.
                 MaterialExpressiveTheme(colorScheme = playerScheme) {
-                    CompositionLocalProvider(LocalContentColor provides playerScheme.onSurface, LocalDarkTheme provides !lightPlayer) {
+                    CompositionLocalProvider(LocalContentColor provides playerScheme.onSurface, LocalDarkTheme provides !lightShown) {
                         Box(
                             Modifier
                                 .fillMaxSize()
@@ -591,10 +643,11 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 artworkScale = { artScale.value },
                                 lyricsVisible = expanded && settledOpen && mode == PlayerMode.Lyrics,
                                 onPreviewToggle = { seed -> seedState.seed = if (seedState.seed == null) seed else null },
-                                immersive = artworkLayout?.takeIf { immersiveEdge != null },
+                                coverArt = coverArt,
+                                immersive = artworkLayout,
                                 carousel = carousel,
                                 neighbours = neighbours,
-                                neighbourEdges = previousEdge to nextEdge,
+                                neighbourLayouts = previousLayout to nextLayout,
                                 headerAlpha = { HeroGeometry.headerAlpha(state.progress) },
                             )
                         }
@@ -610,7 +663,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // The one artwork that flies from the mini player's thumbnail to the full player's
                 // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
                 // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout?.takeIf { immersiveEdge != null })
+                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
             }
         }
     }
@@ -618,6 +671,45 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
 
 /** The dark text and controls over a light immersive continuation (the core's contrast target). */
 private val IMMERSIVE_DARK = Color(0xFF1C1B1F)
+
+/** What the player shows for a song: its cover, its immersive layout (null: a card) and its seed colour. */
+private data class Scene(val coverArt: String?, val layout: ArtworkLayout?, val seed: Color?)
+
+/** How long a new cover's scene waits for its layout and colours before showing as a card. */
+private const val SCENE_HOLD_MS = 400L
+
+/** The steps the colours take across a skip swipe (one recomposition each). */
+private const val SCHEME_STEPS = 12
+
+/**
+ * The full player's scheme for a seed: dark, themed from the artwork, or over a light immersive
+ * continuation ([light]) dark text on the cover's colour: the one dark the core checked 4.5:1 for,
+ * and translucent dark tonal buttons that take on the colour beneath instead of a pale container.
+ */
+private fun playerSchemeFor(seed: Color?, light: Boolean): ColorScheme {
+    val scheme = seed?.let { ArtworkColors.scheme(it, dark = !light) } ?: darkColorScheme()
+    return if (!light) scheme else scheme.copy(
+        onSurface = IMMERSIVE_DARK, onSurfaceVariant = IMMERSIVE_DARK, onBackground = IMMERSIVE_DARK,
+        secondaryContainer = IMMERSIVE_DARK.copy(alpha = 0.12f), onSecondaryContainer = IMMERSIVE_DARK,
+        surfaceContainerHighest = IMMERSIVE_DARK.copy(alpha = 0.12f),
+    )
+}
+
+/** [a] to [b] at [t] for the roles the player animates ([animateColorScheme]). */
+private fun lerpScheme(a: ColorScheme, b: ColorScheme, t: Float): ColorScheme {
+    fun l(x: Color, y: Color) = androidx.compose.ui.graphics.lerp(x, y, t.coerceIn(0f, 1f))
+    return a.copy(
+        primary = l(a.primary, b.primary), onPrimary = l(a.onPrimary, b.onPrimary),
+        primaryContainer = l(a.primaryContainer, b.primaryContainer), onPrimaryContainer = l(a.onPrimaryContainer, b.onPrimaryContainer),
+        secondary = l(a.secondary, b.secondary), onSecondary = l(a.onSecondary, b.onSecondary),
+        secondaryContainer = l(a.secondaryContainer, b.secondaryContainer), onSecondaryContainer = l(a.onSecondaryContainer, b.onSecondaryContainer),
+        tertiary = l(a.tertiary, b.tertiary), onTertiary = l(a.onTertiary, b.onTertiary),
+        surface = l(a.surface, b.surface), onSurface = l(a.onSurface, b.onSurface), onSurfaceVariant = l(a.onSurfaceVariant, b.onSurfaceVariant),
+        surfaceContainer = l(a.surfaceContainer, b.surfaceContainer), surfaceContainerHigh = l(a.surfaceContainerHigh, b.surfaceContainerHigh),
+        surfaceContainerHighest = l(a.surfaceContainerHighest, b.surfaceContainerHighest),
+        outline = l(a.outline, b.outline), outlineVariant = l(a.outlineVariant, b.outlineVariant),
+    )
+}
 
 /** Sheet progress from which the full player (not the mini bar) is what accessibility sees. */
 private const val FULL_PLAYER_A11Y_PROGRESS = 0.6f
@@ -671,8 +763,8 @@ private fun fallbackThumb(density: Density): Rect = with(density) {
 
 /**
  * The layer an immersive continuation is drawn in (laid out for the landed artwork,
- * [HeroGeometry.bigSlot]): at rest it follows the full player's skip swipe, [offsetSpans] slots
- * along (a neighbour's continuation: -1 the previous, 1 the next); while the sheet moves it takes
+ * [HeroGeometry.immersiveSlot]): at rest it follows the full player's skip swipe, [offsetSpans]
+ * pages ([span]) along (a neighbour's continuation: -1 the previous, 1 the next); while the sheet moves it takes
  * the artwork in flight's transform ([HeroGeometry.flightRect]), so the two stay one unit, and
  * fades out ([HeroGeometry.continuationAlpha]) before the artwork shrinks. It fades with the mode
  * too (lyrics / queue).
@@ -685,6 +777,7 @@ private fun Modifier.continuationLayer(
     scale: () -> Float,
     density: Density,
     offsetSpans: Float,
+    span: () -> Float,
 ): Modifier = graphicsLayer {
     val p = state.progress
     val big = hero.bigSlot()
@@ -694,10 +787,10 @@ private fun Modifier.continuationLayer(
         val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
         scaleX = t.scale
         scaleY = t.scale
-        translationX = t.x + offsetSpans * big.width * t.scale
+        translationX = t.x + offsetSpans * span() * t.scale
         translationY = t.y
     } else {
-        translationX = hero.swipe() + offsetSpans * big.width
+        translationX = hero.swipe() + offsetSpans * span()
     }
 }
 
@@ -850,7 +943,16 @@ private fun animateColorScheme(target: ColorScheme, animate: Boolean): ColorSche
 @Composable
 fun artworkSeed(coverArt: String?): androidx.compose.runtime.State<Color?> {
     val client = LocalCoreClient.current
-    return androidx.compose.runtime.produceState<Color?>(initialValue = null, coverArt) {
-        value = if (coverArt == null) null else (ArtworkColors.seedFrom(client.artworkPath(coverArt, ArtworkSizes.LIST)) ?: ArtworkColors.seedFor(coverArt))
+    // Null while worked out; one worked out before (a neighbour's, say) is there from the first frame.
+    val state = remember(coverArt) { mutableStateOf(coverArt?.let { seeds.get(it) }) }
+    LaunchedEffect(state) {
+        if (state.value != null || coverArt == null) return@LaunchedEffect
+        val seed = ArtworkColors.seedFrom(client.artworkPath(coverArt, ArtworkSizes.LIST)) ?: ArtworkColors.seedFor(coverArt)
+        seeds.put(coverArt, seed)
+        state.value = seed
     }
+    return state
 }
+
+/** Seed colours by cover id. */
+private val seeds = android.util.LruCache<String, Color>(64)
