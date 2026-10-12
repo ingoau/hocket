@@ -188,6 +188,15 @@ class AppScreenshotTest {
         }
 
         step {
+            // The artist line's sheet: the song's artists, then its album.
+            click("player.artistLine")
+            awaitTag("player.artists.album")
+            settle()
+            shot(dir, "$prefix-06b-artists-sheet")
+            dismissSheet()
+        }
+
+        step {
             click("player.more")
             awaitTag("songMenu.header")
             settle()

@@ -132,7 +132,7 @@ class FullPlayerLayoutTest {
         val play = bounds("player.playPause")
         val actions = bounds("player.mode.queue")
         assertEquals("the artwork as wide as the margins allow", 371f * dp, art.width, 1f)
-        assertEquals("the artwork centred above the controls", art.top - handle.bottom - 8f * dp, title.top - art.bottom - 24f * dp, 1.5f)
+        assertEquals("the artwork centred above the controls", art.top - handle.bottom - 8f * dp, title.top - art.bottom - 8f * dp, 1.5f)
         val share = actions.top - play.bottom - 16f * dp
         assertEquals("the action row as far above the bottom", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
         val (times, stars) = gaps(stars = true)
@@ -257,10 +257,14 @@ class FullPlayerLayoutTest {
         assertFalse("not scrolling", compose.onAllNodesWithTag("player.title.marquee", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
     }
 
+    /** The line under the title is the artist string as given, without the album, in every mode. */
     @Test
-    fun theAlbumStaysBesideTheThumbnailInTheOtherModes() {
+    fun theArtistLineIsTheArtistOnlyBesideTheThumbnailInTheOtherModes() {
         startExpanded()
-        val album = core.client.nowPlaying.value!!.track.album
+        val track = core.client.nowPlaying.value!!.track
+        fun line() = compose.onAllNodesWithTag("player.artist", useUnmergedTree = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].joinToString { it.text }
+        assertEquals(track.artist, line())
+        assertFalse("no album", exists("player.album"))
         // The lyrics animate every frame while shown: step the clock by hand instead of waiting for idle.
         compose.mainClock.autoAdvance = false
         try {
@@ -268,8 +272,7 @@ class FullPlayerLayoutTest {
                 tap("player.mode.$mode")
                 compose.mainClock.advanceTimeBy(1_000)
                 assertTrue("the panel in $mode", exists("player.panel"))
-                val node = compose.onAllNodesWithTag("player.album", useUnmergedTree = true).fetchSemanticsNodes().single()
-                if (album != null) assertEquals(album, node.config[SemanticsProperties.Text].joinToString { it.text })
+                assertEquals(track.artist, line())
                 // The thumbnail sits beside the title, left of it.
                 assertTrue(bounds("player.artwork").right <= bounds("player.title").left + 1f)
                 tap("player.mode.$mode")
@@ -278,6 +281,68 @@ class FullPlayerLayoutTest {
         } finally {
             compose.mainClock.autoAdvance = true
         }
+    }
+
+    /**
+     * The title and the artist line are two targets, neither overlapping the other nor the stars,
+     * each with a 48 dp touch area: in artwork mode the stars sit right under the artist line; in
+     * the other modes (and without the stars) its target reaches 48 dp down.
+     */
+    @Test
+    fun theTitleAndTheArtistLineAreSeparateTargets() {
+        startExpanded()
+        fun check(what: String, stars: Boolean) {
+            val title = compose.onNodeWithTag("player.title").fetchSemanticsNode()
+            val artist = compose.onNodeWithTag("player.artistLine").fetchSemanticsNode()
+            assertTrue("apart ($what)", title.boundsInRoot.bottom <= artist.boundsInRoot.top + 0.5f)
+            assertTrue("the title's 48 dp ($what)", title.boundsInRoot.height >= 48f * dp - 1f)
+            assertTrue("the artist line's touch area 48 dp ($what)", artist.touchBoundsInRoot.height >= 48f * dp - 1f)
+            if (stars) assertTrue("clear of the stars", artist.boundsInRoot.bottom <= bounds("rating").top + 0.5f)
+            else assertTrue("the artist line's own 48 dp ($what)", artist.boundsInRoot.height >= 48f * dp - 1f)
+        }
+        check("artwork", stars = true)
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        check("queue", stars = false)
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { !exists("queue.list") }
+        core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
+        compose.waitUntil(5_000) { !exists("rating") }
+        compose.waitForIdle()
+        check("no stars", stars = false)
+    }
+
+    /** The artist line opens the song's artists and its album; each goes to its page and closes the player. */
+    @Test
+    fun tappingTheArtistLineListsTheArtistsAndTheAlbum() {
+        startExpanded()
+        val track = core.client.nowPlaying.value!!.track
+        val line = compose.onNodeWithTag("player.artistLine").fetchSemanticsNode()
+        assertEquals("Show artists and album", line.config[SemanticsActions.OnClick].label)
+        tap("player.artistLine")
+        compose.waitUntil(5_000) { exists("player.artists") }
+        assertTrue(compose.onAllNodesWithText("Artists and album").fetchSemanticsNodes().isNotEmpty())
+        val artist = compose.onNodeWithTag("player.artists.artist.0").fetchSemanticsNode()
+        assertEquals("Go to artist", artist.config[SemanticsActions.OnClick].label)
+        assertTrue(compose.onAllNodesWithText(track.artist!!, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        assertFalse("one artist until the core sends the list", exists("player.artists.artist.1"))
+        assertEquals("Go to album", compose.onNodeWithTag("player.artists.album").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
+        tap("player.artists.artist.0")
+        compose.waitUntil(5_000) { !exists("player.artists") }
+        // The player collapses to the mini player.
+        compose.waitUntil(5_000) { bounds("nowPlaying.sheet").top > 600f * dp }
+        compose.waitUntil(5_000) { exists("detail.header") }
+        // The album, from the sheet again.
+        compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
+        compose.waitUntil(5_000) { exists("player.artistLine") }
+        compose.waitForIdle()
+        tap("player.artistLine")
+        compose.waitUntil(5_000) { exists("player.artists.album") }
+        tap("player.artists.album")
+        compose.waitUntil(5_000) { !exists("player.artists") }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(track.album!!).fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test
@@ -338,7 +403,7 @@ class FullPlayerLayoutTest {
     /** The first baseline (px, in the root) of the title block's line reading [text], from its text layout. */
     private fun baseline(text: String): Float {
         // In the title block (the queue below lists the same song).
-        val block = bounds("player.title")
+        val block = bounds("player.title").let { t -> val a = bounds("player.artistLine"); androidx.compose.ui.geometry.Rect(t.left, t.top, a.right, a.bottom) }
         val node = compose.onAllNodes(androidx.compose.ui.test.hasText(text), useUnmergedTree = true).fetchSemanticsNodes()
             .first { it.config.contains(SemanticsActions.GetTextLayoutResult) && block.contains(it.boundsInRoot.center) }
         val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -363,7 +428,7 @@ class FullPlayerLayoutTest {
     fun theStarsShowOverTheArtworkOnly() {
         startExpanded()
         assertTrue(exists("rating"))
-        assertEquals("stars a little under the title block", bounds("player.title").bottom + 1f * dp, bounds("rating").top, 1f)
+        assertEquals("stars a little under the artist line", bounds("player.artistLine").bottom + 1f * dp, bounds("rating").top, 1f)
         compose.mainClock.autoAdvance = false
         try {
             for (mode in listOf("queue", "lyrics")) {

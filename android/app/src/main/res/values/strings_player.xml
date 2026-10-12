@@ -9,6 +9,9 @@
     <string name="player_add_to_playlist">Add to playlist</string>
     <string name="player_sleep_active_a11y">On</string>
     <string name="player_about_title">About this song</string>
+    <!-- The artist line's tap (TalkBack: "double tap to show artists and album") and the sheet it opens. -->
+    <string name="player_artists_action">Show artists and album</string>
+    <string name="player_artists_title">Artists and album</string>
     <string name="player_about_album">Album</string>
     <string name="player_about_artist">Artist</string>
     <string name="player_about_album_artist">Album artist</string>

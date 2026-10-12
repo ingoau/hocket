@@ -135,6 +135,16 @@ class AccessibilityChecksTest {
     }
 
     @Test
+    fun theArtistsSheetPassesTheChecks() {
+        start()
+        compose.onNodeWithTag("miniPlayer").performClick()
+        compose.waitUntil(5_000) { displayed("player.playPause") }
+        compose.onNodeWithTag("player.artistLine").performClick()
+        compose.waitUntil(5_000) { displayed("player.artists.album") }
+        check("artists and album")
+    }
+
+    @Test
     fun everySettingsScreenPassesTheChecks() {
         start()
         compose.openSettingsFromAccount()

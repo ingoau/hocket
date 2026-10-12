@@ -193,6 +193,7 @@ internal fun FullPlayer(
     var queues by remember { mutableStateOf(false) }
     var sleepSheet by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var artists by remember { mutableStateOf(false) }
     var lyricsTiming by remember { mutableStateOf(false) }
     // While the lyrics show, the song menu offers their timing (the row that sat under them).
     val lyricsDoc = if (mode == PlayerMode.Lyrics) app.hocket.ui.lyrics.rememberCurrentLyrics().lyrics else null
@@ -232,7 +233,7 @@ internal fun FullPlayer(
                 // page: the page keeps the handle's room (invisible) and the real one goes on top.
                 header = { if (immersive != null) Box(Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics { }) { header() } else Box(Modifier.graphicsLayer { alpha = headerAlpha() }) { header() } },
                 area = { ModeArea(mode, hero, lyricsVisible) },
-                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onAddTo = { addTo = true }) },
+                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
                 seek = { PlayerSeek(position) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -292,6 +293,7 @@ internal fun FullPlayer(
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
+    if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
@@ -503,7 +505,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onAddTo: () -> Unit) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -514,7 +516,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onAddTo)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onArtists, onAddTo)
         }
     }
 }
@@ -573,19 +575,23 @@ private fun SeekStatus() {
 }
 
 /**
- * Title and "artist · album" as one target that opens the song's details ([SongInfoSheet]), the
- * star rating under them (when [showRating]), and add to playlist (a tonal round button). In a
- * non-artwork mode a thumbnail slot opens at the start of the row (its width follows
- * [HeroGeometry.modeFraction] in the layout phase); the one artwork lands in it. The thumbnail is
- * 48 dp with the title and artist centred on it (or, where they span more, from the title's cap
- * height to the artist's baseline). The stars show in artwork mode only, folding away with the
- * mode change ([HeroGeometry.titleFold]: the mode area takes the room, so nothing below moves). While the artwork
- * is swiped, the neighbour's title and artist crossfade in with the swipe.
+ * The title (one target: the song's details, [SongInfoSheet]) and the artist line (another: the
+ * song's artists and album, [ArtistsSheet]), the star rating under them (when [showRating]), and
+ * add to playlist (a tonal round button). The title's target takes the row's top margin and the
+ * artist's reaches 48 dp down where nothing is below it (the stars in artwork mode leave it its line,
+ * with Compose's touch slop round it). In a non-artwork mode a thumbnail slot opens at the start of
+ * the row (its width follows [HeroGeometry.modeFraction] in the layout phase); the one artwork lands
+ * in it. The thumbnail is 48 dp with the title and artist centred on it (or, where they span more,
+ * from the title's cap height to the artist's baseline). The stars show in artwork mode only,
+ * folding away with the mode change ([HeroGeometry.titleFold]: the mode area takes the room, so
+ * nothing below moves). While the artwork is swiped, the neighbour's title and artist crossfade in
+ * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onAddTo: () -> Unit) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
+    val artistsLabel = stringResource(R.string.player_artists_action)
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
     val previous = if (carousel.restartPeek) track else neighbours.previous?.track
     val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
@@ -605,21 +611,35 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
             },
             {
                 Box(Modifier.fillMaxWidth()) {
-                    // The page's heading and a polite live region: it changes once per track, so a
-                    // track change is announced once (never the position). A tap opens the details.
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
-                            .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
-                            .testTag("player.title"),
-                    ) { TrackLines(track, marquee = !swiping) }
+                    Column(Modifier.fillMaxWidth().graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }) {
+                        // The page's heading and a polite live region: it changes once per track, so a
+                        // track change is announced once (never the position). A tap opens the details.
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
+                                .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
+                                .testTag("player.title")
+                                .padding(top = 16.dp),
+                        ) { MarqueeText(track.title, titleStyle(), running = !swiping) }
+                        // The artist line: the song's artists and its album.
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = if (showRating && !compact) 0.dp else 48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(onClickLabel = artistsLabel, role = Role.Button, onClick = onArtists)
+                                .testTag("player.artistLine"),
+                        ) { ArtistLine(track, tagged = true) }
+                    }
                     // The neighbours' lines, faded in as the artwork is swiped towards them.
                     for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
                         if (neighbour == null || neighbour === track) continue
-                        Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, marquee = false, tagged = false) }
+                        Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) {
+                            Text(neighbour.title, style = titleStyle(), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 16.dp))
+                            ArtistLine(neighbour, tagged = false)
+                        }
                     }
                 }
             },
@@ -646,7 +666,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                 }
             },
         ),
-        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) { (thumbSlot, text, stars, add), constraints ->
         val w = constraints.maxWidth
         val f = hero.modeFraction()
@@ -673,7 +693,8 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val centre = capTop + span / 2
         // The block's visual bottom: the star glyphs' bottoms in artwork mode (when rated), else the
         // artist's baseline; it moves from one to the other as the stars fold away with the mode.
-        val starsTop = t.height + STAR_GAP.roundToPx()
+        val artistBottom = t[ArtistBottom].takeIf { it != AlignmentLine.Unspecified } ?: t.height
+        val starsTop = artistBottom + STAR_GAP.roundToPx()
         val glyphs = starsTop + STAR_GLYPH_BOTTOM.roundToPx()
         val full = if (showRating) glyphs else baseline
         val bottom = lerpF(full.toFloat(), baseline.toFloat(), f).roundToInt()
@@ -735,36 +756,42 @@ private fun outgoingAlpha(f: Float): Float = (1f - 2f * abs(f)).coerceIn(0f, 1f)
 /** A neighbour's lines at [f] (towards it, 0..1): in over the second half, so the two never overlap. */
 private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 
-/**
- * Title (emphasized headline, one line: scrolling when it does not fit, [MarqueeText]) and
- * "artist · album" (muted, ellipsised).
- */
+/** The title's style: the emphasized headline, extra bold. */
 @Composable
-private fun TrackLines(track: TrackSummary, marquee: Boolean, tagged: Boolean = true) {
-    MarqueeText(track.title, MaterialTheme.typography.headlineSmallEmphasized.copy(fontWeight = FontWeight.ExtraBold), running = marquee, scrolls = tagged)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        val sub = MaterialTheme.typography.bodyLarge
-        val subColor = MaterialTheme.colorScheme.onSurfaceVariant
-        Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false).then(if (tagged) Modifier.testTag("player.artist") else Modifier))
-        track.album?.let { album ->
-            Text(stringResource(R.string.dot_separator), style = sub, color = subColor)
-            Text(album, style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).then(if (tagged) Modifier.testTag("player.album") else Modifier))
-        }
-    }
+private fun titleStyle() = MaterialTheme.typography.headlineSmallEmphasized.copy(fontWeight = FontWeight.ExtraBold)
+
+/** The artist line: the track's artist string as given (muted, one line, ellipsised). */
+@Composable
+private fun ArtistLine(track: TrackSummary, tagged: Boolean) {
+    Text(
+        track.artist ?: stringResource(R.string.unknown_artist),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .then(if (tagged) Modifier.testTag("player.artist") else Modifier)
+            .layout { m, c ->
+                val p = m.measure(c)
+                layout(p.width, p.height, mapOf(ArtistBottom to p.height)) { p.place(0, 0) }
+            },
+    )
 }
+
+/** The bottom of the artist line's text (its target can reach further down): the stars go under it. */
+private val ArtistBottom = HorizontalAlignmentLine(::minOf)
 
 /**
  * One line of [text] that, when it does not fit, scrolls (a marquee): after [MARQUEE_DELAY_MS] one
  * slow pass ([MARQUEE_SPEED]) brings the text round to where it started, then it pauses and goes
  * again, the edges fading softly (the start edge only while the text is away from it). It holds
  * still while not [running] (the artwork being swiped), and does not scroll at all with reduced
- * motion, or where it never [scrolls] (the neighbours' lines): an ellipsis then. The whole text is in
+ * motion: an ellipsis then. The whole text is in
  * the semantics either way.
  */
 @Composable
-private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean, scrolls: Boolean) {
-    if (LocalReducedMotion.current || !scrolls) {
+private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean) {
+    if (LocalReducedMotion.current) {
         Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
         return
     }
