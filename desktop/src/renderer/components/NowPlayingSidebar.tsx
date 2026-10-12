@@ -159,9 +159,12 @@ function Overview() {
   if (!track || !now) return <div className="side-scroll"><EmptyState message={t("player.nothingPlaying")} icon="music" action={<span className="small muted">{t("player.nothingPlayingHint")}</span>} testId="sidebar-empty" /></div>;
   const { layers, edge, fading, settle } = scene;
   const style = edge ? ({ "--side-fill": fillOf(edge) } as CSSProperties) : undefined;
+  // An extension fills the whole overview in its colour, and every card sits on it; a reflection
+  // fades back into the pane behind the Lyrics card.
+  const fill = edge?.style === "extend";
   return (
-    <div className="side-scroll" data-testid="sidebar-scroll">
-      <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} style={style} data-testid="side-overview">
+    <div className="side-scroll" data-fill={fill ? "" : undefined} style={style} data-testid="sidebar-scroll">
+      <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} data-fill={fill ? "" : undefined} data-testid="side-overview">
       {edge ? (
         <div className="side-backdrop" aria-hidden="true">
           {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
@@ -250,7 +253,7 @@ function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | und
     const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(width * dpr);
     el.height = Math.round(width * 2 * dpr);
-    drawContinuation(el, img, edge, "bottom", undefined, { bottomFade: false });
+    drawContinuation(el, img, edge, "bottom", undefined, { bottomFade: false, baseFill: true });
   }, [img, edge, width]);
   return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} />;
 }

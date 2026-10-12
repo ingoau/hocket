@@ -540,6 +540,8 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const at = Number.parseFloat(style.getPropertyValue("--side-fade-at"));
     const len = Number.parseFloat(style.getPropertyValue("--side-fade-len"));
     const top0 = root.getBoundingClientRect().top;
+    /** An extension fills the whole overview: no fade, every card over it. */
+    const fill = root.hasAttribute("data-fill");
     const ss = (t: number) => {
       const u = Math.max(0, Math.min(1, t));
       return u * u * (3 - 2 * u);
@@ -550,7 +552,11 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const sx = canvas.width / box.width;
     let min = Infinity;
     let worst = "";
-    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > [data-card='lyrics'] :is(.side-card-title, .side-card-link, .peek-line)");
+    const texts = root.querySelectorAll<HTMLElement>(
+      fill
+        ? ":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)"
+        : ":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > [data-card='lyrics'] :is(.side-card-title, .side-card-link, .peek-line)",
+    );
     for (const el of Array.from(texts)) {
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
@@ -565,9 +571,9 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
           let back = base;
           if (y < box.bottom) {
             const d = ctx.getImageData(Math.floor((x - box.left) * sx), Math.floor((y - box.top) * sx), 1, 1).data;
-            back = over([d[0]!, d[1]!, d[2]!, (d[3]! / 255) * (1 - ss((local - (at - 64)) / 64))], base);
+            back = over([d[0]!, d[1]!, d[2]!, (d[3]! / 255) * (fill ? 1 : 1 - ss((local - (at - 64)) / 64))], base);
           }
-          let bg = over([back[0], back[1], back[2], 1 - ss((local - at) / len)], panel);
+          let bg = over([back[0], back[1], back[2], fill ? 1 : 1 - ss((local - at) / len)], panel);
           if (fill) bg = over(fill, bg);
           const c = ratio(over(fg, bg), bg);
           if (c < min) {
@@ -652,6 +658,16 @@ test.describe("immersive artwork from the classifier", () => {
     writeCover(covers, "1-right", (x, y) => (x >= 196 ? [40, 70, 130] : busy(x, y)));
     writeCover(covers, "2-card", busy);
     writeCover(covers, "3-light", () => [236, 228, 210]);
+    // al-6: white with a block of coloured pixel squares, a plain white bottom (a white cover
+    // carried on in white, in the dark theme too). al-7: columns of colour, carried on column by column.
+    writeCover(covers, "5-white", (x, y) => (x >= 56 && x < 200 && y >= 48 && y < 176 && ((Math.floor(x / 16) + Math.floor(y / 16)) % 3 !== 0) ? busy(x, y) : [250, 250, 250]));
+    // (A caption just above the edge rules a reflection out.)
+    const glyph = (x: number, y: number) => {
+      if (y < 226 || y >= 240 || x < 40 || x >= 180) return false;
+      const gx = 40 + Math.floor((x - 40) / 14) * 14;
+      return x < gx + 3 || (x < gx + 9 && y < 229) || (x >= gx + 6 && x < gx + 9 && y >= 232);
+    };
+    writeCover(covers, "6-columns", (x, y) => (glyph(x, y) ? [20, 20, 24] : [Math.round(40 + x * 0.6), 90, Math.round(200 - x * 0.5)]));
     // al-5: a soft, mid-tone texture, mirrored.
     writeCover(covers, "4-soft", (x, y) => {
       const v = (Math.sin(x / 9) * Math.cos(y / 11) * 0.5 + 0.5) * 120;
@@ -721,31 +737,57 @@ test.describe("immersive artwork from the classifier", () => {
       const art = page.getByTestId("sidebar-art");
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
-        for (const [n, tone] of [[1, "dark"], [4, "light"], [5, undefined]] as const) {
+        // Extensions: dark flat, light flat, white with pixel squares, columns; and a reflection.
+        for (const [n, style, tone] of [[1, "extend", "dark"], [4, "extend", "light"], [6, "extend", "light"], [7, "extend", undefined], [5, "mirror", undefined]] as const) {
           await playCover(page, n);
           if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
           await expect(panel).toHaveAttribute("data-view", "overview");
           await expect(overview).toHaveClass(/immersive/);
           await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
+          await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", style);
           if (tone) await expect(overview).toHaveAttribute("data-tone", tone);
-          else await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", "mirror");
+          await page.waitForTimeout(700);
           // Flush to the pane's top and sides, square (the pane's own corners clip it).
           const pane = await panel.locator(".side-pane").boundingBox();
           const box = await art.boundingBox();
           expect(Math.abs(box!.y - pane!.y)).toBeLessThan(1.5);
           expect(Math.abs(box!.x - pane!.x)).toBeLessThan(1.5);
           expect(await art.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe("0px");
-          // The continuation fades back into the pane behind the Lyrics card, from the title row
-          // to Up next, so the cards after it are the usual ones.
-          const fade = await overview.evaluate((el) => {
-            const title = el.querySelector<HTMLElement>(".side-title-row")!;
-            const upNext = el.querySelector<HTMLElement>('[data-card="upnext"]')!;
-            const start = title.offsetTop + title.offsetHeight;
-            return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px`, upNextGlass: getComputedStyle(upNext).backdropFilter };
-          });
-          expect(fade.at).toBe(fade.want);
-          expect(fade.len).toBe(fade.wantLen);
-          expect(fade.upNextGlass).toBe("none");
+          if (style === "mirror") {
+            // A reflection fades back into the pane behind the Lyrics card, from the title row
+            // to Up next, so the cards after it are the usual ones.
+            await expect(overview).not.toHaveAttribute("data-fill", "");
+            const fade = await overview.evaluate((el) => {
+              const title = el.querySelector<HTMLElement>(".side-title-row")!;
+              const upNext = el.querySelector<HTMLElement>('[data-card="upnext"]')!;
+              const start = title.offsetTop + title.offsetHeight;
+              return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px`, upNextGlass: getComputedStyle(upNext).backdropFilter };
+            });
+            expect(fade.at).toBe(fade.want);
+            expect(fade.len).toBe(fade.wantLen);
+            expect(fade.upNextGlass).toBe("none");
+          } else {
+            // An extension fills the whole overview: the bottom of the pane is its colour, not the pane's.
+            await expect(overview).toHaveAttribute("data-fill", "");
+            await expect(page.getByTestId("sidebar-upnext-card")).not.toHaveCSS("backdrop-filter", "none");
+            const pane = await panel.locator(".side-pane").boundingBox();
+            const shot = readPng(await page.screenshot({ clip: { x: pane!.x, y: pane!.y, width: pane!.width, height: pane!.height } }));
+            const want = (await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).style.getPropertyValue("--side-fill"))).split(",").map(Number);
+            // Below the canvas (where columns carry on in their own colours), the base colour to the end.
+            const canvasEnd = await page.getByTestId("sidebar-continuation").evaluate((el) => el.getBoundingClientRect().bottom);
+            const from = Math.max(Math.ceil(canvasEnd - pane!.y) + 2, 0);
+            expect(from, "the canvas ends above the pane's bottom").toBeLessThan(shot.height - 30);
+            // And nothing marks where the canvas ends.
+            const level = (y: number) => {
+              const i = (y * shot.width + 6) * 4;
+              return (shot.data[i]! + shot.data[i + 1]! + shot.data[i + 2]!) / 3;
+            };
+            for (let y = from - 14; y < from + 10; y++) expect(Math.abs(level(y + 1) - level(y)), `${theme} al-${n}: a step where the canvas ends (${y} px)`).toBeLessThanOrEqual(3);
+            for (let y = from; y < shot.height - 30; y += 10) {
+              const i = (y * shot.width + 6) * 4;
+              for (let k = 0; k < 3; k++) expect(Math.abs(shot.data[i + k]! - want[k]!), `${theme} al-${n}: the pane's bottom wears the extension (${y} px)`).toBeLessThanOrEqual(3);
+            }
+          }
           // No scrollbar: the content is as wide as the pane whether or not it overflows.
           expect(await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).offsetWidth - el.clientWidth)).toBe(0);
           const { min, worst } = await overviewContrast(page);
@@ -768,7 +810,7 @@ test.describe("immersive artwork from the classifier", () => {
       rmSync(userData, { recursive: true, force: true });
     }
   });
-  test("the side panel's continuation fades back into the pane behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
+  test("the side panel's reflection fades back into the pane behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
     const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
@@ -777,7 +819,7 @@ test.describe("immersive artwork from the classifier", () => {
       const panel = page.getByTestId("right-panel");
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
-        for (const [n, name] of [[1, "extend"], [5, "mirror"]] as const) {
+        for (const [n, name] of [[5, "mirror"]] as const) {
           await playCover(page, n);
           await toTrackWithLyrics(page, true);
           if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();

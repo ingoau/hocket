@@ -3,7 +3,8 @@
 // docs/plans/prototypes. Not an assertion test: it runs only with an output
 // folder. With HOCKET_FAKE_COVERS (a folder of covers; album n wears cover
 // n - 1, so put a busy card cover first, then one with flat edges and one to
-// mirror both ways, and as the twelfth one that carries on to the right only)
+// mirror both ways, the twelfth one that carries on to the right only, then a
+// white one with pixel squares and one of columns, both carried on below)
 // it also shoots the immersive layouts, against a native addon built
 // with `pnpm gen` (the fake core borrows its classifier). HOCKET_SCREENSHOT_ONLY limits which
 // shots are written (comma-separated name fragments):
@@ -230,13 +231,14 @@ test("now playing surfaces", async () => {
       // in the fullscreen player; cover 11 carries on to the right only, so it stays on the left).
       if (covers) {
         await setSetting(page, "display.immersiveArtwork", "automatic");
-        for (const [index, name] of [[1, "extend"], [2, "mirror"], [11, "right"]] as const) {
+        for (const [index, name] of [[1, "extend"], [2, "mirror"], [11, "right"], [12, "extend-white"], [13, "extend-columns"]] as const) {
           await playAlbum(page, index, "Road trip");
           if (name !== "right") {
             const panel = page.getByTestId("right-panel");
             if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
             if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
             await expect(panel).toHaveAttribute("data-view", "overview");
+            await expect(page.getByTestId("side-overview")).toHaveClass(/immersive/);
             await shot(`sidebar-overview-immersive-${name}`);
             if (name === "mirror" && wanted("sidebar-overview-immersive-mirror-nolyrics")) {
               // A song without lyrics: the fade runs below the title instead.
@@ -255,6 +257,8 @@ test("now playing surfaces", async () => {
               await playAlbum(page, index, "Road trip");
             }
           }
+          // (The white and columns covers are for the side panel.)
+          if (name === "extend-white" || name === "extend-columns") continue;
           await page.getByTestId("toggle-fullscreen").click();
           const fs = page.getByTestId("fullscreen-player");
           await fs.waitFor();

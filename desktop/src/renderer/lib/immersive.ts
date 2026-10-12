@@ -39,6 +39,7 @@ export async function classify(url: string, preference: ImmersiveArtwork, dark: 
     if (ctx) {
       ctx.drawImage(img, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
+      c.width = c.height = 0;
       // No face detection on the desktop yet: faces only rule a mirror out, so a portrait may mirror.
       layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference, theme: dark ? "dark" : "light" }).catch(() => undefined);
     }
@@ -207,12 +208,12 @@ const BLUR_FAR = 0.14;
  */
 function mirrored(source: CanvasImageSource, W: number, S: number, blur: number): { canvas: HTMLCanvasElement; pad: number } {
   const pad = Math.ceil(blur * 3);
-  const c = document.createElement("canvas");
+  const c = scratch();
   c.width = W + 2 * pad;
   c.height = 2 * S + pad;
   const ctx = c.getContext("2d");
   if (!ctx) return { canvas: c, pad };
-  const tile = document.createElement("canvas");
+  const tile = scratch();
   tile.width = c.width;
   tile.height = c.height;
   const t = tile.getContext("2d");
@@ -257,9 +258,29 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * right), the artwork flipped before it is carried on. With `split` (centred artwork, carried on
  * both ways) the blurred copy under the artwork covers only this side's half of it, so the other
  * side's copy shows under the other half. Without `bottomFade` (the side panel, where the
- * continuation carries on in its base colour past the canvas) no fade over the controls.
+ * continuation carries on in its base colour past the canvas) no fade over the controls; with
+ * `baseFill` the continuation always lies on its base colour (never on what is beneath), so the
+ * canvas ends in exactly the colour that carries on past it.
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }, { split = false, bottomFade = true }: { split?: boolean; bottomFade?: boolean } = {}): void {
+export function drawContinuation(...args: Parameters<typeof draw>): void {
+  try {
+    draw(...args);
+  } finally {
+    // The working canvases are large (the artwork's side and more, twice or three times over, per
+    // side); give their memory back now rather than at the next collection.
+    for (const c of temps.splice(0)) c.width = c.height = 0;
+  }
+}
+
+/** Working canvases made during a draw, released when it ends. */
+const temps: HTMLCanvasElement[] = [];
+function scratch(): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  temps.push(c);
+  return c;
+}
+
+function draw(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }, { split = false, bottomFade = true, baseFill = false }: { split?: boolean; bottomFade?: boolean; baseFill?: boolean } = {}): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -274,7 +295,7 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   if (H <= S) return;
   let source: CanvasImageSource | undefined = img;
   if (img && side) {
-    const t = document.createElement("canvas");
+    const t = scratch();
     t.width = img.height;
     t.height = img.width;
     const tc = t.getContext("2d");
@@ -290,13 +311,13 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   const region = H - S;
   const flat = isFlat(edge);
   const band0 = flat ? S : Math.round(S * (1 - FEATHER));
-  if (flat || edge.light) {
+  if (flat || edge.light || baseFill) {
     ctx.fillStyle = hex(edge.baseColor);
     ctx.fillRect(0, band0, W, H - band0);
   }
   /** Draws `paint` into a layer below the seam, masked to `stops` ([fraction of S from the seam, alpha]). */
   const band = (stops: [number, number][], paint: (c: CanvasRenderingContext2D) => void) => {
-    const layer = document.createElement("canvas");
+    const layer = scratch();
     layer.width = W;
     layer.height = region;
     const lc = layer.getContext("2d");
@@ -319,7 +340,7 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   const nearAcross = (after: [number, number][]) => {
     if (!near) return;
     const h = Math.min(H, near.canvas.height);
-    const layer = document.createElement("canvas");
+    const layer = scratch();
     layer.width = W;
     layer.height = h;
     const lc = layer.getContext("2d");
@@ -387,7 +408,7 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   const lead = 0.08 * canvas.height;
   const top = Math.max(side ? 0 : band0, Math.min(controls ? controls.top - lead : side ? canvas.height * 0.3 : S, canvas.height - 1));
   const end = controls ? Math.max(top + 1, Math.min(controls.bottom, canvas.height)) : canvas.height;
-  const layer = document.createElement("canvas");
+  const layer = scratch();
   layer.width = canvas.width - x0;
   layer.height = canvas.height - top;
   const lc = layer.getContext("2d");
