@@ -493,7 +493,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         LaunchedEffect(trackCover) { kotlinx.coroutines.delay(SCENE_HOLD_MS); holdOver = true }
         val scene = when {
             ready -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
-            !holdOver && held != null -> held!!
+            // A skip swipe has already shown the new song in its own style: no holding the old one.
+            !holdOver && held != null && !carousel.committing -> held!!
             else -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
         }
         SideEffect { if (ready) held = scene }
