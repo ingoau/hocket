@@ -159,7 +159,7 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
   s.show_volume_controls = b[1] & 4;
   s.show_progress_bar = b[1] & 8;
   s.show_album_art = b[1] & 16;
-  for (int i = 0; i < GestureCount; i++) s.gestures[i] = b[2 + i] <= GestureBack ? b[2 + i] : GestureNone;
+  for (int i = 0; i < GestureCount; i++) s.gestures[i] = b[2 + i] <= GestureLyrics ? b[2 + i] : GestureNone;
   s.menu_timeout_s = b[7];
   size_t at = 8;
   uint8_t n = b[at++];
@@ -246,6 +246,7 @@ static void prv_handle_now(DictionaryIterator *iter) {
   g_now.volume = prv_u32(iter, MESSAGE_KEY_Volume, 255);
   g_now.art_gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
   now_playing_update(changed);
+  if (changed) lyrics_track_changed();
   list_refresh_local();
 }
 
@@ -309,7 +310,8 @@ static void prv_inbox(DictionaryIterator *iter, void *context) {
       prv_handle_now(iter);
       break;
     case MsgList:
-      list_handle_page(iter);
+      if (lyrics_is_top()) lyrics_handle_page(iter);
+      else list_handle_page(iter);
       break;
     case MsgArt:
 #if ART_SUPPORTED
@@ -415,6 +417,7 @@ void open_gesture(Gesture g) {
     case GestureLibrary: list_push_remote("library", "Library"); break;
     case GestureActions: list_push_menu(ListActions); break;
     case GestureBack: window_stack_pop(true); break;
+    case GestureLyrics: lyrics_push(); break;
     case GestureNone: break;
   }
 }
@@ -429,6 +432,7 @@ void open_menu_item(MenuItemId id, bool from_menu) {
     case ItemArtists: list_push_remote("artists", "Artists"); break;
     case ItemDownloads: list_push_remote("downloads", "Downloads"); break;
     case ItemSearch: list_start_search(); break;
+    case ItemLyrics: lyrics_push(); break;
     case ItemRating: list_push_rating(); break;
     case ItemGoAlbum: list_push_remote("goAlbum", g_now.album[0] ? g_now.album : "Album"); break;
     case ItemGoArtist: list_push_remote("goArtist", g_now.artist[0] ? g_now.artist : "Artist"); break;
@@ -477,6 +481,7 @@ const char *menu_item_label(MenuItemId id, char *buf, size_t n) {
     case ItemArtists: return "Artists";
     case ItemDownloads: return "Downloads";
     case ItemSearch: return "Search";
+    case ItemLyrics: return "Lyrics";
     case ItemCount: break;
   }
   return "";
@@ -524,9 +529,9 @@ void show_notice(const char *text) {
 
 #ifdef HOCKET_DEMO
 static void prv_demo(void) {
-  strcpy(g_now.title, "Teardrop");
-  strcpy(g_now.artist, "Massive Attack");
-  strcpy(g_now.album, "Mezzanine");
+  strcpy(g_now.title, "Signal Fires");
+  strcpy(g_now.artist, "The Example Band");
+  strcpy(g_now.album, "Placeholder Sessions");
   g_now.duration_ms = 330000;
   prv_stamp_position(97000);
   g_now.flags = NowPlaying | NowHasTrack | NowReportsPosition | NowLoved;

@@ -56,9 +56,9 @@ static void prv_demo_page(List *l, uint16_t offset) {
     {"recent", "Recently played"}, {"downloads", "Downloads"}, {"search", "Search"},
   };
   static const char *const QUEUE[][2] = {
-    {"Angel", "Massive Attack"}, {"Risingson", "Massive Attack"}, {"Teardrop", "Massive Attack"},
-    {"Inertia Creeps", "Massive Attack"}, {"Exchange", "Massive Attack"}, {"Dissolved Girl", "Massive Attack"},
-    {"Man Next Door", "Massive Attack"}, {"Black Milk", "Massive Attack"},
+    {"Track One", "The Example Band"}, {"Track Two", "The Example Band"}, {"Signal Fires", "The Example Band"},
+    {"Track Four", "The Example Band"}, {"Track Five", "The Example Band"}, {"Track Six", "The Example Band"},
+    {"Track Seven", "The Example Band"}, {"Track Eight", "The Example Band"},
   };
   l->base = 0;
   l->have_total = true;

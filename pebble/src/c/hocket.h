@@ -58,6 +58,7 @@ typedef enum {
   CmdActivate = 13,   // Path, Item: play / open the row
   CmdPlayNext = 14,   // Path, Item
   CmdPlayLater = 15,  // Path, Item
+  CmdSeek = 16,       // Arg = position in ms
 } Cmd;
 
 // List row flags (first byte of each packed row)
@@ -77,6 +78,7 @@ typedef enum {
   GestureLibrary = 2,
   GestureActions = 3,
   GestureBack = 4,
+  GestureLyrics = 5,
 } Gesture;
 
 typedef enum {
@@ -100,6 +102,7 @@ typedef enum {
   ItemArtists = 12,
   ItemDownloads = 13,
   ItemSearch = 14,
+  ItemLyrics = 15,
   ItemCount,
 } MenuItemId;
 
@@ -186,3 +189,12 @@ void list_handle_page(DictionaryIterator *iter);
 // Refresh labels of open local menus (state changed).
 void list_refresh_local(void);
 void list_start_search(void);
+
+// -- lyrics.c ------------------------------------------------------------------------------------
+
+// Line-synced lyrics of the playing track: follows the current line; up/down focus other lines,
+// select seeks there, back returns to the current line (or closes when already there).
+void lyrics_push(void);
+void lyrics_handle_page(DictionaryIterator *iter);
+bool lyrics_is_top(void);
+void lyrics_track_changed(void);

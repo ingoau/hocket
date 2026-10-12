@@ -283,7 +283,7 @@ pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
 ];
 
 /// What a touch gesture on the Pebble's Now Playing opens.
-pub const PEBBLE_GESTURES: &[&str] = &["none", "queue", "library", "actions", "back"];
+pub const PEBBLE_GESTURES: &[&str] = &["none", "queue", "library", "actions", "back", "lyrics"];
 
 /// Rows the Pebble's buttons-only menu can carry: screens, track actions and library shortcuts.
 pub const PEBBLE_MENU_ITEMS: &[&str] = &[
@@ -302,11 +302,12 @@ pub const PEBBLE_MENU_ITEMS: &[&str] = &[
     "artists",
     "downloads",
     "search",
+    "lyrics",
 ];
 
 /// Rows of the Pebble's actions menu.
 pub const PEBBLE_ACTION_ITEMS: &[&str] = &[
-    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn",
+    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
 ];
 
 /// Sections of the Pebble's library browser.
