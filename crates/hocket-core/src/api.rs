@@ -889,10 +889,19 @@ pub struct ArtworkLayout {
     pub bottom: ArtworkEdge,
     /// Art on the left, continued to the right (wide windows).
     pub right: ArtworkEdge,
+    /// Art on the right, continued to the left (with [`ArtworkLayout::right`], centred art on wide
+    /// windows). Its [`ArtworkEdge::edge_colors`] run top to bottom. Layouts from before it existed
+    /// decode to a card.
+    #[serde(default = "default_left_edge")]
+    pub left: ArtworkEdge,
     /// The top strip (under the status bar and the player's header) is light: dark icons there.
     pub top_light: bool,
     /// Text or a logo sits in the top strip: start the artwork below the status bar.
     pub top_marks: bool,
+}
+
+fn default_left_edge() -> ArtworkEdge {
+    crate::artwork::card_edge("card:none")
 }
 
 // ---------------------------------------------------------------------------

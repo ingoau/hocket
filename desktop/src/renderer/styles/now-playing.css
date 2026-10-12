@@ -229,21 +229,41 @@
 }
 .np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-art { --np-art-solid: 70%; }
 
-/* Wide: the artwork full height on the left, the card floating over its bottom, a view on the right. */
-.np[data-layout="immersive"] { --np-card-w: min(calc(100vh - 56px), 480px); }
-.np[data-layout="immersive"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vh; height: 100vh; z-index: 1; }
-.np[data-layout="immersive"] .np-controls { position: absolute; bottom: 28px; left: calc((100vh - var(--np-card-w)) / 2); width: var(--np-card-w); background: rgba(10, 10, 14, var(--np-glass)); }
+/* Wide: the artwork full height on the left, the card floating over its bottom, a view on the right.
+   Centred with the artwork alone when both its sides carry on (data-sides="both"): the artwork,
+   its card and both continuations slide there and back by --np-art-x (a spring), the left
+   continuation going off the left edge with the artwork as a view opens. */
+.np[data-layout="immersive"] { --np-card-w: min(calc(100vh - 56px), 480px); --np-art-x: 0px; }
+.np[data-layout="immersive"][data-centred] { --np-art-x: calc((100vw - 100vh) / 2); }
+.np[data-layout="immersive"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vh; height: 100vh; z-index: 1; translate: var(--np-art-x) 0; transition: translate var(--spring-spatial-ms) var(--spring-spatial); }
+.np[data-layout="immersive"] .np-controls { position: absolute; bottom: 28px; left: calc((100vh - var(--np-card-w)) / 2); width: var(--np-card-w); background: rgba(10, 10, 14, var(--np-glass)); translate: var(--np-art-x) 0; transition: opacity 300ms var(--ease-emphasized-decel), translate var(--spring-spatial-ms) var(--spring-spatial); }
+.np[data-layout="immersive"][data-idle] .np-controls { transition: opacity 900ms var(--ease-emphasized), translate var(--spring-spatial-ms) var(--spring-spatial); }
+/* The left continuation is drawn with the artwork at its right end: it sits off the left edge
+   until the artwork is centred. */
+.np[data-layout="immersive"] .np-continuation[data-side="right"] { translate: var(--np-art-x) 0; }
+.np[data-layout="immersive"] .np-continuation[data-side="left"] { translate: calc(var(--np-art-x) - (100vw - 100vh)) 0; transition: translate var(--spring-spatial-ms) var(--spring-spatial); }
+/* Centred, the artwork's left edge fades onto the left continuation as its right one does
+   (--np-left-solid eases from 1, no fade, to 0 as it centres). */
+@property --np-left-solid { syntax: "<number>"; inherits: false; initial-value: 1; }
+.np[data-sides="both"] .np-art-slot {
+  --np-left-solid: 1;
+  mask-image: linear-gradient(rgba(0, 0, 0, var(--np-left-solid)), rgba(0, 0, 0, var(--np-left-solid))), linear-gradient(to left, var(--np-feather)), radial-gradient(ellipse 120% 90% at 100% 50%, var(--np-feather));
+  mask-composite: add, intersect, add;
+  transition: translate var(--spring-spatial-ms) var(--spring-spatial), --np-left-solid var(--spring-spatial-ms) var(--ease-emphasized);
+}
+.np[data-sides="both"][data-centred] .np-art-slot { --np-left-solid: 0; }
+.np[data-sides="both"][data-left-flat] .np-art-slot { mask-image: none; }
 .np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; left: calc(100vh + 40px); right: 40px; top: 88px; bottom: 104px; }
 /* With a view open, the carried-on part shortens and dissolves into the moving blur, and the view sits on that. */
 @property --np-solid { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
 @property --np-clear { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
-.np[data-immersive="right"] .np-continuation {
+.np[data-immersive="right"] .np-continuation[data-side="right"] {
   --np-solid: 100%; --np-clear: 100%;
   mask-image: linear-gradient(to right, #000 var(--np-solid), transparent var(--np-clear));
-  transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized);
+  transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized), translate var(--spring-spatial-ms) var(--spring-spatial);
 }
-.np[data-immersive="right"]:not([data-mode="art"]) .np-continuation { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
-.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-continuation { --np-solid: 70vh; --np-clear: 100vh; }
+.np[data-immersive="right"]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
+.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: 70vh; --np-clear: 100vh; }
 /* And a scrim comes in beside the artwork, so the view's white text holds 4.5:1 over what is left of a light continuation. */
 .np[data-layout="immersive"] .np-fade { display: block; opacity: 0; background: linear-gradient(to right, transparent calc(100vh - 8vw), rgba(0, 0, 0, 0.4) calc(100vh + 2vw)); transition: opacity 700ms var(--ease-emphasized); }
 .np[data-layout="immersive"]:not([data-mode="art"]) .np-fade { opacity: 1; }
@@ -284,7 +304,13 @@
 :is(.np[data-light], .np .light-glass) .qrow.current { background: rgba(0, 0, 0, 0.08); }
 :is(.np[data-light], .np .light-glass) .queue-clear { color: #1c1b1f; }
 :is(.np[data-light], .np .light-glass) .about-path-text { background: rgba(0, 0, 0, 0.06); }
-@media (prefers-reduced-motion: reduce) { .np-continuation { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .np-continuation { animation: none; }
+  /* No slide between centred and left: everything fades in where it lands (FullscreenPlayer). */
+  .np[data-layout="immersive"] .np-art-slot, .np[data-layout="immersive"] .np-continuation[data-side="left"] { transition: none; }
+  .np[data-layout="immersive"] .np-controls { transition: opacity 300ms var(--ease-emphasized-decel); }
+  .np[data-immersive="right"] .np-continuation[data-side="right"] { transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized); }
+}
 
 @media (forced-colors: active) {
   .np-fade { display: none; }

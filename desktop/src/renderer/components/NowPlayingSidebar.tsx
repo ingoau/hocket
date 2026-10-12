@@ -2,16 +2,19 @@
 // scrolling pane. The overview shows the artwork, the title and artist with
 // add to playlist and More, then three cards: Lyrics (the previous, current
 // and next lines, following playback), Up next (the next three songs) and
-// About (album, genre, plays, format). Each card's link drills in to its own
+// About (album, genre, plays, format). A cover whose bottom edge carries on
+// (lib/immersive.ts, as on the phone's player) runs edge to edge at the top,
+// its continuation behind the title and the cards; others are a rounded card.
+// Each card's link drills in to its own
 // view, with a back arrow: Lyrics (the synced lyrics), Queue (the queue
 // selector, Autoplay and the timeline), About this song, and Recent queues.
 // The player bar's lyrics and queue buttons open those views directly.
 // Resizable by its left edge; below 900px it is a drawer over the content.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { QueueEntry, Track } from "@core/api";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track } from "@core/api";
 import { t } from "@shared/strings";
 import { SK } from "@shared/settings-keys";
-import { showSideView, useApp, type Route, type SideView } from "../store/app";
+import { showSideView, useApp, useSetting, type Route, type SideView } from "../store/app";
 import { useQuery } from "../store/queries";
 import { usePosition } from "../store/position";
 import { bridge } from "../core/bridge";
@@ -25,10 +28,11 @@ import { QueuePanel } from "./QueuePanel";
 import { SavedQueues } from "./SavedQueues";
 import { LyricsView } from "./LyricsView";
 import { EmptyState } from "./EmptyState";
-import { Artwork, useArtwork } from "./Artwork";
+import { Artwork } from "./Artwork";
 import { AboutSong, formatLine } from "./AboutSong";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
+import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Scene } from "../lib/immersive";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -118,14 +122,40 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
   );
 }
 
+/** Muted text's opacity over the continuation (--fg-muted there): the scrim is sized for it. */
+const MUTED_ALPHA = 0.8;
+
 function Overview() {
   const now = useApp((s) => s.nowPlaying);
   const navigate = useApp((s) => s.navigate);
   const track = now?.track;
+  const scene = useOverviewScene(track?.coverArt);
+  const overview = useRef<HTMLDivElement>(null);
+  const immersive = !!scene.edge;
+  // The continuation fades back into the pane below the Lyrics card (or the title, without one):
+  // its offset, kept on the overview for the stylesheet as the content's height changes.
+  useLayoutEffect(() => {
+    const el = overview.current;
+    if (!el || !immersive) return;
+    const place = () => {
+      const anchor = el.querySelector<HTMLElement>('[data-card="lyrics"]') ?? el.querySelector<HTMLElement>(".side-title-row");
+      if (anchor) el.style.setProperty("--side-fade-at", `${anchor.offsetTop + anchor.offsetHeight}px`);
+    };
+    place();
+    const ro = new ResizeObserver(place);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [immersive]);
   if (!track || !now) return <div className="side-scroll"><EmptyState message={t("player.nothingPlaying")} icon="music" action={<span className="small muted">{t("player.nothingPlayingHint")}</span>} testId="sidebar-empty" /></div>;
+  const { layers, edge, fading, settle } = scene;
+  const style = edge ? ({ "--side-fill": fillOf(edge) } as CSSProperties) : undefined;
   return (
     <div className="side-scroll" data-testid="sidebar-scroll">
-      <CrossfadeArt coverArt={track.coverArt} />
+      <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} style={style} data-testid="side-overview">
+      {edge ? layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null)) : null}
+      <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined}>
+        {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={l.scene.coverArt} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={l.scene.coverArt} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
+      </div>
       <div className="side-title-row">
         <div className="side-titles">
           <h2 className="side-title" title={track.title}>{track.albumId ? <button type="button" className="side-text-link" onClick={() => navigate({ view: "album", id: track.albumId as string })}>{track.title}</button> : track.title}</h2>
@@ -137,25 +167,83 @@ function Overview() {
       <LyricsCard trackId={track.id} durationMs={track.durationMs} />
       <UpNextCard />
       <AboutCard trackId={track.id} />
+      </div>
     </div>
   );
 }
 
-/** The artwork, crossfading to the next cover once it has loaded. */
-function CrossfadeArt({ coverArt }: { coverArt: string | undefined }) {
-  const url = useArtwork(coverArt, 600);
-  const [layers, setLayers] = useState<string[]>([]);
-  if (url && layers.at(-1) !== url) setLayers([...layers.slice(-1), url]);
-  return (
-    <div className="side-art" data-testid="sidebar-art">
-      {layers.length ? layers.map((u, i) => <img key={u} src={u} alt="" draggable={false} className={i === layers.length - 1 && layers.length > 1 ? "fade-in-art" : ""} onAnimationEnd={() => setLayers((l) => l.slice(-1))} />) : <div className="placeholder"><Icon name="music" size={48} /></div>}
-    </div>
-  );
+/** What the continuation carries on in past its canvas: the edge's base colour under its scrim, as `r, g, b`. */
+function fillOf(edge: ArtworkEdge): string {
+  const under = edge.light ? 255 : 0;
+  return [16, 8, 0].map((shift) => Math.round(((edge.baseColor >> shift) & 255) * (1 - edge.scrim) + under * edge.scrim)).join(", ");
+}
+
+/** The latest a new cover's scene has faded in over the last (side-art-in is quicker). */
+const SCENE_FADE_MS = 2000;
+
+/**
+ * The overview's artwork, one scene per cover (lib/immersive.ts): its layout's bottom edge decides
+ * between edge to edge (with its continuation, in the tone the text follows) and a rounded card.
+ * The next cover's scene is prepared ahead; a new one fades in over the last, which stays beneath
+ * only when laid out the same way.
+ */
+function useOverviewScene(coverArt: string | undefined) {
+  const preference = useSetting<ImmersiveArtwork>(SK.displayImmersiveArtwork, "automatic");
+  const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
+  const scene = useScene(coverArt, preference, dark);
+  const next = useApp((s) => (s.queue.playingNext[0] ?? s.queue.upcoming[0])?.track.coverArt);
+  useEffect(() => {
+    if (next) void prepareScene(next, preference, dark);
+  }, [next, preference, dark]);
+  const edgeOf = (s: Scene | undefined): ArtworkEdge | undefined => {
+    const e = s?.layout?.bottom;
+    return e && e.style !== "card" ? withTone(e, e.light, MUTED_ALPHA) : undefined;
+  };
+  const [shown, setShown] = useState<Scene[]>([]);
+  if (scene ? shown.at(-1) !== scene : shown.length > 0) setShown(scene ? [...shown.slice(-1), scene] : []);
+  const settle = () => setShown((s) => s.slice(-1));
+  useEffect(() => {
+    if (shown.length < 2) return;
+    const id = window.setTimeout(settle, SCENE_FADE_MS);
+    return () => window.clearTimeout(id);
+  }, [shown]);
+  const edge = edgeOf(scene);
+  const layers = shown.filter((s, i) => i === shown.length - 1 || !edgeOf(s) === !edge).map((s) => ({ scene: s, edge: edgeOf(s) }));
+  return { layers, edge, fading: layers.length > 1, settle };
+}
+
+/**
+ * The continuation under an edge-to-edge artwork: a canvas the artwork's width and twice its
+ * height (the artwork, then as long again carried on), drawn once per cover and width; past it
+ * the overview carries on in the edge's base colour, and both fade into the pane below the
+ * Lyrics card (CSS).
+ */
+function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; entering: boolean }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    el.width = Math.round(width * dpr);
+    el.height = Math.round(width * 2 * dpr);
+    drawContinuation(el, img, edge, "bottom", undefined, { bottomFade: false });
+  }, [img, edge, width]);
+  return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} />;
 }
 
 function Card({ id, title, link, onLink, children, testId, drill }: { id: string; title: string; link: string; onLink: () => void; children: React.ReactNode; testId: string; drill: SideView }) {
   return (
-    <section className="side-card" aria-labelledby={`side-card-${id}`} data-testid={testId}>
+    <section className="side-card" aria-labelledby={`side-card-${id}`} data-card={id} data-testid={testId}>
       <div className="side-card-head">
         <h3 className="side-card-title" id={`side-card-${id}`}>{title}</h3>
         <button type="button" className="side-card-link" onClick={onLink} data-drill={drill} data-testid={`${testId}-link`}>{link}</button>

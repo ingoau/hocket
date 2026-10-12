@@ -2,8 +2,9 @@
 // player) for reviewing the layout by eye against the prototypes in
 // docs/plans/prototypes. Not an assertion test: it runs only with an output
 // folder. With HOCKET_FAKE_COVERS (a folder of covers; album n wears cover
-// n - 1, so put a busy card cover first, then one with a flat edge and one to
-// mirror) it also shoots the immersive layouts, against a native addon built
+// n - 1, so put a busy card cover first, then one with flat edges and one to
+// mirror both ways, and as the twelfth one that carries on to the right only)
+// it also shoots the immersive layouts, against a native addon built
 // with `pnpm gen` (the fake core borrows its classifier). HOCKET_SCREENSHOT_ONLY limits which
 // shots are written (comma-separated name fragments):
 //
@@ -111,6 +112,7 @@ test("now playing surfaces", async () => {
       // The bar and the side panel.
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "overview");
       await shot("sidebar-overview");
+      await shot("sidebar-overview-immersive-card");
       await page.getByTestId("toggle-side-panel").click();
       await expect(page.getByTestId("right-panel")).toHaveCount(0);
       await shot("bar-sidebar-closed");
@@ -120,7 +122,7 @@ test("now playing surfaces", async () => {
       // a line was current both before and after the shot.
       await settle(page);
       const current = page.getByTestId("right-panel").locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])');
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 20 && wanted("sidebar-lyrics"); i++) {
         await expect(current.first()).toBeVisible({ timeout: 15_000 });
         await page.waitForTimeout(400);
         if (!(await current.count())) continue;
@@ -149,11 +151,13 @@ test("now playing surfaces", async () => {
       await handoff(page, "remote");
       await expect(page.getByTestId("connect-button-name")).toBeVisible();
       await shot("connect-remote");
-      await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-remote.png`) });
+      if (wanted("bar-connect-remote")) await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-remote.png`) });
       await handoff(page, "self");
       await expect(page.getByTestId("connect-button-name")).toHaveCount(0);
-      await settle(page);
-      await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-local.png`) });
+      if (wanted("bar-connect-local")) {
+        await settle(page);
+        await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-local.png`) });
+      }
 
       // Narrow: the bar's two rows, the side panel a drawer.
       await size(app, 860, 760);
@@ -199,24 +203,40 @@ test("now playing surfaces", async () => {
       await shot("sidebar-overview-1600");
       await size(app, 1456, 912);
 
-      // Fullscreen, immersive (cover 1 has a flat edge to extend, cover 2 is a landscape to mirror).
+      // Immersive (cover 1 has flat edges to extend, cover 2 is a landscape to mirror, both centred
+      // in the fullscreen player; cover 11 carries on to the right only, so it stays on the left).
       if (covers) {
         await setSetting(page, "display.immersiveArtwork", "automatic");
-        for (const [index, name] of [[1, "extend"], [2, "mirror"]] as const) {
+        for (const [index, name] of [[1, "extend"], [2, "mirror"], [11, "right"]] as const) {
           await playAlbum(page, index, "Road trip");
+          if (name !== "right") {
+            const panel = page.getByTestId("right-panel");
+            if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
+            if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
+            await expect(panel).toHaveAttribute("data-view", "overview");
+            await shot(`sidebar-overview-immersive-${name}`);
+          }
           await page.getByTestId("toggle-fullscreen").click();
           const fs = page.getByTestId("fullscreen-player");
           await fs.waitFor();
           await fsMode(page, "art");
           await expect(fs).toHaveAttribute("data-layout", "immersive");
-          console.log(`${theme} ${name}: continuation style`, await fs.getByTestId("np-continuation").first().getAttribute("data-style"));
+          console.log(`${theme} ${name}: continuation style`, await fs.getByTestId("np-continuation").first().getAttribute("data-style"), "sides", await fs.getAttribute("data-sides"));
           await shot(`fs-immersive-${name}-art`);
           // Idle: the controls fade after a few seconds without the mouse.
           await page.mouse.move(700, 400);
           await expect(fs).toHaveAttribute("data-idle", "", { timeout: 8000 });
           await page.waitForTimeout(1200);
-          await page.screenshot({ path: join(out!, `desktop-${theme}-fs-immersive-${name}-idle.png`) });
+          if (wanted(`fs-immersive-${name}-idle`)) await page.screenshot({ path: join(out!, `desktop-${theme}-fs-immersive-${name}-idle.png`) });
           await page.mouse.move(600, 300);
+          if (name === "mirror" && wanted("fs-immersive-mirror-mid")) {
+            // Halfway through sliding from centred to the left as the queue opens.
+            await settle(page);
+            await fs.getByTestId("fs-mode-queue").click();
+            await page.waitForTimeout(140);
+            await page.screenshot({ path: join(out!, `desktop-${theme}-fs-immersive-mirror-mid.png`) });
+            await fsMode(page, "art");
+          }
           for (const mode of ["lyrics", "queue", "about"] as const) {
             await fsMode(page, mode);
             await shot(`fs-immersive-${name}-${mode}`);

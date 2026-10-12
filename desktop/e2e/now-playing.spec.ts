@@ -396,3 +396,213 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
     }
   });
 });
+
+/** Generated covers for the classifier, `256`² RGBA: `paint(x, y)` gives each pixel. */
+function writeCover(dir: string, name: string, paint: (x: number, y: number) => [number, number, number]): void {
+  const rgba = new Uint8Array(256 * 256 * 4);
+  for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) rgba.set([...paint(x, y), 255], (y * 256 + x) * 4);
+  writeFileSync(join(dir, `${name}.png`), encodePng(256, 256, rgba));
+}
+/** Deterministic high-contrast blocks: a busy cover, nothing to carry on. */
+function busy(x: number, y: number): [number, number, number] {
+  let h = (Math.floor(x / 8) * 7919 + Math.floor(y / 8) * 104_729) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
+  return [h & 255, (h >>> 8) & 255, (h >>> 16) & 255];
+}
+
+/** Plays album `al-<n>` (which wears cover n - 1) from the fake library. */
+async function playCover(page: Page, n: number): Promise<void> {
+  await page.evaluate(async (id) => {
+    const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+    window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: s.data[0]!.id, kind: { type: "album", data: { id } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
+  }, `al-${n}`);
+  await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(`al-${n}`);
+}
+
+/**
+ * The lowest contrast of the text over the continuation (the title row and the Lyrics card) against
+ * what is behind it: sampled across each text element, the continuation canvas's pixels over the
+ * overview's own background (the base colour under the scrim), with the card's translucent fill
+ * on top, and the text's colour over that.
+ */
+async function overviewContrast(page: Page): Promise<{ min: number; worst: string }> {
+  return page.getByTestId("side-overview").evaluate((root) => {
+    type C = [number, number, number, number];
+    const parse = (s: string): C => {
+      const m = /rgba?\(([^)]+)\)/.exec(s);
+      if (m) {
+        const [r, g, b, a] = m[1]!.split(/[\s,/]+/).filter(Boolean).map(Number);
+        return [r!, g!, b!, a ?? 1];
+      }
+      const h = /#([0-9a-f]{6})/i.exec(s)!;
+      return [parseInt(h[1]!.slice(0, 2), 16), parseInt(h[1]!.slice(2, 4), 16), parseInt(h[1]!.slice(4, 6), 16), 1];
+    };
+    const over = (top: C, under: C): C => [0, 1, 2].map((i) => top[i]! * top[3] + under[i]! * (1 - top[3])).concat(1) as C;
+    const lum = (c: C) => {
+      const ch = (v: number) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2]);
+    };
+    const ratio = (a: C, b: C) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    const style = getComputedStyle(root);
+    const base = parse(`rgb(${style.getPropertyValue("--side-fill")})`);
+    const canvas = root.querySelector<HTMLCanvasElement>("canvas.side-continuation:last-of-type")!;
+    const ctx = canvas.getContext("2d")!;
+    const box = canvas.getBoundingClientRect();
+    const sx = canvas.width / box.width;
+    let min = Infinity;
+    let worst = "";
+    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > [data-card='lyrics'] :is(.side-card-title, .side-card-link, .peek-line)");
+    for (const el of Array.from(texts)) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const fg = parse(getComputedStyle(el).color);
+      const card = el.closest(".side-card");
+      const fill = card ? parse(getComputedStyle(card).backgroundColor) : undefined;
+      for (let i = 1; i <= 5; i++) {
+        for (let j = 1; j <= 3; j++) {
+          const x = r.left + (r.width * i) / 6;
+          const y = r.top + (r.height * j) / 4;
+          let bg = base;
+          if (y < box.bottom) {
+            const d = ctx.getImageData(Math.floor((x - box.left) * sx), Math.floor((y - box.top) * sx), 1, 1).data;
+            bg = over([d[0]!, d[1]!, d[2]!, d[3]! / 255], base);
+          }
+          if (fill) bg = over(fill, bg);
+          const c = ratio(over(fg, bg), bg);
+          if (c < min) {
+            min = c;
+            worst = `${el.className || el.tagName}: ${c.toFixed(2)}`;
+          }
+        }
+      }
+    }
+    return { min, worst };
+  });
+}
+
+test.describe("immersive artwork from the classifier", () => {
+  test.skip(!addonBuilt, "native addon not built (run pnpm gen): no immersive artwork without its classifier");
+  test.setTimeout(120_000);
+  let covers: string;
+  test.beforeAll(() => {
+    covers = mkdtempSync(join(tmpdir(), "hocket-covers-"));
+    // al-1: one dark colour, carried on every way. al-2: busy, with a plain band down the right
+    // only. al-3: busy all over. al-4: one light colour.
+    writeCover(covers, "0-both", () => [24, 58, 72]);
+    writeCover(covers, "1-right", (x, y) => (x >= 196 ? [40, 70, 130] : busy(x, y)));
+    writeCover(covers, "2-card", busy);
+    writeCover(covers, "3-light", () => [236, 228, 210]);
+    // al-5: a soft, mid-tone texture, mirrored.
+    writeCover(covers, "4-soft", (x, y) => {
+      const v = (Math.sin(x / 9) * Math.cos(y / 11) * 0.5 + 0.5) * 120;
+      return [Math.round(60 + v), Math.round(90 + v * 0.6), Math.round(110 + v * 0.8)];
+    });
+  });
+  test.afterAll(() => rmSync(covers, { recursive: true, force: true }));
+
+  test("wide fullscreen: centred when both sides carry on, on the left when only the right does; a view slides it left and back", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
+    try {
+      await completeSetup(page);
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      await playCover(page, 1);
+      await page.getByTestId("toggle-fullscreen").click();
+      const fs = page.getByTestId("fullscreen-player");
+      if ((await fs.getAttribute("data-mode")) !== "art") await fs.getByTestId(`fs-mode-${await fs.getAttribute("data-mode")}`).click();
+      await expect(fs).toHaveAttribute("data-layout", "immersive");
+      await expect(fs).toHaveAttribute("data-sides", "both");
+      await expect(fs).toHaveAttribute("data-centred", "");
+      await expect(fs.getByTestId("np-continuation-left")).toHaveCount(1);
+      const artX = () => fs.locator(".np-art-slot").evaluate((el) => Math.round(el.getBoundingClientRect().left));
+      const cardX = () => fs.getByTestId("fs-controls").evaluate((el) => Math.round(el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2));
+      const { w, h } = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+      await expect.poll(artX).toBe(Math.round((w - h) / 2));
+      // The card is centred under the centred artwork.
+      await expect.poll(cardX).toBe(Math.round(w / 2));
+      // A view slides the artwork (and its card) to the left edge; closing it brings them back.
+      await fs.getByTestId("fs-mode-queue").click();
+      await expect(fs).not.toHaveAttribute("data-centred", "");
+      const during = await artX();
+      expect(during).toBeGreaterThan(0);
+      await expect.poll(artX).toBe(0);
+      await expect.poll(cardX).toBe(Math.round(h / 2));
+      await fs.getByTestId("fs-mode-queue").click();
+      await expect(fs).toHaveAttribute("data-centred", "");
+      await expect.poll(artX).toBe(Math.round((w - h) / 2));
+      // A track change mid-slide leaves no stale continuation: the right-only cover's layout wins.
+      await fs.getByTestId("fs-mode-queue").click();
+      await playCover(page, 2);
+      await fs.getByTestId("fs-mode-queue").click();
+      await expect(fs).toHaveAttribute("data-mode", "art");
+      await expect(fs).toHaveAttribute("data-layout", "immersive");
+      await expect(fs).not.toHaveAttribute("data-sides", "both");
+      await expect(fs.getByTestId("np-continuation-left")).toHaveCount(0);
+      await expect(fs.getByTestId("np-continuation")).toHaveCount(1);
+      await expect.poll(artX).toBe(0);
+      // A busy cover is a card.
+      await playCover(page, 3);
+      await expect(fs).toHaveAttribute("data-layout", "columns");
+      await expect(fs.getByTestId("np-continuation")).toHaveCount(0);
+    } finally {
+      await app.close().catch(() => undefined);
+      rmSync(userData, { recursive: true, force: true });
+    }
+  });
+
+  test("the side panel's overview: edge to edge over a continuation when the bottom edge carries on, readable; a card otherwise", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
+    try {
+      await completeSetup(page);
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      const panel = page.getByTestId("right-panel");
+      const overview = page.getByTestId("side-overview");
+      const art = page.getByTestId("sidebar-art");
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
+        for (const [n, tone] of [[1, "dark"], [4, "light"], [5, undefined]] as const) {
+          await playCover(page, n);
+          if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
+          await expect(panel).toHaveAttribute("data-view", "overview");
+          await expect(overview).toHaveClass(/immersive/);
+          await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
+          if (tone) await expect(overview).toHaveAttribute("data-tone", tone);
+          else await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", "mirror");
+          // Flush to the pane's top and sides, square (the pane's own corners clip it).
+          const pane = await panel.locator(".side-pane").boundingBox();
+          const box = await art.boundingBox();
+          expect(Math.abs(box!.y - pane!.y)).toBeLessThan(1.5);
+          expect(Math.abs(box!.x - pane!.x)).toBeLessThan(1.5);
+          expect(await art.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe("0px");
+          // The continuation fades back into the pane right below the Lyrics card (the title
+          // without one), so the cards after it are the usual ones.
+          const fade = await overview.evaluate((el) => {
+            const anchor = el.querySelector<HTMLElement>('[data-card="lyrics"]') ?? el.querySelector<HTMLElement>(".side-title-row")!;
+            return { at: el.style.getPropertyValue("--side-fade-at"), want: `${anchor.offsetTop + anchor.offsetHeight}px`, upNextGlass: getComputedStyle(el.querySelector('[data-card="upnext"]')!).backdropFilter };
+          });
+          expect(fade.at).toBe(fade.want);
+          expect(fade.upNextGlass).toBe("none");
+          // No scrollbar: the content is as wide as the pane whether or not it overflows.
+          expect(await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).offsetWidth - el.clientWidth)).toBe(0);
+          const { min, worst } = await overviewContrast(page);
+          console.log(`${theme} al-${n}: lowest contrast ${worst}`);
+          expect(min, `${theme} theme, ${tone} continuation: ${worst}`).toBeGreaterThanOrEqual(4.5);
+        }
+        // A busy cover keeps the rounded card, inset.
+        await playCover(page, 3);
+        await expect(overview).not.toHaveClass(/immersive/);
+        await expect(page.getByTestId("sidebar-continuation")).toHaveCount(0);
+        expect(await art.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).not.toBe("0px");
+      }
+      // "Never" keeps it a card; the drill-ins never change.
+      await playCover(page, 1);
+      await expect(overview).toHaveClass(/immersive/);
+      await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("never") } }));
+      await expect(overview).not.toHaveClass(/immersive/);
+    } finally {
+      await app.close().catch(() => undefined);
+      rmSync(userData, { recursive: true, force: true });
+    }
+  });
+});

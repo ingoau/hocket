@@ -12,12 +12,15 @@
 //   under it, centred; with Lyrics, Queue or About the column moves left
 //   (FLIP, a spring) and the view takes the right.
 // - "immersive" (3:2 or wider, a cover lib/immersive.ts carries on): the
-//   artwork full height on the left, flush to the edges, carried on to the
-//   right; the controls card floats over its bottom like glass. With the
-//   artwork alone, the controls fade while the mouse rests during playback
-//   (never while paused, focused or with a menu open; a setting turns it
-//   off). The other views shorten the carried-on part, which dissolves into
-//   the moving blur, and sit on that; the card does not move.
+//   artwork full height, flush to the top and bottom, carried on past its
+//   edges; the controls card floats over its bottom like glass. Centred and
+//   carried on both ways when both its sides suit it, else on the left and
+//   carried on to the right. With the artwork alone, the controls fade while
+//   the mouse rests during playback (never while paused, focused or with a
+//   menu open; a setting turns it off). The other views put the artwork on
+//   the left (centred artwork slides there, its card with it, the left
+//   continuation going with it off the edge), shorten the carried-on part,
+//   which dissolves into the moving blur, and sit on that.
 // - "stacked" (narrow or tall windows): the mobile layout, artwork (or the
 //   view, with a thumbnail by the title) over the controls; a tall window's
 //   immersive cover runs full width on top, carried on below.
@@ -29,7 +32,7 @@
 // while it fades (lib/presence.ts). The window fullscreen button beside the
 // collapse button toggles the window's own fullscreen; if it put the window
 // into fullscreen, the window leaves it again as the close fade starts.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting, type NowPlayingMode } from "../store/app";
 import { executeAction } from "../store/actions";
@@ -49,7 +52,7 @@ import { openMenuFromButton } from "../components/ContextMenu";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
-import { drawContinuation, isFlat, prepareScene, useScene, type Orientation, type Scene } from "../lib/immersive";
+import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
 import { IDLE_HIDE_MS, useIdleHide } from "../lib/idle-hide";
 import { extractBrightest } from "../lib/accent";
 import { scrimAlpha } from "../lib/contrast";
@@ -136,8 +139,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const pill = useRef<HTMLDivElement>(null);
   /** Where the controls last rested (the columns layout moves them between modes). */
   const controlsAt = useRef<{ rect: DOMRect; mode: NowPlayingMode } | undefined>(undefined);
-  /** Where the visible artwork last came to rest, and in which mode. */
-  const flight = useRef<{ rect: DOMRect; radius: number; mode: NowPlayingMode } | undefined>(undefined);
+  /** Where the visible artwork last came to rest, and in which mode and layout. */
+  const flight = useRef<{ rect: DOMRect; radius: number; mode: NowPlayingMode; shape: FullscreenLayout } | undefined>(undefined);
   useReturnFocus(!closing);
   useEffect(() => closeRef.current?.focus({ preventScroll: true }), []);
   const d = bridge().dispatch;
@@ -159,9 +162,10 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
     };
   }, [closing]);
 
-  // Immersive artwork: a wide window puts the artwork at its full height on the left,
-  // carried on to the right (in every view); a tall one at its full width on top, carried
-  // on below (with the artwork alone). Otherwise the artwork is a card.
+  // Immersive artwork: a wide window puts the artwork at its full height, carried on to the
+  // right (in every view) and, centred with the artwork alone, to the left too when that side
+  // suits it; a tall one at its full width on top, carried on below (with the artwork alone).
+  // Otherwise the artwork is a card.
   const preference = useSetting<ImmersiveArtwork>(SK.displayImmersiveArtwork, "automatic");
   const themeSetting = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
@@ -178,12 +182,21 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const tall = useMediaQuery(TALL_IMMERSIVE);
   const columns = useMediaQuery(COLUMNS);
   const orientation: Orientation | undefined = wide ? "right" : tall && mode === "art" ? "bottom" : undefined;
-  const immersiveOf = (s: Scene | undefined) => {
+  const immersiveOf = (s: Scene | undefined): { edge: ArtworkEdge; orientation: Orientation; left?: ArtworkEdge } | undefined => {
     const edge = s && orientation ? s.layout?.[orientation] : undefined;
-    return edge && edge.style !== "card" ? { edge, orientation: orientation as Orientation } : undefined;
+    if (!edge || edge.style === "card") return undefined;
+    // Layouts from an older core have no left edge: a card there.
+    const left = orientation === "right" ? s?.layout?.left : undefined;
+    if (!left || left.style === "card") return { edge, orientation: orientation as Orientation };
+    // Centred, carried on both ways: one tone for the controls over both sides (the two
+    // decisions where they agree, the app's theme where they do not, with the scrim it needs).
+    const light = left.light === edge.light ? edge.light : !dark;
+    return { edge: withTone(edge, light), orientation: orientation as Orientation, left: withTone(left, light) };
   };
   const immersive = immersiveOf(scene);
   const shape: FullscreenLayout = immersive?.orientation === "right" ? "immersive" : columns ? "columns" : "stacked";
+  /** The artwork centred, carried on both ways (both sides suit it, with the artwork alone). */
+  const centred = !!immersive?.left && mode === "art";
   /** Dark controls on light glass over a light continuation; they keep it when a view opens. */
   const lightGlass = !!immersive?.edge.light;
   /** The scenes on screen: the current one last, over the one it is fading in from. */
@@ -226,11 +239,12 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
     if (!prev) {
       const barArt = document.querySelector<HTMLElement>('[data-testid="player-bar"] .now .art');
       if (barArt) from = { rect: barArt.getBoundingClientRect(), radius: radiusOf(barArt) };
-    } else if (prev.mode !== mode) {
+    } else if (prev.mode !== mode && !(prev.shape === "immersive" && shape === "immersive")) {
+      // (The immersive layout moves its artwork with a transition of its own, below.)
       from = prev;
     }
     const rect = from && !reducedMotion ? flyFrom(el, from.rect, from.radius, radius) : el.getBoundingClientRect();
-    flight.current = { rect, radius, mode };
+    flight.current = { rect, radius, mode, shape };
   });
   // The columns layout moves the controls with the artwork when the mode changes: glide them there too.
   useLayoutEffect(() => {
@@ -239,12 +253,23 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
     const prev = controlsAt.current;
     if (el.getAnimations().length && prev?.mode === mode) return;
     const to = el.getBoundingClientRect();
-    if (prev && prev.mode !== mode && !reducedMotion) {
+    if (prev && prev.mode !== mode && !reducedMotion && shape !== "immersive") {
       const dx = prev.rect.left - to.left;
       const dy = prev.rect.top - to.top;
       if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: SPRING_SPATIAL.duration, easing: SPRING_SPATIAL.easing });
     }
     controlsAt.current = { rect: to, mode };
+  });
+  // The immersive layout slides its artwork, card and continuations between centred and left
+  // (a CSS transition on --np-art-x); with reduced motion they fade in where they land instead.
+  const wasCentred = useRef(centred);
+  useLayoutEffect(() => {
+    if (wasCentred.current === centred) return;
+    wasCentred.current = centred;
+    if (!reducedMotion || shape !== "immersive") return;
+    for (const el of exitProps.ref.current?.querySelectorAll<HTMLElement>(".np-art-slot, .np-controls, .np-continuation") ?? []) {
+      el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 250, easing: "ease-out" });
+    }
   });
 
   // The glass under the controls: dark enough that white text reaches 4.5:1 over the cover's brightest colour.
@@ -308,12 +333,17 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
 
   return (
-    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-layout={shape} data-immersive={immersive?.orientation} data-light={immersive?.edge.light && (mode === "art" || immersive.orientation === "bottom") ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} data-idle={idle ? "" : undefined}
+    <div {...exitProps} className={`fullscreen np ${motion}`} data-mode={mode} data-layout={shape} data-immersive={immersive?.orientation} data-light={immersive?.edge.light && (mode === "art" || immersive.orientation === "bottom") ? "" : undefined} data-flat={immersive && isFlat(immersive.edge) ? "" : undefined} data-sides={immersive?.left ? "both" : undefined} data-centred={centred ? "" : undefined} data-left-flat={immersive?.left && isFlat(immersive.left) ? "" : undefined} data-top-light={immersive && layout?.topLight ? "" : undefined} data-idle={idle ? "" : undefined}
       style={{ ...MOTION, "--np-glass": glass } as CSSProperties} role="dialog" aria-modal="true" aria-labelledby="fs-title" inert={covered || closing} onKeyDown={onKey} data-testid="fullscreen-player">
       <FluidBackground coverArt={scene?.coverArt ?? track?.coverArt} />
       {layers.map((s) => {
         const im = immersiveOf(s);
-        return im ? <ImmersiveContinuation key={s.coverArt} img={s.img} edge={im.edge} orientation={im.orientation} controls={im.orientation === "right" ? pill : controls} /> : null;
+        return im ? (
+          <Fragment key={s.coverArt}>
+            <ImmersiveContinuation img={s.img} edge={im.edge} orientation={im.orientation} controls={im.orientation === "right" ? pill : controls} split={!!im.left} />
+            {im.left ? <ImmersiveContinuation img={s.img} edge={im.left} orientation="left" controls={pill} split /> : null}
+          </Fragment>
+        ) : null;
       })}
       <div className="np-fade" aria-hidden="true" />
 
@@ -410,7 +440,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
  * (and wherever what sits on it, whose fade covers it, ends up: the pill beside a full-height
  * artwork, the controls under a full-width one).
  */
-function ImmersiveContinuation({ img, edge, orientation, controls }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null> }) {
+function ImmersiveContinuation({ img, edge, orientation, controls, split = false }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; orientation: Orientation; controls: RefObject<HTMLDivElement | null>; split?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0, top: 0, bottom: 0 });
   useLayoutEffect(() => {
@@ -433,9 +463,9 @@ function ImmersiveContinuation({ img, edge, orientation, controls }: { img: HTML
     const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(size.w * dpr);
     el.height = Math.round(size.h * dpr);
-    drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined);
-  }, [img, edge, orientation, size]);
-  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid="np-continuation" data-style={edge.style} />;
+    drawContinuation(el, img, edge, orientation, size.bottom > size.top ? { top: size.top * dpr, bottom: size.bottom * dpr } : undefined, { split });
+  }, [img, edge, orientation, size, split]);
+  return <canvas ref={ref} className="np-continuation" aria-hidden="true" data-testid={orientation === "left" ? "np-continuation-left" : "np-continuation"} data-side={orientation} data-style={edge.style} />;
 }
 
 /**
