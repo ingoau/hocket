@@ -204,7 +204,8 @@
 .lyrics-peek.moving .peek-line { transition: font-size var(--dur-spring) var(--spring-fast), color var(--dur-spring) var(--ease-emphasized); animation: peek-in var(--dur-spring-long) var(--spring-fast); }
 @keyframes peek-in { from { transform: translateY(10px); opacity: 0; } }
 .upnext-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
-.upnext-row { display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: var(--shape-md); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.upnext-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 6px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; text-align: left; -webkit-appearance: none; appearance: none; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.upnext-row .t1, .upnext-row .t2 { display: block; }
 .upnext-row:hover { background: var(--state-selected); }
 .upnext-row .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; object-fit: cover; background: var(--bg-elev); }
 .upnext-row .text { flex: 1 1 auto; min-width: 0; }

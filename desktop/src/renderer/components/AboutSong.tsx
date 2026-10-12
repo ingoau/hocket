@@ -77,7 +77,7 @@ export function AboutSong({ trackId, onNavigate, variant }: { trackId: string | 
       </dl>
       {tr.path ? (
         <div className="about-path">
-          <span className="about-path-text selectable" title={tr.path} aria-label={`${t("about.path")}: ${tr.path}`}>{tr.path}</span>
+          <span className="about-path-text selectable" title={tr.path}><span className="sr-only">{`${t("about.path")}: `}</span>{tr.path}</span>
           <button type="button" className="about-chip" onClick={() => bridge().shell.showItemInFolder(tr.path as string)}><Icon name="folder" size={18} />{t("action.showInFolder")}</button>
         </div>
       ) : null}

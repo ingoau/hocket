@@ -307,12 +307,12 @@ function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | und
   return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} data-drawn={width || undefined} />;
 }
 
-function Card({ id, title, link, onLink, children, testId, drill }: { id: string; title: string; link: string; onLink: () => void; children: React.ReactNode; testId: string; drill: SideView }) {
+function Card({ id, title, link, linkLabel, onLink, children, testId, drill }: { id: string; title: string; link: string; linkLabel?: string; onLink: () => void; children: React.ReactNode; testId: string; drill: SideView }) {
   return (
     <section className="side-card" aria-labelledby={`side-card-${id}`} data-card={id} data-testid={testId}>
       <div className="side-card-head">
         <h3 className="side-card-title" id={`side-card-${id}`}>{title}</h3>
-        <button type="button" className="side-card-link" onClick={onLink} data-drill={drill} data-testid={`${testId}-link`}>{link}</button>
+        <button type="button" className="side-card-link" aria-label={linkLabel} onClick={onLink} data-drill={drill} data-testid={`${testId}-link`}>{link}</button>
       </div>
       {children}
     </section>
@@ -375,13 +375,17 @@ function UpNextCard() {
       {next.length ? (
         <ul className="plain-list upnext-list">
           {next.map((e) => (
-            <li key={e.item.key} className="upnext-row" onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => void openContextMenu(ev, { type: "queueItems", data: { keys: [e.item.key] } })} data-testid="sidebar-upnext-row">
-              <Artwork id={e.track.coverArt} size={100} className="art" />
-              <div className="text">
-                <div className="t1">{e.track.title}</div>
-                <div className="t2">{e.item.source.type === "autoplay" ? t("queue.autoplayFrom", { reason: e.item.source.data.reason }) : e.track.artist}</div>
-              </div>
-              <span className="dur">{fmtTime(e.track.durationMs)}</span>
+            // A double-click plays the song, like a queue row; so do Enter and Space (a button,
+            // which the pointer's single click leaves alone).
+            <li key={e.item.key}>
+              <button type="button" className="upnext-row" onClick={(ev) => { if (ev.detail === 0) d({ type: "jumpToQueueItem", data: { key: e.item.key } }); }} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => void openContextMenu(ev, { type: "queueItems", data: { keys: [e.item.key] } })} data-testid="sidebar-upnext-row">
+                <Artwork id={e.track.coverArt} size={100} className="art" />
+                <span className="text">
+                  <span className="t1">{e.track.title}</span>
+                  <span className="t2">{e.item.source.type === "autoplay" ? t("queue.autoplayFrom", { reason: e.item.source.data.reason }) : e.track.artist}</span>
+                </span>
+                <span className="dur">{fmtTime(e.track.durationMs)}</span>
+              </button>
             </li>
           ))}
         </ul>
@@ -400,7 +404,7 @@ function AboutCard({ trackId }: { trackId: string }) {
     [t("about.format"), formatLine(tr, true) || undefined],
   ] : [];
   return (
-    <Card id="about" title={t("nowPlaying.view.about")} link={t("nowPlaying.moreAbout")} onLink={() => showSideView("about")} drill="about" testId="sidebar-about-card">
+    <Card id="about" title={t("nowPlaying.view.about")} link={t("nowPlaying.moreAbout")} linkLabel={t("nowPlaying.moreAboutLabel")} onLink={() => showSideView("about")} drill="about" testId="sidebar-about-card">
       <dl className="side-facts">
         {facts.filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => (
           <div key={k} className="side-fact"><dt>{k}</dt><dd>{v}</dd></div>

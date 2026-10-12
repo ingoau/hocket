@@ -116,8 +116,8 @@ export function useLyricsOptionsTrigger(placement: "below" | "above") {
   const { lyrics, anchor, open, close, popover } = useLyricsOptionsPopover(placement);
   const hintId = useId();
   const trigger = {
+    // (No aria-haspopup: the toggle's own action is the click, aria-pressed; the hint says the rest.)
     "aria-describedby": lyrics ? hintId : undefined,
-    "aria-haspopup": lyrics ? ("dialog" as const) : undefined,
     onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
       e.preventDefault();
       e.stopPropagation();

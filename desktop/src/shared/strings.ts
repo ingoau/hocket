@@ -187,6 +187,7 @@ const STRINGS = {
   "nowPlaying.showLyrics": "Show lyrics",
   "nowPlaying.openQueue": "Open queue",
   "nowPlaying.moreAbout": "More",
+  "nowPlaying.moreAboutLabel": "More about this song",
   "nowPlaying.upNext": "Up next",
   "nowPlaying.artistMenu": "Artists and album",
   "nowPlaying.nothingNext": "Nothing up next.",

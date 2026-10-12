@@ -216,7 +216,7 @@ test.describe("now playing", () => {
     // The bar's lyrics toggle: a right-click opens the options above it (a click still toggles the
     // lyrics), and so do Shift+F10 and the context-menu key; it says so.
     const toggle = page.getByTestId("toggle-lyrics");
-    await expect(toggle).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(toggle).not.toHaveAttribute("aria-haspopup", /./);
     await expect(toggle).toHaveAccessibleDescription("Right-click for lyrics options");
     await toggle.click({ button: "right" });
     await expect(options).toBeVisible();
@@ -431,6 +431,29 @@ test.describe("the artist in the now playing subtitle", () => {
     await menu.getByTestId("artist-menu-artist").first().click();
     await expect(fs).toHaveCount(0);
     await expect(page.getByTestId("view-artist")).toBeVisible();
+  });
+});
+
+test.describe("the side panel overview from the keyboard", () => {
+  test("Enter on an Up next row plays it; the About card's link has its own name", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    await page.getByTestId("toggle-side-panel").click();
+    if (!(await page.getByTestId("right-panel").count())) await page.getByTestId("toggle-side-panel").click();
+    const panel = page.getByTestId("right-panel");
+    if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
+    await expect(panel).toHaveAttribute("data-view", "overview");
+    await expect(page.getByTestId("sidebar-about-card-link")).toHaveAccessibleName("More about this song");
+    const row = page.getByTestId("sidebar-upnext-row").first();
+    const title = (await row.locator(".t1").textContent())!;
+    // A single click leaves it alone; Enter plays it.
+    await row.click();
+    await page.waitForTimeout(300);
+    expect(await page.getByTestId("player-bar").locator(".now .title").textContent()).not.toBe(title);
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("player-bar").locator(".now .title")).toHaveText(title);
   });
 });
 
