@@ -1,6 +1,6 @@
 // Screenshots of the now playing surfaces (player bar, side panel, fullscreen
 // player) for reviewing the layout by eye against the prototypes in
-// docs/plans/prototypes. Not an assertion test: it runs only with an output
+// issues #40 and #47. Not an assertion test: it runs only with an output
 // folder. With HOCKET_FAKE_COVERS (a folder of covers; album n wears cover
 // n - 1, so put a busy card cover first, then one with flat edges and one to
 // mirror both ways, the twelfth one that carries on to the right only, then a
