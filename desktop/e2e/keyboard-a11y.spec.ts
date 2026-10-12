@@ -2,7 +2,7 @@
 // link, a full Tab cycle in a logical order with a visible focus ring on every
 // stop, roving grids and tables, activation keys, the context-menu key, focus
 // traps and focus return for menus, dialogs, the palette and the fullscreen
-// player, the queue listbox and tabs, and the seek/volume/splitter sliders.
+// player, the queue listbox and selector, and the seek/volume/splitter sliders.
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { focused, hasRing, keyboardSetup, type FocusInfo } from "./a11y-helpers";
@@ -32,6 +32,9 @@ async function playFirstAlbumByKeyboard(page: Page): Promise<void> {
   await expect(page.getByTestId("view-album")).toBeVisible();
   await tabTo(page, byTestId("album-play"), "the album Play button");
   await page.keyboard.press("Enter");
+  // Q shows the queue in the side panel (it opens on its overview).
+  await page.keyboard.press("q");
+  await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
 }
 
@@ -77,8 +80,8 @@ test.describe("keyboard only", () => {
     // Composite widgets are one stop each: the track grid, the queue listbox, each rating group.
     expect(stops.filter((f) => f.role === "row").length).toBe(1);
     expect(stops.filter((f) => f.role === "listbox").length).toBe(1);
-    expect(stops.filter((f) => f.role === "radio").length).toBe(3); // album rating, lyrics size, player-bar rating
-    for (const id of ["search-input", "nav-albums", "seek-slider", "volume", "play-pause", "queue-timeline", "tab-queue", "sidebar-resize"]) {
+    expect(stops.filter((f) => f.role === "radio").length).toBe(2); // album rating, player-bar rating
+    for (const id of ["search-input", "nav-albums", "seek-slider", "volume", "play-pause", "queue-timeline", "queue-selector", "queue-autoplay", "sidebar-back", "side-panel-resize", "toggle-side-panel", "toggle-lyrics", "toggle-queue", "connect-button", "sidebar-resize"]) {
       expect(stops.some((f) => f.testId === id), `${id} is reachable`).toBe(true);
     }
   });
@@ -209,7 +212,7 @@ test.describe("keyboard only", () => {
     await expect(row).toBeFocused();
   });
 
-  test("queue listbox, panel tabs, and the seek, volume and splitter sliders", async ({ hocket }) => {
+  test("queue listbox and selector, and the seek, volume and splitter sliders", async ({ hocket }) => {
     const { page } = hocket;
     await keyboardSetup(page);
     await playFirstAlbumByKeyboard(page);
@@ -234,19 +237,34 @@ test.describe("keyboard only", () => {
     await expect.poll(async () => (await list.getAttribute("aria-activedescendant")) === (await second.getAttribute("id"))).toBe(true);
     await page.keyboard.press("Alt+ArrowUp");
     await expect(page.getByTestId("queue-row-upcoming").first().locator(".t1")).toHaveText(moving!);
-    // Tabs: arrows switch and focus follows.
-    await tabTo(page, byTestId("tab-queue"), "the Queue tab", { back: true });
-    await page.keyboard.press("ArrowRight");
-    await expect(page.getByTestId("tab-recent")).toBeFocused();
-    await expect(page.getByTestId("tab-recent")).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("#queue-tabs-panel")).toHaveAttribute("aria-labelledby", "queue-tabs-tab-recent");
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.getByTestId("tab-queue")).toHaveAttribute("aria-selected", "true");
-    // The split between queue and lyrics.
-    await tabTo(page, byTestId("panel-divider"), "the queue/lyrics splitter");
-    const split = Number(await page.getByTestId("panel-divider").getAttribute("aria-valuenow"));
+    // The queue selector: Enter opens it with focus inside, arrows move, Escape closes it and focus returns.
+    await tabTo(page, byTestId("queue-selector"), "the queue selector", { back: true });
+    await page.keyboard.press("Enter");
+    const menu = page.getByTestId("queue-selector-menu");
+    await expect(menu).toBeVisible();
+    await expect(page.getByTestId("queue-selector")).toHaveAttribute("aria-expanded", "true");
+    const choices = menu.locator(".qs-item, .qs-all");
+    const n = await choices.count();
+    await expect(choices.first()).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByTestId("panel-divider")).toHaveAttribute("aria-valuenow", String(split + 5));
+    await expect(choices.nth(1 % n)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("queue-selector")).toBeFocused();
+    // The side panel's width: a separator the arrows move.
+    await tabTo(page, byTestId("side-panel-resize"), "the side panel splitter", { back: true });
+    const width = Number(await page.getByTestId("side-panel-resize").getAttribute("aria-valuenow"));
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByTestId("side-panel-resize")).toHaveAttribute("aria-valuenow", String(width + 16));
+    // Back from the queue to the overview, and its cards' links drill in again.
+    await tabTo(page, byTestId("sidebar-back"), "the side panel's back arrow");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "overview");
+    // Focus lands on the link that went in.
+    await expect(page.getByTestId("sidebar-upnext-card-link")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
+    await expect(page.getByTestId("sidebar-back")).toBeFocused();
     // Seek: arrows move 5 s, the value is spoken in words.
     await tabTo(page, byTestId("seek-slider"), "the seek slider");
     const seek = page.getByTestId("seek-slider");
@@ -286,14 +304,17 @@ test.describe("keyboard only", () => {
       expect(inside, `Tab #${i}`).toBe(true);
       expect(hasRing(await focused(page)), `ring at Tab #${i}`).toBe(true);
     }
-    // The Lyrics / Queue / About toggles are buttons: Enter shows the pane, again brings the artwork back.
+    // The Lyrics / Queue / About toggles are buttons. It opens on the queue (the first time):
+    // Enter on its toggle brings the artwork back alone, again shows the queue.
     await tabTo(page, byTestId("fs-mode-queue"), "the Queue toggle");
+    await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "false");
+    await expect(fs.getByTestId("np-artwork")).toBeVisible();
+    await expect(page.getByTestId("fs-mode-queue")).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
     await expect(fs.getByTestId("queue-timeline")).toBeVisible();
-    await expect(page.getByTestId("fs-mode-queue")).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(page.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "false");
     await page.keyboard.press("Escape");
     await expect(fs).toHaveCount(0);
     await expect(page.getByTestId("nav-albums")).toBeFocused();

@@ -200,6 +200,20 @@ pub struct Track {
     pub music_brainz_id: Option<String>,
     pub explicit: bool,
     pub comment: Option<String>,
+    /// Every artist on the song, in the server's order (OpenSubsonic `artists`), or the one
+    /// [`Track::artist_id`] + [`Track::artist`] names when the server sends no list. `artist` stays
+    /// the display string as tagged (e.g. "A feat. B").
+    #[serde(default)]
+    pub artists: Vec<ArtistRef>,
+}
+
+/// One of a song's artists: its library id (when the server gives one) and its name.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistRef {
+    pub id: Option<ArtistId>,
+    pub name: String,
 }
 
 /// Compact track for queue views and lists that don't need everything.
@@ -219,6 +233,9 @@ pub struct TrackSummary {
     pub rating: u32,
     pub loved: bool,
     pub offline: OfflineState,
+    /// As [`Track::artists`] (the player lists them without asking for the whole track).
+    #[serde(default)]
+    pub artists: Vec<ArtistRef>,
 }
 
 #[typeshare]
@@ -889,10 +906,28 @@ pub struct ArtworkLayout {
     pub bottom: ArtworkEdge,
     /// Art on the left, continued to the right (wide windows).
     pub right: ArtworkEdge,
+    /// Art on the right, continued to the left (with [`ArtworkLayout::right`], centred art on wide
+    /// windows). Its [`ArtworkEdge::edge_colors`] run top to bottom. Layouts from before it existed
+    /// decode to a card.
+    #[serde(default = "default_left_edge")]
+    pub left: ArtworkEdge,
+    /// Art at the bottom, continued upwards (the room under a phone's status bar and the player's
+    /// handle). Its [`ArtworkEdge::edge_colors`] run left to right. Layouts from before it existed
+    /// decode to a card.
+    #[serde(default = "default_top_edge")]
+    pub top: ArtworkEdge,
     /// The top strip (under the status bar and the player's header) is light: dark icons there.
     pub top_light: bool,
     /// Text or a logo sits in the top strip: start the artwork below the status bar.
     pub top_marks: bool,
+}
+
+fn default_left_edge() -> ArtworkEdge {
+    crate::artwork::card_edge("card:none")
+}
+
+fn default_top_edge() -> ArtworkEdge {
+    crate::artwork::card_edge("card:none")
 }
 
 // ---------------------------------------------------------------------------

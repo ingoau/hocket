@@ -95,3 +95,22 @@ export function useSecondsPosition(stamp: PositionStamp, durationMs: number | un
   }, [frame, stamp, durationMs, clockOffsetMs]);
   return sec;
 }
+
+/**
+ * `derive(position)`, re-rendering only when its value changes: the ticker is subscribed only
+ * while the stamp plays and `active` holds, and each frame compares the derived value instead of
+ * re-rendering (a lyric line index, not every millisecond). `derive` should be stable (useCallback).
+ */
+export function usePositionValue<T>(stamp: PositionStamp, durationMs: number | undefined, clockOffsetMs: number, derive: (positionMs: number) => T, active = true): T {
+  const [value, setValue] = useState(() => derive(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs)));
+  useEffect(() => {
+    const update = () => {
+      const v = derive(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs));
+      setValue((prev) => (Object.is(prev, v) ? prev : v));
+    };
+    update();
+    if (!stamp.isPlaying || !active) return;
+    return ticker.subscribe(update);
+  }, [stamp, durationMs, clockOffsetMs, derive, active]);
+  return value;
+}

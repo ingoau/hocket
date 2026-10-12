@@ -45,10 +45,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0004_play_history_unique",
         include_str!("migrations/0004_play_history_unique.sql"),
     ),
+    (
+        5,
+        "0005_track_artists",
+        include_str!("migrations/0005_track_artists.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -522,7 +527,8 @@ mod tests {
             db.with_conn(|c| {
                 c.execute_batch(
                     "DROP INDEX idx_play_history_play;
-                     DELETE FROM schema_version WHERE version = 4;
+                     ALTER TABLE tracks DROP COLUMN artists;
+                     DELETE FROM schema_version WHERE version >= 4;
                      INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
                      INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
                          ('s', 't', 1790294961606.5, 126260, 0, 'd'),
@@ -571,6 +577,46 @@ mod tests {
                 Ok(())
             })
             .is_err());
+    }
+
+    #[test]
+    fn migration_5_adds_track_artists_and_makes_the_next_sync_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hocket.db");
+        {
+            // A version 4 database with a song and a server synced in full once.
+            let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+            db.with_conn(|c| {
+                c.execute_batch(
+                    "ALTER TABLE tracks DROP COLUMN artists;
+                     DELETE FROM schema_version WHERE version >= 5;
+                     INSERT INTO tracks(id, server_id, title, artist_id, artist) VALUES ('t', 's', 'T', 'ar1', 'A feat. B');
+                     INSERT INTO saved_state VALUES ('sync:s', '{\"gen\":3,\"phase\":\"done\",\"lastFullAt\":1790000000000.0,\"readyTables\":[\"tracks\"]}', 0);
+                     INSERT INTO saved_state VALUES ('sync:never', '{\"gen\":0,\"phase\":\"done\"}', 0);",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        // A row from before the list: its one artist.
+        let t = db.track("t").unwrap().unwrap();
+        assert_eq!(t.artist.as_deref(), Some("A feat. B"));
+        assert_eq!(
+            t.artists,
+            vec![crate::api::ArtistRef {
+                id: Some("ar1".into()),
+                name: "A feat. B".into()
+            }]
+        );
+        // The synced server's next sync is a full one (it refetches every song); still synced once.
+        let c: sync::SyncCursor = db.saved_state_get("sync:s").unwrap().unwrap();
+        assert_eq!(c.last_full_at, Some(0.0));
+        assert!(c.has_completed_once());
+        assert_eq!(c.gen, 3);
+        let never: sync::SyncCursor = db.saved_state_get("sync:never").unwrap().unwrap();
+        assert_eq!(never.last_full_at, None);
     }
 
     #[test]

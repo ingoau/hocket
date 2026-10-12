@@ -19,7 +19,9 @@ test.describe("undo", () => {
     await expect(page.getByTestId("shuffle")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("toasts")).not.toContainText("Shuffle");
     // Keyboard undo/redo.
-    await page.getByTestId("content").click();
+    // Focus the content pane rather than clicking its centre (that lands on whatever the layout
+    // puts there, e.g. the album's own rating, whose change would be the one undone).
+    await page.getByTestId("content").focus();
     await page.keyboard.press("Control+z");
     await expect(page.getByTestId("shuffle")).toHaveAttribute("aria-pressed", "false");
     await page.keyboard.press("Control+Shift+z");

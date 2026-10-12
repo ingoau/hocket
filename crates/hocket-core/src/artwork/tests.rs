@@ -148,6 +148,7 @@ fn never_is_always_a_card() {
     let l = soft_texture().layout(ImmersiveArtwork::Never, vec![]);
     assert_eq!(l.bottom.style, ArtworkStyle::Card);
     assert_eq!(l.right.style, ArtworkStyle::Card);
+    assert_eq!(l.left.style, ArtworkStyle::Card);
 }
 
 #[test]
@@ -228,6 +229,130 @@ fn the_right_edge_is_decided_on_its_own() {
 }
 
 #[test]
+fn the_left_edge_is_decided_on_its_own() {
+    // Busy on the right and bottom, a plain band down the left.
+    let mut c = noise();
+    c.fill(0, 0, 60, S, [30, 60, 120]);
+    let l = c.auto();
+    assert_eq!(l.left.style, ArtworkStyle::Extend, "{:?}", l.left);
+    assert_eq!(l.right.style, ArtworkStyle::Card, "{:?}", l.right);
+    assert_eq!(l.bottom.style, ArtworkStyle::Card, "{:?}", l.bottom);
+    assert!(l
+        .left
+        .edge_colors
+        .iter()
+        .all(|&c| c == l.left.edge_colors[0]));
+}
+
+#[test]
+fn the_left_edge_colours_run_top_to_bottom() {
+    // Dark at the top of the left edge, light at the bottom; a busy right edge.
+    let mut c = noise();
+    c.fill(0, 0, 60, S / 2, [20, 20, 30]);
+    c.fill(0, S / 2, 60, S / 2, [230, 225, 215]);
+    let l = c.layout(ImmersiveArtwork::Always, vec![]);
+    let (first, last) = (l.left.edge_colors[0], *l.left.edge_colors.last().unwrap());
+    assert!(
+        first & 0xff < 0x40 && last & 0xff > 0xc0,
+        "{first:06x} .. {last:06x}"
+    );
+}
+
+#[test]
+fn the_top_edge_is_decided_on_its_own() {
+    // Busy everywhere but a plain band across the top.
+    let mut c = noise();
+    c.fill(0, 0, S, 60, [30, 60, 120]);
+    let l = c.auto();
+    assert_eq!(l.top.style, ArtworkStyle::Extend, "{:?}", l.top);
+    assert_eq!(l.top.reason, "extend:flat");
+    assert_eq!(l.bottom.style, ArtworkStyle::Card, "{:?}", l.bottom);
+    assert!(l.top.edge_colors.iter().all(|&c| c == l.top.edge_colors[0]));
+}
+
+#[test]
+fn the_top_edge_colours_run_left_to_right() {
+    // Dark at the left of the top edge, light at the right; a busy bottom.
+    let mut c = noise();
+    c.fill(0, 0, S / 2, 60, [20, 20, 30]);
+    c.fill(S / 2, 0, S / 2, 60, [230, 225, 215]);
+    let l = c.layout(ImmersiveArtwork::Always, vec![]);
+    let (first, last) = (l.top.edge_colors[0], *l.top.edge_colors.last().unwrap());
+    assert!(
+        first & 0xff < 0x40 && last & 0xff > 0xc0,
+        "{first:06x} .. {last:06x}"
+    );
+}
+
+#[test]
+fn a_cover_flipped_top_to_bottom_swaps_its_top_and_bottom_edges() {
+    let l = soft_texture().auto();
+    let flipped = {
+        let c = soft_texture();
+        let mut m = Canvas::new(S, S, [0; 3]);
+        for y in 0..S {
+            for x in 0..S {
+                let i = ((S - 1 - y) * S + x) * 4;
+                m.set(x, y, [c.px[i], c.px[i + 1], c.px[i + 2]]);
+            }
+        }
+        m.auto()
+    };
+    for (a, b) in [(&l.top, &flipped.bottom), (&l.bottom, &flipped.top)] {
+        assert_eq!(
+            (a.style, &a.reason, &a.edge_colors),
+            (b.style, &b.reason, &b.edge_colors)
+        );
+    }
+}
+
+#[test]
+fn a_layout_without_a_top_edge_decodes_to_a_card() {
+    let c = soft_texture();
+    let out = layout_json(&c.px, S as u32, S as u32, "").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&out).unwrap();
+    value.as_object_mut().unwrap().remove("top");
+    let back: ArtworkLayout = serde_json::from_value(value).unwrap();
+    assert_eq!(back.top.style, ArtworkStyle::Card);
+    assert_eq!(back.bottom.style, ArtworkStyle::Mirror);
+}
+
+#[test]
+fn a_symmetric_cover_decides_both_sides_alike() {
+    let l = soft_texture().auto();
+    let mirrored = {
+        let c = soft_texture();
+        let mut m = Canvas::new(S, S, [0; 3]);
+        for y in 0..S {
+            for x in 0..S {
+                let i = (y * S + S - 1 - x) * 4;
+                m.set(x, y, [c.px[i], c.px[i + 1], c.px[i + 2]]);
+            }
+        }
+        m.auto()
+    };
+    // Alike up to rounding (the metrics sum in another order).
+    for (a, b) in [(&l.left, &mirrored.right), (&l.right, &mirrored.left)] {
+        assert_eq!(
+            (a.style, &a.reason, &a.edge_colors),
+            (b.style, &b.reason, &b.edge_colors)
+        );
+        assert!((a.metrics.busy - b.metrics.busy).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn a_layout_without_a_left_edge_decodes_to_a_card() {
+    let c = soft_texture();
+    let out = layout_json(&c.px, S as u32, S as u32, "").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&out).unwrap();
+    value.as_object_mut().unwrap().remove("left");
+    let back: ArtworkLayout = serde_json::from_value(value).unwrap();
+    assert_eq!(back.left.style, ArtworkStyle::Card);
+    assert_eq!(back.bottom.style, ArtworkStyle::Mirror);
+}
+
+#[test]
 fn a_non_square_cover_is_a_card() {
     let c = Canvas::new(S, S * 3 / 4, [255; 3]);
     assert_eq!(c.auto().bottom.reason, "card:notSquare");
@@ -297,7 +422,12 @@ fn json_round_trip() {
     .unwrap();
     let back: ArtworkLayout = serde_json::from_str(&out).unwrap();
     assert_eq!(back.bottom.style, ArtworkStyle::Mirror);
+    // The texture's first column is one colour: the left edge carries it on.
+    assert_eq!(back.left.reason, "extend:flat");
     assert!(out.contains("\"edgeColors\""));
+    let never = layout_json(&c.px, S as u32, S as u32, r#"{"preference":"never"}"#).unwrap();
+    let never: ArtworkLayout = serde_json::from_str(&never).unwrap();
+    assert_eq!(never.left.style, ArtworkStyle::Card);
     assert!(layout_json(&c.px, S as u32, S as u32, "").is_ok());
     assert!(layout_json(&c.px, S as u32, S as u32, "{").is_err());
 }

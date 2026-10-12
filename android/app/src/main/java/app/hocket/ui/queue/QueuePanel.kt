@@ -3,6 +3,10 @@ package app.hocket.ui.queue
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -111,15 +115,42 @@ private const val FOOTER_KEY = "footer"
 fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
 
 /**
- * The player's queue, Apple Music style: a fixed header of shuffle / repeat / autoplay toggles over
- * ONE list of history (scrolled away above), now playing, "Playing next" and "Continue playing".
- * Everything is drawn on a transparent background so the player's artwork gradient shows through;
- * colours come from [LocalContentColor] and the (artwork-derived) [MaterialTheme].
- * [contentPadding] pads the list only (e.g. room for controls drawn over its bottom edge).
+ * The player's queue, Apple Music style: shuffle / repeat / autoplay toggles with ONE list of
+ * history (scrolled away above), now playing, "Playing next" and "Continue playing". Everything is
+ * drawn on a transparent background so the player's artwork gradient shows through; colours come
+ * from [LocalContentColor] and the (artwork-derived) [MaterialTheme]. [contentPadding] pads the list
+ * only (e.g. room for controls drawn over its bottom edge).
+ *
+ * The toggles head the list, or with [controlsAtBottom] (the full player's queue, #40) float at its
+ * bottom straight on the backdrop, the list fading out before them (nothing is drawn behind them).
  */
 @Composable
-fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier) {
+fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier, controlsAtBottom: Boolean = false) {
     val dir = LocalLayoutDirection.current
+    if (controlsAtBottom) {
+        val strip = QUEUE_CONTROLS_STRIP
+        // The list ends a little above the toggles (where it used to be masked away): rows never
+        // sit behind them, so none takes their taps or accessibility focus.
+        val under = strip - STRIP_TOP_PAD + 6.dp
+        Box(modifier) {
+            QueueTimeline(
+                Modifier.fillMaxSize().padding(bottom = under).then(listModifier).fadeOut().testTag("queue.timeline"),
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
+                    top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp - under,
+                ),
+            )
+            QueueModeHeader(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = STRIP_TOP_PAD, bottom = 12.dp)
+                    .testTag("queue.controls"),
+                labels = true,
+            )
+        }
+        return
+    }
     Column(modifier) {
         QueueModeHeader(
             Modifier.fillMaxWidth()
@@ -129,15 +160,47 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
     }
 }
 
-/** Shuffle, repeat (off / all / one) and autoplay as three equal tonal pills. */
+/** The height of the toggles' strip at the bottom of the player's queue panel (the list scrolls under it). */
+val QUEUE_CONTROLS_STRIP = 72.dp
+
+/** The list's last [FADE] fading out (above the bottom toggles, where it ends). */
+private fun Modifier.fadeOut(): Modifier = this
+    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val from = (size.height - FADE.toPx()).coerceAtLeast(0f)
+        drawRect(
+            // Eased like the lyrics' edges: mostly gone over the last half.
+            Brush.verticalGradient(0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.3f), 1f to Color.Transparent, startY = from, endY = size.height),
+            topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+            size = size.copy(height = size.height - from),
+            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+        )
+    }
+
+/** How far the list fades out above the toggles, and the room above the toggles in their strip. */
+private val FADE = 56.dp
+private val STRIP_TOP_PAD = 20.dp
+
+/**
+ * Shuffle, repeat (off / all / one) and autoplay as three equal tonal pills; with [labels], each
+ * names itself beside its icon where all three names fit.
+ */
 @Composable
-private fun QueueModeHeader(modifier: Modifier = Modifier) {
+private fun QueueModeHeader(modifier: Modifier = Modifier, labels: Boolean = false) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val style = MaterialTheme.typography.labelLarge
+    val names = listOf(stringResource(R.string.action_shuffle), stringResource(R.string.action_label_repeat), stringResource(R.string.player_autoplay))
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
+    val pill = (maxWidth - 16.dp) / 3
+    val widest = with(LocalDensity.current) { names.maxOf { measurer.measure(it, style).size.width }.toDp() }
+    val showLabels = labels && widest + 20.dp + 6.dp + 24.dp <= pill
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         ModeToggle(
             checked = queue.shuffle, onCheckedChange = { client.dispatch(Commands.setShuffle(it)) },
-            icon = HocketIcons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f),
+            icon = HocketIcons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f), showLabel = showLabels,
         )
         ModeToggle(
             checked = queue.repeat != RepeatMode.Off,
@@ -145,17 +208,18 @@ private fun QueueModeHeader(modifier: Modifier = Modifier) {
             icon = if (queue.repeat == RepeatMode.One) HocketIcons.Filled.RepeatOne else HocketIcons.Filled.Repeat,
             label = stringResource(R.string.action_label_repeat),
             state = stringResource(when (queue.repeat) { RepeatMode.Off -> R.string.player_repeat_off; RepeatMode.All -> R.string.player_repeat_all; RepeatMode.One -> R.string.player_repeat_one }),
-            tag = "queue.repeat", modifier = Modifier.weight(1f),
+            tag = "queue.repeat", modifier = Modifier.weight(1f), showLabel = showLabels,
         )
         ModeToggle(
             checked = queue.autoplay, onCheckedChange = { client.dispatch(Commands.setAutoplay(it)) },
-            icon = HocketIcons.Filled.AllInclusive, label = stringResource(R.string.player_autoplay), tag = "queue.infinite", modifier = Modifier.weight(1f),
+            icon = HocketIcons.Filled.AllInclusive, label = stringResource(R.string.player_autoplay), tag = "queue.infinite", modifier = Modifier.weight(1f), showLabel = showLabels,
         )
+    }
     }
 }
 
 @Composable
-private fun ModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, icon: ImageVector, label: String, tag: String, modifier: Modifier = Modifier, state: String? = null) {
+private fun ModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, icon: ImageVector, label: String, tag: String, modifier: Modifier = Modifier, state: String? = null, showLabel: Boolean = false) {
     val content = LocalContentColor.current
     // Off: a faint wash of the content colour over the artwork backdrop; on: the scheme's primary.
     val container by animateColorAsState(if (checked) MaterialTheme.colorScheme.primary else content.copy(alpha = 0.12f), label = "modeContainer")
@@ -168,8 +232,15 @@ private fun ModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, ico
             disabledContainerColor = container.copy(alpha = 0.06f), disabledContentColor = foreground.copy(alpha = 0.38f),
             checkedContainerColor = container, checkedContentColor = foreground,
         ),
+        contentPadding = PaddingValues(horizontal = 12.dp),
         modifier = modifier.heightIn(min = 40.dp).testTag(tag).semantics { contentDescription = label; if (state != null) stateDescription = state },
-    ) { Icon(icon, null) }
+    ) {
+        Icon(icon, null, Modifier.size(20.dp))
+        if (showLabel) {
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, modifier = Modifier.clearAndSetSemantics { })
+        }
+    }
 }
 
 private sealed interface Line {

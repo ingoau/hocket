@@ -2,13 +2,14 @@
 // the fullscreen fluid background (measured from the rendered pixels) and over
 // artwork-tinted surfaces, forced colours, and reflow at 200% zoom.
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, showSideView, test } from "./fixtures";
 import { expectNoViolations, playShowcase, serverId, setTheme, setZoom } from "./a11y-helpers";
 
 async function playAlbum(page: Page, nth = 0): Promise<void> {
   await page.getByTestId("nav-albums").click();
   await page.getByTestId("grid-tile").nth(nth).dblclick();
   await page.getByTestId("album-play").click();
+  await showSideView(page, "queue");
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
 }
 
@@ -28,6 +29,7 @@ test.describe("motion, contrast and zoom", () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await completeSetup(page);
     await playShowcase(page);
+    await showSideView(page, "lyrics");
     const view = page.getByTestId("lyrics-view");
     await expect(view).toHaveAttribute("data-tier", "syllable");
     await expect(view).toHaveAttribute("data-mode", "plain");
@@ -70,6 +72,7 @@ test.describe("motion, contrast and zoom", () => {
     await expect(announcer).toHaveAttribute("aria-live", "polite");
     await expect(announcer).toHaveText("");
     await playShowcase(page);
+    await showSideView(page, "lyrics");
     await expect(announcer).toHaveText(/^Now playing: Word by Word by .+/);
     const view = page.getByTestId("lyrics-view");
     await expect(view).toHaveAttribute("data-mode", "animated");
@@ -96,6 +99,7 @@ test.describe("motion, contrast and zoom", () => {
     const { page } = hocket;
     await completeSetup(page);
     await playShowcase(page);
+    await showSideView(page, "lyrics");
     await expect(page.getByTestId("lyrics-view")).toHaveAttribute("data-mode", "animated");
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-appearance").click();
@@ -126,7 +130,7 @@ test.describe("motion, contrast and zoom", () => {
         await page.waitForTimeout(600);
         const texts = await page.evaluate(() => {
           const out: { what: string; rect: { x: number; y: number; w: number; h: number }; color: string }[] = [];
-          for (const sel of [".np-text .t1", ".np-text .t2", ".np-seek .time", ".np-kicker", ".np-source-name", ".np-mode:not(.on)"]) {
+          for (const sel of [".np-text .t1", ".np-text .t2", ".np-seek .time", ".np-pane .qs-label", ".np-pane .qrow .t1", ".np-pane .qrow .t2"].map((s) => `.fullscreen ${s}`)) {
             for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
               const r = el.getBoundingClientRect();
               if (r.width && r.height && el.textContent?.trim()) out.push({ what: `${sel} "${el.textContent.trim().slice(0, 20)}"`, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, color: getComputedStyle(el).color });
@@ -135,8 +139,9 @@ test.describe("motion, contrast and zoom", () => {
           return out;
         });
         expect(texts.length).toBeGreaterThan(5);
-        // Photograph the background alone: hide everything drawn over it.
-        await page.addStyleTag({ content: ".np-stage, .toasts { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => (el as Element).setAttribute("data-e2e-hide", "")));
+        // Photograph the background alone: hide everything drawn over it (the controls' glass
+        // only darkens it further, so the bare background is the harder test).
+        await page.addStyleTag({ content: ".np-stage, .np-head, .np-pill, .toasts { visibility: hidden !important; }" }).then((h) => h.evaluate((el) => (el as Element).setAttribute("data-e2e-hide", "")));
         const png = (await page.screenshot()).toString("base64");
         await page.evaluate(() => document.querySelector("[data-e2e-hide]")?.remove());
         const worst = await page.evaluate(async ({ png, texts }) => {
@@ -231,8 +236,8 @@ test.describe("motion, contrast and zoom", () => {
     expect(ring.style).not.toBe("none");
     expect(Number.parseFloat(ring.width)).toBeGreaterThanOrEqual(2);
     expect(ring.color).toBe(system.highlight);
-    // The seek fill and a pressed toggle.
-    expect(await page.locator(".player .seek .fill").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
+    // The seek bar's played wave and a pressed toggle.
+    expect(await page.locator(".player .np-seek-bar .played").evaluate((el) => getComputedStyle(el).stroke)).toBe(system.highlight);
     await page.getByTestId("shuffle").click();
     await expect(page.getByTestId("shuffle")).toHaveAttribute("aria-pressed", "true");
     expect(await page.getByTestId("shuffle").evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");

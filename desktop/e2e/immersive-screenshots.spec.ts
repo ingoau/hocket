@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { AlbumPage, ServerInfo, Snapshot } from "../src/core/api";
-import { completeSetup, launchFake } from "./fixtures";
+import { completeSetup, launchFake, resizeWindow } from "./fixtures";
 
 const covers = process.env.HOCKET_FAKE_COVERS;
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -73,7 +73,7 @@ test("fullscreen player with real covers", async () => {
           })
           .toBe(true);
         for (const shape of SHAPES) {
-          await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0]?.setContentSize(s.width, s.height), shape);
+          await resizeWindow(app, page, shape.width, shape.height);
           // The new cover's scene (artwork, layout, continuation) on screen on its own, then settled.
           await page.locator(`[data-testid="np-artwork"][data-cover="${cover}"]`).waitFor();
           await page.waitForTimeout(300);
@@ -93,8 +93,7 @@ test("fullscreen player with real covers", async () => {
           await page.evaluate(() => {
             const set = (sel: string, text: string) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
             set("#fs-title", "Song Name");
-            set(".np-text .t2", "Artist • Album");
-            set('[data-testid="np-source"]', "Album");
+            set(".np-text .t2 .artist-chooser", "Artist");
           });
           await page.screenshot({ path: join(out!, `${String(offset + i).padStart(3, "0")}-${shape.name}.png`) });
         }

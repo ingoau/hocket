@@ -1,13 +1,11 @@
 package app.hocket.ui.player
 
-import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +36,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -62,16 +62,15 @@ import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
-import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 /**
  * The collapsed player, a floating card (Navic's detached style): square-ish rounded artwork, title
  * and artist (scrolling once when too long), play/pause (a loading indicator while buffering) and
  * next, and a thin progress line along the card's bottom edge. The card itself (margins, corners,
- * shadow) is the sheet's clip, so it grows into the full player. Tap or drag up to expand; swipe the content left/right to skip: the
- * artwork and text move with the finger, a haptic marks the threshold, and it settles back without
- * overshoot.
+ * shadow) is the sheet's clip, so it grows into the full player. Tap or drag up to expand; swipe the
+ * content left/right to skip: a carousel in miniature ([SkipCarousel]) where the artwork and text
+ * follow the finger and the neighbour's thumbnail, title and artist slide in beside them; past half
+ * way (or flung) it settles on the neighbour and skips, otherwise it springs back without overshoot.
  *
  * The progress line is drawn in the draw phase from [position], so ticks never recompose the bar.
  * The thumbnail reports its bounds to [hero] (the artwork that flies into the full player starts
@@ -84,28 +83,23 @@ import kotlin.math.abs
  * position never is (the progress line is not exposed; the full player's seek bar carries it).
  */
 @Composable
-internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: HeroGeometry, thumbHidden: () -> Boolean) {
+internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: HeroGeometry, thumbHidden: () -> Boolean, neighbours: Neighbours = Neighbours.None) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
     val transport by client.transport.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
-    val resume by client.resumeOffer.collectAsStateWithLifecycle()
     val track = entry?.track
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
-    val swipe = remember { Animatable(0f) }
+    val carousel = remember { SkipCarousel() }
     val threshold = with(density) { 72.dp.toPx() }
     val title = track?.title ?: ""
     val artist = track?.artist ?: stringResource(R.string.unknown_artist)
     val nowPlayingDesc = stringResource(R.string.player_mini_a11y, title, artist)
-    val sub = when {
-        notice != null -> notice
-        resume != null -> stringResource(R.string.player_resume_offer, resume!!.deviceName, resume!!.track.title)
-        else -> artist
-    }
+    val sub = notice ?: artist
     val desc = if (sub != artist) "$nowPlayingDesc. $sub" else nowPlayingDesc
     val expandLabel = stringResource(R.string.player_expand)
     val nextLabel = stringResource(R.string.action_next)
@@ -114,6 +108,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val durationMs = track?.durationMs?.toFloat()?.takeIf { it > 0f } ?: 1f
     val line = MaterialTheme.colorScheme.primary
     val lineTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
     // The item's description already carries both lines; the scrolling texts themselves stay out of
     // the tree (a marquee is laid out wider than its box on purpose).
     val marquee = if (reducedMotion) Modifier else Modifier.clearAndSetSemantics { }.basicMarquee(iterations = 1, initialDelayMillis = 3_000, velocity = 30.dp)
@@ -132,76 +127,67 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                     val f = (position() / durationMs).coerceIn(0f, 1f)
                     drawRect(line, topLeft = Offset(0f, size.height - h), size = Size(size.width * f, h))
                 }
-                .pointerInput(Unit) {
-                    var crossed = false
-                    detectHorizontalDragGestures(
-                        onDragStart = { crossed = false },
-                        onDragEnd = {
-                            scope.launch {
-                                val v = swipe.value
-                                when {
-                                    v < -threshold -> { client.dispatch(Command.Next); haptics.performHapticFeedback(HapticFeedbackType.Confirm) }
-                                    v > threshold -> { client.dispatch(Command.Previous); haptics.performHapticFeedback(HapticFeedbackType.Confirm) }
-                                }
-                                swipe.animateTo(0f, Motion.snap)
-                            }
-                        },
-                        onDragCancel = { scope.launch { swipe.animateTo(0f, Motion.snap) } },
-                    ) { change, delta ->
-                        change.consume()
-                        // Resistance past the threshold; a tick when the finger crosses it either way.
-                        val next = swipe.value + delta
-                        val resisted = if (abs(next) > threshold) threshold * next.sign() + (abs(next) - threshold) * 0.35f * next.sign() else next
-                        val over = abs(resisted) > threshold
-                        if (over != crossed) { crossed = over; haptics.performHapticFeedback(if (over) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentTick) }
-                        scope.launch { swipe.snapTo(resisted) }
-                    }
-                }
+                // The skip swipe: the artwork and the text slide, the neighbour's sliding in.
+                .then(with(carousel) { Modifier.gesture(client, scope, haptics, enabled = true, reduced = reducedMotion, hasNext = { currentNeighbours.value.next != null }, rubberThreshold = threshold) })
                 // Taps outside the info (the thumbnail, the card's edges) expand too; pointer only,
                 // the info item below carries the accessible click.
                 .pointerInput(onExpand) { detectTapGestures(onTap = { onExpand() }) }
                 .testTag("miniPlayer"),
         ) {
             androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-            Row(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = swipe.value
-                        alpha = 1f - (abs(swipe.value) / (threshold * 3f)).coerceIn(0f, 0.6f)
-                    }
-                    .padding(start = 10.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Artwork(
-                    track?.coverArt, ArtworkSizes.LIST, null,
-                    Modifier
-                        .size(HeroGeometry.THUMB_SIZE)
-                        .onGloballyPositioned { hero.thumb = hero.measure(it) }
-                        .graphicsLayer { alpha = if (thumbHidden()) 0f else 1f },
-                    RoundedCornerShape(HeroGeometry.THUMB_CORNER),
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(
+            Row(Modifier.fillMaxSize().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                // The strip: the current track's artwork and text, its neighbours a strip's width
+                // either side (off view, clipped, until a swipe brings one in).
+                Box(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .clickable(onClickLabel = expandLabel, onClick = onExpand)
-                        // Semantics modifiers inside a clearAndSetSemantics on the same node are dropped: tag first.
-                        .testTag("miniPlayer.info")
-                        .clearAndSetSemantics {
-                            contentDescription = desc
-                            liveRegion = LiveRegionMode.Polite
-                            customActions = listOf(
-                                CustomAccessibilityAction(nextLabel) { client.dispatch(Command.Next); true },
-                                CustomAccessibilityAction(previousLabel) { client.dispatch(Command.Previous); true },
-                            )
-                            onClick(expandLabel) { onExpand(); true }
-                        },
-                    verticalArrangement = Arrangement.Center,
+                        .clipToBounds()
+                        .onSizeChanged { carousel.span = it.width.toFloat().coerceAtLeast(1f) },
                 ) {
-                    Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = if (reducedMotion) TextOverflow.Ellipsis else TextOverflow.Clip, modifier = marquee)
-                    Text(sub, style = MaterialTheme.typography.bodyMedium, color = if (notice != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = if (reducedMotion) TextOverflow.Ellipsis else TextOverflow.Clip, modifier = marquee)
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { translationX = carousel.offset.value }
+                            .padding(start = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Artwork(
+                            track?.coverArt, ArtworkSizes.LIST, null,
+                            Modifier
+                                .size(HeroGeometry.THUMB_SIZE)
+                                .onGloballyPositioned { hero.thumb = hero.measure(it) }
+                                .graphicsLayer { alpha = if (thumbHidden()) 0f else 1f },
+                            RoundedCornerShape(HeroGeometry.THUMB_CORNER),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable(onClickLabel = expandLabel, onClick = onExpand)
+                                // Semantics modifiers inside a clearAndSetSemantics on the same node are dropped: tag first.
+                                .testTag("miniPlayer.info")
+                                .clearAndSetSemantics {
+                                    contentDescription = desc
+                                    liveRegion = LiveRegionMode.Polite
+                                    customActions = listOf(
+                                        CustomAccessibilityAction(nextLabel) { client.dispatch(Command.Next); true },
+                                        CustomAccessibilityAction(previousLabel) { client.dispatch(Command.Previous); true },
+                                    )
+                                    onClick(expandLabel) { onExpand(); true }
+                                },
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = if (reducedMotion) TextOverflow.Ellipsis else TextOverflow.Clip, modifier = marquee)
+                            Text(sub, style = MaterialTheme.typography.bodyMedium, color = if (notice != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = if (reducedMotion) TextOverflow.Ellipsis else TextOverflow.Clip, modifier = marquee)
+                        }
+                    }
+                    if (!reducedMotion) {
+                        val previous = if (carousel.restartPeek) track else neighbours.previous?.track
+                        previous?.let { MiniNeighbour(it, carousel, side = -1f, tag = "miniPlayer.previous") }
+                        neighbours.next?.track?.let { MiniNeighbour(it, carousel, side = 1f, tag = "miniPlayer.next") }
+                    }
                 }
                 val colors = IconButtonDefaults.iconButtonVibrantColors()
                 val playLabel = stringResource(if (playing) R.string.action_pause else R.string.action_play)
@@ -221,4 +207,27 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     }
 }
 
-private fun Float.sign(): Float = if (this < 0f) -1f else 1f
+/**
+ * A neighbour in the mini player's strip, a strip's width to the [side] (-1 before, 1 after):
+ * its thumbnail, title and artist, decorative (the current item carries the semantics).
+ */
+@Composable
+private fun MiniNeighbour(track: app.hocket.core.api.TrackSummary, carousel: SkipCarousel, side: Float, tag: String) {
+    Row(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { translationX = carousel.offset.value + side * carousel.span }
+            .padding(start = 10.dp)
+            .testTag(tag)
+            .clearAndSetSemantics { },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Artwork(track.coverArt, ArtworkSizes.LIST, null, Modifier.size(HeroGeometry.THUMB_SIZE), RoundedCornerShape(HeroGeometry.THUMB_CORNER))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Text(track.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(track.artist ?: stringResource(R.string.unknown_artist), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+

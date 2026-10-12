@@ -50,6 +50,11 @@ class FakeCore(
     private val timers: Boolean = true,
     private val now: () -> Double = { System.currentTimeMillis().toDouble() },
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
+    /**
+     * Whether this device holds the transport lease at start. False is a cold start with a restored
+     * queue (nobody plays until Play takes the lease), as after Stop.
+     */
+    leaseHeld: Boolean = true,
 ) : CoreHandle {
     override val kind: CoreKind = CoreKind.Fake
     private val scope = CoroutineScope((parentScope?.coroutineContext ?: SupervisorJob()) + dispatcher + SupervisorJob())
@@ -76,7 +81,7 @@ class FakeCore(
     private var stamp = PositionStamp(0u, now(), 1.0, false)
     private var volume = 1.0
     private var buffering = false
-    private var transportOwner: DeviceId? = deviceId
+    private var transportOwner: DeviceId? = if (leaseHeld) deviceId else null
     private var epoch = 1u
     private var playedMs = 0L
     private val savedQueues = ArrayList<SavedQueue>()
@@ -146,6 +151,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_LYRICS_FPS, "60", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
@@ -415,7 +421,9 @@ class FakeCore(
     private fun contextItem(pos: Int): QueueItem? = order.getOrNull(pos)?.let { idx -> QueueItem(newKey(), contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false) }
 
     private fun previous() {
-        if (positionNow() > 3_000 && history.isEmpty()) { startPlayback(0, stamp.isPlaying); return }
+        // The core's rule (handlers::session::previous with session::previous_should_restart): from
+        // 3 s into a track loaded here, or with nothing before it, Previous restarts the track.
+        if (transportOwner == deviceId && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
         val prev = history.removeLastOrNull() ?: run { startPlayback(0, stamp.isPlaying); return }
         current?.let { cur ->
             when (cur.source) {
@@ -595,10 +603,15 @@ class FakeCore(
                 setSetting(SettingKeys.TRANSCODING_PROFILES, HocketJson.json.encodeToString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), map))
             }
 
-            Command.Play -> if (current != null && !stamp.isPlaying) { startPlayback(positionNow(), true); emitTransport() }
+            Command.Play -> if (current != null && !stamp.isPlaying) {
+                // As the core: playing here takes the lease when nobody holds it.
+                if (transportOwner == null) { transportOwner = deviceId; epoch++ }
+                startPlayback(positionNow(), true); emitTransport()
+            }
             Command.Pause -> if (stamp.isPlaying) { playedMs += now().toLong() - stamp.takenAt.toLong(); startPlayback(positionNow(), false); emitTransport() }
             Command.TogglePlay -> handle(if (stamp.isPlaying) Command.Pause else Command.Play)
-            Command.Stop -> { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel(); emitTransport() }
+            // As the core: Stop releases the lease (nobody holds it until Play).
+            Command.Stop -> { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel(); if (transportOwner == deviceId) { transportOwner = null; epoch++ }; emitTransport() }
             Command.Next -> { advance(natural = false); emitQueue(); emitTransport() }
             Command.Previous -> { previous(); emitQueue(); emitTransport() }
             is Command.SeekTo -> { startPlayback(c.data.position_ms.toLong(), stamp.isPlaying); emitTransport() }

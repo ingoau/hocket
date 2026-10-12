@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -133,17 +134,29 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
-    private val modes = listOf("lyrics", "queue", "about")
-    private fun modeSelected(mode: String): Boolean = compose.onNodeWithTag("player.mode.$mode").fetchSemanticsNode().config.getOrElse(SemanticsProperties.Selected) { false }
+    private val modes = listOf("lyrics", "queue")
+    /** The queue's name is a button marked selected while the queue shows; lyrics a toggle, on while shown. */
+    private fun modeSelected(mode: String): Boolean = compose.onNodeWithTag("player.mode.$mode").fetchSemanticsNode().config.let { c ->
+        c.getOrElse(SemanticsProperties.Selected) { false } || c.getOrNull(SemanticsProperties.ToggleableState) == androidx.compose.ui.state.ToggleableState.On
+    }
 
-    /** Switches the full player to [mode] (lyrics / queue / about), or back to the artwork for null. */
+    /**
+     * A semantics click on [tag], then the state it wrote handed to composition: with the clock under
+     * manual control nothing else sends the global snapshot's apply notifications (a device's looper would).
+     */
+    private fun tap(tag: String) {
+        compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick)
+        compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
+    }
+
+    /** Switches the full player to [mode] (lyrics / queue), or back to the artwork for null. */
     private fun openMode(mode: String?) {
         if (mode == null) {
-            // Tapping the selected pill again goes back to the artwork.
-            modes.filter { modeSelected(it) }.forEach { compose.onNodeWithTag("player.mode.$it").performSemanticsAction(SemanticsActions.OnClick) }
+            // Tapping the selected one again goes back to the artwork.
+            modes.filter { modeSelected(it) }.forEach { tap("player.mode.$it") }
             advanceUntil("artwork mode") { modes.none { modeSelected(it) } }
         } else {
-            if (!modeSelected(mode)) compose.onNodeWithTag("player.mode.$mode").performSemanticsAction(SemanticsActions.OnClick)
+            if (!modeSelected(mode)) tap("player.mode.$mode")
             advanceUntil("mode $mode") { modeSelected(mode) }
         }
     }
@@ -205,7 +218,6 @@ class NowPlayingSheetTest {
     private fun swipeAwayFromEveryPage(core: TestCore) {
         swipeAwayFrom("queue", "queue.list")
         swipeAwayFrom("lyrics", "lyrics.list")
-        swipeAwayFrom("about", "player.about")
         swipeAwayFrom(null, "player.page")
         assertTrue(core.client.nowPlaying.value != null)
     }
@@ -285,16 +297,111 @@ class NowPlayingSheetTest {
             advanceUntil("the sheet to open") { sheetOpen() }
             advanceUntil("the queue again") { displayed("queue.list") && modeSelected("queue") }
             // The artwork, now a thumbnail beside the title, brings the artwork back when tapped.
-            compose.onNodeWithTag("player.artwork").performSemanticsAction(SemanticsActions.OnClick)
+            tap("player.artwork")
             advanceUntil("artwork mode") { modes.none { modeSelected(it) } }
-            // And a selected pill tapped again does too.
-            openMode("about")
-            advanceUntil("about") { displayed("player.about") }
-            compose.onNodeWithTag("player.mode.about").performSemanticsAction(SemanticsActions.OnClick)
+            // And lyrics, toggled off again, does too.
+            openMode("lyrics")
+            advanceUntil("lyrics") { displayed("lyrics.page") }
+            tap("player.mode.lyrics")
             advanceUntil("artwork mode again") { modes.none { modeSelected(it) } }
         } finally {
             compose.mainClock.autoAdvance = true
         }
+    }
+
+    /**
+     * The immersive dismiss (#40 follow-up, "feels a bit janky"): the artwork in flight and its
+     * continuation are one unit. Through the first part of the drag the scene keeps its full size
+     * (sliding down with the sheet); then it shrinks, and wherever it is, the transform the
+     * continuation is drawn with puts the continuation's edges and seam exactly on the artwork's.
+     * The continuation has faded before the shrink starts, the seam stays the landed one until
+     * then, and the handle has gone long before.
+     */
+    @Test
+    fun anImmersiveArtworkInFlightCarriesItsContinuationAsOneUnit() {
+        val hero = app.hocket.ui.player.HeroGeometry().apply {
+            immersive = true
+            headerHeight = 80f
+            // The page puts the immersive artwork at its top (the header's height above the area).
+            immersiveTop = -80f
+            area = androidx.compose.ui.geometry.Rect(0f, 80f, 1080f, 1080f)
+            thumb = androidx.compose.ui.geometry.Rect(46f, 30f, 172f, 156f)
+        }
+        val big = hero.bigSlot()
+        assertEquals(androidx.compose.ui.geometry.Rect(0f, 0f, 1080f, 1080f), big)
+        val none = androidx.compose.ui.geometry.Rect.Zero
+        for (p in listOf(1f, 0.9f, 0.7f)) {
+            assertEquals("full size at $p", big, hero.flightRect(p, 0f, 1f, none))
+            assertEquals(1f, hero.flightTransform(p, 0f, 1f, none).scale)
+        }
+        val feather = app.hocket.ui.player.FEATHER
+        for (p in listOf(0.5f, 0.3f)) {
+            val r = hero.flightRect(p, 0f, 1f, none)
+            assertTrue("shrinking at $p: $r", r.width < big.width && r.width > hero.thumb.width)
+            val t = hero.flightTransform(p, 0f, 1f, none)
+            fun x(v: Float) = v * t.scale + t.x
+            fun y(v: Float) = v * t.scale + t.y
+            assertEquals("left edges at $p", r.left, x(big.left), 0.5f)
+            assertEquals("right edges at $p", r.right, x(big.right), 0.5f)
+            assertEquals("tops at $p", r.top, y(big.top), 0.5f)
+            // The continuation is laid out from the seam, FEATHER of the side above the bottom.
+            assertEquals("seams at $p", r.bottom - feather * r.width, y(big.bottom - feather * big.width), 0.5f)
+        }
+        val shrinkFrom = app.hocket.ui.player.HeroGeometry.SHRINK_FROM
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.continuationAlpha(shrinkFrom - 0.15f), 1e-4f)
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.continuationAlpha(0.9f), 1e-4f)
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.seamFraction(0.45f), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.headerAlpha(0.85f), 1e-4f)
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.headerAlpha(1f), 1e-4f)
+        // A card is unchanged: it follows the progress from the start.
+        hero.immersive = false
+        hero.artSide = 1000f
+        assertTrue(hero.flightRect(0.9f, 0f, 1f, none).width < hero.bigSlot().width)
+    }
+
+    /** The mini player's skip swipe is the carousel in miniature: half way the next song peeks in; further, it skips once. */
+    @Test
+    fun theMiniPlayerPeeksAtTheNextSongAndSkipsOncePastHalfWay() {
+        val core = TestCore()
+        start(core)
+        val before = core.client.nowPlaying.value!!.item.key
+        val next = core.client.queue.value.let { it.playingNext.firstOrNull() ?: it.upcoming.first() }
+        val width = compose.onNodeWithTag("miniPlayer").fetchSemanticsNode().size.width.toFloat()
+        assertFalse(displayed("miniPlayer.next"))
+        compose.onNodeWithTag("miniPlayer").performTouchInput {
+            down(center)
+            moveBy(Offset(-viewConfiguration.touchSlop - 1f, 0f))
+            repeat(8) { moveBy(Offset(-width * 0.25f / 8f, 0f)) }
+        }
+        compose.waitForIdle()
+        assertTrue("the next song peeks in", displayed("miniPlayer.next"))
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithTag("miniPlayer").performTouchInput { up() }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertEquals("a slow short swipe skips nothing", before, core.client.nowPlaying.value!!.item.key)
+        compose.onNodeWithTag("miniPlayer").performTouchInput {
+            down(center)
+            moveBy(Offset(-viewConfiguration.touchSlop - 1f, 0f))
+            repeat(8) { moveBy(Offset(-width * 0.6f / 8f, 0f)) }
+        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithTag("miniPlayer").performTouchInput { up() }
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.item?.key == next.item.key }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertEquals("one skip", next.item.key, core.client.nowPlaying.value!!.item.key)
+    }
+
+    /** Square only at rest fully open; extra-large corners as soon as it is dragged; the mini card's when collapsed. */
+    @Test
+    fun theSheetsTopCornersRoundAsSoonAsItLeavesTheOpenRest() {
+        val corner = { p: Float -> app.hocket.ui.player.sheetTopCorner(p, miniCorner = 16f, sheetCorner = 28f) }
+        assertEquals(0f, corner(1f), 0f)
+        assertTrue("rounding off the rest: ${corner(0.99f)}", corner(0.99f) > 5f)
+        assertEquals(28f, corner(0.95f), 1f)
+        assertEquals(22f, corner(0.5f), 0.5f)
+        assertEquals(16f, corner(0f), 0f)
     }
 
     @Test
@@ -307,5 +414,7 @@ class NowPlayingSheetTest {
         assertEquals(app.hocket.ui.player.SheetValue.Expanded, restored.draggable.currentValue)
         // A value saved before modes existed restores to the artwork.
         assertEquals(app.hocket.ui.player.PlayerMode.Artwork, saver.restore("Collapsed")!!.mode)
+        // About became a sheet: a state saved in About opens on the artwork.
+        assertEquals(app.hocket.ui.player.PlayerMode.Artwork, saver.restore("Expanded|About")!!.mode)
     }
 }

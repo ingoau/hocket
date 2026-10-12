@@ -11,7 +11,7 @@
   --radius: 6px;
   --radius-sm: 4px;
   --row-h: 30px;
-  --player-h: 84px;
+  --player-h: 88px;
   --topbar-h: 44px;
   /* Accent tokens. App.tsx useTheme() recomputes them from the (possibly
      artwork-derived) accent with lib/contrast.ts: --accent-text reaches 4.5:1
@@ -86,6 +86,8 @@
   --fg: #1b1b1f;
   --fg-muted: #51515a;
   --fg-faint: #5b5b64;
+  /* The side panel's lyrics around the current line: lighter than muted text, still 4.5:1 on the pane. */
+  --lyrics-muted: #707078;
   --border: rgba(0, 0, 0, 0.11);
   --border-strong: rgba(0, 0, 0, 0.22);
   --danger: #a1231c;
@@ -112,6 +114,7 @@
   --fg: #ececf1;
   --fg-muted: #acacb5;
   --fg-faint: #9f9fa8;
+  --lyrics-muted: #92929a;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.2);
   --danger: #ff7a7a;
@@ -288,7 +291,6 @@ h3 { font-size: var(--fs-lg); }
 /* Titles inside a card or side sheet. */
 .card-title { font-size: var(--title-card); font-weight: 700; letter-spacing: -0.005em; line-height: 1.2; margin: 0 0 14px; }
 .dialog-title { font-size: var(--fs-lg); font-weight: 600; margin: 0; }
-.pane-title { font-size: var(--fs-sm); font-weight: 600; margin: 0; }
 
 /* ---- App shell ---------------------------------------------------------- */
 .app { display: grid; grid-template-rows: auto 1fr var(--player-h); height: 100%; background: var(--bg); }
@@ -452,21 +454,58 @@ h3 { font-size: var(--fs-lg); }
 .detail-head .meta h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-head .meta .actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 
-/* Player bar */
-.player { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(360px, 2fr) minmax(200px, 1fr); align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border); background: var(--bg-elev); position: relative; }
-.player .now { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.player .now .art { width: 56px; height: 56px; border-radius: var(--radius-sm); background: var(--bg-sunken); object-fit: cover; flex: 0 0 auto; }
+/* Player bar (docs/design.md, "Desktop layout"): on the window surface, no
+   divider, Material 3 Expressive icon buttons (40px, a round state layer; a
+   toggle that is on fills tonally and squares off), and a wide filled
+   play/pause that morphs from a pill (paused) to a rounded square (playing). */
+.player {
+  display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.2fr) minmax(max-content, 1fr); align-items: center; gap: 16px;
+  padding: 0 16px 0 12px; background: var(--bg); position: relative; container: player / inline-size;
+}
+
+.player .now { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.player .now .art { width: 64px; height: 64px; border-radius: var(--shape-md); background: var(--bg-sunken); object-fit: cover; flex: 0 0 auto; box-shadow: var(--shadow-1); }
 .art.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); background: var(--bg-sunken); }
 .player .now .text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.player .now .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.player .now .artist { color: var(--fg-muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.player .now .artist a, .player .now .title a { color: inherit; text-decoration: none; }
+.player .now .title { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player .now .artist { color: var(--fg-muted); font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player .now .artist a, .player .now .title a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
 .player .now .artist a:hover, .player .now .title a:hover { text-decoration: underline; }
-.player .center { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
-.transport { display: flex; align-items: center; gap: 4px; }
-.transport .btn.icon { width: 30px; height: 30px; }
-.transport .btn.play { width: 36px; height: 36px; border-radius: 50%; background: var(--fg); color: var(--bg); }
-.transport .btn.play:hover { filter: brightness(1.1); background: var(--fg); }
+.player .now .stars { margin-top: 3px; display: inline-flex; gap: 2px; }
+.player .now-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+/* The centre grows with the bar up to 520px (a flexible track, so the song's side keeps its share). */
+.player .center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; width: 100%; max-width: 520px; justify-self: center; }
+.transport { display: flex; align-items: center; gap: 8px; }
+.player .btn {
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized),
+    border-radius var(--dur-spring) var(--spring-fast), width var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
+}
+.player .btn.icon { width: 40px; height: 40px; border-radius: 20px; color: var(--fg); }
+.player .btn.icon:hover { background: var(--bg-hover); }
+.player .btn.icon:active { background: var(--bg-active); border-radius: var(--shape-sm); transform: scale(0.94); transition-duration: 80ms, 80ms, 120ms, 120ms, 120ms; }
+.player .btn.icon.toggle.on { background: var(--selection); color: var(--accent-text); border-radius: var(--shape-md); }
+.player .btn.icon.toggle.on:hover { background: var(--state-selected); }
+.player .btn.icon.on:not(.toggle) { color: var(--accent-text); }
+.transport .btn.play { width: 52px; height: 40px; background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow-1); }
+.transport .btn.play.paused { border-radius: 20px; }
+.transport .btn.play.playing { border-radius: var(--shape-md); }
+.transport .btn.play:hover { background: var(--accent); filter: brightness(1.08); box-shadow: var(--shadow-2); }
+.transport .btn.play:active { background: var(--accent); border-radius: var(--shape-sm); }
+.transport .btn.play .spin { animation: spin 1.2s linear infinite; }
+.player .bar-seek { width: 100%; }
+/* The bar's wave (WavySeek variant "bar"; now-playing.css has the wave's own rules): the elapsed
+   time and the duration either side, in the theme's colours. */
+.np-seek.bar-seek { flex-direction: row; align-items: center; gap: 10px; width: 100%; }
+.bar-seek .time { flex: 0 0 auto; min-width: 36px; font-size: var(--fs-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.bar-seek .time:first-child { text-align: right; }
+.bar-seek .np-seek-bar { flex: 1 1 auto; min-width: 0; height: 24px; border-radius: var(--shape-xs); }
+.bar-seek .np-seek-bar .played { stroke: var(--accent); stroke-width: 4px; }
+.bar-seek .np-seek-bar .rest { stroke: var(--border-strong); stroke-width: 4px; }
+.bar-seek .np-seek-bar .stop, .bar-seek .np-seek-bar .thumb { fill: var(--accent); }
+.bar-seek .np-seek-bar .hover-time, .bar-seek .np-seek-bar .value-bubble { bottom: 26px; padding: 2px 8px; font-size: var(--fs-xs); }
+.bar-seek .np-seek-bar .hover-time { background: var(--fg); color: var(--bg); }
+.bar-seek .np-seek-bar .value-bubble { background: var(--accent); color: var(--accent-fg); }
+
 .seek { display: flex; align-items: center; gap: 8px; width: 100%; font-size: var(--fs-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .seek .bar { position: relative; flex: 1; height: 14px; display: flex; align-items: center; cursor: default; }
 .seek .bar .track { position: relative; width: 100%; height: 4px; border-radius: 2px; background: var(--bg-active); overflow: visible; }
@@ -474,29 +513,50 @@ h3 { font-size: var(--fs-lg); }
 .seek .bar .knob { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); transform: translate(-50%, -50%); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
 .seek .bar:hover .knob, .seek .bar.dragging .knob { opacity: 1; }
 .seek .bar .hover-time { position: absolute; bottom: 14px; transform: translateX(-50%); background: var(--bg-elev); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-size: var(--fs-xs); pointer-events: none; white-space: nowrap; }
-.player .right { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
-.volume { display: flex; align-items: center; gap: 4px; width: 120px; }
+.player .right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.volume { display: flex; align-items: center; gap: 0; margin-right: 6px; }
 .volume input { width: 80px; }
+/* The Connect pill: the device icon in a round button here; another device's name on the accent while it plays. */
+.connect-pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; min-width: 40px; padding: 0 10px; border: 0; border-radius: var(--shape-full);
+  background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 700; white-space: nowrap; -webkit-appearance: none; appearance: none;
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
+}
+.connect-pill:hover { background: var(--bg-hover); }
+.connect-pill:active { transform: scale(0.95); border-radius: var(--shape-md); transition-duration: 80ms, 80ms, 120ms, 120ms; }
+.connect-pill.remote { background: var(--accent); color: var(--accent-fg); padding: 0 18px 0 14px; box-shadow: var(--shadow-1); }
+.connect-pill.remote:hover { background: var(--accent); filter: brightness(1.08); }
+.connect-pill .connect-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.connect-pill:focus-visible { border-radius: var(--shape-full); }
 .player .notice { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 10px; font-size: var(--fs-xs); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; box-shadow: var(--shadow); white-space: nowrap; max-width: 90%; }
-.player .notice.resume { color: var(--fg); }
 .player .notice .btn { height: 20px; padding: 0 6px; font-size: var(--fs-xs); }
+.player .notice .btn.icon { width: 20px; border-radius: 10px; }
+/* Between the two-row layout (900px) and room for everything, the song's side gives way first:
+   the stars, then add to playlist and More (both stay in its context menu and the side panel),
+   sooner while another device's name takes room on the right; then the volume slider and that
+   name shorten. The song's block never shrinks below its art and some of its title. */
+@container player (min-width: 901px) and (max-width: 1360px) {
+  .player:has(.connect-pill.remote) .now .stars { display: none; }
+}
+@container player (min-width: 901px) and (max-width: 1280px) {
+  .player:has(.connect-pill.remote) .now-actions { display: none; }
+}
+@container player (min-width: 901px) and (max-width: 1180px) {
+  .player .now .stars { display: none; }
+  .player .connect-pill .connect-name { max-width: 120px; }
+}
+@container player (min-width: 901px) and (max-width: 1060px) {
+  .player .now-actions { display: none; }
+  .player .volume .m3-slider { flex: 0 0 72px; min-width: 72px; }
+}
+@container player (min-width: 901px) and (max-width: 1000px) {
+  .player:has(.connect-pill.remote) .volume .m3-slider { display: none; }
+  .player .connect-pill .connect-name { max-width: 88px; }
+}
+
 
 /* Right panel */
-.right-panel { display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg-sunken); min-height: 0; min-width: 0; position: relative; }
-.right-panel .pane { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.right-panel .pane.collapsed { flex: 0 0 32px !important; }
-.pane-head { display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
-/* Pane tabs are a compact pill segment: the selected one fills tonally. */
-.pane-head .tabs { display: flex; gap: 2px; }
-.pane-head .tab {
-  height: 24px; padding: 0 10px; border-radius: var(--shape-full); color: var(--fg-muted); font-size: var(--fs-sm); font-weight: 500; background: transparent; border: none;
-  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), transform var(--dur-spring) var(--spring-bouncy);
-}
-.pane-head .tab:hover { background: var(--bg-hover); color: var(--fg); }
-.pane-head .tab:active { transform: scale(0.94); transition-duration: 80ms, 80ms, 120ms; }
-.pane-head .tab.active { background: var(--accent-soft); color: var(--fg); }
-.pane-head .tab.active:hover { background: var(--selection); }
-.pane-head .spacer { flex: 1; }
+.right-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
 .pane-body { flex: 1; min-height: 0; overflow: auto; }
 .queue-section { padding: 6px 10px 2px; color: var(--fg-faint); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; position: sticky; top: 0; background: var(--bg-sunken); z-index: 1; }
 .qrow { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 3px; margin: 0 4px; }
@@ -509,7 +569,6 @@ h3 { font-size: var(--fs-lg); }
 [role="listbox"]:focus-visible .qrow[data-focused] { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .queue-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .queue-tools { display: flex; justify-content: flex-end; padding: 2px 8px 0; flex: 0 0 auto; }
-.tab-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .qrow.unavailable { opacity: 0.5; text-decoration: line-through; }
 .qrow .art { width: 30px; height: 30px; border-radius: 3px; background: var(--bg-elev); flex: 0 0 auto; }
 .qrow .text { min-width: 0; flex: 1; display: flex; flex-direction: column; }
@@ -533,8 +592,6 @@ button.qrow { width: 100%; }
 /* Background vocals: smaller, never fainter than the other lines (no opacity: that would cut contrast). */
 .lyrics-static .bg { font-size: 0.7em; }
 .lyrics-static .duet { text-align: right; }
-.lyrics-tools { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 4px; align-items: center; background: color-mix(in srgb, var(--bg-elev) 85%, transparent); border: 1px solid var(--border); border-radius: var(--shape-full); padding: 2px 8px; font-size: var(--fs-xs); color: var(--fg-muted); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
-.lyrics-pane:hover .lyrics-tools, .lyrics-tools:focus-within { opacity: 1; }
 /* AMLL sizes itself from --amll-lp-font-size (its own default is 5vh, far too big
    for a side pane). The in-window view scales with the viewport and the
    device-local small/medium/large preference (--lyrics-scale); fullscreen stays large. */
@@ -781,6 +838,9 @@ button.qrow { width: 100%; }
   .seek .bar .track, .progress { border: 1px solid CanvasText; }
   .seek .bar .fill, .progress > div, .bars div { forced-color-adjust: none; background: Highlight; }
   .seek .bar .knob { forced-color-adjust: none; background: CanvasText; opacity: 1; }
+  /* The bar's wave: the played part in Highlight, the thumb in CanvasText. */
+  .bar-seek .np-seek-bar .played { forced-color-adjust: none; stroke: Highlight; }
+  .bar-seek .np-seek-bar .thumb, .bar-seek .np-seek-bar .stop { forced-color-adjust: none; fill: CanvasText; }
   .stars .star.on svg, .heart.on svg { fill: CanvasText; }
   .tile .play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
   /* Toasts are drawn inverted (--fg on --bg); in the system palette they are plain Canvas text. */
@@ -816,7 +876,7 @@ button.qrow { width: 100%; }
   .window-controls .btn { width: 30px; }
   .player { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "now right" "center center"; padding: 6px 10px; row-gap: 4px; }
   .player .now { grid-area: now; }
-  .player .center { grid-area: center; }
+  .player .center { grid-area: center; max-width: none; }
   .player .right { grid-area: right; flex-wrap: wrap; }
   .player .now .art { width: 40px; height: 40px; }
   .volume { width: auto; }

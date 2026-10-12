@@ -26,7 +26,11 @@ pnpm test:e2e       # Playwright Electron e2e (needs a display: `xvfb-run -a pnp
                     # keyboard-a11y.spec: keyboard-only walkthrough; motion-contrast.spec: reduced
                     # motion, measured contrast, forced colours, 200% zoom; exit-motion.spec:
                     # closed dialogs, menus, popovers, toasts and the fullscreen player animate
-                    # out, inert, before they unmount, and go at once under reduced motion);
+                    # out, inert, before they unmount, and go at once under reduced motion;
+                    # now-playing.spec: the side panel's views, the queue selector, the Connect
+                    # pill, the rating setting, the fullscreen player's views and idle fade);
+                    # now-playing-screenshots.spec (with HOCKET_SCREENSHOT_DIR, optionally
+                    # HOCKET_FAKE_COVERS) shoots the bar, side panel and fullscreen layouts;
                     # e2e/native.spec.ts runs the REAL core (native addon,
                     # skipped when native/ isn't built) against e2e/fake-navidrome.ts, a small
                     # Subsonic JSON server: setup → sync → play → queue → rate → undo → lyrics →
@@ -51,6 +55,9 @@ Environment variables:
 | `HOCKET_USER_DATA=<dir>` | Override Electron's userData dir (fresh profile per e2e test). |
 | `HOCKET_DEVICE_NAME` | Device name reported to the core (defaults to the hostname). |
 | `HOCKET_LOG=debug` | `tracing` filter for the native core. |
+| `HOCKET_SCREENSHOT_DIR=<dir>` | Where the screenshot specs (`now-playing-screenshots`, `immersive-screenshots`) write; without it they skip. |
+| `HOCKET_FAKE_COVERS=<dir>` | Screenshots only: a folder of cover images; the fake core's album n wears the (n − 1)th, and borrows the native addon's artwork classifier for the immersive layouts (`HOCKET_FAKE_COVERS_OFFSET` shifts which). |
+| `HOCKET_SCREENSHOT_ONLY=a,b` | `now-playing-screenshots`: write only the shots whose names contain one of these fragments. |
 | `HOCKET_DEV=1` | Set by `pnpm dev`: load the renderer from the Vite dev server. |
 
 ## Layout
@@ -70,7 +77,7 @@ src/shared/          contract shared by main/preload/renderer: bridge types, IPC
 src/renderer/        React app
   store/             zustand store, pure event reducer, position ticker, selection model,
                      shortcut parser, palette ranking, action executor, query hooks
-  components/        player bar, right panel (queue + lyrics), track table, grid, menus…
+  components/        player bar, now playing side panel, queue, track table, grid, menus…
   views/             setup, home, library views, filters, stats, settings, fullscreen, mini
   lib/               lyrics -> AMLL mapping, accent extraction, formatting
 e2e/                 Playwright Electron tests
@@ -150,7 +157,7 @@ Descriptor icons are Material Symbols names; `components/Icon.tsx` maps them to 
 
 Settings keys are the registry's (`crates/hocket-core/src/settings/registry.rs`), listed in
 `src/shared/settings-keys.ts`: `display.theme`, `display.accent`, `display.dynamicColour`,
-`display.animatedBackground`, `display.lyricsFps`, `display.queuePanelSplit`, `battery.autoEngage`,
+`display.animatedBackground`, `display.lyricsFps`, `display.playerRating`, `battery.autoEngage`,
 `battery.lyricsFps`, `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`,
 `storage.warnThresholdBytes`, `queue.{mode,savedCap}`, `sync.enabled`, `connect.*`,
 `actions.order.*`, `shortcuts`. Close-to-tray is not a registry key; it is a device-local
@@ -167,10 +174,15 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
 ## Panel and keyboard conventions
 
 - Left sidebar (choose-and-order via Settings → Customisation, backed by
-  `Query.Actions(surface = "sidebar")` / `Command.SetActionOrder`), main content, right
-  panel with the queue above the lyrics. The divider ratio, right-panel width and sidebar
-  width are device-local (`localStorage`, `store/app.ts`). Either pane collapses to give
-  the other the full height (`Q` / `L` toggle them).
+  `Query.Actions(surface = "sidebar")` / `Command.SetActionOrder`), main content, and the
+  now playing side panel (`components/NowPlayingSidebar.tsx`): a scrolling overview (artwork,
+  title, Lyrics / Up next / About cards) whose cards drill into the lyrics, the queue (with the
+  saved-queue selector, `QueueSelector.tsx`), About this song and Recent queues. The player
+  bar's lyrics and queue buttons, and `L` / `Q`, open it on that view or close it when it is
+  showing it. Whether it is open, its view and width, and the sidebar width are device-local
+  (`localStorage` `hocket.panels`, `store/app.ts`); `display.queuePanelSplit` is no longer used.
+  The fullscreen player's last view is too (`hocket.nowPlayingMode`, the queue the first time),
+  as is whether its controls fade when the mouse rests (`hocket.fullscreenIdleHide`).
 - Lists are virtualised (`@tanstack/react-virtual`), never paginated. Selection is keyed by
   id; Ctrl+A selects the predicate "everything matching" with the count from the query's
   `total`, never materialised ids. Shift-range, Ctrl-click, arrows/Home/End/PageUp/Down and
@@ -183,7 +195,8 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
   rebinds (with conflict detection and reset) through `Command.SetShortcut`. A focused
   text field keeps Ctrl+Z/typing; media keys never arrive here.
 - Fullscreen player (`F`): Kawarp fluid background fed from the cached artwork via
-  `loadBlob`, AMLL lyrics. Performance budget: hidden/minimised → both renderers stopped;
+  `loadBlob`, AMLL lyrics; a columns, immersive or stacked layout by window shape and cover
+  (`views/FullscreenPlayer.tsx`, docs/design.md "Desktop layout"). Performance budget: hidden/minimised → both renderers stopped;
   visible-but-unfocused → ~24 fps; focused → full rate (capped by the lyrics fps setting);
   battery saver → static blurred still, lyrics ≤ 30 fps. The animated background has its
   own always-off setting.
@@ -213,7 +226,7 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
   the fullscreen scrim is sized from the cover's brightest colour. `contrast.test.ts` checks the
   stylesheet's tokens. Forced-colours styles keep selection, focus, toggles and the seek fill.
 - Below 900 CSS px (a 1280 px window at 200% zoom) the sidebar becomes an icon rail, the side
-  panel a drawer (Q/L or the chevron open it, Escape closes it), the player bar two rows, and
+  panel a drawer (Q/L or its button open it, Escape closes it), the player bar two rows, and
   the track table drops low-priority columns (`fitColumns`).
 
 ## Packaging

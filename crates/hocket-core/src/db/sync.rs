@@ -763,6 +763,40 @@ mod tests {
         .with_page_size(5)
     }
 
+    /// A song by several artists reaches the mirror with each of them (its artist string as tagged).
+    #[tokio::test]
+    async fn sync_keeps_every_artist_on_a_song() {
+        let db = Db::open_in_memory().unwrap();
+        let s = server();
+        s.add_song(FakeServer::song_by(
+            "duet",
+            "Harbour Lights",
+            "al0",
+            &[("ar0", "Artist ar0"), ("ar1", "Artist ar1")],
+            200.0,
+        ));
+        let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
+        sync.run(true, &NoopObserver).await.unwrap();
+        let t = db.track("duet").unwrap().unwrap();
+        assert_eq!(t.artist.as_deref(), Some("Artist ar0 feat. Artist ar1"));
+        let names: Vec<_> = t
+            .artists
+            .iter()
+            .map(|a| (a.id.clone().unwrap_or_default(), a.name.clone()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("ar0".to_string(), "Artist ar0".to_string()),
+                ("ar1".to_string(), "Artist ar1".to_string())
+            ]
+        );
+        // A one-artist song: that artist.
+        let one = db.track("s00").unwrap().unwrap();
+        assert_eq!(one.artists.len(), 1);
+        assert_eq!(one.artists[0].id.as_deref(), Some("ar0"));
+    }
+
     #[tokio::test]
     async fn full_sync_populates_everything_with_progress() {
         let db = Db::open_in_memory().unwrap();

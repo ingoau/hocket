@@ -23,6 +23,33 @@ export async function launchFake(userData: string, extraEnv: Record<string, stri
   return { app, page };
 }
 
+/**
+ * Resize the window's content area to `width`×`height` and wait until the renderer sees it.
+ * Through the window's own handle; Playwright's main-process evaluation can lose its result to a
+ * garbage collection in the main process ("Resulting promise was garbage collected"), which
+ * leaves the resize done or not, so it is retried (setting the same size again is harmless), and
+ * the renderer's size, not the call, is what the spec waits on.
+ */
+export async function resizeWindow(app: ElectronApplication, page: Page, width: number, height: number): Promise<void> {
+  let size: [number, number] = [width, height];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const bw = await app.browserWindow(page);
+      // What the window settled on (its minimum size may have the last word).
+      size = (await bw.evaluate((w, s) => {
+        w.setContentSize(s[0], s[1]);
+        return w.getContentSize();
+      }, [width, height] as const)) as [number, number];
+      await bw.dispose().catch(() => undefined);
+      break;
+    } catch (error) {
+      if (attempt >= 4 || !/garbage collected|Target closed|Execution context/i.test(String(error))) throw error;
+      await page.waitForTimeout(100);
+    }
+  }
+  await page.waitForFunction((s) => window.innerWidth === s[0] && window.innerHeight === s[1], size, { timeout: 10_000 });
+}
+
 export const test = base.extend<{ hocket: AppFixture }>({
   hocket: async ({}, use) => { // eslint-disable-line no-empty-pattern
     const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
@@ -58,6 +85,7 @@ export async function completeSetup(page: Page): Promise<void> {
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 
+/** Plays the first album and shows the queue in the side panel (its overview is the default view). */
 export async function playFirstAlbum(page: Page): Promise<void> {
   await page.getByTestId("nav-albums").click();
   const tile = page.getByTestId("grid-tile").first();
@@ -65,7 +93,16 @@ export async function playFirstAlbum(page: Page): Promise<void> {
   await tile.dblclick();
   await expect(page.getByTestId("view-album")).toBeVisible();
   await page.getByTestId("album-play").click();
+  await showSideView(page, "queue");
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
+}
+
+/** Shows the side panel on `view` with the player bar's buttons, as a user would. */
+export async function showSideView(page: Page, view: "lyrics" | "queue"): Promise<void> {
+  const panel = page.getByTestId("right-panel");
+  if ((await panel.count()) && (await panel.getAttribute("data-view")) === view) return;
+  await page.getByTestId(view === "queue" ? "toggle-queue" : "toggle-lyrics").click();
+  await expect(panel).toHaveAttribute("data-view", view);
 }
 
 /** Pick `value` in one of the app's Select comboboxes (components/controls.tsx) by pointer, like a user. */

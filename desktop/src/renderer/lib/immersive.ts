@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
 import { resolveArtwork } from "../components/Artwork";
+import { BLACK, composite, contrast, mix, roundRgb, WHITE, type Rgb } from "./contrast";
 
 /** What the classifier gets: the cover at this side (it resamples to 128 itself). */
 const SIDE = 256;
@@ -38,6 +39,7 @@ export async function classify(url: string, preference: ImmersiveArtwork, dark: 
     if (ctx) {
       ctx.drawImage(img, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h).data;
+      c.width = c.height = 0;
       // No face detection on the desktop yet: faces only rule a mirror out, so a portrait may mirror.
       layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference, theme: dark ? "dark" : "light" }).catch(() => undefined);
     }
@@ -113,9 +115,15 @@ export function useScene(coverArt: string | undefined, preference: ImmersiveArtw
   return coverArt ? scene : undefined;
 }
 
-export type Orientation = "bottom" | "right";
+/**
+ * Which way the continuation runs from the artwork: "bottom" (artwork on top, full width),
+ * "right" (artwork on the left, full height) or "left" (artwork on the right, full height; with
+ * "right", centred artwork carried on both ways).
+ */
+export type Orientation = "bottom" | "right" | "left";
 
-const hex = (c: number) => `#${(c & 0xffffff).toString(16).padStart(6, "0")}`;
+/** A `0xRRGGBB` colour as CSS. */
+export const hex = (c: number) => `#${(c & 0xffffff).toString(16).padStart(6, "0")}`;
 
 /** `colors` averaged over a window of 2·radius + 1: the same edge, blurred sideways. */
 export function soften(colors: number[], radius: number): number[] {
@@ -135,6 +143,136 @@ export function isFlat(edge: ArtworkEdge): boolean {
   return edge.style === "extend" && edge.reason === "extend:flat";
 }
 
+const DARK_FG: Rgb = { r: 0x1c, g: 0x1b, b: 0x1f };
+const rgbOf = (c: number): Rgb => ({ r: (c >> 16) & 255, g: (c >> 8) & 255, b: c & 255 });
+
+/**
+ * The scrim (white under dark controls, black under light ones) that `light` controls need over
+ * `edge`'s colours to reach 4.5:1: what the core works out for its own choice, for the other one.
+ */
+export function scrimFor(edge: ArtworkEdge, light: boolean, textAlpha = 1): number {
+  const fg = light ? DARK_FG : WHITE;
+  const under = light ? WHITE : BLACK;
+  /** The text (at `textAlpha`, like muted text) against what it is drawn on. */
+  const ok = (bg: Rgb) => contrast(composite(fg, textAlpha, bg), bg) >= 4.5;
+  let need = 0;
+  for (const c of [...edge.edgeColors, edge.baseColor].map(rgbOf)) {
+    if (ok(c)) continue;
+    let lo = 0;
+    let hi = 1;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      if (ok(composite(under, mid, c))) hi = mid;
+      else lo = mid;
+    }
+    need = Math.max(need, hi);
+  }
+  return Math.min(0.85, need);
+}
+
+const ends = new WeakMap<HTMLImageElement, Rgb>();
+/**
+ * Where a reflection ends up: the average of the cover's bottom strip (what the reflection's
+ * blur, carried far enough, comes to). Cached per image.
+ */
+export function endColour(img: HTMLImageElement): Rgb | undefined {
+  const known = ends.get(img);
+  if (known) return known;
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 4;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx || !img.width) return undefined;
+  const strip = Math.max(1, Math.round(img.height * 0.12));
+  ctx.drawImage(img, 0, img.height - strip, img.width, strip, 0, 0, 32, 4);
+  const d = ctx.getImageData(0, 0, 32, 4).data;
+  c.width = c.height = 0;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    r += d[i]!;
+    g += d[i + 1]!;
+    b += d[i + 2]!;
+  }
+  const n = d.length / 4;
+  const end = { r: Math.round(r / n), g: Math.round(g / n), b: Math.round(b / n) };
+  ends.set(img, end);
+  return end;
+}
+
+/**
+ * `bg` darkened (under light text) or lightened (under dark text, `light`), keeping its hue, just
+ * enough that text at `textAlpha` over it reaches 4.5:1.
+ */
+export function toneForText(bg: Rgb, light: boolean, textAlpha = 1): Rgb {
+  const fg = light ? DARK_FG : WHITE;
+  const toward = light ? WHITE : BLACK;
+  for (let t = 0; t <= 1.0001; t += 0.01) {
+    const c = roundRgb(mix(bg, toward, t));
+    if (contrast(composite(fg, textAlpha, c), c) >= 4.6) return c;
+  }
+  return toward;
+}
+
+/**
+ * After a draw: the scrim (white under dark text when `light`, black under light text) that text
+ * at `textAlpha` needs over what the canvas shows between rows `from` and `to` (device px), so the
+ * part nearest the artwork (where a reflection, or an extension's bridge, still shows the
+ * artwork's own detail) reads as well as the colours along the edge. Sampled every 4 px.
+ */
+export function scrimOver(canvas: HTMLCanvasElement, from: number, to: number, light: boolean, textAlpha: number, max = 0.7): number {
+  const ctx = canvas.getContext("2d");
+  const y0 = Math.max(0, Math.floor(from));
+  const h = Math.min(canvas.height, Math.ceil(to)) - y0;
+  if (!ctx || h <= 0) return 0;
+  const d = ctx.getImageData(0, y0, canvas.width, h).data;
+  const fg = light ? DARK_FG : WHITE;
+  const under = light ? WHITE : BLACK;
+  const ok = (bg: Rgb) => contrast(composite(fg, textAlpha, bg), bg) >= 4.6;
+  let need = 0;
+  for (let y = 0; y < h; y += 4) {
+    for (let x = 0; x < canvas.width; x += 4) {
+      const i = (y * canvas.width + x) * 4;
+      if (d[i + 3]! < 200) continue;
+      const c = { r: d[i]!, g: d[i + 1]!, b: d[i + 2]! };
+      if (ok(composite(under, need, c))) continue;
+      let lo = need;
+      let hi = max;
+      for (let k = 0; k < 10; k++) {
+        const mid = (lo + hi) / 2;
+        if (ok(composite(under, mid, c))) hi = mid;
+        else lo = mid;
+      }
+      need = hi;
+      if (need >= max) return max;
+    }
+  }
+  return need;
+}
+
+const toned = new WeakMap<ArtworkEdge, Map<string, ArtworkEdge>>();
+/**
+ * `edge` under controls that are `light` (dark text) or not, whatever the core chose for it alone:
+ * where two continuations share the controls (centred artwork) and disagree, both follow the app's
+ * theme, and the one that did not gets the scrim that choice needs. With `textAlpha` below 1 the
+ * scrim is enough for text that faint too (muted text over the side panel's continuation). The
+ * same object for the same edge and choice, so it draws once.
+ */
+export function withTone(edge: ArtworkEdge, light: boolean, textAlpha = 1): ArtworkEdge {
+  if (edge.light === light && textAlpha === 1) return edge;
+  const key = `${light}|${textAlpha}`;
+  let byKey = toned.get(edge);
+  if (!byKey) toned.set(edge, (byKey = new Map()));
+  let t = byKey.get(key);
+  if (!t) {
+    const own = edge.light === light ? edge.scrim : 0;
+    t = { ...edge, light, scrim: Math.max(own, scrimFor(edge, light, textAlpha)) };
+    byKey.set(key, t);
+  }
+  return t;
+}
+
 /** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
 export const FEATHER = 0.3;
 /** Blur at the seam and far from it, as shares of the artwork's side. */
@@ -151,12 +289,12 @@ const BLUR_FAR = 0.14;
  */
 function mirrored(source: CanvasImageSource, W: number, S: number, blur: number): { canvas: HTMLCanvasElement; pad: number } {
   const pad = Math.ceil(blur * 3);
-  const c = document.createElement("canvas");
+  const c = scratch();
   c.width = W + 2 * pad;
   c.height = 2 * S + pad;
   const ctx = c.getContext("2d");
   if (!ctx) return { canvas: c, pad };
-  const tile = document.createElement("canvas");
+  const tile = scratch();
   tile.width = c.width;
   tile.height = c.height;
   const t = tile.getContext("2d");
@@ -197,41 +335,70 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * scrim the core worked out for 4.5:1, and from the controls down a partial fade to
  * black under light controls or white under dark ones (the controls follow the app's
  * theme unless the cover is almost all dark or light).
+ * "left" is "right" mirrored: from the artwork's left part leftwards (the full height at the
+ * right), the artwork flipped before it is carried on. With `split` (centred artwork, carried on
+ * both ways) the blurred copy under the artwork covers only this side's half of it, so the other
+ * side's copy shows under the other half. Without `bottomFade` (the side panel, where the
+ * continuation carries on in its base colour past the canvas) no fade over the controls; with
+ * `baseFill` the continuation always lies on its base colour (never on what is beneath), so the
+ * canvas ends in exactly the colour that carries on past it.
  */
-export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }): void {
+export function drawContinuation(...args: Parameters<typeof draw>): void {
+  try {
+    draw(...args);
+  } finally {
+    // The working canvases are large (the artwork's side and more, twice or three times over, per
+    // side); give their memory back now rather than at the next collection.
+    for (const c of temps.splice(0)) c.width = c.height = 0;
+  }
+}
+
+/** Working canvases made during a draw, released when it ends. */
+const temps: HTMLCanvasElement[] = [];
+function scratch(): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  temps.push(c);
+  return c;
+}
+
+function draw(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge: ArtworkEdge, orientation: Orientation, controls?: { top: number; bottom: number }, { split = false, bottomFade = true, baseFill = false }: { split?: boolean; bottomFade?: boolean; baseFill?: boolean } = {}): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // Work in "bottom" terms: for "right", transpose the canvas (x↔y) and the image.
-  const right = orientation === "right";
-  const W = right ? canvas.height : canvas.width;
-  const H = right ? canvas.width : canvas.height;
-  const S = W; // the artwork's side: the full width (or, for "right", the full height)
+  // Work in "bottom" terms: for "right", transpose the canvas (x↔y) and the image; for "left",
+  // mirror both left to right first.
+  const side = orientation !== "bottom";
+  const left = orientation === "left";
+  const W = side ? canvas.height : canvas.width;
+  const H = side ? canvas.width : canvas.height;
+  const S = W; // the artwork's side: the full width (or, beside it, the full height)
   if (H <= S) return;
   let source: CanvasImageSource | undefined = img;
-  if (img && right) {
-    const t = document.createElement("canvas");
-    t.width = img.width;
-    t.height = img.height;
+  if (img && side) {
+    const t = scratch();
+    t.width = img.height;
+    t.height = img.width;
     const tc = t.getContext("2d");
     if (tc) {
-      tc.setTransform(0, 1, 1, 0, 0, 0);
+      if (left) tc.setTransform(0, -1, 1, 0, 0, img.width);
+      else tc.setTransform(0, 1, 1, 0, 0, 0);
       tc.drawImage(img, 0, 0);
       source = t;
     }
   }
-  if (right) ctx.setTransform(0, 1, 1, 0, 0, 0);
+  if (left) ctx.setTransform(0, 1, -1, 0, canvas.width, 0);
+  else if (side) ctx.setTransform(0, 1, 1, 0, 0, 0);
   const region = H - S;
   const flat = isFlat(edge);
   const band0 = flat ? S : Math.round(S * (1 - FEATHER));
-  if (flat || edge.light) {
+  if (flat || edge.light || baseFill) {
     ctx.fillStyle = hex(edge.baseColor);
     ctx.fillRect(0, band0, W, H - band0);
   }
   /** Draws `paint` into a layer below the seam, masked to `stops` ([fraction of S from the seam, alpha]). */
   const band = (stops: [number, number][], paint: (c: CanvasRenderingContext2D) => void) => {
-    const layer = document.createElement("canvas");
+    const layer = scratch();
     layer.width = W;
     layer.height = region;
     const lc = layer.getContext("2d");
@@ -254,7 +421,7 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   const nearAcross = (after: [number, number][]) => {
     if (!near) return;
     const h = Math.min(H, near.canvas.height);
-    const layer = document.createElement("canvas");
+    const layer = scratch();
     layer.width = W;
     layer.height = h;
     const lc = layer.getContext("2d");
@@ -262,7 +429,13 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     lc.drawImage(near.canvas, near.pad, 0, W, h, 0, 0, W, h);
     lc.globalCompositeOperation = "destination-in";
     const g = lc.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, "rgba(0,0,0,1)");
+    if (split) {
+      g.addColorStop(0, "rgba(0,0,0,0)");
+      g.addColorStop((0.4 * S) / h, "rgba(0,0,0,0)");
+      g.addColorStop((0.55 * S) / h, "rgba(0,0,0,1)");
+    } else {
+      g.addColorStop(0, "rgba(0,0,0,1)");
+    }
     for (const [y, a] of after) g.addColorStop(Math.min(1, (S + y * S) / h), `rgba(0,0,0,${a})`);
     lc.fillStyle = g;
     lc.fillRect(0, 0, W, h);
@@ -288,7 +461,7 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   }
   // Where the scrim is at full strength: the controls start right at the seam below the artwork,
   // but a little way past it beside the artwork, so there it can come in more gently.
-  const full = flat ? S + 0.12 * S : right ? S + 0.06 * S : S;
+  const full = flat ? S + 0.12 * S : side ? S + 0.06 * S : S;
   // The scrim the controls need: it comes in under the artwork's fading edge (or, past a crisp
   // flat edge, just after it).
   if (edge.scrim > 0) {
@@ -299,18 +472,24 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
     ctx.fillStyle = g;
     ctx.fillRect(0, from, W, H - from);
   }
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Back to screen terms (mirrored for "left").
+  if (left) ctx.setTransform(-1, 0, 0, 1, canvas.width, 0);
+  else ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!bottomFade) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return;
+  }
   // Over the controls (`controls`: their top and bottom in canvas px; in screen terms, whichever
   // way the continuation runs) it fades part of the way to the controls' opposite: black under
   // light controls, white under dark ones. It comes in a little above them and is at full
   // strength by their bottom, so it covers all of them. Beside the artwork it comes in across
   // the seam too, under the artwork's fading edge.
   const rgb = edge.light ? "255,255,255" : "0,0,0";
-  const x0 = right ? (flat ? S : band0) : 0;
+  const x0 = side ? (flat ? S : band0) : 0;
   const lead = 0.08 * canvas.height;
-  const top = Math.max(right ? 0 : band0, Math.min(controls ? controls.top - lead : right ? canvas.height * 0.3 : S, canvas.height - 1));
+  const top = Math.max(side ? 0 : band0, Math.min(controls ? controls.top - lead : side ? canvas.height * 0.3 : S, canvas.height - 1));
   const end = controls ? Math.max(top + 1, Math.min(controls.bottom, canvas.height)) : canvas.height;
-  const layer = document.createElement("canvas");
+  const layer = scratch();
   layer.width = canvas.width - x0;
   layer.height = canvas.height - top;
   const lc = layer.getContext("2d");
@@ -319,9 +498,11 @@ export function drawContinuation(canvas: HTMLCanvasElement, img: HTMLImageElemen
   eased(down, rgb, 0, BOTTOM_FADE);
   lc.fillStyle = down;
   lc.fillRect(0, 0, layer.width, layer.height);
-  if (right) {
+  if (side) {
     lc.globalCompositeOperation = "destination-in";
-    const across = lc.createLinearGradient(0, 0, Math.max(1, full - x0), 0);
+    // Centred, the fade sits in both bottom corners: it comes in more slowly there, so the two
+    // read as one vignette rather than as edges beside the artwork.
+    const across = lc.createLinearGradient(0, 0, Math.max(1, (split ? S + 0.3 * S : full) - x0), 0);
     eased(across, "0,0,0", 0, 1);
     lc.fillStyle = across;
     lc.fillRect(0, 0, layer.width, layer.height);

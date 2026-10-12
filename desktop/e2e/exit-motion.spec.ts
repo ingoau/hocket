@@ -78,6 +78,13 @@ test.describe("exit animations", () => {
     await page.getByTestId("jobs-button").click();
     await expectExiting(popover);
 
+    // The queue selector's drop-down (the side panel shows the queue after playFirstAlbum).
+    await page.getByTestId("queue-selector").click();
+    const selector = page.getByTestId("queue-selector-menu");
+    await expect(selector).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expectExiting(selector);
+
     // The fullscreen player: fades out, focus already back in the shell.
     await page.getByTestId("content").click();
     await page.keyboard.press("f");

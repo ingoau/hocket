@@ -184,4 +184,5 @@ object ArtworkSizes {
 fun Track.toSummary(): TrackSummary = TrackSummary(
     id = id, serverId = serverId, title = title, artist = artist, album = album, albumId = albumId,
     artistId = artistId, durationMs = durationMs, coverArt = coverArt, rating = rating, loved = loved, offline = offline,
+    artists = artists,
 )

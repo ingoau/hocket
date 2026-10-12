@@ -1,0 +1,32 @@
+{
+  "subsonic-response": {
+    "status": "ok",
+    "version": "1.16.1",
+    "type": "navidrome",
+    "serverVersion": "0.55.0",
+    "openSubsonic": true,
+    "song": {
+      "id": "s9",
+      "parent": "al9",
+      "isDir": false,
+      "title": "Harbour Lights",
+      "album": "Night Ferries",
+      "artist": "Marlowe Reed feat. Juno",
+      "displayArtist": "Marlowe Reed & Juno",
+      "albumId": "al9",
+      "artistId": "ar7",
+      "duration": 201,
+      "suffix": "flac",
+      "contentType": "audio/flac",
+      "coverArt": "al-al9",
+      "type": "music",
+      "mediaType": "song",
+      "artists": [
+        { "id": "ar7", "name": "Marlowe Reed" },
+        { "id": "ar8", "name": "Juno" }
+      ],
+      "displayAlbumArtist": "Marlowe Reed",
+      "albumArtists": [{ "id": "ar7", "name": "Marlowe Reed" }]
+    }
+  }
+}

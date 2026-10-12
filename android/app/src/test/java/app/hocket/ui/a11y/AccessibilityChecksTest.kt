@@ -119,14 +119,29 @@ class AccessibilityChecksTest {
         compose.onNodeWithTag("player.mode.queue").performClick()
         compose.waitForIdle()
         check("queue")
-        compose.onNodeWithTag("player.mode.about").performClick()
+        compose.onNodeWithTag("player.mode.queue").performClick()
         compose.waitForIdle()
-        check("about")
         // The lyrics page runs a frame loop while shown: drive the clock by hand from here.
         compose.mainClock.autoAdvance = false
         compose.onNodeWithTag("player.mode.lyrics").performClick()
         repeat(60) { compose.mainClock.advanceTimeByFrame() }
         A11yChecks.assertAccessible(compose, "lyrics")
+        compose.onNodeWithTag("player.mode.lyrics").performClick()
+        repeat(60) { compose.mainClock.advanceTimeByFrame() }
+        // The song's details, from the title.
+        compose.onNodeWithTag("player.title").performClick()
+        repeat(60) { compose.mainClock.advanceTimeByFrame() }
+        A11yChecks.assertAccessible(compose, "about this song")
+    }
+
+    @Test
+    fun theArtistsSheetPassesTheChecks() {
+        start()
+        compose.onNodeWithTag("miniPlayer").performClick()
+        compose.waitUntil(5_000) { displayed("player.playPause") }
+        compose.onNodeWithTag("player.artistLine").performClick()
+        compose.waitUntil(5_000) { displayed("player.artists.album") }
+        check("artists and album")
     }
 
     @Test

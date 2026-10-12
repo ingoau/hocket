@@ -106,7 +106,9 @@ test.describe("real server (manual)", () => {
       const view = page.getByTestId("lyrics-view");
       await expect(view).toBeVisible({ timeout: 60_000 });
       await expect(view).toHaveAttribute("data-tier", "syllable", { timeout: 30_000 });
+      await page.getByTestId("lyrics-options").click();
       await expect(page.getByTestId("lyrics-tools")).toContainText("Word-synced");
+      await page.keyboard.press("Escape");
       const host = page.getByTestId("amll-host");
       const active = host.locator('[class*="lyricLine"][class*="active"]:not([class*="lyricBgLine"])').first();
       await expect(active).toBeVisible({ timeout: 90_000 });

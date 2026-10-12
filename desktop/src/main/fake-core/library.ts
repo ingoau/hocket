@@ -32,6 +32,7 @@ export function summary(t: Track): TrackSummary {
     album: t.album,
     albumId: t.albumId,
     artistId: t.artistId,
+    artists: t.artists,
     durationMs: t.durationMs,
     coverArt: t.coverArt,
     rating: t.rating,
@@ -154,6 +155,14 @@ export function generateLibrary(serverId: string, seed = 7, trackTarget = 3200):
         explicit: rng.chance(0.05),
         comment: undefined,
       };
+      // The showcase song has a guest (OpenSubsonic `artists`): the player shows the artist string
+      // as given and its artist menu lists both. Nothing random is drawn for it, so the rest of
+      // the library stays as it was.
+      if (showcase) {
+        const guest = artists[(artists.indexOf(artist) + 7) % artists.length]!;
+        track.artist = `${artist.name} feat. ${guest.name}`;
+        track.artists = [{ id: artist.id, name: artist.name }, { id: guest.id, name: guest.name }];
+      }
       album.durationMs += durationMs;
       album.playCount += plays;
       if (track.lastPlayed !== undefined && (album.lastPlayed === undefined || track.lastPlayed > album.lastPlayed)) album.lastPlayed = track.lastPlayed;

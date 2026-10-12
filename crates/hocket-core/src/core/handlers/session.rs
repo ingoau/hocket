@@ -1210,6 +1210,7 @@ pub(crate) fn track_from_summary(s: &TrackSummary) -> Track {
         album: s.album.clone(),
         artist_id: s.artist_id.clone(),
         artist: s.artist.clone(),
+        artists: s.artists.clone(),
         duration_ms: s.duration_ms,
         cover_art: s.cover_art.clone(),
         rating: s.rating,
@@ -1310,5 +1311,36 @@ impl Actor {
     #[allow(dead_code)]
     pub(crate) fn queue_op_of(&self, op: &SessionOp) -> Option<QueueOp> {
         crate::connect::session_adapter::to_queue_op(op)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cached_summary_keeps_every_artist() {
+        // Autoplay caches picks the mirror doesn't have yet from their summaries: the queue then
+        // reads them back from the mirror, so the artists list must survive the round trip.
+        let summary = TrackSummary {
+            id: "t1".into(),
+            title: "Low Tide".into(),
+            artist: Some("Marlowe Reed feat. Juno".into()),
+            artist_id: Some("ar7".into()),
+            artists: vec![
+                ArtistRef {
+                    id: Some("ar7".into()),
+                    name: "Marlowe Reed".into(),
+                },
+                ArtistRef {
+                    id: Some("ar8".into()),
+                    name: "Juno".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let track = track_from_summary(&summary);
+        assert_eq!(track.artists, summary.artists);
+        assert_eq!(track.artist.as_deref(), Some("Marlowe Reed feat. Juno"));
     }
 }

@@ -37,21 +37,26 @@ test.describe("playback and queue", () => {
     await expect(page.getByTestId("queue-row-history")).toHaveCount(2);
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");
-    await fs.getByTestId("fs-mode-queue").click();
+    // It opens on the queue the first time.
+    await expect(fs).toHaveAttribute("data-mode", "queue");
     // History is scrolled out of view above; the current item sits at the top.
     await expect.poll(() => fs.getByTestId("queue-scroll").evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
     const [listTop, currentTop] = await Promise.all([fs.getByTestId("queue-scroll").evaluate((el) => el.getBoundingClientRect().top), fs.getByTestId("queue-row-current").evaluate((el) => el.getBoundingClientRect().top)]);
     expect(currentTop - listTop).toBeLessThan(80);
-    // The header toggles are the queue's shuffle / repeat / autoplay.
-    await fs.getByTestId("queue-repeat").click();
-    await expect(fs.getByTestId("queue-repeat")).toHaveAttribute("aria-pressed", "true");
+    // The header's toggle is the queue's autoplay (shuffle and repeat are in the transport).
+    const autoplay = fs.getByTestId("queue-autoplay");
+    const was = await autoplay.getAttribute("aria-pressed");
+    await autoplay.click();
+    await expect(autoplay).toHaveAttribute("aria-pressed", was === "true" ? "false" : "true");
+    await expect(fs.getByTestId("queue-autoplay-note")).toHaveCount(was === "true" ? 0 : 1);
+    await fs.getByTestId("fs-repeat").click();
     await expect(fs.getByTestId("fs-repeat")).toHaveAttribute("aria-pressed", "true");
     await fs.getByTestId("queue-clear-history").click();
     await expect(page.getByTestId("queue-row-history")).toHaveCount(0);
     await expect(fs.getByTestId("queue-row-current")).toHaveCount(1);
   });
 
-  test("the fullscreen player opens with F and shows lyrics, related and up next", async ({ hocket }) => {
+  test("the fullscreen player opens with F on the queue and shows lyrics, related and up next", async ({ hocket }) => {
     const { app, page } = hocket;
     const windowFullscreen = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isFullScreen()));
     await completeSetup(page);
@@ -76,31 +81,43 @@ test.describe("playback and queue", () => {
     // The fluid background is fed the cover art, not the fallback gradient.
     const bg = fs.getByTestId("fluid-bg");
     await expect(bg).toHaveAttribute("data-source", "artwork");
-    // Wide windows get the desktop layout: the controls column carries volume (the player bar is covered).
+    // Volume lives in the pill (the player bar is covered): a popover with the slider.
+    await fs.getByTestId("fs-pill-volume").click();
     const vol = fs.getByTestId("fs-volume");
     await expect(vol).toBeVisible();
+    await expect(vol).toBeFocused();
     const v0 = Number(await vol.inputValue());
-    await vol.focus();
     await page.keyboard.press("ArrowLeft");
     await expect.poll(async () => Math.round(Number(await vol.inputValue()) * 100)).toBe(Math.round((v0 - 0.05) * 100));
-    // It opens on the artwork; Lyrics / Queue / About replace it in place and the artwork shrinks next to the title.
+    // Escape closes the popover, not the player.
+    await page.keyboard.press("Escape");
+    await expect(fs.getByTestId("fs-volume-popover")).toHaveCount(0);
+    await expect(fs).toBeVisible();
+    // It opens on the queue the first time; the toggle that is on goes back to the artwork alone.
+    await expect(fs.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
+    await expect(fs.getByTestId("queue-timeline")).toBeVisible();
+    await expect(fs.getByTestId("queue-header")).toBeVisible();
+    // The queue's name is its selector's (there is no "Playing from" header).
+    await expect(fs.getByTestId("queue-selector-label")).not.toHaveText("");
+    await expect(fs.getByText("Playing from")).toHaveCount(0);
+    await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
-    await expect(fs.getByTestId("np-source")).not.toHaveText("");
+    // Lyrics / Queue / About take the right; the artwork stays beside them, now a button back to
+    // it alone (np-thumb: the big artwork here, in the columns layout; a thumbnail by the title
+    // only in the stacked one).
     await fs.getByTestId("fs-mode-queue").click();
     await expect(fs.getByTestId("fs-mode-queue")).toHaveAttribute("aria-pressed", "true");
     await expect(fs.getByTestId("np-artwork")).toHaveCount(0);
     await expect(fs.getByTestId("np-thumb")).toBeVisible();
-    await expect(fs.getByTestId("queue-timeline")).toBeVisible();
-    await expect(fs.getByTestId("queue-header")).toBeVisible();
     await fs.getByTestId("fs-mode-about").click();
     await expect(fs.getByTestId("np-about")).toContainText("Duration");
     await expect(fs.getByTestId("related-list")).toBeVisible();
-    // The chosen pane is remembered when the player closes and reopens.
+    // The chosen view is remembered when the player closes and reopens.
     await page.keyboard.press("Escape");
     await expect(fs).toHaveCount(0);
     await page.getByTestId("toggle-fullscreen").click();
     await expect(fs.getByTestId("np-about")).toBeVisible();
-    // Choosing it again (or the thumbnail) brings the artwork back.
+    // Choosing it again (or the artwork) brings the artwork back alone.
     await fs.getByTestId("fs-mode-about").click();
     await expect(fs.getByTestId("np-artwork")).toBeVisible();
     await expect(fs.getByTestId("fs-mode-about")).toHaveAttribute("aria-pressed", "false");

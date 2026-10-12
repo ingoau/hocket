@@ -139,11 +139,14 @@ object A11yChecks {
     }
 
     /**
-     * Clipped or overlapping controls and clipped text (text shortened with an ellipsis is fine).
+     * Clipped or overlapping controls and clipped text (text shortened with an ellipsis, or cut at the
+     * sides of a marquee that scrolls it, is fine).
      * Content scrolled under a floating [overlays] surface (the mini player sheet, the navigation
-     * bar: the bottom inset lets it scroll clear) is not an overlap; controls within one are.
+     * bar: the bottom inset lets it scroll clear; the full player's queue toggles, floating over the
+     * bottom of the queue panel with the list scrolling under them) is not an overlap; controls
+     * within one are.
      */
-    fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar")): List<Issue> {
+    fun layoutIssues(rule: ComposeTestRule, overlays: Set<String> = setOf("nowPlaying.sheet", "navBar", "queue.controls")): List<Issue> {
         val merged = roots(rule)
         val unmergedRoots = roots(rule, unmerged = true)
         return merged.indices.flatMap { i -> layoutIssues(merged[i], unmergedRoots.getOrNull(i) ?: merged[i], rule.density.density, overlays) }
@@ -187,10 +190,16 @@ object A11yChecks {
             // Lines beyond maxLines end in an ellipsis (fine); lines that are laid out but do not fit
             // the height the text was given are cut off.
             if (r.size.height + 1 < r.multiParagraph.height) out += Issue(describe(n) + " text=${r.multiParagraph.height}px box=${r.size.height}px", "text clipped")
-            if (isClipped(n) && !clippedByScroll(n, rootBounds)) out += Issue(describe(n) + " unclipped=${unclipped(n)}", "text clipped by its container")
+            // A marquee (the player's title) cuts its line at the sides and scrolls the rest into view;
+            // cut at the top or bottom it is still clipped.
+            val marquee = under(n, MARQUEES) != null && kotlin.math.abs(n.boundsInRoot.height - unclipped(n).height) <= 1f
+            if (isClipped(n) && !clippedByScroll(n, rootBounds) && !marquee) out += Issue(describe(n) + " unclipped=${unclipped(n)}", "text clipped by its container")
         }
         return out
     }
+
+    /** Lines that scroll sideways when they do not fit. */
+    private val MARQUEES = setOf("player.title.marquee")
 
     fun assertAccessible(rule: ComposeTestRule, what: String, minTouchDp: Float = 48f) {
         val found = issues(rule, minTouchDp)

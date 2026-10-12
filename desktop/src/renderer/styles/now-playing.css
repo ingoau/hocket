@@ -15,50 +15,72 @@
 .qrow .grip { display: inline-flex; flex: 0 0 auto; }
 .qrow .grip-space { width: 14px; flex: 0 0 auto; }
 
-/* ---- Fullscreen player --------------------------------------------------- */
-.fullscreen.np { display: block; overflow: hidden; }
+/* ---- Fullscreen player ---------------------------------------------------
+   docs/design.md "Desktop layout". Three layouts (data-layout): "columns"
+   (the rounded artwork with the controls card under it; a view takes the
+   right), "immersive" (the artwork full height on the left, the card floating
+   over it as glass) and "stacked" (narrow and tall windows). The header and
+   the bottom-right pill are absolutely placed in all three. */
+/* --np-pane-w: the view's (lyrics, queue, about) width beside the artwork, one rule for every wide
+   layout, so the lines are as long whatever the cover. */
+.fullscreen.np { display: block; overflow: hidden; --np-col-w: clamp(260px, min(38vw, calc(100vh - 500px)), 480px); --np-pane-w: clamp(400px, 36vw, 640px); --np-glass: 0.5; }
 .np-fade { position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.12) 40%, rgba(0, 0, 0, 0.62) 100%); }
-.np-stage { position: relative; z-index: 1; height: 100%; width: min(calc(100% - 48px), 680px); margin: 0 auto; padding: 18px 0 22px; display: flex; flex-direction: column; gap: 14px; }
-.np[data-mode="queue"] .np-stage, .np[data-mode="lyrics"] .np-stage, .np[data-mode="about"] .np-stage { width: min(calc(100% - 48px), 760px); }
 
-.np-head { display: flex; align-items: center; gap: 12px; min-height: 44px; flex: 0 0 auto; }
-.np-source { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.np-kicker { font-size: var(--fs-sm); color: var(--fg-muted); }
-.np-source-name { font-size: var(--fs-lg); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The chrome (header, controls card, pill) fades out over the immersive artwork while the mouse rests. */
+.np-chrome { transition: opacity 300ms var(--ease-emphasized-decel); }
+.np[data-idle] .np-chrome { opacity: 0; pointer-events: none; transition: opacity 900ms var(--ease-emphasized); }
+.np[data-idle], .np[data-idle] * { cursor: none; }
 
-.np-main { flex: 1 1 auto; min-height: 0; container-type: size; display: flex; }
-.np-art-slot { width: 100%; height: 100%; display: grid; place-items: center; }
-.np-art { width: min(100cqw, 100cqh, 46vh); aspect-ratio: 1; border-radius: 28px; overflow: hidden; box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.3); background: rgba(255, 255, 255, 0.06); }
+.np-head { position: absolute; z-index: 3; top: 20px; right: 24px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 48px; }
+
+.np-stage { position: absolute; inset: 0; z-index: 1; }
+.np-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.np-art-slot { width: 100%; }
+.np-art { position: relative; display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 0; border-radius: var(--shape-xl); overflow: hidden; color: inherit; background: rgba(255, 255, 255, 0.06); box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5), 0 4px 14px rgba(0, 0, 0, 0.3); }
+.np-art-button { -webkit-appearance: none; appearance: none; cursor: default; }
+.np-art-button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 4px; border-radius: var(--shape-xl); }
 .np-art-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 /* A cover's scene (lib/immersive.ts): stacked over the one it fades in from (SCENE_FADE_MS). */
-.np-art { position: relative; }
 .np-art > .np-scene { position: absolute; inset: 0; }
 .np-scene-in { animation: np-scene-in 500ms var(--ease) both; }
 @keyframes np-scene-in { from { opacity: 0; } }
 .np-art-img.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-muted); background: rgba(255, 255, 255, 0.06); }
-.np-pane { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; animation: np-pane-in var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
-@keyframes np-pane-in { from { opacity: 0; transform: translateY(18px) scale(0.98); } }
+.np-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; animation: np-pane-in var(--spring-spatial-ms, 400ms) var(--spring-spatial, var(--ease)); }
+@keyframes np-pane-in { from { opacity: 0; transform: translateX(24px); } }
 
-.np-controls { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 14px; flex: 0 0 auto; min-width: 0; }
-.np-info { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; min-width: 0; }
-.np-thumb { flex: 0 0 auto; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
-.np-thumb:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 12px; }
+/* The controls card: glass over the blur (and over the artwork, where it is
+   as dark as the cover's brightest colour needs for 4.5:1, --np-glass). */
+.np-controls {
+  position: relative; z-index: 2; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 20px 20px; border-radius: var(--shape-xl);
+  background: rgba(0, 0, 0, calc(var(--np-glass) * 0.45)); -webkit-backdrop-filter: blur(32px) saturate(1.5); backdrop-filter: blur(32px) saturate(1.5);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.np-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.np-thumb { flex: 0 0 auto; width: 64px; height: 64px; padding: 0; border: 0; border-radius: var(--shape-md); overflow: hidden; background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); color: inherit; }
+.np-thumb:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--shape-md); }
 .np-text { flex: 1; min-width: 0; text-align: left; }
-.np-text .t1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-text .t1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 800; letter-spacing: -0.015em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .np-text .t2 { font-size: 16px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .np-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; border-radius: 4px; }
 .np-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-.np-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.np-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.np-stars { display: flex; margin: -2px 0 0 -2px; }
+.np-stars .stars { gap: 4px; }
 
-/* Buttons: circles with a state layer; pressing squashes them a little, springing back. */
-.np-icon-btn, .np-skip, .np-play, .np-tonal, .np-mode, .np-chip, .np-thumb {
-  -webkit-appearance: none; appearance: none; font: inherit; cursor: default;
-  transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), border-radius var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), width var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), background-color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease));
+/* Buttons: a state layer; pressing squashes them a little and squares them off, springing back. */
+.np-icon-btn, .np-skip, .np-play, .np-tonal, .np-mode, .np-thumb, .np-art-button { -webkit-appearance: none; appearance: none; font: inherit; cursor: default; }
+.np-icon-btn, .np-skip, .np-play, .np-tonal, .np-mode, .np-thumb, .np-art-button, .np .connect-pill, .np .autoplay-pill, .np .qs-button, .np .about-chip {
+  transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), border-radius var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), width var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), background-color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), opacity 300ms var(--ease-emphasized-decel);
 }
-.np-icon-btn:active, .np-skip:active, .np-tonal:active, .np-mode:active, .np-chip:active, .np-thumb:active { transform: scale(0.9); }
-.np-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 22px; border: 0; background: transparent; color: #fff; padding: 0; }
-.np-icon-btn.sm { width: 32px; height: 32px; }
+.np-icon-btn:active, .np-skip:active, .np-tonal:active, .np-mode:active, .np-thumb:active, .np .connect-pill:active { transform: scale(0.9); border-radius: var(--shape-md); }
+.np-art-button:active { transform: scale(0.985); }
+.np-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 22px; border: 0; background: transparent; color: var(--fg); padding: 0; }
+.np-icon-btn.sm { width: 36px; height: 36px; border-radius: 18px; }
 .np-icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
+/* Round tonal buttons (the card's actions and the header's). */
+.np-icon-btn.np-round { background: rgba(255, 255, 255, 0.14); }
+.np-icon-btn.np-round:hover { background: rgba(255, 255, 255, 0.22); }
+.np-actions .np-icon-btn.np-round { width: 40px; height: 40px; border-radius: 20px; }
 .np-icon-btn.heart.on { color: #ff9aae; }
 
 /* Wavy seek bar (WavySeek.tsx draws the wave; the geometry lives there). */
@@ -80,173 +102,114 @@
 .np-seek-bar .value-bubble { background: #fff; color: #121214; animation: np-bubble var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); transform-origin: 50% 100%; }
 @keyframes np-bubble { from { transform: translateX(-50%) scale(0.4); opacity: 0; } }
 .np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; margin-top: -4px; }
-
-/* Volume (wide layout): a thick rounded track with a gap either side of a bar thumb. */
-.np-volume { display: none; align-items: center; gap: 10px; flex: 0 0 auto; }
-
 /* Transport: the play button morphs between a pill (paused) and a rounded square (playing). */
-.np-transport { display: flex; align-items: center; justify-content: center; gap: 22px; flex: 0 0 auto; }
+.np-transport { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; margin-top: 2px; }
 /* Shuffle and repeat flank the transport: quiet circles that fill (and square off) when on. */
+.np-tonal { display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 0; color: var(--fg); }
 .np-tonal.np-flank { width: 48px; height: 48px; border-radius: 24px; background: transparent; }
 .np-tonal.np-flank:hover { background: rgba(255, 255, 255, 0.14); }
-.np-tonal.np-flank.on { background: rgba(255, 255, 255, 0.92); border-radius: 16px; }
-/* Autoplay, device and sleep share a row with volume (wide windows). */
-.np-row2 { display: flex; align-items: center; justify-content: center; gap: 16px; flex: 0 0 auto; flex-wrap: wrap; }
-.np-skip { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 32px; border: 0; background: transparent; color: #fff; padding: 0; }
-.np-skip:hover { background: rgba(255, 255, 255, 0.12); border-radius: 22px; }
+.np-tonal.np-flank.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: var(--shape-md); }
+.np-skip { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 28px; border: 0; background: transparent; color: var(--fg); padding: 0; }
+.np-skip:hover { background: rgba(255, 255, 255, 0.12); border-radius: var(--shape-lg); }
 .np-play { display: inline-flex; align-items: center; justify-content: center; height: 80px; border: 0; padding: 0; background: #fff; color: #121214; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
 .np-play.paused { width: 104px; border-radius: 40px; }
-.np-play.playing { width: 80px; border-radius: 26px; }
+.np-play.playing { width: 80px; border-radius: var(--shape-xl); }
 .np-play:hover { background: #f1f1f4; }
-.np-play:active { transform: scale(0.92); }
-.np-play:focus-visible { outline: 3px solid #fff; outline-offset: 3px; border-radius: 40px; }
+.np-play:active { transform: scale(0.92); border-radius: var(--shape-lg); }
+.np-play:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
 .np-play .spin { animation: spin 1.2s linear infinite; }
 
-/* Playback options: tonal buttons; on, they fill and square off a little. */
-.np-options { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 0 0 auto; flex-wrap: wrap; }
-.np-tonal { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 40px; border-radius: 20px; border: 0; padding: 0; background: rgba(255, 255, 255, 0.12); color: #fff; }
-.np-tonal:hover { background: rgba(255, 255, 255, 0.2); }
-.np-tonal.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: 12px; }
-.np-tonal.on:hover { background: #fff; }
-
-/* Lyrics / Queue / About */
-.np-modes { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
-.np-mode { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; border: 1px solid rgba(255, 255, 255, 0.34); background: transparent; color: #fff; font-size: var(--fs-lg); font-weight: 500; }
-.np-mode:hover { background: rgba(255, 255, 255, 0.12); }
-.np-mode.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-color: transparent; border-radius: 14px; }
+/* The bottom-right pill: the Connect device, the view toggles, sleep and volume. */
+.np-pill {
+  position: absolute; z-index: 3; right: 28px; bottom: 24px; display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: var(--shape-full);
+  background: rgba(0, 0, 0, 0.26); -webkit-backdrop-filter: blur(28px) saturate(1.4); backdrop-filter: blur(28px) saturate(1.4); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.np-pill-divider { flex: 0 0 auto; width: 1px; height: 28px; margin: 0 4px; background: rgba(255, 255, 255, 0.24); }
+.np-modes { display: flex; align-items: center; gap: 4px; }
+.np-mode { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 22px; background: transparent; color: var(--fg); }
+.np-mode:hover { background: rgba(255, 255, 255, 0.14); }
+.np-mode.on { background: rgba(255, 255, 255, 0.94); color: #121214; border-radius: var(--shape-md); }
 .np-mode.on:hover { background: #fff; }
+.np .connect-pill { height: 44px; padding: 0 6px 0 12px; gap: 4px; background: rgba(255, 255, 255, 0.14); color: var(--fg); }
+.np .connect-pill:hover { background: rgba(255, 255, 255, 0.22); }
+.np .connect-pill.remote { padding: 0 8px 0 14px; gap: 8px; background: var(--accent); color: var(--accent-fg); }
+.np .connect-pill .connect-caret { margin-left: -2px; }
+/* Volume: a popover over the pill with mute and a thick M3 slider. */
+.np-volume-wrap { position: relative; }
+.np-volume-pop {
+  position: absolute; right: -6px; bottom: calc(100% + 14px); display: flex; align-items: center; gap: 8px; width: 280px; padding: 10px 18px 10px 10px; border-radius: var(--shape-full);
+  background: rgba(20, 20, 24, 0.86); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); box-shadow: var(--shadow-2), var(--shadow); color: #fff; --fg: #fff;
+}
+.np-volume-pop { transform-origin: 90% 100%; }
+.np-volume-pop.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.np-volume-pop.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 
-/* Chips (queue header, About) */
-.np-chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 12px; border-radius: 17px; border: 0; background: rgba(255, 255, 255, 0.12); color: #fff; font-size: var(--fs-md); font-weight: 500; }
-.np-chip:hover { background: rgba(255, 255, 255, 0.2); }
-.np-chip.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: 10px; }
-
-/* Panes */
+/* Views */
 .np .empty { color: var(--fg-muted); }
 .np-pane-lyrics .lyrics-pane, .np-pane-lyrics .amll-host { height: 100%; }
 .np-pane-lyrics .amll-host.large { mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 48px), transparent 100%); }
 .np-pane-lyrics .lyrics-static { font-size: 22px; }
 .np .queue-wrap { height: 100%; }
-.np .queue-header { display: flex; gap: 8px; padding: 0 0 12px; flex: 0 0 auto; flex-wrap: wrap; }
-.np .queue-scroll { border-radius: 20px; }
-.np .queue-list { padding-bottom: 60cqh; }
-.np .queue-section { background: rgba(12, 12, 16, 0.5); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-radius: 14px; padding: 8px 12px; margin: 0 0 4px; font-size: var(--fs-sm); text-transform: none; letter-spacing: 0; color: #fff; }
-.np .queue-section-sub { color: rgba(255, 255, 255, 0.8); }
+.np .queue-header.large { padding: 0 0 14px; }
+.np .qs-button { color: var(--fg); }
+.np .qs-button:hover { background: rgba(255, 255, 255, 0.12); }
+.np .qs-button[aria-expanded="true"] { background: rgba(255, 255, 255, 0.16); }
+.qs-button.large { height: 52px; padding: 0 10px 0 8px; margin-left: -8px; font-size: 30px; letter-spacing: -0.02em; }
+.np .autoplay-pill { height: 40px; background: rgba(255, 255, 255, 0.14); color: var(--fg); }
+.np .autoplay-pill:hover { background: rgba(255, 255, 255, 0.22); filter: none; }
+.np .autoplay-pill.on { background: rgba(255, 255, 255, 0.94); color: #121214; }
+.np .autoplay-pill:active { transform: scale(0.95); border-radius: var(--shape-sm); }
+.fullscreen .lyrics-options-pop { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); --focus-ring: #fff; }
+.fullscreen .lyrics-options-pop .lyrics-size .btn.on { background: #fff; color: #121214; }
+.fullscreen .qs-popover { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); }
+.np .queue-scroll { border-radius: var(--shape-lg); }
+.np .queue-list { padding-bottom: 30vh; }
+.np .queue-section { background: rgba(12, 12, 16, 0.26); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); border-radius: var(--shape-md); padding: 8px 12px; margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #fff; }
+.np .queue-section-sub { color: rgba(255, 255, 255, 0.8); text-transform: none; letter-spacing: 0; }
 .np .queue-group.history .qrow { opacity: 0.85; }
-.np .qrow { height: 60px; border-radius: 16px; margin: 0 0 2px; padding: 0 10px; gap: 12px; }
-.np .qrow .art { width: 44px; height: 44px; border-radius: 10px; }
-.np .qrow .t1 { font-size: var(--fs-lg); font-weight: 500; }
-.np .qrow .t2 { font-size: var(--fs-sm); }
-.np .qrow.current { background: rgba(255, 255, 255, 0.14); }
+.np .qrow { height: 64px; border-radius: var(--shape-lg); margin: 0 0 2px; padding: 0 12px 0 8px; gap: 14px; }
+.np .qrow .art { width: 48px; height: 48px; border-radius: var(--shape-sm); }
+.np .qrow .t1 { font-size: var(--fs-lg); font-weight: 700; }
+.np .qrow .t2 { font-size: var(--fs-md); }
+.np .qrow .dur { color: var(--fg-muted); font-size: var(--fs-md); }
+.np .qrow.current { background: rgba(255, 255, 255, 0.16); }
 .np .qrow .grip { opacity: 0.55; }
 .np .qrow:hover .grip { opacity: 1; }
 .np .queue-clear { color: #fff; }
+.np .queue-autoplay-note { padding: 12px 12px 24px; }
+.np-about-scroll { height: 100%; overflow-y: auto; border-radius: var(--shape-lg); padding-right: 8px; }
+.np .about-song.about-player { gap: 22px; padding-bottom: 24px; }
+.np .about-facts { gap: 18px 32px; }
+.np .about-fact dt { font-size: var(--fs-md); }
+.np .about-fact dd { font-size: 18px; }
+.np .about-path-text { background: rgba(255, 255, 255, 0.1); font-size: var(--fs-md); }
+.np .about-chip { background: rgba(255, 255, 255, 0.14); color: var(--fg); }
+.np .about-chip:hover { background: rgba(255, 255, 255, 0.22); }
+.np .about-song .related-row:hover { background: rgba(255, 255, 255, 0.1); }
+.np .about-icon-btn:hover { background: rgba(255, 255, 255, 0.14); }
 
-.np-about { height: 100%; min-height: 0; }
-.np-about-scroll { height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; border-radius: 24px; }
-.np-card { background: rgba(0, 0, 0, 0.28); border-radius: 24px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
-.np-card-title { margin: 0; font-size: var(--fs-lg); font-weight: 700; }
-.np-facts { margin: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 20px; }
-.np-fact { min-width: 0; }
-.np-fact.wide { grid-column: 1 / -1; }
-.np-fact dt { font-size: var(--fs-sm); color: var(--fg-muted); margin: 0 0 2px; }
-.np-fact dd { margin: 0; font-size: var(--fs-lg); overflow-wrap: anywhere; }
-.np-muted { color: var(--fg-muted); }
-.np-card .plain-list { width: 100%; }
-.np .related-row { display: flex; gap: 12px; padding: 8px 10px; align-items: center; border-radius: 14px; }
-.np .related-row:hover { background: rgba(255, 255, 255, 0.1); }
-.np .related-row .art { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
-.np .related-row .why { font-size: var(--fs-xs); color: var(--fg-muted); }
+/* ---- Columns: the artwork and its card in a column, centred alone, on the left beside a view. */
+.np[data-layout="columns"] .np-stage { display: grid; grid-template-columns: var(--np-col-w) var(--np-pane-w); justify-content: center; column-gap: clamp(48px, 8vw, 160px); align-items: center; padding: 80px clamp(40px, 4vw, 64px) 100px; }
+.np[data-layout="columns"][data-mode="art"] .np-stage { grid-template-columns: var(--np-col-w); justify-content: center; padding-left: clamp(40px, 4vw, 64px); }
+.np[data-layout="columns"] .np-pane { align-self: stretch; }
+.np[data-layout="columns"] .np-pane-about { padding-top: 32px; }
 
-/* ---- Wide windows: a desktop layout, not a stretched phone -----------------
-   Artwork mode: a modest cover beside the controls column, centred together.
-   Pane modes: the pane fills the left and the cover stacks, large, on top of
-   the controls on the right. The cover flies between the two (FLIP) and the
-   controls column glides to its new place. */
-@media (min-width: 1100px) and (min-height: 620px) {
-  .np-stage, .np[data-mode] .np-stage { width: min(calc(100% - 96px), 1520px); display: grid; grid-template-columns: minmax(0, 1fr) clamp(380px, 30vw, 460px); grid-template-rows: auto minmax(0, 1fr); column-gap: clamp(40px, 5vw, 96px); row-gap: 20px; padding: 28px 0 36px; }
-  .np[data-mode="art"] .np-stage { grid-template-columns: clamp(300px, min(50vh, 38vw), 560px) clamp(380px, 30vw, 460px); justify-content: center; }
-  .np-head { grid-column: 1 / -1; }
-  .np-main { grid-column: 1; grid-row: 2; }
-  .np-controls { grid-column: 2; grid-row: 2; align-self: center; gap: 18px; }
-  .np-art { border-radius: 32px; }
-  .np-art-slot { place-items: center; }
-  .np-info { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thumb" "text" "actions"; row-gap: 10px; }
-  /* The stacked cover: as large as the column and the window height allow. */
-  .np-thumb { grid-area: thumb; width: clamp(140px, calc(100vh - 640px), 100%); height: auto; aspect-ratio: 1; border-radius: 28px; margin-bottom: 8px; box-shadow: 0 22px 56px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.3); }
-  .np-thumb:focus-visible { border-radius: 28px; }
-  .np-text { grid-area: text; }
-  .np-text .t1 { font-size: clamp(28px, 2.4vw, 40px); line-height: 1.12; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .np-text .t2 { font-size: 18px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .np-actions { grid-area: actions; margin-left: -10px; }
-  .np-transport { justify-content: space-between; gap: 8px; }
-  .np-play { height: 88px; }
-  .np-play.paused { width: 120px; border-radius: 44px; }
-  .np-play.playing { width: 88px; border-radius: 28px; }
-  .np-skip { width: 68px; height: 68px; border-radius: 34px; }
-  .np-volume { display: flex; flex: 1 1 150px; min-width: 0; }
-  .np-row2 { justify-content: space-between; flex-wrap: nowrap; }
-  .np-options { flex: 0 0 auto; flex-wrap: nowrap; gap: 8px; }
-  .np-options .np-tonal { width: 48px; }
-  .np-modes { justify-content: stretch; }
-  .np-mode { flex: 1 1 0; justify-content: center; padding: 0 12px; }
-  .np-pane { background: rgba(0, 0, 0, 0.16); border-radius: 32px; padding: 20px 20px 0; }
-  .np-pane-lyrics { background: none; padding: 0; }
-  .np .queue-list { padding-bottom: 40cqh; }
+/* ---- Stacked: narrow and tall windows (and 200% zoom), like the phone; the page scrolls rather than squashing. */
+.np[data-layout="stacked"] { overflow-y: auto; }
+.np[data-layout="stacked"] .np-stage { position: relative; inset: auto; min-height: 100%; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 80px 16px 96px; }
+.np[data-layout="stacked"] .np-col { width: min(100%, 560px); }
+.np[data-layout="stacked"] .np-art-slot { width: min(100%, max(220px, calc(100vh - 500px))); align-self: center; }
+.np[data-layout="stacked"] .np-pane { order: -1; width: min(100%, 560px); height: max(280px, calc(100vh - 520px)); flex: 0 0 auto; }
+.np[data-layout="stacked"] .np-pill { position: fixed; }
 
-  /* Pane modes: the controls condense (title and actions on one line, a
-     smaller transport) so the cover above them can span the column. */
-  .np:not([data-mode="art"]) .np-controls { gap: 14px; }
-  .np:not([data-mode="art"]) .np-info { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "thumb thumb" "text actions"; column-gap: 8px; row-gap: 28px; align-items: center; }
-  .np:not([data-mode="art"]) .np-thumb { width: clamp(160px, calc(100vh - 504px), 100%); margin: 0; justify-self: center; }
-  .np:not([data-mode="art"]) .np-text .t1 { font-size: 26px; -webkit-line-clamp: 1; }
-  .np:not([data-mode="art"]) .np-text .t2 { font-size: 16px; -webkit-line-clamp: 1; }
-  .np:not([data-mode="art"]) .np-actions { margin: 0 -8px 0 0; gap: 0; }
-  .np:not([data-mode="art"]) .np-actions .np-icon-btn { width: 40px; height: 40px; }
-  .np:not([data-mode="art"]) .np-play { height: 72px; }
-  .np:not([data-mode="art"]) .np-play.paused { width: 100px; border-radius: 36px; }
-  .np:not([data-mode="art"]) .np-play.playing { width: 72px; border-radius: 24px; }
-  .np:not([data-mode="art"]) .np-skip { width: 56px; height: 56px; }
-  .np:not([data-mode="art"]) .np-mode { height: 40px; }
-}
-
-/* Short or narrow windows (and 200% zoom): the page scrolls rather than squashing the controls. */
-@media (max-width: 900px), (max-height: 620px) {
-  .fullscreen.np { overflow-y: auto; }
-  .np-stage { height: auto; min-height: 100%; width: min(calc(100% - 32px), 680px) !important; padding: 12px 0 16px; gap: 12px; }
-  .np-main { flex: 0 0 auto; height: max(200px, min(70vw, calc(100vh - 430px))); }
-  .np-text .t1 { font-size: 20px; }
-  .np-transport { gap: 16px; }
-  .np-mode { padding: 0 14px 0 12px; }
-}
-
-@media (forced-colors: active) {
-  .np-fade { display: none; }
-  .np-play, .np-tonal, .np-mode, .np-chip, .np-icon-btn, .np-skip { border: 1px solid ButtonText; }
-  .np-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; }
-  .np-tonal.on, .np-mode.on, .np-chip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
-  .np-seek-bar .played { stroke: Highlight; }
-  .np-seek-bar .rest { stroke: GrayText; }
-  .np-seek-bar .thumb, .np-seek-bar .stop { fill: CanvasText; }
-  .np-seek-bar .value-bubble { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
-  .np .queue-section { background: Canvas; }
-  .np-card { border: 1px solid CanvasText; }
-}
-
-/* While the player is open, snackbars drop in from the top instead of covering the transport. */
-.app:has(.fullscreen.np) .toasts { bottom: auto; top: 16px; }
-
-/* ---- Immersive artwork (lib/immersive.ts) ---------------------------------
+/* ---- Immersive (lib/immersive.ts) ------------------------------------------
    The artwork edge to edge: at the window's full height on the left ("right":
    carried on to the right), or its full width on top ("bottom": carried on
-   below). The continuation is a still canvas over the fluid background; the
-   controls sit on it with the scrim the core sized. */
+   below). The continuation is a still canvas over the fluid background. */
 .np-continuation { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; animation: np-scene-in 500ms var(--ease) both; }
-.np[data-immersive] .np-fade { display: none; }
-.np[data-immersive] .np-stage { position: static; }
-.np[data-immersive] .np-main { position: absolute; left: 0; top: 0; z-index: 1; container-type: normal; }
-.np[data-immersive] .np-art-slot { display: block; }
+.np[data-immersive="bottom"] .np-fade { display: none; }
 .np[data-immersive] .np-art { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; }
+.np[data-immersive] .np-art-button:focus-visible { outline-offset: -6px; border-radius: 0; }
 /* The artwork's last 30% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
    beneath, along a smoothstep: a straight ramp's ends read as edges. */
 .np[data-immersive] { --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent; }
@@ -255,35 +218,113 @@
 .np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
 .np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)), radial-gradient(ellipse 120% 90% at 0% 50%, var(--np-feather)); mask-composite: intersect; }
 /* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
-.np[data-immersive][data-flat] .np-art { mask-image: none; }
-.np[data-immersive] .np-head, .np[data-immersive] .np-controls { position: relative; z-index: 2; }
-.np[data-immersive="right"] .np-main { width: 100vh; height: 100vh; }
-.np[data-immersive="right"] .np-stage, .np[data-immersive="right"][data-mode] .np-stage {
-  display: flex; flex-direction: column; width: auto; max-width: 560px;
-  margin: 0 clamp(24px, 4vw, 72px) 0 calc(100vh + clamp(32px, 4vw, 72px)); padding: 28px 0 36px;
+.np[data-immersive="bottom"][data-flat] .np-art { mask-image: none; }
+/* Beside a view, a flat extension dissolves too: the artwork's own last 30% fades into the moving
+   blur (a smoothstep, eased in as the view opens) and the carried-on colour is gone by its edge,
+   so the soft edge is as wide as a mirror's rather than the crisp seam. */
+@property --np-art-solid { syntax: "<percentage>"; inherits: false; initial-value: 100%; }
+.np[data-immersive="right"][data-flat] .np-art {
+  --np-art-solid: 100%;
+  --np-art-span: calc(100% - var(--np-art-solid));
+  mask-image: linear-gradient(to right, #000 var(--np-art-solid), rgba(0, 0, 0, 0.84) calc(var(--np-art-solid) + var(--np-art-span) * 0.25), rgba(0, 0, 0, 0.5) calc(var(--np-art-solid) + var(--np-art-span) * 0.5), rgba(0, 0, 0, 0.16) calc(var(--np-art-solid) + var(--np-art-span) * 0.75), transparent 100%);
+  transition: --np-art-solid 700ms var(--ease-emphasized);
 }
-.np[data-immersive="right"] .np-controls { margin-block: auto; gap: 18px; }
-.np[data-immersive="bottom"] .np-main { width: 100vw; height: 100vw; }
-.np[data-immersive="bottom"] .np-stage { padding-top: calc(100vw + 16px); height: auto; min-height: 100%; }
-.np[data-immersive="bottom"] .np-head { position: absolute; top: 18px; left: 24px; right: 24px; }
+.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-art { --np-art-solid: 70%; }
+
+/* Wide: the artwork full height on the left, the card floating over its bottom, a view on the right.
+   Centred with the artwork alone when both its sides carry on (data-sides="both"): the artwork,
+   its card and both continuations slide there and back by --np-art-x (a spring), the left
+   continuation going off the left edge with the artwork as a view opens. */
+.np[data-layout="immersive"] { --np-card-w: min(calc(100vh - 56px), 480px); --np-art-x: 0px; }
+.np[data-layout="immersive"][data-centred] { --np-art-x: calc((100vw - 100vh) / 2); }
+.np[data-layout="immersive"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vh; height: 100vh; z-index: 1; translate: var(--np-art-x) 0; transition: translate var(--spring-spatial-ms) var(--spring-spatial); }
+.np[data-layout="immersive"] .np-controls { position: absolute; bottom: 28px; left: calc((100vh - var(--np-card-w)) / 2); width: var(--np-card-w); background: rgba(10, 10, 14, var(--np-glass)); translate: var(--np-art-x) 0; transition: opacity 300ms var(--ease-emphasized-decel), translate var(--spring-spatial-ms) var(--spring-spatial); }
+.np[data-layout="immersive"][data-idle] .np-controls { transition: opacity 900ms var(--ease-emphasized), translate var(--spring-spatial-ms) var(--spring-spatial); }
+/* The left continuation is drawn with the artwork at its right end: it sits off the left edge
+   until the artwork is centred. */
+.np[data-layout="immersive"] .np-continuation[data-side="right"] { translate: var(--np-art-x) 0; }
+.np[data-layout="immersive"] .np-continuation[data-side="left"] { translate: calc(var(--np-art-x) - (100vw - 100vh)) 0; transition: translate var(--spring-spatial-ms) var(--spring-spatial); }
+/* Centred, the artwork's left edge fades onto the left continuation as its right one does
+   (--np-left-solid eases from 1, no fade, to 0 as it centres). */
+@property --np-left-solid { syntax: "<number>"; inherits: false; initial-value: 1; }
+.np[data-sides="both"] .np-art-slot {
+  --np-left-solid: 1;
+  mask-image: linear-gradient(rgba(0, 0, 0, var(--np-left-solid)), rgba(0, 0, 0, var(--np-left-solid))), linear-gradient(to left, var(--np-feather)), radial-gradient(ellipse 120% 90% at 100% 50%, var(--np-feather));
+  mask-composite: add, intersect, add;
+  transition: translate var(--spring-spatial-ms) var(--spring-spatial), --np-left-solid var(--spring-spatial-ms) var(--ease-emphasized);
+}
+.np[data-sides="both"][data-centred] .np-art-slot { --np-left-solid: 0; }
+.np[data-sides="both"][data-left-flat] .np-art-slot { mask-image: none; }
+.np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; right: 40px; width: var(--np-pane-w); top: 88px; bottom: 104px; }
+/* With a view open, the carried-on part shortens and dissolves into the moving blur, and the view sits on that. */
+@property --np-solid { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
+@property --np-clear { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
+.np[data-immersive="right"] .np-continuation[data-side="right"] {
+  --np-solid: 100%; --np-clear: 100%;
+  mask-image: linear-gradient(to right, #000 var(--np-solid), transparent var(--np-clear));
+  transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized), translate var(--spring-spatial-ms) var(--spring-spatial);
+}
+.np[data-immersive="right"]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
+.np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: 70vh; --np-clear: 100vh; }
+/* And a scrim comes in beside the artwork, so the view's white text holds 4.5:1 over what is left of a light continuation. */
+.np[data-layout="immersive"] .np-fade { display: block; opacity: 0; background: linear-gradient(to right, transparent calc(100vh - 8vw), rgba(0, 0, 0, 0.4) calc(100vh + 2vw)); transition: opacity 700ms var(--ease-emphasized); }
+.np[data-layout="immersive"]:not([data-mode="art"]) .np-fade { opacity: 1; }
+
+/* Tall: the artwork full width on top, carried on below; the controls under it. */
+.np[data-immersive="bottom"] .np-art-slot { position: absolute; left: 0; top: 0; width: 100vw; height: 100vw; z-index: 1; }
+.np[data-immersive="bottom"] .np-stage { padding-top: calc(100vw + 8px); }
 /* Over a full-width artwork the header takes its colours from the artwork's top (dark over a
    light top, light over a dark one, with a soft dark scrim for busy covers), not from the controls. */
-.np[data-immersive="bottom"]:not([data-top-light]) .np-main::after { content: ""; position: absolute; inset: 0 0 auto; height: 22%; background: linear-gradient(rgba(0, 0, 0, 0.3), transparent); pointer-events: none; }
+.np[data-immersive="bottom"]:not([data-top-light]) .np-art-slot::after { content: ""; position: absolute; inset: 0 0 auto; height: 22%; background: linear-gradient(rgba(0, 0, 0, 0.3), transparent); pointer-events: none; }
 .np[data-immersive="bottom"][data-top-light] .np-head { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --focus-ring: #1c1b1f; }
+.np[data-immersive="bottom"][data-top-light] .np-head .np-round { background: rgba(0, 0, 0, 0.08); }
 .np[data-immersive="bottom"]:not([data-top-light]) .np-head { color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --focus-ring: #fff; }
-/* Over a light continuation (a white cover carried on in white): dark text and controls. */
-.np[data-light] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
-.np[data-light] .np-play { background: #1c1b1f; color: #fff; }
-.np[data-light] .np-play:focus-visible { outline-color: #1c1b1f; }
-.np[data-light] .np-icon-btn, .np[data-light] .np-skip { color: #1c1b1f; }
-.np[data-light] .np-icon-btn:hover, .np[data-light] .np-skip:hover, .np[data-light] .np-mode:hover { background: rgba(0, 0, 0, 0.08); }
-.np[data-light] .np-tonal, .np[data-light] .np-chip { background: rgba(0, 0, 0, 0.08); color: #1c1b1f; }
-.np[data-light] .np-tonal:hover, .np[data-light] .np-chip:hover { background: rgba(0, 0, 0, 0.14); }
-.np[data-light] .np-tonal.on, .np[data-light] .np-mode.on, .np[data-light] .np-chip.on, .np[data-light] .np-tonal.np-flank.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
-.np[data-light] .np-tonal.on:hover, .np[data-light] .np-mode.on:hover { background: #1c1b1f; }
-.np[data-light] .np-mode { color: #1c1b1f; border-color: rgba(0, 0, 0, 0.34); }
-.np[data-light] .np-seek-bar .played, .np[data-light] .np-seek-bar .stop, .np[data-light] .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
-.np[data-light] .np-seek-bar .played { fill: none; }
-.np[data-light] .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
-.np[data-light] .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
-@media (prefers-reduced-motion: reduce) { .np-continuation { animation: none; } }
+
+/* Over a light continuation (a white cover carried on in white): dark text and controls, light glass.
+   The whole player with the artwork alone; with a view open (the view and the header then sit on
+   the moving blur, white text) only the card and the pill, which keep their light glass. */
+.np[data-light], .np .light-glass { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --border: rgba(0, 0, 0, 0.15); --focus-ring: #1c1b1f; --accent-text: #1c1b1f; --accent-soft: rgba(0, 0, 0, 0.08); --selection: rgba(0, 0, 0, 0.12); }
+.np .np-controls.light-glass { background: rgba(255, 255, 255, 0.72); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 12px 40px rgba(0, 0, 0, 0.12); }
+.np-pill.light-glass { background: rgba(255, 255, 255, 0.62); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .np-pill-divider { background: rgba(0, 0, 0, 0.18); }
+:is(.np[data-light], .np .light-glass) .np-play { background: #1c1b1f; color: #fff; }
+:is(.np[data-light], .np .light-glass) .np-play:focus-visible { outline-color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-icon-btn:hover, :is(.np[data-light], .np .light-glass) .np-skip:hover, :is(.np[data-light], .np .light-glass) .np-mode:hover, :is(.np[data-light], .np .light-glass) .np-tonal.np-flank:hover { background: rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .np-icon-btn.np-round, :is(.np[data-light], .np .light-glass) .connect-pill, :is(.np[data-light], .np .light-glass) .autoplay-pill, :is(.np[data-light], .np .light-glass) .about-chip { background: rgba(0, 0, 0, 0.08); color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-icon-btn.np-round:hover, :is(.np[data-light], .np .light-glass) .connect-pill:hover { background: rgba(0, 0, 0, 0.14); }
+:is(.np[data-light], .np .light-glass) .connect-pill.remote { background: var(--accent); color: var(--accent-fg); }
+:is(.np[data-light], .np .light-glass) .np-mode.on, :is(.np[data-light], .np .light-glass) .np-tonal.np-flank.on, :is(.np[data-light], .np .light-glass) .autoplay-pill.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
+:is(.np[data-light], .np .light-glass) .np-mode.on:hover { background: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .played, :is(.np[data-light], .np .light-glass) .np-seek-bar .stop, :is(.np[data-light], .np .light-glass) .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .played { fill: none; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .value-bubble { background: #1c1b1f; color: #fff; }
+:is(.np[data-light], .np .light-glass) .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
+:is(.np[data-light], .np .light-glass) .np-volume-pop .m3-slider { --active: #fff; --handle: #fff; --stop: #fff; --inactive: rgba(255, 255, 255, 0.28); }
+:is(.np[data-light], .np .light-glass) .queue-section { background: rgba(255, 255, 255, 0.55); color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .queue-section-sub { color: rgba(28, 27, 31, 0.8); }
+:is(.np[data-light], .np .light-glass) .qrow.current { background: rgba(0, 0, 0, 0.08); }
+:is(.np[data-light], .np .light-glass) .queue-clear { color: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .about-path-text { background: rgba(0, 0, 0, 0.06); }
+@media (prefers-reduced-motion: reduce) {
+  .np-continuation { animation: none; }
+  /* No slide between centred and left: everything fades in where it lands (FullscreenPlayer). */
+  .np[data-layout="immersive"] .np-art-slot, .np[data-layout="immersive"] .np-continuation[data-side="left"] { transition: none; }
+  .np[data-layout="immersive"] .np-controls { transition: opacity 300ms var(--ease-emphasized-decel); }
+  .np[data-immersive="right"] .np-continuation[data-side="right"] { transition: --np-solid 700ms var(--ease-emphasized), --np-clear 700ms var(--ease-emphasized); }
+}
+
+@media (forced-colors: active) {
+  .np-fade { display: none; }
+  .np-play, .np-tonal, .np-mode, .np-icon-btn, .np-skip, .np-controls, .np-pill { border: 1px solid ButtonText; }
+  .np-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; }
+  .np-tonal.on, .np-mode.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .np-seek-bar .played { stroke: Highlight; }
+  .np-seek-bar .rest { stroke: GrayText; }
+  .np-seek-bar .thumb, .np-seek-bar .stop { fill: CanvasText; }
+  .np-seek-bar .value-bubble { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+  .np .queue-section { background: Canvas; }
+}
+
+/* While the player is open, snackbars drop in from the top instead of covering the transport. */
+.app:has(.fullscreen.np) .toasts { bottom: auto; top: 16px; }

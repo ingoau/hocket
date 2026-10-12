@@ -75,7 +75,7 @@ pub fn offline_to_i64(s: OfflineState) -> i64 {
 }
 
 /// Column list for `SELECT ... FROM tracks`, in the order [`track_from_row`] reads.
-pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment";
+pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment, artists";
 
 fn opt_u32(row: &Row, idx: usize) -> rusqlite::Result<Option<u32>> {
     Ok(row.get::<_, Option<i64>>(idx)?.map(|v| v.max(0) as u32))
@@ -96,7 +96,7 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         danceability: row.get(35)?,
         valence: row.get(36)?,
     };
-    Ok(Track {
+    let mut t = Track {
         id: row.get(0)?,
         server_id: row.get(1)?,
         title: row.get(2)?,
@@ -138,7 +138,15 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         music_brainz_id: row.get(38)?,
         explicit: row.get::<_, i64>(39)? != 0,
         comment: row.get(40)?,
-    })
+        artists: Vec::new(),
+    };
+    // As stored (JSON), or for a row from before the column existed the one artist it names.
+    t.artists = row
+        .get::<_, Option<String>>(41)?
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .filter(|a: &Vec<api::ArtistRef>| !a.is_empty())
+        .unwrap_or_else(|| crate::subsonic::convert::fallback_artists(&t.artist_id, &t.artist));
+    Ok(t)
 }
 
 pub const ALBUM_COLUMNS: &str = "id, server_id, name, artist_id, artist, year, genre, song_count, duration_ms, cover_art, rating, loved, play_count, created, last_played, is_compilation, music_brainz_id, rg_album_gain, rg_album_peak, offline";
@@ -1044,8 +1052,8 @@ pub(crate) fn upsert_tracks_in(
     sync_gen: i64,
 ) -> DbResult<usize> {
     let mut st = tx.prepare_cached(
-        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38)
+        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39)
          ON CONFLICT(server_id, id) DO UPDATE SET
            title = excluded.title, album_id = excluded.album_id, album = excluded.album, artist_id = excluded.artist_id, artist = excluded.artist, album_artist = excluded.album_artist,
            track_number = excluded.track_number, disc_number = excluded.disc_number, year = excluded.year, genre = excluded.genre, duration_ms = excluded.duration_ms,
@@ -1055,13 +1063,18 @@ pub(crate) fn upsert_tracks_in(
            rg_track_gain = excluded.rg_track_gain, rg_track_peak = excluded.rg_track_peak, rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak,
            bpm = COALESCE(excluded.bpm, tracks.bpm), mood = COALESCE(excluded.mood, tracks.mood),
            music_brainz_id = excluded.music_brainz_id, explicit = excluded.explicit, comment = excluded.comment,
-           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen",
+           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen, artists = excluded.artists",
     )?;
     let mut n = 0;
     for (i, t) in tracks.iter().enumerate() {
         let rg = t.replay_gain.clone().unwrap_or_default();
         let sonic = t.sonic.clone().unwrap_or_default();
         let changed = changed_ms.get(i).copied().flatten();
+        let artists = if t.artists.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&t.artists)?)
+        };
         n += st.execute(params![
             t.id,
             t.server_id,
@@ -1101,6 +1114,7 @@ pub(crate) fn upsert_tracks_in(
             t.explicit as i64,
             t.comment,
             sync_gen,
+            artists,
         ])?;
     }
     Ok(n)
@@ -1347,6 +1361,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_tracks_artists_round_trip_through_the_mirror() {
+        let db = Db::open_in_memory().unwrap();
+        let mut a = t("1", "Harbour Lights", "Night Ferries", "Marlowe Reed");
+        a.artist = Some("Marlowe Reed feat. Juno".into());
+        a.artists = vec![
+            api::ArtistRef {
+                id: Some("ar7".into()),
+                name: "Marlowe Reed".into(),
+            },
+            api::ArtistRef {
+                id: Some("ar8".into()),
+                name: "Juno".into(),
+            },
+        ];
+        db.upsert_tracks(std::slice::from_ref(&a), &[None], 1)
+            .unwrap();
+        let back = db.track("1").unwrap().unwrap();
+        assert_eq!(back.artists, a.artists);
+        assert_eq!(back.artist.as_deref(), Some("Marlowe Reed feat. Juno"));
+        // A later sync without the list (a plain Subsonic server): the one artist it names.
+        let mut plain = a.clone();
+        plain.artists.clear();
+        db.upsert_tracks(&[plain], &[None], 2).unwrap();
+        let back = db.track("1").unwrap().unwrap();
+        assert_eq!(back.artists.len(), 1);
+        assert_eq!(back.artists[0].name, "Marlowe Reed feat. Juno");
+    }
+
     fn seeded() -> Db {
         let db = Db::open_in_memory().unwrap();
         let mut a = t("1", "Roygbiv", "Music Has the Right", "Boards of Canada");
@@ -1475,6 +1518,16 @@ mod tests {
             music_brainz_id: Some("mb".into()),
             explicit: true,
             comment: Some("c".into()),
+            artists: vec![
+                api::ArtistRef {
+                    id: Some("ar".into()),
+                    name: "A".into(),
+                },
+                api::ArtistRef {
+                    id: None,
+                    name: "B".into(),
+                },
+            ],
         };
         db.upsert_tracks(std::slice::from_ref(&full), &[Some(7.0)], 1)
             .unwrap();
