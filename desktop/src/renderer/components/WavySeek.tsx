@@ -77,7 +77,10 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   const ids = variant === "bar" ? { root: "seek", slider: "seek-slider", position: "seek-position" } : { root: "fs-seek", slider: "fs-seek-slider", position: "fs-seek-position" };
   const stamp = useApp((s) => s.transport.position);
   const offset = useApp((s) => s.connection.clockOffsetMs);
-  const stopped = useApp((s) => s.perf === "stopped");
+  // The player bar's wave moves only while the window has focus and the battery saver is off (it
+  // is always on screen, unlike the fullscreen player's); otherwise it holds still, like with
+  // reduced motion. The fullscreen one stops only with the window hidden.
+  const stopped = useApp((s) => (variant === "bar" ? s.perf !== "full" || s.batterySaver : s.perf === "stopped"));
   const pos = usePosition(stamp, durationMs, offset);
   const reducedMotion = usePrefersReducedMotion();
   const [drag, setDrag] = useState<number | undefined>(undefined);
@@ -140,7 +143,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   live.current.x0 = x0;
   live.current.x1 = playedEnd;
   live.current.mid = mid;
-  if (reducedMotion) {
+  if (reducedMotion || stopped) {
     live.current.amp = waving ? geo.amplitude : 0;
     live.current.vel = 0;
   }
@@ -177,7 +180,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   const thumbH = variant === "bar" ? 18 : 28;
   const thumbW = variant === "bar" ? 4 : 5;
   const slider = (
-    <div ref={bar} className={`np-seek-bar ${dragging ? "dragging" : ""} ${waving ? "playing" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
+    <div ref={bar} className={`np-seek-bar ${dragging ? "dragging" : ""} ${waving ? "playing" : ""}`} data-wave={waving ? (reducedMotion || stopped ? "still" : "moving") : undefined} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
       onKeyDown={onKey}
       onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
       onBlur={() => setFocused(false)}
