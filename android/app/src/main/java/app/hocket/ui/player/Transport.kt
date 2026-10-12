@@ -66,6 +66,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.HorizontalAlignmentLine
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -79,6 +81,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -355,7 +358,7 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
         Box(
             Modifier
                 .fillMaxWidth()
-                // A 48 dp touch target; the times tuck up into its slack below the wave.
+                // A 48 dp touch target from just above the wave; the times tuck up into its slack below.
                 .height(48.dp)
                 .testTag("player.seek")
                 .pointerInput(durationMs) {
@@ -387,13 +390,21 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
                     val w = (if (dragging) 6.dp else 4.dp).toPx()
                     val h = (if (dragging) 28.dp else 20.dp).toPx()
                     val x = fraction() * size.width
-                    drawRoundRect(active, topLeft = Offset((x - w / 2).coerceIn(0f, size.width - w), center.y - h / 2), size = Size(w, h), cornerRadius = CornerRadius(w / 2))
+                    val cy = (WAVE_TOP + WAVE_HEIGHT / 2).toPx()
+                    drawRoundRect(active, topLeft = Offset((x - w / 2).coerceIn(0f, size.width - w), cy - h / 2), size = Size(w, h), cornerRadius = CornerRadius(w / 2))
                 },
-            contentAlignment = Alignment.CenterStart,
+            contentAlignment = Alignment.TopStart,
         ) {
             LinearWavyProgressIndicator(
                 progress = fraction,
-                modifier = Modifier.fillMaxWidth().height(14.dp),
+                modifier = Modifier
+                    .padding(top = WAVE_TOP)
+                    .fillMaxWidth()
+                    .height(WAVE_HEIGHT)
+                    .layout { m, c ->
+                        val p = m.measure(c)
+                        layout(p.width, p.height, mapOf(SeekWaveTop to 0)) { p.place(0, 0) }
+                    },
                 color = active,
                 trackColor = track,
                 stroke = Stroke(width = with(density) { 4.dp.toPx() }, cap = StrokeCap.Round),
@@ -420,16 +431,34 @@ private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable (
     Row(
         Modifier.fillMaxWidth().layout { m, c ->
             val p = m.measure(c)
-            val pull = 8.dp.roundToPx()
+            // Up into the touch area's slack: the same 16 dp below the wave's centre line as ever.
+            val pull = (48.dp - WAVE_TOP - WAVE_HEIGHT / 2 - 16.dp).roundToPx()
             layout(p.width, (p.height - pull).coerceAtLeast(0)) { p.place(0, -pull) }
         },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(formatClock(positionMs), style = style, color = color, modifier = Modifier.clearAndSetSemantics { }, maxLines = 1)
+        Text(
+            formatClock(positionMs), style = style, color = color, maxLines = 1,
+            // Read by the seek bar's node; kept (hidden) for tests to find the times' baseline.
+            modifier = Modifier.semantics { hideFromAccessibility() }.testTag("player.elapsed").layout { m, c ->
+                val p = m.measure(c)
+                layout(p.width, p.height, mapOf(SeekTimesBaseline to p[FirstBaseline])) { p.place(0, 0) }
+            },
+        )
         Box(Modifier.weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { centre?.invoke() }
         Text(remaining, style = style, color = color, modifier = Modifier.clearAndSetSemantics { }, maxLines = 1)
     }
 }
+
+/** The wave's top in the seek bar's 48 dp touch area, and its height. */
+private val WAVE_TOP = 6.dp
+private val WAVE_HEIGHT = 14.dp
+
+/** The top of the seek bar's wave (its crests while playing), for spacing what is above it. */
+val SeekWaveTop = HorizontalAlignmentLine(::minOf)
+
+/** The baseline of the seek bar's elapsed time, for spacing what is below it. */
+val SeekTimesBaseline = HorizontalAlignmentLine(::maxOf)
 
 /** How long a seek's target is held on screen at most while waiting for the core to report it. */
 private const val SEEK_HOLD_MS = 2_500L

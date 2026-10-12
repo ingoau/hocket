@@ -93,65 +93,168 @@ class FullPlayerLayoutTest {
         row.forEach { assertTrue("48 dp tall: $it", it.height >= 48f * dp - 1f) }
     }
 
+    /** The seek bar's wave (6 dp into its touch area) and the star glyphs' bottoms (17.5 dp into their 20 dp icons). */
+    private fun waveTop() = bounds("player.seekBar").top + 6f * dp
+    private fun starsBottom() = bounds("rating").top + 17.5f * dp
+
+    /** The elapsed time's baseline (the times are hidden from accessibility, read by the seek bar). */
+    private fun timesBaseline(): Float {
+        val node = compose.onAllNodesWithTag("player.elapsed", useUnmergedTree = true).fetchSemanticsNodes().single()
+        val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        return node.positionInRoot.y + results.first().firstBaseline
+    }
+
+    /** The times-to-transport gap, and the title block's (stars, or the artist line) to the wave. */
+    private fun gaps(stars: Boolean): Pair<Float, Float> {
+        val track = core.client.nowPlaying.value!!.track
+        val bottom = if (stars) starsBottom() else baseline(track.artist!!)
+        return (bounds("player.playPause").top - timesBaseline()) to (waveTop() - bottom)
+    }
+
+    private fun showMode(tag: String) {
+        compose.mainClock.autoAdvance = false
+        tap(tag)
+        compose.mainClock.advanceTimeBy(1_500)
+    }
+
     /**
-     * Up to the reference phone's height (891 dp) nothing changes: the artwork right under the
-     * handle (its 8 dp margin, no more), the spare height shared evenly above the transport, above
-     * the action row and under it.
+     * The title block is as far above the seek bar's wave as the times are above the transport, in
+     * every mode, with or without the stars; the stars' touch row stops short of the seek bar's;
+     * the action row is as far above the bottom as above the transport; and the artwork is centred
+     * in what is left above the controls.
      */
-    @Test
-    fun atTheReferenceSizeTheControlsSpreadAndTheArtworkSitsUnderTheHandle() {
-        startExpanded()
+    private fun assertControlsLayout() {
         val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
-        assertTrue("no taller than the reference (${root.height / dp} dp)", root.height <= 891f * dp)
         val handle = bounds("player.collapse")
         val art = bounds("player.artwork")
         val title = bounds("player.title")
         val play = bounds("player.playPause")
         val actions = bounds("player.mode.queue")
-        assertEquals("the artwork's margin under the handle", 8f * dp, art.top - handle.bottom, 1f)
-        assertEquals("the title's margin under the artwork", 24f * dp, title.top - art.bottom, 1f)
+        assertEquals("the artwork as wide as the margins allow", 371f * dp, art.width, 1f)
+        assertEquals("the artwork centred above the controls", art.top - handle.bottom - 8f * dp, title.top - art.bottom - 24f * dp, 1.5f)
         val share = actions.top - play.bottom - 16f * dp
-        assertTrue("spread out (share $share)", share > 4f * dp)
-        assertEquals("the same share under the action row", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
+        assertEquals("the action row as far above the bottom", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
+        val (times, stars) = gaps(stars = true)
+        assertTrue("a real gap ($times)", times > 20f * dp)
+        assertEquals("stars to wave as times to transport", times, stars, 1f * dp)
+        assertTrue("the stars' touch row clear of the seek bar's", bounds("rating").bottom <= bounds("player.seekBar").top + 0.5f)
+        val controls = listOf("player.seekBar", "player.playPause", "player.mode.queue").map { bounds(it).top }
+        for (mode in listOf("player.mode.queue", "player.mode.lyrics")) {
+            showMode(mode)
+            val (t, artist) = gaps(stars = false)
+            assertEquals("artist line to wave as times to transport in $mode", t, artist, 1f * dp)
+            listOf("player.seekBar", "player.playPause", "player.mode.queue").zip(controls).forEach { (tag, top) -> assertEquals("$tag stays put", top, bounds(tag).top, 1f) }
+            showMode(mode)
+        }
+        compose.mainClock.autoAdvance = true
+        core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
+        compose.waitUntil(5_000) { !exists("rating") }
+        compose.waitForIdle()
+        val (t, artist) = gaps(stars = false)
+        assertEquals("artist line to wave as times to transport without the stars", t, artist, 1f * dp)
+    }
+
+    @Test
+    fun atTheReferenceSizeTheGapsAroundTheSeekBarMatch() {
+        startExpanded()
+        val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
+        assertTrue("no taller than the reference (${root.height / dp} dp)", root.height <= 891f * dp)
+        assertControlsLayout()
     }
 
     /**
-     * A taller phone: the controls (title to actions) keep the reference phone's gaps, packed at the
-     * bottom; what is left goes to the mode area, the artwork centred in it, and in queue mode the
-     * panel takes it. Nothing below moves across modes.
+     * A taller phone: the controls (title to actions) keep their largest gaps (40 dp from the times
+     * to the transport), packed at the bottom; what is left goes to the mode area, the artwork
+     * centred in it, and in queue mode the panel takes it.
      */
     @Test
     @Config(qualifiers = "w411dp-h960dp")
     fun onATallPhoneTheControlsStayAtTheBottomAndTheArtworkCentresAbove() {
         startExpanded()
-        val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
         val handle = bounds("player.collapse")
         val art = bounds("player.artwork")
-        val title = bounds("player.title")
-        val seek = bounds("player.seekBar")
-        val play = bounds("player.playPause")
-        val actions = bounds("player.mode.queue")
-        val extra = root.height - 891f * dp
-        assertTrue("taller than the reference (${root.height / dp} dp)", extra > 20f * dp)
-        assertEquals("the artwork as wide as the margins allow", 371f * dp, art.width, 1f)
-        // Everything past the reference height goes above the controls, half over the artwork.
-        assertEquals("the artwork lower by half the extra height", extra / 2f, art.top - handle.bottom - 8f * dp, 1.5f)
-        assertEquals("and the title by all of it", extra / 2f, title.top - art.bottom - 24f * dp, 1.5f)
-        // The controls packed at the bottom with the gaps they have on the reference phone.
-        val share = actions.top - play.bottom - 16f * dp
-        assertTrue("the reference gaps (share $share)", share > 4f * dp)
-        assertEquals("anchored to the bottom", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
-        val before = listOf(seek, play, actions)
+        assertTrue("the artwork lower than its margin under the handle ($art)", art.top - handle.bottom > 20f * dp)
+        assertEquals("the largest gap", 40f * dp, gaps(stars = true).first, 1f * dp)
         tap("player.mode.queue")
         compose.waitUntil(5_000) { exists("queue.list") }
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
-        listOf("player.seekBar", "player.playPause", "player.mode.queue").zip(before).forEach { (tag, b) ->
-            assertEquals("$tag stays put", b.top, bounds(tag).top, 1f)
-        }
         val panel = bounds("player.panel")
         assertEquals("the queue's panel from the handle", handle.bottom + 8f * dp, panel.top, 1f)
-        assertTrue("down to the title, taking the extra height ($panel)", panel.height >= art.height + extra - 2f * dp)
+        assertTrue("taking the extra height ($panel)", panel.height >= art.height + 2f * (art.top - handle.bottom - 8f * dp) - 2f * dp)
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { !exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertControlsLayout()
+    }
+
+    /** The add button shares the thumbnail's centre line: the title + artist pair's, in every mode, with or without the stars. */
+    @Test
+    fun theAddButtonCentresOnTheTitleAndArtist() {
+        startExpanded()
+        val track = core.client.nowPlaying.value!!.track
+        fun check(what: String) {
+            val pair = ((baseline(track.title) - titleCapHeight()) + baseline(track.artist!!)) / 2f
+            assertEquals("the add button on the pair's centre ($what)", pair, bounds("player.addToPlaylist").center.y, 2f)
+        }
+        check("artwork")
+        for (mode in listOf("player.mode.queue", "player.mode.lyrics")) {
+            showMode(mode)
+            check(mode)
+            assertEquals("the thumbnail on the same line ($mode)", bounds("player.addToPlaylist").center.y, bounds("player.artwork").center.y, 2f)
+            showMode(mode)
+        }
+        compose.mainClock.autoAdvance = true
+        core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
+        compose.waitUntil(5_000) { !exists("rating") }
+        compose.waitForIdle()
+        check("no stars")
+    }
+
+    /** Opens the player on a song whose title is far too long for the line. */
+    private fun startWithLongTitle(reducedMotion: Boolean) {
+        val lib = core.fake.library
+        lib.tracks[0] = lib.tracks[0].copy(title = LONG_TITLE)
+        compose.setThemedContent(core) {
+            androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.a11y.LocalReducedMotion provides reducedMotion) { AppRoot(core.client) }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[0].id), 0, "Long"))
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.title == LONG_TITLE }
+        compose.waitUntil(5_000) { exists("miniPlayer") }
+        compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
+        compose.waitUntil(5_000) { exists("player.playPause") }
+        compose.waitForIdle()
+    }
+
+    /** The title's text layout in the title block. */
+    private fun titleLayout(): androidx.compose.ui.text.TextLayoutResult {
+        val block = bounds("player.title")
+        val node = compose.onAllNodes(androidx.compose.ui.test.hasText(LONG_TITLE), useUnmergedTree = true).fetchSemanticsNodes()
+            .first { it.config.contains(SemanticsActions.GetTextLayoutResult) && block.contains(it.boundsInRoot.center) }
+        val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        return results.first()
+    }
+
+    @Test
+    fun aLongTitleIsOneLineAndScrolls() {
+        startWithLongTitle(reducedMotion = false)
+        assertEquals("one line", 1, titleLayout().lineCount)
+        assertTrue("wider than the line, unshortened", titleLayout().size.width > bounds("player.title").width && !titleLayout().isLineEllipsized(0))
+        assertTrue("scrolling", compose.onAllNodesWithTag("player.title.marquee", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        assertTrue("the whole title for TalkBack", compose.onNodeWithTag("player.title").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single().contains(LONG_TITLE))
+    }
+
+    @Test
+    fun withReducedMotionALongTitleIsEllipsisedInstead() {
+        startWithLongTitle(reducedMotion = true)
+        assertEquals("one line", 1, titleLayout().lineCount)
+        assertTrue("ellipsised", titleLayout().isLineEllipsized(0))
+        assertFalse("not scrolling", compose.onAllNodesWithTag("player.title.marquee", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
     }
 
     @Test
@@ -497,5 +600,9 @@ class FullPlayerLayoutTest {
         compose.waitForIdle()
         assertEquals(rest.left, bounds("player.artwork").left, 1f)
         assertEquals(track, core.client.nowPlaying.value!!.track.id)
+    }
+
+    private companion object {
+        const val LONG_TITLE = "The Lighthouse Keeper's Daughter (Live at the Harbour Room)"
     }
 }

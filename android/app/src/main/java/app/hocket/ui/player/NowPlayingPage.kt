@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -56,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -71,6 +74,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -79,7 +83,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.layout.HorizontalAlignmentLine
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -227,34 +233,32 @@ internal fun FullPlayer(
                 header = { if (immersive != null) Box(Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics { }) { header() } else Box(Modifier.graphicsLayer { alpha = headerAlpha() }) { header() } },
                 area = { ModeArea(mode, hero, lyricsVisible) },
                 title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onAddTo = { addTo = true }) },
-                items = listOf(
-                    { PlayerSeek(position) },
-                    {
-                        val playing by client.isPlaying.collectAsStateWithLifecycle()
-                        val transport by client.transport.collectAsStateWithLifecycle()
-                        // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
-                        TransportRow(
-                            playing = playing,
-                            buffering = transport.buffering,
-                            onPrevious = { client.dispatch(Command.Previous) },
-                            onToggle = { client.dispatch(Command.TogglePlay) },
-                            onNext = { client.dispatch(Command.Next) },
-                            height = if (pageWidth < 360.dp) 68.dp else TRANSPORT_HEIGHT,
-                            modifier = Modifier.padding(horizontal = PAGE_PADDING),
-                        )
-                    },
-                    {
-                        PlayerActions(
-                            mode = mode,
-                            onMode = onMode,
-                            switcherOpen = queues,
-                            onSwitchQueue = { queues = true },
-                            onConnect = { handoff = true },
-                            onMore = openMenu,
-                            modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
-                        )
-                    },
-                ),
+                seek = { PlayerSeek(position) },
+                transport = {
+                    val playing by client.isPlaying.collectAsStateWithLifecycle()
+                    val transport by client.transport.collectAsStateWithLifecycle()
+                    // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
+                    TransportRow(
+                        playing = playing,
+                        buffering = transport.buffering,
+                        onPrevious = { client.dispatch(Command.Previous) },
+                        onToggle = { client.dispatch(Command.TogglePlay) },
+                        onNext = { client.dispatch(Command.Next) },
+                        height = if (pageWidth < 360.dp) 68.dp else TRANSPORT_HEIGHT,
+                        modifier = Modifier.padding(horizontal = PAGE_PADDING),
+                    )
+                },
+                actions = {
+                    PlayerActions(
+                        mode = mode,
+                        onMode = onMode,
+                        switcherOpen = queues,
+                        onSwitchQueue = { queues = true },
+                        onConnect = { handoff = true },
+                        onMore = openMenu,
+                        modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
+                    )
+                },
             )
         }
         PlayerArtwork(
@@ -300,24 +304,26 @@ private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
 private val TRANSPORT_HEIGHT = 84.dp
 
-/** The least gap above each of the [PlayerLayout] items (seek bar, transport, actions). */
-private val ITEM_GAPS = listOf(4.dp, 12.dp, 16.dp)
+/** The least gaps above the transport and the action row (the seek bar's follows the title's: see [PlayerLayout]). */
+private val TRANSPORT_GAP = 12.dp
+private val ACTIONS_GAP = 16.dp
 
 /**
- * The phone the controls' spacing is designed on: up to its height the [PlayerLayout] items spread
- * over the room left; taller screens keep the gaps they get here and give the rest to the mode area.
+ * The largest gap from the seek bar's times to the transport: the same as from the title block to
+ * the seek bar. Past it, the controls stay packed at the bottom.
  */
-private val REFERENCE_WIDTH = 411.dp
-private val REFERENCE_HEIGHT = 891.dp
+private val MAX_GAP = 40.dp
 
 /**
  * The page's layout: the header, the mode area at the artwork's size (as large as the width
  * allows, up to [MAX_ART], shrinking on short screens but never below what [MIN_AREA] leaves; an
- * immersive artwork the full width from the top of the page, under the header), the title right
- * below it, and the [items] spread evenly over what is left of [minHeight] (the same share above
- * each and below the last, on top of [ITEM_GAPS]), but never further apart than on the reference
- * phone ([REFERENCE_WIDTH] x [REFERENCE_HEIGHT]): on a taller screen the controls (title to
- * actions) stay packed at the bottom and the mode area takes the rest, the artwork centred in it
+ * immersive artwork the full width from the top of the page, under the header), then the controls:
+ * the title, the seek bar, the transport and the actions. The gap from the title block's visual
+ * bottom ([TitleBottom]: the stars, or the artist line) to the wave ([SeekWaveTop]) is the same as
+ * from the times ([SeekTimesBaseline]) to the transport (unless that would bring the stars' touch
+ * area onto the seek bar's); those and the gaps around the action row share what is left of
+ * [minHeight] (on top of [TRANSPORT_GAP] and [ACTIONS_GAP]) up to [MAX_GAP]. Past that, the controls
+ * stay packed at the bottom and the mode area takes the rest, the artwork centred in it
  * ([HeroGeometry.artTop]; an immersive artwork stays at the top, its continuation filling the gap).
  * The same in every mode: lyrics and the queue take the artwork's place, so nothing below moves when
  * the mode changes. Inside the page's vertical scroll, so it can be taller than the screen. The
@@ -330,52 +336,67 @@ private fun PlayerLayout(
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
-    items: List<@Composable () -> Unit>,
+    seek: @Composable () -> Unit,
+    transport: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
 ) {
-    Layout(contents = listOf(header, area, title) + items) { slots, constraints ->
+    Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
         val w = constraints.maxWidth
         val loose = Constraints(maxWidth = w)
-        val hp = slots[0].map { it.measure(loose) }
-        val tp = slots[2].map { it.measure(loose) }
-        val ip = slots.drop(3).map { s -> s.map { it.measure(loose) } }
-        val hh = hp.maxOfOrNull { it.height } ?: 0
+        fun measure(i: Int) = slots[i].map { it.measure(loose) }
+        val hp = measure(0)
+        val tp = measure(2)
+        val sp = measure(3)
+        val xp = measure(4)
+        val ap = measure(5)
+        fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
+        val hh = height(hp)
         // The title row less what its folding stars have taken off: the area gets that back.
         val fold = hero.titleFold.roundToInt()
-        val th = (tp.maxOfOrNull { it.height } ?: 0) + fold
-        val ih = ip.map { p -> p.maxOfOrNull { it.height } ?: 0 }
-        // An empty item (no resume offer) takes no gap either.
-        val gaps = ih.mapIndexed { i, h -> if (h > 0) ITEM_GAPS.getOrElse(i) { 0.dp }.roundToPx() else 0 }
-        val rest = ih.sum() + gaps.sum()
+        val th = height(tp) + fold
+        val sh = height(sp)
+        val xh = height(xp)
+        val ah = height(ap)
+        // How far the title block's visual bottom and the wave are from their rows' edges.
+        val below = tp.firstOrNull()?.get(TitleBottom)?.takeIf { it != AlignmentLine.Unspecified }?.let { height(tp) - it } ?: 0
+        val wave = sp.firstOrNull()?.get(SeekWaveTop)?.takeIf { it != AlignmentLine.Unspecified } ?: 0
+        val times = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: sh
+        val gapX = if (xh > 0) TRANSPORT_GAP.roundToPx() else 0
+        val gapA = if (ah > 0) ACTIONS_GAP.roundToPx() else 0
+        // With a share s on each of the transport's and the actions' gaps and under the actions,
+        // the times-to-transport gap is (sh - times) + gapX + s; the title-to-seek-bar gap matches
+        // it: the seek bar sits c + s under the title row (never closer than touching).
+        val c = if (sh > 0) (sh - times) + gapX - wave - below else 0
+        val rest = sh + xh + ah + gapX + gapA
         val view = minHeight.roundToPx()
         val pad = ART_PAD.roundToPx()
         val minArea = MIN_AREA.roundToPx()
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
-        fun sideFor(height: Int, width: Int, most: Int) =
-            if (hero.immersive) width else (height - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, most), most).coerceAtLeast(0)
-        fun areaFor(side: Int) = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
-        val side = sideFor(view, w, maxSide)
+        val side = if (hero.immersive) w else (view - hh - th - rest - maxOf(c, 0) - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
         hero.artSide = side.toFloat()
         hero.headerHeight = hh.toFloat()
-        val shares = ih.count { it > 0 } + 1
-        // The share each gap gets on the reference phone (with this page's own rows): no more.
-        val refW = REFERENCE_WIDTH.roundToPx()
-        val refH = REFERENCE_HEIGHT.roundToPx()
-        val refArea = areaFor(sideFor(refH, refW, minOf(refW - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())))
-        val refShare = (refH - hh - refArea - th - rest).coerceAtLeast(0).toFloat() / shares
-        val spare = (view - hh - areaFor(side) - th - rest).coerceAtLeast(0)
-        val share = minOf(spare.toFloat() / shares, refShare)
+        val baseArea = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
+        val spare = (view - hh - baseArea - th - rest).coerceAtLeast(0).toFloat()
+        // Three shares, plus the seek bar's gap once it is above nothing (c + s > 0).
+        val most = (MAX_GAP.toPx() - (sh - times) - gapX).coerceAtLeast(0f)
+        val share = (if (c + spare / 3f > 0f) (spare - c) / 4f else spare / 3f).coerceIn(0f, most).roundToInt()
+        val seekGap = maxOf(c + share, 0)
         // What the gaps leave goes to the mode area, above the controls.
-        val extra = if (share < spare.toFloat() / shares) (spare - share.roundToInt() * shares).coerceAtLeast(0) else 0
-        val areaH = areaFor(side) + extra
+        val extra = (spare.roundToInt() - 3 * share - seekGap).coerceAtLeast(0)
+        val areaH = baseArea + extra
         hero.artTop = (pad + extra / 2).toFloat()
-        val ap = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
-        var y = hh + areaH + th
-        val tops = ih.mapIndexed { i, h -> if (h > 0) { y += gaps[i] + share.roundToInt(); val top = y; y += h; top } else y }
-        layout(w, maxOf(y + share.roundToInt(), view)) {
+        val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
+        val titleTop = hh + areaH + fold
+        val seekTop = hh + areaH + th + seekGap
+        val transportTop = seekTop + sh + gapX + share
+        val actionsTop = transportTop + xh + gapA + share
+        layout(w, maxOf(actionsTop + ah + share, view)) {
             hp.forEach { it.place(0, 0) }
-            ap.forEach { it.place(0, hh) }
-            tp.forEach { it.place(0, hh + areaH + fold) }
-            ip.forEachIndexed { i, p -> p.forEach { it.place(0, tops[i]) } }
+            mp.forEach { it.place(0, hh) }
+            tp.forEach { it.place(0, titleTop) }
+            sp.forEach { it.place(0, seekTop) }
+            xp.forEach { it.place(0, transportTop) }
+            ap.forEach { it.place(0, actionsTop) }
         }
     }
 }
@@ -574,6 +595,8 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     // The stars show in artwork mode only: they fade and fold away as the artwork flies to the
     // thumbnail (and stay composed until that has finished).
     val starsLeft by remember(hero) { derivedStateOf { hero.modeFraction() < 1f } }
+    // The title scrolls when it does not fit, but not while the artwork is being swiped.
+    val swiping by remember(carousel) { derivedStateOf { carousel.fraction() != 0f } }
     Layout(
         contents = listOf(
             {
@@ -581,47 +604,40 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                 Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) })
             },
             {
-                Column {
-                    Box(Modifier.fillMaxWidth()) {
-                        // The page's heading and a polite live region: it changes once per track, so a
-                        // track change is announced once (never the position). A tap opens the details.
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
-                                .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
-                                .testTag("player.title"),
-                        ) { TrackLines(track, compact) }
-                        // The neighbours' lines, faded in as the artwork is swiped towards them.
-                        for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
-                            if (neighbour == null || neighbour === track) continue
-                            Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, compact = true, tagged = false) }
-                        }
+                Box(Modifier.fillMaxWidth()) {
+                    // The page's heading and a polite live region: it changes once per track, so a
+                    // track change is announced once (never the position). A tap opens the details.
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) }
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
+                            .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
+                            .testTag("player.title"),
+                    ) { TrackLines(track, marquee = !swiping) }
+                    // The neighbours' lines, faded in as the artwork is swiped towards them.
+                    for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
+                        if (neighbour == null || neighbour === track) continue
+                        Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, marquee = false, tagged = false) }
                     }
-                    if (showRating && (!compact || starsLeft)) {
-                        RatingStars(
-                            track.rating.toInt(),
-                            onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
-                            starSize = STAR_SIZE,
-                            spacing = 8.dp,
-                            tint = MaterialTheme.colorScheme.primary,
-                            emptyTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            // Right under the artist line: the stars at the top of their 48 dp row, whose
-                            // touch area hangs below them past the room it takes in the layout.
-                            verticalAlignment = Alignment.Top,
-                            modifier = Modifier
-                                .then(if (compact) Modifier.clearAndSetSemantics { } else Modifier)
-                                .layout { m, c ->
-                                    val p = m.measure(c)
-                                    val gap = STAR_GAP.roundToPx()
-                                    val full = p.height - STAR_TOUCH_OVERHANG.roundToPx() + gap
-                                    layout(p.width, (full * (1f - hero.modeFraction())).roundToInt().coerceAtLeast(0)) { p.place(0, gap) }
-                                }
-                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) * (1f - 2f * hero.modeFraction()).coerceIn(0f, 1f) },
-                        )
-                    }
+                }
+            },
+            {
+                if (showRating && (!compact || starsLeft)) {
+                    RatingStars(
+                        track.rating.toInt(),
+                        onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
+                        starSize = STAR_SIZE,
+                        spacing = 8.dp,
+                        tint = MaterialTheme.colorScheme.primary,
+                        emptyTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        // The stars at the top of their 48 dp touch row, which hangs below them.
+                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier
+                            .then(if (compact) Modifier.clearAndSetSemantics { } else Modifier)
+                            .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) * (1f - 2f * hero.modeFraction()).coerceIn(0f, 1f) },
+                    )
                 }
             },
             {
@@ -630,50 +646,65 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                 }
             },
         ),
-        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
-    ) { (thumbSlot, text, add), constraints ->
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+    ) { (thumbSlot, text, stars, add), constraints ->
         val w = constraints.maxWidth
+        val f = hero.modeFraction()
         val gap = THUMB_GAP.roundToPx()
         val addGap = 12.dp.roundToPx()
         val a = add.first().measure(Constraints())
         // The thumbnail's width opens with the mode (it lands as the mode animates).
         val side0 = thumbSide.takeIf { it > 0 } ?: HeroGeometry.SMALL_SIZE.roundToPx()
-        val reserve = ((side0 + gap) * hero.modeFraction()).roundToInt()
+        val reserve = ((side0 + gap) * f).roundToInt()
         val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
         val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
-        // The thumbnail and the title + artist pair: their span (the title's cap height to the
-        // artist's baseline) centred on it, at least [THUMB_MIN]; large fonts on narrow screens cap
-        // it (a share of the row), centred the same way.
+        val sp = stars.firstOrNull()?.measure(Constraints(maxWidth = textW))
+        // The title + artist pair: from the title's cap height to the artist's baseline. The
+        // thumbnail (at least [THUMB_MIN]; large fonts on narrow screens cap it at a share of the
+        // row) and the add button are centred on it, in every mode.
         val first = t[FirstBaseline]
         val last = t[LastBaseline]
-        val top = if (first == AlignmentLine.Unspecified) 0 else (first - capHeight).roundToInt().coerceAtLeast(0)
-        val bottom = if (last == AlignmentLine.Unspecified) t.height else last
-        val span = bottom - top
+        val capTop = if (first == AlignmentLine.Unspecified) 0 else (first - capHeight).roundToInt().coerceAtLeast(0)
+        val baseline = if (last == AlignmentLine.Unspecified) t.height else last
+        val span = baseline - capTop
         val side = span.coerceIn(THUMB_MIN.roundToPx(), minOf(THUMB_MAX.roundToPx(), (w * THUMB_MAX_SHARE).roundToInt()))
         if (side != thumbSide) thumbSide = side
         val thumb = thumbSlot.first().measure(Constraints.fixed(side, side))
-        val h = maxOf(t.height, a.height)
-        val textY = (h - t.height) / 2
-        // How much the folding stars have taken off the row: the mode area takes it, so nothing
-        // below moves.
-        val starsFull = if (showRating) (48.dp - STAR_TOUCH_OVERHANG + STAR_GAP).roundToPx() else 0
-        val folded = (starsFull * hero.modeFraction()).roundToInt()
-        hero.titleFold = (maxOf(t.height + folded, a.height) - h).toFloat()
-        layout(w, h) {
-            thumb.place(0, textY + top + (span - side) / 2)
-            t.place(reserve, textY)
-            a.place(w - a.width, (h - a.height) / 2)
+        val centre = capTop + span / 2
+        // The block's visual bottom: the star glyphs' bottoms in artwork mode (when rated), else the
+        // artist's baseline; it moves from one to the other as the stars fold away with the mode.
+        val starsTop = t.height + STAR_GAP.roundToPx()
+        val glyphs = starsTop + STAR_GLYPH_BOTTOM.roundToPx()
+        val full = if (showRating) glyphs else baseline
+        val bottom = lerpF(full.toFloat(), baseline.toFloat(), f).roundToInt()
+        // What hangs below that line (the same in every mode, so the line does not move): the
+        // stars' touch row, the artist's descenders, the button and the thumbnail.
+        val below = maxOf(
+            if (showRating) starsTop + 48.dp.roundToPx() - glyphs else 0,
+            t.height - baseline,
+            centre + (a.height + 1) / 2 - baseline,
+            centre + (side + 1) / 2 - baseline,
+        )
+        val top = minOf(0, centre - a.height / 2, centre - side / 2)
+        val h = bottom - top + below
+        // What the folding stars have taken off the row: the mode area takes it, so nothing below moves.
+        hero.titleFold = (full - bottom).toFloat()
+        layout(w, h, mapOf(TitleBottom to bottom - top)) {
+            thumb.place(0, centre - side / 2 - top)
+            t.place(reserve, -top)
+            sp?.place(reserve, starsTop - top)
+            a.place(w - a.width, centre - a.height / 2 - top)
         }
     }
 }
 
+/** The title block's visual bottom ([TitleRow]): the star glyphs' bottoms, or the artist's baseline. */
+private val TitleBottom = HorizontalAlignmentLine(::maxOf)
+
 /** The stars' size in the title block. */
 private val STAR_SIZE = 20.dp
-/**
- * How much of the stars' 48 dp touch row hangs below the room it takes in the layout: the title
- * row's bottom padding and the seek bar's least gap, so it never reaches the seek bar.
- */
-private val STAR_TOUCH_OVERHANG = 8.dp
+/** Where the star glyphs end in their [STAR_SIZE] icons (the star's points reach 21 of 24 units). */
+private val STAR_GLYPH_BOTTOM = 17.5.dp
 /** The room between the artist line's box and the stars' icons (about 8 dp from its descenders to the star glyphs). */
 private val STAR_GAP = 1.dp
 /** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
@@ -704,10 +735,13 @@ private fun outgoingAlpha(f: Float): Float = (1f - 2f * abs(f)).coerceIn(0f, 1f)
 /** A neighbour's lines at [f] (towards it, 0..1): in over the second half, so the two never overlap. */
 private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 
-/** Title (emphasized headline) and "artist · album" (muted), each ellipsised. */
+/**
+ * Title (emphasized headline, one line: scrolling when it does not fit, [MarqueeText]) and
+ * "artist · album" (muted, ellipsised).
+ */
 @Composable
-private fun TrackLines(track: TrackSummary, compact: Boolean, tagged: Boolean = true) {
-    Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.ExtraBold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
+private fun TrackLines(track: TrackSummary, marquee: Boolean, tagged: Boolean = true) {
+    MarqueeText(track.title, MaterialTheme.typography.headlineSmallEmphasized.copy(fontWeight = FontWeight.ExtraBold), running = marquee, scrolls = tagged)
     Row(verticalAlignment = Alignment.CenterVertically) {
         val sub = MaterialTheme.typography.bodyLarge
         val subColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -719,6 +753,73 @@ private fun TrackLines(track: TrackSummary, compact: Boolean, tagged: Boolean = 
         }
     }
 }
+
+/**
+ * One line of [text] that, when it does not fit, scrolls (a marquee): after [MARQUEE_DELAY_MS] one
+ * slow pass ([MARQUEE_SPEED]) brings the text round to where it started, then it pauses and goes
+ * again, the edges fading softly (the start edge only while the text is away from it). It holds
+ * still while not [running] (the artwork being swiped), and does not scroll at all with reduced
+ * motion, or where it never [scrolls] (the neighbours' lines): an ellipsis then. The whole text is in
+ * the semantics either way.
+ */
+@Composable
+private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean, scrolls: Boolean) {
+    if (LocalReducedMotion.current || !scrolls) {
+        Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        return
+    }
+    val density = LocalDensity.current
+    val spacing = with(density) { MARQUEE_SPACING.roundToPx() }
+    val speed = with(density) { MARQUEE_SPEED.toPx() }
+    val fade = with(density) { MARQUEE_FADE.toPx() }
+    val offset = remember(text) { Animatable(0f) }
+    var textWidth by remember(text) { mutableIntStateOf(0) }
+    var boxWidth by remember { mutableIntStateOf(0) }
+    val overflows = textWidth > boxWidth && boxWidth > 0
+    LaunchedEffect(text, overflows, running) {
+        offset.snapTo(0f)
+        if (!overflows || !running) return@LaunchedEffect
+        val distance = (textWidth + spacing).toFloat()
+        while (true) {
+            kotlinx.coroutines.delay(MARQUEE_DELAY_MS)
+            offset.animateTo(distance, tween((distance / speed * 1000).roundToInt(), easing = LinearEasing))
+            offset.snapTo(0f)
+        }
+    }
+    Layout(
+        content = { Text(text, style = style, maxLines = 1, softWrap = false) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (overflows) Modifier.testTag("player.title.marquee") else Modifier)
+            .clipToBounds()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                if (!overflows) return@drawWithContent
+                // The copy that follows the text round.
+                translate(left = textWidth + spacing.toFloat()) { this@drawWithContent.drawContent() }
+                val start = (offset.value / fade).coerceIn(0f, 1f)
+                if (start > 0f) {
+                    drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 1f - start), 1f to Color.Black, startX = 0f, endX = fade), size = size.copy(width = fade), blendMode = BlendMode.DstIn)
+                }
+                drawRect(Brush.horizontalGradient(0f to Color.Black, 1f to Color.Transparent, startX = size.width - fade, endX = size.width), topLeft = Offset(size.width - fade, 0f), size = size.copy(width = fade), blendMode = BlendMode.DstIn)
+            },
+    ) { measurables, constraints ->
+        val p = measurables.first().measure(constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity))
+        val w = if (constraints.hasBoundedWidth) constraints.maxWidth else p.width
+        if (p.width != textWidth) textWidth = p.width
+        if (w != boxWidth) boxWidth = w
+        layout(w, p.height, mapOf(FirstBaseline to p[FirstBaseline], LastBaseline to p[LastBaseline])) {
+            p.placeWithLayer(0, 0) { translationX = -offset.value }
+        }
+    }
+}
+
+/** The title marquee's wait before each pass, its speed, the gap before the text comes round, and its edge fades. */
+private const val MARQUEE_DELAY_MS = 1_800L
+private val MARQUEE_SPEED = 30.dp
+private val MARQUEE_SPACING = 48.dp
+private val MARQUEE_FADE = 16.dp
 
 /**
  * The row under the transport (#40): the queue's name as a split button (the name opens the queue,

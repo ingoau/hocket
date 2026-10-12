@@ -85,6 +85,33 @@ class AppScreenshotTest {
         shot(dir, "android-dark-17-queue-$size")
     }
 
+    /** A title too long for the line: one line, ellipsis-free, scrolling after a pause. */
+    @Test
+    @Config(qualifiers = "+night")
+    fun longTitle() {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
+        dir!!.mkdirs()
+        val core = TestCore(startPlaying = true)
+        val lib = core.fake.library
+        lib.tracks[0] = lib.tracks[0].copy(title = LONG_TITLE)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[0].id), 0, "Long"))
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.title == LONG_TITLE }
+        awaitTag("miniPlayer")
+        compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
+        awaitTag("player.playPause")
+        // At rest (before the first pass), then part of the way through a pass.
+        compose.mainClock.autoAdvance = false
+        repeat(30) { compose.mainClock.advanceTimeByFrame() }
+        shot(dir, "android-dark-18-player-long-title")
+        compose.mainClock.advanceTimeBy(1_800L + 4_000L)
+        shot(dir, "android-dark-18b-player-long-title-scrolling")
+        compose.mainClock.autoAdvance = true
+    }
+
     /** The player on a narrow phone (display size "largest") at font scale 1.5. */
     @Test
     @Config(qualifiers = "w360dp-h760dp-night-xxhdpi")
@@ -328,5 +355,9 @@ class AppScreenshotTest {
         val file = File(dir, "$name.png")
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("screenshot: ${file.absolutePath}")
+    }
+
+    private companion object {
+        const val LONG_TITLE = "The Lighthouse Keeper's Daughter (Live at the Harbour Room)"
     }
 }
