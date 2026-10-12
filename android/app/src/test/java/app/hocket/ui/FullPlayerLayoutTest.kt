@@ -329,6 +329,40 @@ class FullPlayerLayoutTest {
         compose.waitUntil(5_000) { exists("detail.header") && compose.onAllNodesWithText(second.name).fetchSemanticsNodes().isNotEmpty() }
     }
 
+    /**
+     * The queue segment: the queue's glyph at its start (after the segment's padding), the name
+     * start-aligned after it; a long name ends in an ellipsis and never moves the glyph.
+     */
+    @Test
+    fun theQueueSegmentStartsWithItsGlyphAndTruncatesALongName() {
+        startExpanded()
+        val lib = core.fake.library
+        fun nodeOf(tag: String) = compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().single()
+        fun glyphInset(): Float = nodeOf("player.mode.queue.icon").boundsInRoot.left - bounds("player.mode.queue").left
+        fun nameLayout(): androidx.compose.ui.text.TextLayoutResult {
+            val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            nodeOf("player.mode.queue.name").config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+            return results.first()
+        }
+        fun queue(label: String) {
+            core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[3].id, lib.tracks[4].id), 0, label))
+            compose.waitUntil(5_000) { core.client.queue.value.contextLabel == label }
+            compose.waitForIdle()
+        }
+        queue("Mix")
+        val short = glyphInset()
+        assertEquals("after the segment's 16 dp padding", 16f * dp, short, 0.5f)
+        assertEquals("the glyph's 18 dp", 18f * dp, nodeOf("player.mode.queue.icon").boundsInRoot.width, 0.5f)
+        assertFalse(nameLayout().isLineEllipsized(0))
+        // Start-aligned: the name right after the glyph.
+        assertEquals(nodeOf("player.mode.queue.icon").boundsInRoot.right + 8f * dp, nodeOf("player.mode.queue.name").boundsInRoot.left, 1f)
+        queue("The Long Drive Home Through Every Town Along The Coast")
+        assertEquals("the glyph stays put", short, glyphInset(), 0.5f)
+        assertTrue("the long name ends in an ellipsis", nameLayout().isLineEllipsized(0))
+        // Its semantics as before.
+        assertEquals("Queue: The Long Drive Home Through Every Town Along The Coast", compose.onNodeWithTag("player.mode.queue").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single())
+    }
+
     /** Opens the player on a song whose title is far too long for the line. */
     private fun startWithLongTitle(reducedMotion: Boolean) {
         val lib = core.fake.library

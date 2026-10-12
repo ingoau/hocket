@@ -896,7 +896,19 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("player.mode.queue")
                         .semantics { contentDescription = queueDesc; selected = queueShown },
                 ) {
-                    Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    // The queue's glyph at the segment's start (filled while the queue shows), then
+                    // its name, start-aligned: a long name ends in an ellipsis, never moving the glyph.
+                    Icon(
+                        if (queueShown) HocketIcons.AutoMirrored.Filled.QueueMusic else HocketIcons.AutoMirrored.Outlined.QueueMusic,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize).testTag("player.mode.queue.icon"),
+                    )
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(
+                        name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Start,
+                        modifier = Modifier.weight(1f).testTag("player.mode.queue.name"),
+                    )
                 }
             },
             trailingButton = {
