@@ -100,7 +100,7 @@ static char s_message_buf[2 * TEXT_LEN];
 
 static BarState s_bar_state;
 static AppTimer *s_bar_revert_timer, *s_volume_repeat_timer, *s_volume_icon_timer;
-static AppTimer *s_progress_flick_timer, *s_art_request_timer, *s_art_retry_timer;
+static AppTimer *s_progress_flick_timer, *s_art_retry_timer;
 static AppTimer *s_marquee_timer;
 static bool s_volume_is_up;
 static bool s_progress_flicked;
@@ -109,8 +109,10 @@ static GBitmap *s_volume_image;  // shown instead of the stars while set
 static Animation *s_transition;
 static uint16_t s_art_requested_gen;
 #if ART_SUPPORTED
+static AppTimer *s_art_request_timer;
 static uint8_t s_art_retries;
 #endif
+static bool s_accel_subscribed;
 static int16_t s_marquee_offset;
 static uint8_t s_marquee_cycles;
 
@@ -692,19 +694,24 @@ static void prv_update_layout(void) {
 
 #if ART_SUPPORTED
 static void prv_request_art(void *context) {
-  s_art_request_timer = NULL;
+  if (context) {
+    // A retry: at most ART_MAX_RETRIES of them.
+    s_art_retry_timer = NULL;
+    if (++s_art_retries > ART_MAX_RETRIES) return;
+  } else {
+    s_art_request_timer = NULL;
+  }
   if (!g_settings.show_album_art || !g_now.art_gen) return;
   s_art_requested_gen = g_now.art_gen;
   GRect r = layer_get_frame(bitmap_layer_get_layer(s_art_layer));
   send_art_request(g_now.art_gen, r.size.w, r.size.h);
   if (s_art_retry_timer) app_timer_cancel(s_art_retry_timer);
   s_art_retry_timer = app_timer_register(ART_RETRY_DELAY_MS, prv_request_art, (void *)1);
-  if (context) {
-    if (++s_art_retries > ART_MAX_RETRIES) {
-      app_timer_cancel(s_art_retry_timer);
-      s_art_retry_timer = NULL;
-    }
-  }
+}
+
+void now_playing_art_progress(void) {
+  // A chunk of the cover arrived: the transfer is alive, so hold off the retry.
+  if (s_art_retry_timer) app_timer_reschedule(s_art_retry_timer, ART_RETRY_DELAY_MS);
 }
 #endif
 
@@ -735,6 +742,15 @@ void now_playing_art_ready(GBitmap *art) {
   prv_restart_marquee();
 }
 
+// The wrist flick only matters with the bar off and a position to show.
+static void prv_update_accel(void) {
+  const bool want = !g_settings.show_progress_bar && (g_now.flags & NowReportsPosition);
+  if (want == s_accel_subscribed) return;
+  s_accel_subscribed = want;
+  if (want) accel_tap_service_subscribe(prv_accel_tap);
+  else accel_tap_service_unsubscribe();
+}
+
 // -- Public ------------------------------------------------------------------------------------------
 
 void now_playing_update(bool track_changed) {
@@ -751,6 +767,7 @@ void now_playing_update(bool track_changed) {
   }
   if (track_changed) prv_restart_marquee();
   if (g_now.art_gen != s_art_requested_gen) prv_art_gen_changed();
+  prv_update_accel();
   prv_update_layout();
   if (s_art_text_layer) layer_mark_dirty(s_art_text_layer);
   if (s_art_title_layer) layer_mark_dirty(s_art_title_layer);
@@ -758,11 +775,7 @@ void now_playing_update(bool track_changed) {
 
 void now_playing_settings_changed(void) {
   if (!s_window) return;
-  if (!g_settings.show_progress_bar && (g_now.flags & NowReportsPosition)) {
-    accel_tap_service_subscribe(prv_accel_tap);
-  } else {
-    accel_tap_service_unsubscribe();
-  }
+  prv_update_accel();
   if (g_settings.show_album_art && !s_art) {
     s_art_requested_gen = 0;
     prv_art_gen_changed();
@@ -871,6 +884,7 @@ static void prv_appear(Window *window) {
 static void prv_unload(Window *window) {
   tick_timer_service_unsubscribe();
   accel_tap_service_unsubscribe();
+  s_accel_subscribed = false;
   status_bar_layer_destroy(s_status);
   action_bar_layer_destroy(s_bar);
   text_layer_destroy(s_message_text);

@@ -7,6 +7,7 @@
 #define MAX_LINES 160
 #define LINE_LEN 64
 #define FOLLOW_MS 250
+#define RETRY_TICKS (5000 / FOLLOW_MS)  // re-request a page the phone has not answered in 5 s
 
 typedef struct {
   int32_t start_ms;  // -1 when unsynced
@@ -23,15 +24,16 @@ static int16_t s_focus;         // the line in the middle
 static bool s_manual;           // focus moved by the buttons
 static bool s_loaded;
 static AppTimer *s_follow_timer;
+static bool s_waiting;       // a page request is out
+static uint8_t s_wait_ticks;
 static char s_title[TEXT_LEN];
 
-bool lyrics_is_top(void) {
-  return s_window && window_stack_get_top_window() == s_window;
-}
-
 static void prv_request(uint16_t offset) {
-  static uint16_t next = 0x8000;
+  static uint16_t next = 0x8000;  // lists use ids below this
+  if (next < 0x8000) next = 0x8000;
   s_req_id = next++;
+  s_waiting = true;
+  s_wait_ticks = 0;
   send_list_request(s_req_id, "lyrics", offset);
 }
 
@@ -45,8 +47,8 @@ static int16_t prv_line_at(uint32_t pos) {
   return current;
 }
 
-static void prv_follow(void *context) {
-  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
+// Moves to the line playing now.
+static void prv_sync(void) {
   const int16_t line = prv_line_at(now_position_ms());
   if (line != s_current) {
     s_current = line;
@@ -55,9 +57,20 @@ static void prv_follow(void *context) {
   }
 }
 
+// The follow timer: the only place that registers it again.
+static void prv_follow(void *context) {
+  s_follow_timer = NULL;
+  if (!s_window || !s_lines) return;
+  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
+  // The request or its reply got lost (not connected, the phone busy): ask again.
+  if (s_waiting && ++s_wait_ticks >= RETRY_TICKS) prv_request(s_count);
+  prv_sync();
+}
+
 void lyrics_handle_page(DictionaryIterator *iter) {
   Tuple *req = dict_find(iter, MESSAGE_KEY_ReqId);
   if (!req || req->value->uint16 != s_req_id || !s_lines) return;
+  s_waiting = false;
   Tuple *total = dict_find(iter, MESSAGE_KEY_Total);
   Tuple *offset = dict_find(iter, MESSAGE_KEY_Offset);
   Tuple *items = dict_find(iter, MESSAGE_KEY_Items);
@@ -66,7 +79,11 @@ void lyrics_handle_page(DictionaryIterator *iter) {
   s_total = total ? total->value->uint16 : 0;
   if (s_total > MAX_LINES) s_total = MAX_LINES;
   uint16_t at = offset ? offset->value->uint16 : 0;
-  if (at != s_count) return;  // out of order: the next request starts over from s_count
+  if (at != s_count) {
+    // Not the page that follows what we have: ask for that one again.
+    prv_request(s_count);
+    return;
+  }
   if (items) {
     const uint8_t *p = items->value->data, *end = p + items->length;
     while (p < end && s_count < s_total) {
@@ -90,9 +107,7 @@ void lyrics_handle_page(DictionaryIterator *iter) {
   s_loaded = true;
   if (s_count < s_total) prv_request(s_count);
   s_current = -2;  // recompute
-  prv_follow(NULL);
-  app_timer_cancel(s_follow_timer);
-  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
+  prv_sync();
   layer_mark_dirty(s_layer);
 }
 
@@ -205,9 +220,7 @@ static void prv_select(ClickRecognizerRef r, void *ctx) {
   time_ms(&g_now.position_at, &g_now.position_at_ms);
   s_manual = false;
   s_current = -2;
-  prv_follow(NULL);
-  app_timer_cancel(s_follow_timer);
-  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
+  prv_sync();
 }
 
 static void prv_back(ClickRecognizerRef r, void *ctx) {
@@ -263,8 +276,12 @@ static void prv_unload(Window *window) {
   if (s_follow_timer) app_timer_cancel(s_follow_timer);
   s_follow_timer = NULL;
   layer_destroy(s_layer);
+  s_layer = NULL;
   free(s_lines);
   s_lines = NULL;
+  s_count = s_total = 0;
+  s_loaded = false;
+  s_waiting = false;
   window_destroy(s_window);
   s_window = NULL;
 }

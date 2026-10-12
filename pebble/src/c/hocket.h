@@ -171,6 +171,8 @@ void show_notice(const char *text);
 // Touch: each window registers a hold handler; a hold on the screen calls the top window's.
 typedef void (*HoldHandler)(void *ctx);
 void touch_set_hold_handler(HoldHandler handler, void *ctx);
+// Clears the hold handler when it is the one registered with ctx (a window going away).
+void touch_clear_hold_handler(void *ctx);
 
 // -- now_playing.c -------------------------------------------------------------------------------
 
@@ -178,6 +180,7 @@ void now_playing_push(void);
 void now_playing_update(bool track_changed);
 void now_playing_settings_changed(void);
 void now_playing_art_ready(GBitmap *art);  // takes ownership; NULL clears
+void now_playing_art_progress(void);       // a chunk of the current cover arrived
 Window *now_playing_window(void);
 
 // -- list.c --------------------------------------------------------------------------------------
@@ -190,7 +193,7 @@ void list_push_remote(const char *path, const char *title);
 void list_push_menu(ListKind kind);
 void list_push_rating(void);
 void list_push_hold(const char *path, const char *item, const char *title);
-// Incoming page for the top remote list.
+// Incoming page for whichever open remote list asked for it.
 void list_handle_page(DictionaryIterator *iter);
 // Refresh labels of open local menus (state changed).
 void list_refresh_local(void);
@@ -202,5 +205,4 @@ void list_start_search(void);
 // select seeks there, back returns to the current line (or closes when already there).
 void lyrics_push(void);
 void lyrics_handle_page(DictionaryIterator *iter);
-bool lyrics_is_top(void);
 void lyrics_track_changed(void);

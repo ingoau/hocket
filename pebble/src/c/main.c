@@ -31,10 +31,11 @@ static void prv_pump(void);
 
 static void prv_enqueue(const OutMsg *msg) {
   if (msg->type == MsgListReq || msg->type == MsgArtReq) {
-    // Only the newest request of a kind matters: replace a queued one.
-    for (int i = 0; i < s_out_count; i++) {
+    // Only the newest request of a kind matters: replace a queued one (not the one being sent).
+    // List requests only replace one for the same path, so another list's request still goes.
+    for (int i = s_out_busy ? 1 : 0; i < s_out_count; i++) {
       OutMsg *m = &s_out[(s_out_head + i) % OUT_QUEUE];
-      if (m->type == msg->type) {
+      if (m->type == msg->type && (msg->type != MsgListReq || !strcmp(m->path, msg->path))) {
         *m = *msg;
         prv_pump();
         return;
@@ -261,6 +262,7 @@ static int16_t s_art_w;
 static void prv_handle_art(DictionaryIterator *iter) {
   const uint16_t gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
   if (gen != g_now.art_gen) return;
+  now_playing_art_progress();
   const uint32_t offset = prv_u32(iter, MESSAGE_KEY_ArtOffset, 0);
   Tuple *data = dict_find(iter, MESSAGE_KEY_ArtData);
   if (offset == 0) {
@@ -310,8 +312,9 @@ static void prv_inbox(DictionaryIterator *iter, void *context) {
       prv_handle_now(iter);
       break;
     case MsgList:
-      if (lyrics_is_top()) lyrics_handle_page(iter);
-      else list_handle_page(iter);
+      // Each takes only the pages it asked for (by ReqId), wherever it is in the stack.
+      lyrics_handle_page(iter);
+      list_handle_page(iter);
       break;
     case MsgArt:
 #if ART_SUPPORTED
@@ -355,6 +358,10 @@ static int16_t s_down_x, s_down_y;
 void touch_set_hold_handler(HoldHandler handler, void *ctx) {
   s_hold_handler = handler;
   s_hold_ctx = ctx;
+}
+
+void touch_clear_hold_handler(void *ctx) {
+  if (s_hold_ctx == ctx) touch_set_hold_handler(NULL, NULL);
 }
 
 bool has_touch(void) {
@@ -507,6 +514,8 @@ static void prv_notice_unload(Window *window) {
 
 void show_notice(const char *text) {
   strncpy(s_notice_buf, text, sizeof(s_notice_buf) - 1);
+  // Nothing to hold on the notice; the window below sets its handler again when it reappears.
+  touch_set_hold_handler(NULL, NULL);
   if (!s_notice_window) {
     s_notice_window = window_create();
     window_set_background_color(s_notice_window, PBL_IF_COLOR_ELSE(HOCKET_DARK, GColorBlack));

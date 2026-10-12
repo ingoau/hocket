@@ -5,6 +5,7 @@
 
 #define CACHE 24
 #define PAGE 12
+#define REQUEST_TIMEOUT_MS 5000
 
 typedef struct {
   uint8_t flags;
@@ -13,7 +14,9 @@ typedef struct {
   char sub[40];
 } Row;
 
-typedef struct {
+typedef struct List List;
+struct List {
+  List *next;  // the open lists
   Window *window;
   MenuLayer *menu;
   ListKind kind;
@@ -22,6 +25,7 @@ typedef struct {
   // Remote
   uint16_t req_id;
   bool loading;
+  AppTimer *req_timer;  // gives up on a request the phone has not answered
   bool have_total;
   uint16_t total;
   uint16_t base;
@@ -34,9 +38,10 @@ typedef struct {
   // Hold menu target
   char hold_path[96];
   char hold_item[64];
-} List;
+};
 
 static uint16_t s_next_req = 1;
+static List *s_lists;
 
 static List *prv_top(void) {
   Window *w = window_stack_get_top_window();
@@ -96,12 +101,27 @@ static void prv_demo_page(List *l, uint16_t offset) {
 }
 #endif
 
+static void prv_request(List *l, uint16_t offset);
+
+// No reply (the send failed, or the phone's did): stop waiting so the rows ask again.
+static void prv_request_timeout(void *ctx) {
+  List *l = ctx;
+  l->req_timer = NULL;
+  l->loading = false;
+  if (!l->have_total) prv_request(l, 0);
+  else menu_layer_reload_data(l->menu);
+}
+
 static void prv_request(List *l, uint16_t offset) {
   if (l->loading) return;
   l->loading = true;
   l->req_id = s_next_req++;
+  if (s_next_req >= 0x8000) s_next_req = 1;  // lyrics use the ids above
+  l->req_timer = app_timer_register(REQUEST_TIMEOUT_MS, prv_request_timeout, l);
 #ifdef HOCKET_DEMO
   l->loading = false;
+  app_timer_cancel(l->req_timer);
+  l->req_timer = NULL;
   prv_demo_page(l, offset);
 #else
   send_list_request(l->req_id, l->path, offset);
@@ -120,10 +140,14 @@ static void prv_ensure(List *l, uint16_t index) {
 
 // Rows: [flags][id\0][title\0][sub\0]…
 void list_handle_page(DictionaryIterator *iter) {
-  List *l = prv_top();
   Tuple *req = dict_find(iter, MESSAGE_KEY_ReqId);
-  if (!l || l->kind != ListRemote || !req || req->value->uint16 != l->req_id) return;
+  if (!req) return;
+  List *l = s_lists;
+  while (l && !(l->kind == ListRemote && l->loading && l->req_id == req->value->uint16)) l = l->next;
+  if (!l) return;
   l->loading = false;
+  if (l->req_timer) app_timer_cancel(l->req_timer);
+  l->req_timer = NULL;
   Tuple *t = dict_find(iter, MESSAGE_KEY_Total);
   Tuple *o = dict_find(iter, MESSAGE_KEY_Offset);
   Tuple *items = dict_find(iter, MESSAGE_KEY_Items);
@@ -417,10 +441,20 @@ static void prv_disappear(Window *window) {
   List *l = window_get_user_data(window);
   if (l->timeout) app_timer_cancel(l->timeout);
   l->timeout = NULL;
+  touch_clear_hold_handler(l);
 }
 
 static void prv_unload(Window *window) {
   List *l = window_get_user_data(window);
+  touch_clear_hold_handler(l);
+  if (l->timeout) app_timer_cancel(l->timeout);
+  if (l->req_timer) app_timer_cancel(l->req_timer);
+  for (List **p = &s_lists; *p; p = &(*p)->next) {
+    if (*p == l) {
+      *p = l->next;
+      break;
+    }
+  }
   menu_layer_destroy(l->menu);
   window_destroy(window);
   free(l);
@@ -437,6 +471,8 @@ static List *prv_push(ListKind kind, const char *title) {
     return NULL;
   }
   l->kind = kind;
+  l->next = s_lists;
+  s_lists = l;
   strncpy(l->title, title, sizeof(l->title) - 1);
   l->window = window_create();
   window_set_user_data(l->window, l);
