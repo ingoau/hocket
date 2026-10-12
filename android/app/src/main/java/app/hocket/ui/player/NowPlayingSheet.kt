@@ -55,6 +55,9 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
@@ -783,6 +786,8 @@ private fun Modifier.continuationLayer(
     val big = hero.bigSlot()
     alpha = HeroGeometry.continuationAlpha(p) * (1f - modeFraction())
     transformOrigin = TransformOrigin(0f, 0f)
+    // Offscreen only while a seam is feathered (below).
+    compositingStrategy = if (seamFeather(hero, offsetSpans, flying()) != 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
     if (flying() && big.width > 0f) {
         val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
         scaleX = t.scale
@@ -791,6 +796,41 @@ private fun Modifier.continuationLayer(
         translationY = t.y
     } else {
         translationX = hero.swipe() + offsetSpans * span()
+    }
+}.drawWithContent {
+    drawContent()
+    // While the artwork is swiped, the edge facing the other page fades out over [SEAM_FEATHER], so
+    // the two pages' continuations and backdrops blend across the seam instead of meeting in a
+    // hard line (the artwork above stays crisp). It eases in with the first [SEAM_FEATHER] of the
+    // swipe, so nothing shows at the screen's edge as a swipe starts.
+    val f = seamFeather(hero, offsetSpans, flying())
+    if (f == 0f) return@drawWithContent
+    val w = SEAM_FEATHER.toPx()
+    val strength = (abs(hero.swipe()) / w).coerceIn(0f, 1f)
+    val faded = Color.Black.copy(alpha = 1f - strength)
+    if (f < 0f) {
+        drawRect(Brush.horizontalGradient(0f to faded, 1f to Color.Black, startX = 0f, endX = w), size = size.copy(width = w), blendMode = BlendMode.DstIn)
+    } else {
+        drawRect(Brush.horizontalGradient(0f to Color.Black, 1f to faded, startX = size.width - w, endX = size.width), topLeft = Offset(size.width - w, 0f), size = size.copy(width = w), blendMode = BlendMode.DstIn)
+    }
+}
+
+/** How wide the soft edge between two swiped pages' continuations is. */
+private val SEAM_FEATHER = 56.dp
+
+/**
+ * Which edge of a continuation [offsetSpans] pages along faces the other page while the artwork is
+ * swiped: -1 its left (the next page's, or the current one moving right), 1 its right, 0 none (at
+ * rest, or in flight with the sheet).
+ */
+private fun seamFeather(hero: HeroGeometry, offsetSpans: Float, flying: Boolean): Float {
+    val swipe = hero.swipe()
+    if (flying || swipe == 0f) return 0f
+    return when {
+        offsetSpans > 0f -> -1f
+        offsetSpans < 0f -> 1f
+        swipe < 0f -> 1f
+        else -> -1f
     }
 }
 
