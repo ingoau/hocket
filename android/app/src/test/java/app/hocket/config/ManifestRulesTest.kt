@@ -80,13 +80,22 @@ class ManifestRulesTest {
     }
 
     @Test
-    fun theArtworkProviderIsTheOnlyProviderAndCannotBeWrittenOrGranted() {
-        // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
+    fun theOnlyProvidersAreArtworkAndThePrivateWatchappFile() {
         val providers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")
             .flatMap { path -> parse(path).getElementsByTagName("provider").let { list -> (0 until list.length).map { list.item(it) as Element } } }
-        val provider = providers.single()
-        assertEquals("app.hocket.playback.ArtworkProvider", provider.getAttribute("android:name"))
-        assertFalse(provider.hasAttribute("android:grantUriPermissions"))
-        assertFalse(provider.hasAttribute("android:writePermission"))
+        assertEquals(setOf("app.hocket.playback.ArtworkProvider", "app.hocket.playback.pebble.PebbleFileProvider"), providers.map { it.getAttribute("android:name") }.toSet())
+        // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
+        val artwork = providers.single { it.getAttribute("android:name") == "app.hocket.playback.ArtworkProvider" }
+        assertFalse(artwork.hasAttribute("android:grantUriPermissions"))
+        assertFalse(artwork.hasAttribute("android:writePermission"))
+        // The bundled watchapp: never exported, reachable only through a per-intent read grant, and
+        // serving nothing but its own cache directory.
+        val pebble = providers.single { it.getAttribute("android:name") == "app.hocket.playback.pebble.PebbleFileProvider" }
+        assertEquals("false", pebble.getAttribute("android:exported"))
+        assertFalse(pebble.hasAttribute("android:writePermission"))
+        val paths = parse("android/playback/src/main/res/xml/pebble_paths.xml").documentElement.let { root ->
+            (0 until root.childNodes.length).map { root.childNodes.item(it) }.filterIsInstance<Element>()
+        }
+        assertEquals(listOf("cache-path:pebble/"), paths.map { it.tagName + ":" + it.getAttribute("path") })
     }
 }
