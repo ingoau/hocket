@@ -67,7 +67,14 @@ class ImmersiveMotionScreenshotTest {
     }
 
     @Test
-    fun motion() {
+    fun motion() = run(tall = false)
+
+    /** A tall phone: the immersive artwork stays at the top, the controls at the bottom, the continuation between. */
+    @Test
+    @Config(qualifiers = "w411dp-h960dp-night-xxhdpi")
+    fun tall() = run(tall = true)
+
+    private fun run(tall: Boolean) {
         val dir = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
         val covers = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.sortedBy { f -> f.name } }.orEmpty()
         val lib = env("HOCKET_HOST_LIB")?.let(::File)?.takeIf { it.exists() }
@@ -118,6 +125,10 @@ class ImmersiveMotionScreenshotTest {
             // The cover is decoded and crossfaded in on a clock the test steps by hand: wait for the
             // frame to stop changing, or the capture can catch the artwork's empty background.
             awaitStill()
+            if (tall) {
+                shot(File(dir, "$prefix-artwork-w411dp-h960dp.png"))
+                return
+            }
             shot(File(dir, "$prefix-artwork.png"))
             if (current == 1) {
                 // The queue on its panel, the continuation fading away under it.

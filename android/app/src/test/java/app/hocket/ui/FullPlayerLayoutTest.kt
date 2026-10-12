@@ -93,6 +93,67 @@ class FullPlayerLayoutTest {
         row.forEach { assertTrue("48 dp tall: $it", it.height >= 48f * dp - 1f) }
     }
 
+    /**
+     * Up to the reference phone's height (891 dp) nothing changes: the artwork right under the
+     * handle (its 8 dp margin, no more), the spare height shared evenly above the transport, above
+     * the action row and under it.
+     */
+    @Test
+    fun atTheReferenceSizeTheControlsSpreadAndTheArtworkSitsUnderTheHandle() {
+        startExpanded()
+        val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
+        assertTrue("no taller than the reference (${root.height / dp} dp)", root.height <= 891f * dp)
+        val handle = bounds("player.collapse")
+        val art = bounds("player.artwork")
+        val title = bounds("player.title")
+        val play = bounds("player.playPause")
+        val actions = bounds("player.mode.queue")
+        assertEquals("the artwork's margin under the handle", 8f * dp, art.top - handle.bottom, 1f)
+        assertEquals("the title's margin under the artwork", 24f * dp, title.top - art.bottom, 1f)
+        val share = actions.top - play.bottom - 16f * dp
+        assertTrue("spread out (share $share)", share > 4f * dp)
+        assertEquals("the same share under the action row", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
+    }
+
+    /**
+     * A taller phone: the controls (title to actions) keep the reference phone's gaps, packed at the
+     * bottom; what is left goes to the mode area, the artwork centred in it, and in queue mode the
+     * panel takes it. Nothing below moves across modes.
+     */
+    @Test
+    @Config(qualifiers = "w411dp-h960dp")
+    fun onATallPhoneTheControlsStayAtTheBottomAndTheArtworkCentresAbove() {
+        startExpanded()
+        val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
+        val handle = bounds("player.collapse")
+        val art = bounds("player.artwork")
+        val title = bounds("player.title")
+        val seek = bounds("player.seekBar")
+        val play = bounds("player.playPause")
+        val actions = bounds("player.mode.queue")
+        val extra = root.height - 891f * dp
+        assertTrue("taller than the reference (${root.height / dp} dp)", extra > 20f * dp)
+        assertEquals("the artwork as wide as the margins allow", 371f * dp, art.width, 1f)
+        // Everything past the reference height goes above the controls, half over the artwork.
+        assertEquals("the artwork lower by half the extra height", extra / 2f, art.top - handle.bottom - 8f * dp, 1.5f)
+        assertEquals("and the title by all of it", extra / 2f, title.top - art.bottom - 24f * dp, 1.5f)
+        // The controls packed at the bottom with the gaps they have on the reference phone.
+        val share = actions.top - play.bottom - 16f * dp
+        assertTrue("the reference gaps (share $share)", share > 4f * dp)
+        assertEquals("anchored to the bottom", share, root.bottom - actions.bottom - 16f * dp, 1.5f)
+        val before = listOf(seek, play, actions)
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        listOf("player.seekBar", "player.playPause", "player.mode.queue").zip(before).forEach { (tag, b) ->
+            assertEquals("$tag stays put", b.top, bounds(tag).top, 1f)
+        }
+        val panel = bounds("player.panel")
+        assertEquals("the queue's panel from the handle", handle.bottom + 8f * dp, panel.top, 1f)
+        assertTrue("down to the title, taking the extra height ($panel)", panel.height >= art.height + extra - 2f * dp)
+    }
+
     @Test
     fun theAlbumStaysBesideTheThumbnailInTheOtherModes() {
         startExpanded()

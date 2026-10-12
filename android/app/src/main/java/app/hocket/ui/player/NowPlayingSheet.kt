@@ -233,6 +233,11 @@ internal class HeroGeometry {
      * page, under the header, with square corners and no shadow, and does not shrink while paused.
      */
     var immersive by mutableStateOf(false)
+    /**
+     * The big artwork's top in its area (px): [artPad], or lower on a tall screen, where the area
+     * has more height than the artwork needs and the artwork is centred in it.
+     */
+    var artTop = 0f
     /** The header's height (px) as the page laid it out: the immersive artwork starts this far above the area. */
     var headerHeight = 0f
     /** How much the title row's stars have folded away (px; they show in artwork mode only): the mode area takes it. */
@@ -247,9 +252,9 @@ internal class HeroGeometry {
     }
 
     /**
-     * The big artwork's square, centred across the top of its area: [artSide] (the same in every
-     * mode, so the artwork does not resize while the area grows for lyrics or the queue), or before
-     * that is known as large as the area allows (up to [artMax]).
+     * The big artwork's square, centred across the top of its area ([artTop] down): [artSide] (the
+     * same in every mode, so the artwork does not resize while the area grows for lyrics or the
+     * queue), or before that is known as large as the area allows (up to [artMax]).
      */
     fun bigSlot(): Rect {
         val a = area
@@ -257,7 +262,7 @@ internal class HeroGeometry {
         if (immersive) return Rect(Offset(a.left, a.top - headerHeight), Size(a.width, a.width))
         val side = if (artSide > 0f) minOf(artSide, a.width - 2 * artInset) else minOf(a.width - 2 * artInset, a.height - 2 * artPad, artMax)
         if (side <= 0f) return Rect.Zero
-        return Rect(Offset(a.center.x - side / 2, a.top + artPad), Size(side, side))
+        return Rect(Offset(a.center.x - side / 2, a.top + maxOf(artTop, artPad)), Size(side, side))
     }
 
     /** Where the full player's artwork is at mode fraction [f], shrunk to [pausedScale] while big (not when immersive). */

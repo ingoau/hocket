@@ -58,6 +58,33 @@ class AppScreenshotTest {
     @Config(qualifiers = "+notnight")
     fun light() = captureAll("light")
 
+    /** Taller phones than the reference: the controls stay packed at the bottom, the artwork centred above. */
+    @Test
+    @Config(qualifiers = "w411dp-h960dp-night-xxhdpi")
+    fun tall() = captureTall("w411dp-h960dp")
+
+    @Test
+    @Config(qualifiers = "w440dp-h1000dp-night-xxhdpi")
+    fun veryTall() = captureTall("w440dp-h1000dp")
+
+    private fun captureTall(size: String) {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write screenshots", dir != null)
+        dir!!.mkdirs()
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        awaitTag("miniPlayer")
+        compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
+        awaitTag("player.playPause")
+        settle()
+        shot(dir, "android-dark-16-player-artwork-$size")
+        click("player.mode.queue")
+        settle()
+        shot(dir, "android-dark-17-queue-$size")
+    }
+
     /** The player on a narrow phone (display size "largest") at font scale 1.5. */
     @Test
     @Config(qualifiers = "w360dp-h760dp-night-xxhdpi")

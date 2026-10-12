@@ -304,14 +304,24 @@ private val TRANSPORT_HEIGHT = 84.dp
 private val ITEM_GAPS = listOf(4.dp, 12.dp, 16.dp)
 
 /**
+ * The phone the controls' spacing is designed on: up to its height the [PlayerLayout] items spread
+ * over the room left; taller screens keep the gaps they get here and give the rest to the mode area.
+ */
+private val REFERENCE_WIDTH = 411.dp
+private val REFERENCE_HEIGHT = 891.dp
+
+/**
  * The page's layout: the header, the mode area at the artwork's size (as large as the width
  * allows, up to [MAX_ART], shrinking on short screens but never below what [MIN_AREA] leaves; an
  * immersive artwork the full width from the top of the page, under the header), the title right
  * below it, and the [items] spread evenly over what is left of [minHeight] (the same share above
- * each and below the last, on top of [ITEM_GAPS]). The same in every mode: lyrics and the queue
- * take the artwork's place, so nothing below moves when the mode changes. Inside the page's
- * vertical scroll, so it can be taller than the screen. The artwork's side goes to
- * [HeroGeometry.artSide].
+ * each and below the last, on top of [ITEM_GAPS]), but never further apart than on the reference
+ * phone ([REFERENCE_WIDTH] x [REFERENCE_HEIGHT]): on a taller screen the controls (title to
+ * actions) stay packed at the bottom and the mode area takes the rest, the artwork centred in it
+ * ([HeroGeometry.artTop]; an immersive artwork stays at the top, its continuation filling the gap).
+ * The same in every mode: lyrics and the queue take the artwork's place, so nothing below moves when
+ * the mode changes. Inside the page's vertical scroll, so it can be taller than the screen. The
+ * artwork's side goes to [HeroGeometry.artSide].
  */
 @Composable
 private fun PlayerLayout(
@@ -340,13 +350,24 @@ private fun PlayerLayout(
         val pad = ART_PAD.roundToPx()
         val minArea = MIN_AREA.roundToPx()
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
-        val side = if (hero.immersive) w else (view - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
+        fun sideFor(height: Int, width: Int, most: Int) =
+            if (hero.immersive) width else (height - hh - th - rest - 2 * pad).coerceIn(minOf(minArea - 2 * pad, most), most).coerceAtLeast(0)
+        fun areaFor(side: Int) = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
+        val side = sideFor(view, w, maxSide)
         hero.artSide = side.toFloat()
         hero.headerHeight = hh.toFloat()
-        val areaH = if (hero.immersive) (side - hh).coerceAtLeast(0) else side + 2 * pad
-        val spare = (view - hh - areaH - th - rest).coerceAtLeast(0)
         val shares = ih.count { it > 0 } + 1
-        val share = spare.toFloat() / shares
+        // The share each gap gets on the reference phone (with this page's own rows): no more.
+        val refW = REFERENCE_WIDTH.roundToPx()
+        val refH = REFERENCE_HEIGHT.roundToPx()
+        val refArea = areaFor(sideFor(refH, refW, minOf(refW - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())))
+        val refShare = (refH - hh - refArea - th - rest).coerceAtLeast(0).toFloat() / shares
+        val spare = (view - hh - areaFor(side) - th - rest).coerceAtLeast(0)
+        val share = minOf(spare.toFloat() / shares, refShare)
+        // What the gaps leave goes to the mode area, above the controls.
+        val extra = if (share < spare.toFloat() / shares) (spare - share.roundToInt() * shares).coerceAtLeast(0) else 0
+        val areaH = areaFor(side) + extra
+        hero.artTop = (pad + extra / 2).toFloat()
         val ap = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
         var y = hh + areaH + th
         val tops = ih.mapIndexed { i, h -> if (h > 0) { y += gaps[i] + share.roundToInt(); val top = y; y += h; top } else y }
@@ -655,8 +676,6 @@ private val STAR_SIZE = 20.dp
 private val STAR_TOUCH_OVERHANG = 8.dp
 /** The room between the artist line's box and the stars' icons (about 8 dp from its descenders to the star glyphs). */
 private val STAR_GAP = 1.dp
-/** How much closer than their line boxes the artist line sits to the title (about 2 dp between the glyphs). */
-private val TITLE_ARTIST_PULL = 7.6.dp
 /** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
 private val THUMB_GAP = 14.dp
 private val THUMB_MIN = 48.dp
@@ -688,21 +707,8 @@ private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 /** Title (emphasized headline) and "artist · album" (muted), each ellipsised. */
 @Composable
 private fun TrackLines(track: TrackSummary, compact: Boolean, tagged: Boolean = true) {
-    // Grouped by proximity: the artist line tucks up under the title ([TITLE_ARTIST_PULL] into the
-    // two line boxes' leading), the stars keep their distance below ([STAR_GAP]).
     Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.ExtraBold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
-    Row(
-        Modifier.layout { m, c ->
-            // Measured at its full height (the pull reports less), so a box that fits the lines
-            // exactly (a neighbour's, matching the current one's) never squeezes the text.
-            val pull = TITLE_ARTIST_PULL.roundToPx()
-            val p = m.measure(c.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-            layout(p.width, (p.height - pull).coerceIn(c.minHeight, c.maxHeight)) { p.place(0, -pull) }
-        },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Untrimmed line boxes (trimming clips the text at large font scales): the pull above and
-        // [STAR_GAP] below account for their leading.
+    Row(verticalAlignment = Alignment.CenterVertically) {
         val sub = MaterialTheme.typography.bodyLarge
         val subColor = MaterialTheme.colorScheme.onSurfaceVariant
         Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
