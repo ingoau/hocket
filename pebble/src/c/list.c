@@ -388,7 +388,7 @@ static void prv_load(Window *window) {
     .selection_changed = prv_selection_changed,
   });
 #ifdef PBL_COLOR
-  menu_layer_set_highlight_colors(l->menu, GColorRed, GColorWhite);
+  menu_layer_set_highlight_colors(l->menu, PBL_IF_COLOR_ELSE(HOCKET_ACCENT, GColorRed), GColorWhite);
 #endif
   menu_layer_set_click_config_onto_window(l->menu, window);
   if (l->kind == ListMenu) {

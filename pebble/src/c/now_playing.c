@@ -190,7 +190,7 @@ static void prv_track_update(Layer *layer, GContext *ctx) {
   if (pct > 100) pct = 100;
   const int16_t w = b.size.w * pct / 100;
   if (w > 0) {
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorBlack));
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(HOCKET_ACCENT, GColorBlack));
     graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), s_cfg->track_radius, GCornersAll);
   }
 #ifndef PBL_COLOR
@@ -335,7 +335,7 @@ static void prv_draw_star(GContext *ctx, GPoint c, int16_t r, bool filled) {
   }
   GPath path = {.num_points = 10, .points = points};
   if (filled) {
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorBlack));
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(HOCKET_ACCENT, GColorBlack));
     gpath_draw_filled(ctx, &path);
   }
   graphics_context_set_stroke_color(ctx, GColorBlack);

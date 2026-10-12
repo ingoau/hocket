@@ -114,8 +114,10 @@ static void prv_demo(void) {
     "Last line of the demo",
   };
   s_count = s_total = ARRAY_LENGTH(LINES);
+  // Timed around the demo position, so the page opens mid-song.
+  const int32_t start = (int32_t)now_position_ms() - 22000;
   for (int i = 0; i < s_count; i++) {
-    s_lines[i].start_ms = 85000 + i * 4000;
+    s_lines[i].start_ms = start + i * 4000;
     strncpy(s_lines[i].text, LINES[i], LINE_LEN - 1);
     s_lines[i].text[LINE_LEN - 1] = 0;
   }
@@ -160,7 +162,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
   int16_t top = b.size.h / 2 - fs.h / 2 - 4;
   // The focused line: white when it is the one playing, the accent while browsing.
   graphics_context_set_text_color(ctx, focus == s_current || !s_manual ? GColorWhite
-                                                                     : PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
+                                                                     : PBL_IF_COLOR_ELSE(HOCKET_ACCENT_PALE, GColorWhite));
   graphics_draw_text(ctx, s_lines[focus].text, focus_font, GRect(inset, top, w, fs.h + 6),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
