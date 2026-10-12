@@ -64,6 +64,8 @@ class PebbleBridge(
         private const val SEARCH_LIMIT = 10
         private const val RECENT_LIMIT = 50
         private const val TEXT_MAX = 95
+        /** Played tracks before the current one: fewer than a page, so the first page holds it. */
+        private const val QUEUE_HISTORY = 8
     }
 
     private val sender by lazy { DefaultPebbleSender(context) }
@@ -390,9 +392,10 @@ class PebbleBridge(
 
     private fun trackRow(t: TrackSummary) = Row("track:${t.id}", t.title, t.artist ?: "", RowFlag.TRACK)
 
-    private fun queueEntries() = queue?.let { it.history + listOfNotNull(it.current) + it.playingNext + it.upcoming }.orEmpty()
+    /** Recent history (enough to scroll back a little), the current track, Playing Next and the rest. */
+    private fun queueEntries() = queue?.let { it.history.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.playingNext + it.upcoming }.orEmpty()
 
-    /** History, the current track, Playing Next and the rest; the watch scrolls to the current one. */
+    /** [queueEntries] as rows; the current one is in the first page, where the watch selects it. */
     private fun queueRows(): List<Row> {
         val q = queue ?: return emptyList()
         val current = q.current?.item?.key

@@ -1,6 +1,7 @@
 // Now Playing: a port of PebbleOS's system music app (fw/apps/system/music.c, Apache-2.0) to the
 // public SDK, plus Hocket's touch gestures and the buttons-only back menu. Behaviour follows the
-// reference section of docs/pebble.md; differences are noted where they happen.
+// reference section of docs/pebble.md; differences are noted where they happen. The biggest: the
+// track's star rating sits where the reference's cassette was.
 #include "hocket.h"
 
 // The reference animations ran at 28fps.
@@ -32,9 +33,7 @@ typedef struct {
   int16_t artist_y, artist_h;
   int16_t title_y, title_h;
   int16_t time_y, time_h;
-  GRect cassette;
-  int16_t cassette_animation_x;
-  int32_t cassette_animation_time;
+  int16_t star_radius;
   int16_t track_y, track_h, track_radius;
   GPoint no_music_pos;
   int16_t no_music_text_y, no_music_text_h;
@@ -52,9 +51,7 @@ static const SizeConfig MEDIUM = {
   .artist_y = 31 + VOFF, .artist_h = 21,
   .title_y = 53 + VOFF, .title_h = 44,
   .time_y = 106 + VOFF, .time_h = 14,
-  .cassette = {{0, -1 + VOFF}, {43, 28}},
-  .cassette_animation_x = 60,
-  .cassette_animation_time = 1 * FRAME_MS,
+  .star_radius = 7,
   .track_y = 120 + VOFF, .track_h = 4, .track_radius = 1,
   .no_music_pos = {PBL_IF_RECT_ELSE(29, 53), PBL_IF_RECT_ELSE(25, 26)},
   .no_music_text_y = PBL_IF_RECT_ELSE(107, 104), .no_music_text_h = 58,
@@ -69,9 +66,7 @@ static const SizeConfig LARGE = {
   .artist_y = PBL_IF_RECT_ELSE(30, 48), .artist_h = 21 + 8,
   .title_y = PBL_IF_RECT_ELSE(60, 72), .title_h = 80,
   .time_y = PBL_IF_RECT_ELSE(146, 158), .time_h = 20,
-  .cassette = {{0, -8}, {43, 28}},
-  .cassette_animation_x = 140,
-  .cassette_animation_time = 3 * FRAME_MS,
+  .star_radius = 10,
   .track_y = PBL_IF_RECT_ELSE(168, 182), .track_h = 10, .track_radius = 4,
   .no_music_pos = {PBL_IF_RECT_ELSE(57, 72), PBL_IF_RECT_ELSE(46, 58)},
   .no_music_text_y = PBL_IF_RECT_ELSE(131, 143), .no_music_text_h = 58,
@@ -86,19 +81,17 @@ static GSize s_size;
 static StatusBarLayer *s_status;
 static BitmapLayer *s_art_layer;
 static Layer *s_art_text_layer;   // outlined artist over the cover
-static Layer *s_art_title_layer;  // the title beside the tape, scrolling (clips to its frame)
+static Layer *s_art_title_layer;  // the title over the cover's foot, scrolling (clips to its frame)
 static TextLayer *s_artist, *s_title, *s_position, *s_length;
 static Layer *s_track;
-static Layer *s_cassette_container;
-static BitmapLayer *s_cassette;
+static Layer *s_rating;  // the stars, or the volume feedback for a moment
 static ActionBarLayer *s_bar;
 static BitmapLayer *s_message_image;
 static TextLayer *s_message_text;
 
 static GBitmap *s_icon_skip_forward, *s_icon_skip_backward, *s_icon_ellipsis, *s_icon_play,
     *s_icon_pause, *s_icon_play_pause, *s_icon_volume_up, *s_icon_volume_down;
-static GBitmap *s_image_cassette, *s_image_paused, *s_image_volume_up, *s_image_volume_down,
-    *s_image_no_music;
+static GBitmap *s_image_volume_up, *s_image_volume_down, *s_image_no_music;
 static GBitmap *s_art;
 
 static char s_artist_buf[TEXT_LEN], s_title_buf[TEXT_LEN];
@@ -111,9 +104,8 @@ static AppTimer *s_progress_flick_timer, *s_art_request_timer, *s_art_retry_time
 static AppTimer *s_marquee_timer;
 static bool s_volume_is_up;
 static bool s_progress_flicked;
-static bool s_was_playing;
 static bool s_showing_message;
-static GBitmap *s_cassette_icon;
+static GBitmap *s_volume_image;  // shown instead of the stars while set
 static Animation *s_transition;
 static uint16_t s_art_requested_gen;
 #if ART_SUPPORTED
@@ -151,9 +143,21 @@ static GRect prv_time_rect(void) {
   return GRect(s_cfg->margin, s_cfg->time_y, prv_content_width(), s_cfg->time_h);
 }
 
-static GRect prv_cassette_rect(void) {
-  const int16_t x = s_cfg->margin + PBL_IF_RECT_ELSE(0, prv_content_width() - s_cfg->cassette.size.w);
-  return GRect(x, s_cfg->cassette.origin.y, s_cfg->cassette.size.w, s_cfg->cassette.size.h);
+// The row under the progress bar, about midway between the times and the bottom of the screen; the
+// stars start at the text margin (on round, inside the circle from the content margin).
+static GRect prv_rating_rect(void) {
+  const int16_t h = s_cfg->star_radius * 2 + 6;
+  const int16_t below = s_cfg->track_y + s_cfg->track_h;
+  const int16_t y = below + (s_size.h - below - h) / 2;
+  int16_t x = s_cfg->margin;
+#if PBL_ROUND
+  // The circle is narrower down here: start where its edge is at the row's bottom.
+  const int32_t r = s_size.w / 2, dy = y + h - s_size.h / 2;
+  int32_t half = 0;
+  while ((half + 1) * (half + 1) <= r * r - dy * dy) half++;
+  if (r - half + 2 > x) x = r - half + 2;
+#endif
+  return GRect(x, y, s_size.w - ACTION_BAR_WIDTH - x - s_cfg->margin, h);
 }
 
 static GRect prv_track_rect(void) {
@@ -233,17 +237,13 @@ static void prv_draw_outlined(GContext *ctx, const char *text, GFont font, GRect
   graphics_draw_text(ctx, text, font, box, overflow, align, NULL);
 }
 
-// Over art (rect): the artist outlined and centred at the bottom of the cover, and the title on one
-// line beside the cassette, scrolling like a sign for a couple of cycles after a track change.
+// Over art (rect): the artist outlined and centred near the bottom of the cover, and the title on
+// one line under it, scrolling like a sign for a couple of cycles after a track change.
 static GRect prv_art_title_rect(void) {
 #if PBL_RECT
-  const int16_t h = 28;
-  GRect tape = prv_cassette_rect();
-  GRect frame = layer_get_frame(s_cassette_container);
-  const int16_t x = tape.origin.x + tape.size.w + 2;
-  const int16_t right = s_size.w - ACTION_BAR_WIDTH - 7;
-  const int16_t y = frame.origin.y + (frame.size.h - h) / 2 - 2;
-  return GRect(x, y, right - x, h);
+  // The cover's last line, the content's full width (the stars have the row below the times).
+  const GRect art = layer_get_frame(bitmap_layer_get_layer(s_art_layer));
+  return GRect(4, art.size.h - 30, art.size.w - 8, 28);
 #else
   return GRect(40, s_size.h / 2 - 20, s_size.w - 80, 60);
 #endif
@@ -255,7 +255,7 @@ static void prv_art_text_update(Layer *layer, GContext *ctx) {
   GFont artist_font = fonts_get_system_font(s_cfg->artist_font);
 #if PBL_RECT
   if (s_artist_buf[0]) {
-    prv_draw_outlined(ctx, s_artist_buf, artist_font, GRect(0, art.size.h - 30, art.size.w, 28),
+    prv_draw_outlined(ctx, s_artist_buf, artist_font, GRect(0, art.size.h - 58, art.size.w, 28),
                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter);
   }
 #else
@@ -268,13 +268,16 @@ static void prv_art_text_update(Layer *layer, GContext *ctx) {
 #endif
 }
 
+static int16_t prv_title_overflow(void);
+
 #if PBL_RECT
 static void prv_art_title_update(Layer *layer, GContext *ctx) {
   const GRect b = layer_get_bounds(layer);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, s_title_buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(-s_marquee_offset, 0, 2000, b.size.h), GTextOverflowModeFill,
-                     GTextAlignmentLeft, NULL);
+  // Centred while it fits; scrolling from the left edge when it doesn't.
+  const bool fits = prv_title_overflow() <= 0;
+  prv_draw_outlined(ctx, s_title_buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                    fits ? GRect(0, 0, b.size.w, b.size.h) : GRect(-s_marquee_offset, 0, 2000, b.size.h),
+                    GTextOverflowModeFill, fits ? GTextAlignmentCenter : GTextAlignmentLeft);
 }
 #endif
 
@@ -319,73 +322,54 @@ static void prv_restart_marquee(void) {
   }
 }
 
-// -- Cassette and the track-change animation --------------------------------------------------------
+// -- Rating (where the reference had its cassette) -------------------------------------------------
 
-static void prv_icon_swapped(Animation *animation, bool finished, void *context) {
-  bitmap_layer_set_bitmap(s_cassette, context);
-  Layer *l = bitmap_layer_get_layer(s_cassette);
-  GRect b = layer_get_bounds(l);
-  b.origin.y = 0;
-  layer_set_bounds(l, b);
+// A five-pointed star of outer radius r centred on c, filled or outlined.
+static void prv_draw_star(GContext *ctx, GPoint c, int16_t r, bool filled) {
+  GPoint points[10];
+  for (int i = 0; i < 10; i++) {
+    const int32_t angle = TRIG_MAX_ANGLE * i / 10;
+    const int32_t radius = i % 2 ? r * 2 / 5 : r;
+    points[i] = GPoint(c.x + sin_lookup(angle) * radius / TRIG_MAX_RATIO,
+                       c.y - cos_lookup(angle) * radius / TRIG_MAX_RATIO);
+  }
+  GPath path = {.num_points = 10, .points = points};
+  if (filled) {
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorBlack));
+    gpath_draw_filled(ctx, &path);
+  }
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  gpath_draw_outline(ctx, &path);
 }
 
-static void prv_switch_cassette_icon(GBitmap *icon, bool animated) {
-  if (!animated) {
-    bitmap_layer_set_bitmap(s_cassette, icon);
-    s_cassette_icon = icon;
+static void prv_rating_update(Layer *layer, GContext *ctx) {
+  const GRect b = layer_get_bounds(layer);
+  if (s_volume_image) {
+    const GSize img = gbitmap_get_bounds(s_volume_image).size;
+    graphics_context_set_compositing_mode(ctx, GCompOpSet);
+    graphics_draw_bitmap_in_rect(ctx, s_volume_image, GRect(0, (b.size.h - img.h) / 2, img.w, img.h));
     return;
   }
-  if (icon == s_cassette_icon) return;
-  Layer *l = bitmap_layer_get_layer(s_cassette);
-  const GRect rect = prv_cassette_rect();
-  GPoint from = GPointZero, to = GPoint(0, -rect.size.h);
-  PropertyAnimation *disappear = property_animation_create_bounds_origin(l, &from, &to);
-  animation_set_duration(property_animation_get_animation(disappear), 3 * FRAME_MS);
-  animation_set_curve(property_animation_get_animation(disappear), AnimationCurveEaseIn);
-  animation_set_handlers(property_animation_get_animation(disappear),
-                         (AnimationHandlers){.stopped = prv_icon_swapped}, icon);
-  GRect start = rect;
-  start.origin.y -= BOUNCEBACK_OFFSET;
-  PropertyAnimation *bounce = property_animation_create_layer_frame(l, &start, (GRect *)&rect);
-  animation_set_duration(property_animation_get_animation(bounce), 4 * FRAME_MS);
-  animation_set_curve(property_animation_get_animation(bounce), AnimationCurveEaseOut);
-  s_cassette_icon = icon;
-  animation_schedule(animation_sequence_create(property_animation_get_animation(disappear),
-                                               property_animation_get_animation(bounce), NULL));
-}
-
-static void prv_update_cassette(bool animated) {
-  prv_switch_cassette_icon((g_now.flags & NowPlaying) ? s_image_cassette : s_image_paused, animated);
+  const int16_t r = s_cfg->star_radius;
+  const int16_t step = r * 2 + 4;
+  const int16_t x0 = r + 1;
+  for (int i = 0; i < 5; i++) {
+    prv_draw_star(ctx, GPoint(x0 + i * step, b.size.h / 2), r, i < g_now.rating);
+  }
 }
 
 static void prv_volume_icon_timeout(void *context) {
   s_volume_icon_timer = NULL;
-  prv_update_cassette(true);
+  s_volume_image = NULL;
+  layer_mark_dirty(s_rating);
 }
 
+// The reference's volume feedback: the big volume icon for a couple of seconds, then the stars.
 static void prv_show_volume_image(bool up) {
   if (s_volume_icon_timer) app_timer_reschedule(s_volume_icon_timer, VOLUME_ICON_TIMEOUT_MS);
   else s_volume_icon_timer = app_timer_register(VOLUME_ICON_TIMEOUT_MS, prv_volume_icon_timeout, NULL);
-  prv_switch_cassette_icon(up ? s_image_volume_up : s_image_volume_down, true);
-}
-
-static void prv_cassette_animation(void) {
-  if (!(g_now.flags & NowPlaying)) return;  // the tape only moves while playing
-  const GRect rect = prv_cassette_rect();
-  GPoint a = GPointZero, b = GPoint(-rect.size.w - rect.origin.x, 0);
-  PropertyAnimation *left = property_animation_create_bounds_origin(s_cassette_container, &a, &b);
-  animation_set_duration(property_animation_get_animation(left), 4 * FRAME_MS);
-  animation_set_curve(property_animation_get_animation(left), AnimationCurveEaseIn);
-  GPoint c = GPoint(s_cfg->cassette_animation_x, 0), d = GPoint(-4, 0);
-  PropertyAnimation *right = property_animation_create_bounds_origin(s_cassette_container, &c, &d);
-  animation_set_duration(property_animation_get_animation(right), s_cfg->cassette_animation_time);
-  GPoint e = GPoint(-4, 0), f = GPointZero;
-  PropertyAnimation *back = property_animation_create_bounds_origin(s_cassette_container, &e, &f);
-  animation_set_duration(property_animation_get_animation(back), 4 * FRAME_MS);
-  animation_set_curve(property_animation_get_animation(back), AnimationCurveEaseOut);
-  animation_schedule(animation_sequence_create(property_animation_get_animation(left),
-                                               property_animation_get_animation(right),
-                                               property_animation_get_animation(back), NULL));
+  s_volume_image = up ? s_image_volume_up : s_image_volume_down;
+  layer_mark_dirty(s_rating);
 }
 
 static Animation *prv_layer_up(Layer *layer, int16_t offset) {
@@ -478,10 +462,6 @@ static void prv_update_ui_state(bool animated) {
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_DOWN, s_icon_volume_down, animated);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_SELECT, playing ? s_icon_pause : s_icon_play, animated);
   }
-  if (playing != s_was_playing) {
-    s_was_playing = playing;
-    prv_update_cassette(animated);
-  }
 }
 
 static void prv_set_bar_state(BarState state) {
@@ -518,7 +498,6 @@ static void prv_change_volume(bool up) {
 
 static void prv_skip(ButtonId button) {
   if (s_showing_message) return;
-  prv_cassette_animation();
   send_cmd(button == BUTTON_ID_UP ? CmdPrevious : CmdNext, 0, NULL, NULL);
 }
 
@@ -693,7 +672,8 @@ static void prv_update_layout(void) {
   layer_set_hidden(s_art_title_layer, !art || !PBL_IF_RECT_ELSE(true, false));
   layer_set_hidden(text_layer_get_layer(s_artist), message || art);
   layer_set_hidden(text_layer_get_layer(s_title), message || art);
-  layer_set_hidden(s_cassette_container, message);
+  layer_set_hidden(s_rating, message);
+  layer_mark_dirty(s_rating);
   const bool progress = !message && prv_progress_visible();
   layer_set_hidden(s_track, !progress);
   layer_set_hidden(text_layer_get_layer(s_position), !progress);
@@ -825,15 +805,9 @@ static void prv_load(Window *window) {
   s_title = prv_text(prv_title_rect(), TITLE_BOUNDS_OFFSET, align, s_cfg->title_font, s_title_buf);
   text_layer_set_overflow_mode(s_title, GTextOverflowModeTrailingEllipsis);
 
-  s_cassette_container = layer_create(GRect(0, s_size.h - s_cfg->margin - 24, s_size.w - ACTION_BAR_WIDTH, 24));
-  layer_set_clips(s_cassette_container, false);
-  layer_add_child(root, s_cassette_container);
-  s_cassette = bitmap_layer_create(prv_cassette_rect());
-  bitmap_layer_set_bitmap(s_cassette, s_image_cassette);
-  s_cassette_icon = s_image_cassette;
-  bitmap_layer_set_alignment(s_cassette, PBL_IF_RECT_ELSE(GAlignTopLeft, GAlignTopRight));
-  bitmap_layer_set_compositing_mode(s_cassette, GCompOpSet);
-  layer_add_child(s_cassette_container, bitmap_layer_get_layer(s_cassette));
+  s_rating = layer_create(prv_rating_rect());
+  layer_set_update_proc(s_rating, prv_rating_update);
+  layer_add_child(root, s_rating);
 
   s_art_text_layer = layer_create(layer_get_bounds(root));
   layer_set_update_proc(s_art_text_layer, prv_art_text_update);
@@ -879,7 +853,6 @@ static void prv_load(Window *window) {
   window_attach_recognizer(window, tap_recognizer_create(prv_tap, NULL));
 #endif
 
-  s_was_playing = !(g_now.flags & NowPlaying);
   strncpy(s_artist_buf, g_now.artist, sizeof(s_artist_buf));
   strncpy(s_title_buf, g_now.title, sizeof(s_title_buf));
   now_playing_settings_changed();
@@ -901,8 +874,7 @@ static void prv_unload(Window *window) {
   layer_destroy(s_track);
   layer_destroy(s_art_title_layer);
   layer_destroy(s_art_text_layer);
-  bitmap_layer_destroy(s_cassette);
-  layer_destroy(s_cassette_container);
+  layer_destroy(s_rating);
   text_layer_destroy(s_title);
   text_layer_destroy(s_length);
   text_layer_destroy(s_position);
@@ -923,8 +895,6 @@ void now_playing_push(void) {
   s_icon_play_pause = gbitmap_create_with_resource(RESOURCE_ID_ICON_PLAY_PAUSE);
   s_icon_volume_up = gbitmap_create_with_resource(RESOURCE_ID_ICON_VOLUME_UP);
   s_icon_volume_down = gbitmap_create_with_resource(RESOURCE_ID_ICON_VOLUME_DOWN);
-  s_image_cassette = gbitmap_create_with_resource(RESOURCE_ID_LARGE_CASSETTE);
-  s_image_paused = gbitmap_create_with_resource(RESOURCE_ID_LARGE_PAUSED);
   s_image_volume_up = gbitmap_create_with_resource(RESOURCE_ID_LARGE_VOLUME_UP);
   s_image_volume_down = gbitmap_create_with_resource(RESOURCE_ID_LARGE_VOLUME_DOWN);
   s_image_no_music = gbitmap_create_with_resource(RESOURCE_ID_NO_MUSIC);

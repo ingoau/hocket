@@ -138,10 +138,12 @@ void lyrics_track_changed(void) {
   layer_mark_dirty(s_layer);
 }
 
-// The focused line sits in the middle; the others stack above and below it.
+// The focused line sits in the middle; the others stack above and below it, all left-aligned.
 static void prv_draw(Layer *layer, GContext *ctx) {
   const GRect b = layer_get_bounds(layer);
-  const int16_t inset = PBL_IF_ROUND_ELSE(24, 6);
+  // Left-aligned at Now Playing's text margin; on round, far enough in that the lines around the
+  // middle (the widest part of the page) clear the bezel.
+  const int16_t inset = PBL_IF_ROUND_ELSE(b.size.w * 17 / 100, b.size.h >= 200 ? 10 : 12);
   const int16_t w = b.size.w - 2 * inset;
   GFont focus_font = fonts_get_system_font(b.size.h >= 200 ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD);
   GFont other_font = fonts_get_system_font(b.size.h >= 200 ? FONT_KEY_GOTHIC_24 : FONT_KEY_GOTHIC_18);
@@ -149,34 +151,34 @@ static void prv_draw(Layer *layer, GContext *ctx) {
     graphics_context_set_text_color(ctx, GColorWhite);
     graphics_draw_text(ctx, s_loaded ? "No lyrics" : "Loading…", other_font,
                        GRect(inset, b.size.h / 2 - 15, w, 30), GTextOverflowModeTrailingEllipsis,
-                       GTextAlignmentCenter, NULL);
+                       GTextAlignmentLeft, NULL);
     return;
   }
   const int16_t focus = s_focus < s_count ? s_focus : s_count - 1;
   GSize fs = graphics_text_layout_get_content_size(s_lines[focus].text, focus_font, GRect(0, 0, w, 200),
-                                                   GTextOverflowModeWordWrap, GTextAlignmentCenter);
+                                                   GTextOverflowModeWordWrap, GTextAlignmentLeft);
   int16_t top = b.size.h / 2 - fs.h / 2 - 4;
   // The focused line: white when it is the one playing, the accent while browsing.
   graphics_context_set_text_color(ctx, focus == s_current || !s_manual ? GColorWhite
                                                                      : PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
   graphics_draw_text(ctx, s_lines[focus].text, focus_font, GRect(inset, top, w, fs.h + 6),
-                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   int16_t y = top + fs.h + 6;
   for (int i = focus + 1; i < s_count && y < b.size.h; i++) {
     GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 200),
-                                                    GTextOverflowModeWordWrap, GTextAlignmentCenter);
+                                                    GTextOverflowModeWordWrap, GTextAlignmentLeft);
     graphics_draw_text(ctx, s_lines[i].text, other_font, GRect(inset, y, w, s.h + 4),
-                       GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
     y += s.h + 4;
   }
   y = top;
   for (int i = focus - 1; i >= 0 && y > 0; i--) {
     GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 200),
-                                                    GTextOverflowModeWordWrap, GTextAlignmentCenter);
+                                                    GTextOverflowModeWordWrap, GTextAlignmentLeft);
     y -= s.h + 4;
     graphics_draw_text(ctx, s_lines[i].text, other_font, GRect(inset, y, w, s.h + 4),
-                       GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   }
 }
 

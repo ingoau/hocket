@@ -89,6 +89,9 @@ static void prv_demo_page(List *l, uint16_t offset) {
     }
   }
   menu_layer_reload_data(l->menu);
+  for (int i = 0; i < l->count; i++) {
+    if (l->rows[i].flags & RowCurrent) menu_layer_set_selected_index(l->menu, MenuIndex(0, i), MenuRowAlignCenter, false);
+  }
   (void)offset;
 }
 #endif

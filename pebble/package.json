@@ -60,8 +60,6 @@
         { "type": "bitmap", "name": "ICON_PLAY_PAUSE", "file": "images/music_icon_play_pause.png" },
         { "type": "bitmap", "name": "ICON_VOLUME_UP", "file": "images/music_icon_volume_up.png" },
         { "type": "bitmap", "name": "ICON_VOLUME_DOWN", "file": "images/music_icon_volume_down.png" },
-        { "type": "bitmap", "name": "LARGE_CASSETTE", "file": "images/music_small_cassette.png" },
-        { "type": "bitmap", "name": "LARGE_PAUSED", "file": "images/music_paused.png" },
         { "type": "bitmap", "name": "LARGE_VOLUME_UP", "file": "images/volume_up_big.png" },
         { "type": "bitmap", "name": "LARGE_VOLUME_DOWN", "file": "images/volume_down_big.png" },
         { "type": "bitmap", "name": "NO_MUSIC", "file": "images/music_no_music.png" }
