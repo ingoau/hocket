@@ -174,9 +174,6 @@ const STRINGS = {
   "lyrics.source.embedded": "Embedded",
 
   // Fullscreen
-  "fullscreen.upNext": "Up next",
-  "fullscreen.related": "Related",
-  "fullscreen.lyrics": "Lyrics",
   "fullscreen.exit": "Close player",
   "nowPlaying.views": "Player view",
   "nowPlaying.view.lyrics": "Lyrics",
