@@ -55,6 +55,7 @@ enum class SettingsCategory(val id: String, val route: Route) {
     Library("library", Route.SettingsLibrary),
     Battery("battery", Route.SettingsBattery),
     Connect("connect", Route.ConnectSettings),
+    Pebble("pebble", Route.SettingsPebble),
     Customise("customise", Route.CustomiseSettings),
     Backup("backup", Route.SettingsBackup),
     About("about", Route.About);
@@ -65,7 +66,7 @@ enum class SettingsCategory(val id: String, val route: Route) {
             listOf(Account),
             listOf(Appearance, Playback, Audio, Streaming),
             listOf(Downloads, Lyrics, Library, Battery),
-            listOf(Connect, Customise),
+            listOf(Connect, Pebble, Customise),
             listOf(Backup, About),
         )
     }
@@ -127,6 +128,7 @@ private fun SettingsCategory.icon(): ImageVector = when (this) {
     SettingsCategory.Library -> HocketIcons.Filled.LibraryMusic
     SettingsCategory.Battery -> HocketIcons.Filled.BatterySaver
     SettingsCategory.Connect -> HocketIcons.Filled.Devices
+    SettingsCategory.Pebble -> HocketIcons.Filled.Watch
     SettingsCategory.Customise -> HocketIcons.Filled.Tune
     SettingsCategory.Backup -> HocketIcons.Filled.SettingsBackupRestore
     SettingsCategory.About -> HocketIcons.Filled.Info
@@ -145,6 +147,7 @@ fun SettingsCategory.title(): String = stringResource(
         SettingsCategory.Library -> R.string.settings_category_library
         SettingsCategory.Battery -> R.string.settings_section_battery
         SettingsCategory.Connect -> R.string.settings_category_connect
+        SettingsCategory.Pebble -> R.string.settings_category_pebble
         SettingsCategory.Customise -> R.string.settings_section_customise
         SettingsCategory.Backup -> R.string.settings_category_backup
         SettingsCategory.About -> R.string.settings_section_about
@@ -207,6 +210,7 @@ private fun SettingsCategory.summary(): String {
                 ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
             }
         }
+        SettingsCategory.Pebble -> stringResource(R.string.pebble_auto_open) + ": " + on(setting(SettingKeys.PEBBLE_AUTO_OPEN).bool ?: false)
         SettingsCategory.Customise -> stringResource(R.string.settings_bottom_bar) + dot + stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_swipe_actions)
         SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
         SettingsCategory.About -> stringResource(R.string.settings_licence)

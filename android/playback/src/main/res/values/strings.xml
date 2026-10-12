@@ -6,4 +6,9 @@
     <string name="browse_artists">Artists</string>
     <string name="browse_playlists">Playlists</string>
     <string name="browse_genres">Genres</string>
+    <!-- The Pebble watchapp: its update notification. -->
+    <string name="pebble_channel">Pebble watch</string>
+    <string name="pebble_update_title">Update the Hocket watchapp</string>
+    <string name="pebble_update_body">The watchapp on your Pebble does not match this version of Hocket.</string>
+    <string name="pebble_install">Install</string>
 </resources>

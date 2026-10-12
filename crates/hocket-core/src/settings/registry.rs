@@ -92,6 +92,25 @@ pub mod keys {
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
     pub const SWIPE_LIST_END_TO_START: &str = "swipe.list.endToStart";
     pub const SHORTCUTS: &str = "shortcuts";
+    /// The Pebble watchapp (`docs/pebble.md`). Device-local: the watch belongs to this phone.
+    pub const PEBBLE_TOUCH_NAVIGATION: &str = "pebble.touchNavigation";
+    pub const PEBBLE_BUTTONS_ONLY: &str = "pebble.buttonsOnly";
+    pub const PEBBLE_GESTURE_UP: &str = "pebble.gesture.up";
+    pub const PEBBLE_GESTURE_DOWN: &str = "pebble.gesture.down";
+    pub const PEBBLE_GESTURE_LEFT: &str = "pebble.gesture.left";
+    pub const PEBBLE_GESTURE_RIGHT: &str = "pebble.gesture.right";
+    pub const PEBBLE_GESTURE_HOLD: &str = "pebble.gesture.hold";
+    /// Ordered ids from [`PEBBLE_MENU_ITEMS`], [] = its default.
+    pub const PEBBLE_MENU: &str = "pebble.menu";
+    /// Ordered ids from [`PEBBLE_ACTION_ITEMS`], [] = its default.
+    pub const PEBBLE_ACTIONS: &str = "pebble.actions";
+    /// Ordered ids from [`PEBBLE_LIBRARY_SECTIONS`], [] = its default.
+    pub const PEBBLE_LIBRARY: &str = "pebble.library";
+    pub const PEBBLE_MENU_TIMEOUT_SECONDS: &str = "pebble.menuTimeoutSeconds";
+    pub const PEBBLE_SHOW_VOLUME_CONTROLS: &str = "pebble.showVolumeControls";
+    pub const PEBBLE_SHOW_PROGRESS_BAR: &str = "pebble.showProgressBar";
+    pub const PEBBLE_SHOW_ALBUM_ART: &str = "pebble.showAlbumArt";
+    pub const PEBBLE_AUTO_OPEN: &str = "pebble.autoOpen";
     pub const SYNC_ENABLED: &str = "sync.enabled";
     pub const CONNECT_COORDINATOR_URL: &str = "connect.coordinatorUrl";
     pub const CONNECT_LAN_DISCOVERY: &str = "connect.lanDiscovery";
@@ -262,6 +281,70 @@ pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
     "addToPlaylist",
     "download",
 ];
+
+/// What a touch gesture on the Pebble's Now Playing opens.
+pub const PEBBLE_GESTURES: &[&str] = &["none", "queue", "library", "actions", "back", "lyrics"];
+
+/// Rows the Pebble's buttons-only menu can carry: screens, track actions and library shortcuts.
+pub const PEBBLE_MENU_ITEMS: &[&str] = &[
+    "nowPlaying",
+    "queue",
+    "library",
+    "love",
+    "rating",
+    "shuffle",
+    "repeat",
+    "goAlbum",
+    "goArtist",
+    "playOn",
+    "playlists",
+    "albums",
+    "artists",
+    "downloads",
+    "search",
+    "lyrics",
+];
+
+/// Rows of the Pebble's actions menu.
+pub const PEBBLE_ACTION_ITEMS: &[&str] = &[
+    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
+];
+
+/// Sections of the Pebble's library browser.
+pub const PEBBLE_LIBRARY_SECTIONS: &[&str] = &[
+    "playlists",
+    "albums",
+    "artists",
+    "recent",
+    "downloads",
+    "search",
+];
+
+fn ids_valid(v: &Value, allowed: &[&str]) -> Result<(), String> {
+    string_list_valid(v)?;
+    match v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|id| !allowed.contains(id))
+    {
+        Some(id) => Err(format!("unknown id {id}")),
+        None => Ok(()),
+    }
+}
+
+fn pebble_menu_valid(v: &Value) -> Result<(), String> {
+    ids_valid(v, PEBBLE_MENU_ITEMS)
+}
+
+fn pebble_actions_valid(v: &Value) -> Result<(), String> {
+    ids_valid(v, PEBBLE_ACTION_ITEMS)
+}
+
+fn pebble_library_valid(v: &Value) -> Result<(), String> {
+    ids_valid(v, PEBBLE_LIBRARY_SECTIONS)
+}
 
 /// What a swipe on a song row in any other list can do (album, playlist,
 /// search results, library songs): an action registry id, or `none`.
@@ -450,6 +533,64 @@ pub static REGISTRY: &[SettingDef] = &[
         || json!("playLater"),
     ),
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
+    def(PEBBLE_TOUCH_NAVIGATION, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
+    def(PEBBLE_BUTTONS_ONLY, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
+    def(
+        PEBBLE_GESTURE_UP,
+        Local,
+        SettingKind::Enum(PEBBLE_GESTURES),
+        || json!("queue"),
+    ),
+    def(
+        PEBBLE_GESTURE_DOWN,
+        Local,
+        SettingKind::Enum(PEBBLE_GESTURES),
+        || json!("none"),
+    ),
+    def(
+        PEBBLE_GESTURE_LEFT,
+        Local,
+        SettingKind::Enum(PEBBLE_GESTURES),
+        || json!("library"),
+    ),
+    def(
+        PEBBLE_GESTURE_RIGHT,
+        Local,
+        SettingKind::Enum(PEBBLE_GESTURES),
+        || json!("back"),
+    ),
+    def(
+        PEBBLE_GESTURE_HOLD,
+        Local,
+        SettingKind::Enum(PEBBLE_GESTURES),
+        || json!("actions"),
+    ),
+    json_def(PEBBLE_MENU, Local, || json!([]), pebble_menu_valid),
+    json_def(PEBBLE_ACTIONS, Local, || json!([]), pebble_actions_valid),
+    json_def(PEBBLE_LIBRARY, Local, || json!([]), pebble_library_valid),
+    def(
+        PEBBLE_MENU_TIMEOUT_SECONDS,
+        Local,
+        SettingKind::Int { min: 0, max: 30 },
+        || json!(5),
+    ),
+    def(
+        PEBBLE_SHOW_VOLUME_CONTROLS,
+        Local,
+        SettingKind::Bool,
+        || json!(true),
+    ),
+    def(PEBBLE_SHOW_PROGRESS_BAR, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(PEBBLE_SHOW_ALBUM_ART, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
+    def(PEBBLE_AUTO_OPEN, Local, SettingKind::Bool, || json!(false)),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
     json_def(CONNECT_COORDINATOR_URL, Local, || Value::Null, url_valid),
     def(

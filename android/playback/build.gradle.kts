@@ -11,6 +11,11 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // The watchapp this build bundles (pebble/package.json); the phone checks the watch's against it.
+        buildConfigField("String", "PEBBLE_WATCHAPP_VERSION", "\"${pebbleWatchappVersion()}\"")
+    }
+    buildFeatures {
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -37,10 +42,16 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.pebblekit2.client)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.androidx.lifecycle.runtime)
+}
+
+fun pebbleWatchappVersion(): String {
+    val json = rootProject.file("../pebble/package.json").takeIf { it.exists() }?.readText() ?: return "dev"
+    return Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1) ?: "dev"
 }

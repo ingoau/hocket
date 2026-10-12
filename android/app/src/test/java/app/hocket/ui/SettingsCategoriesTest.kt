@@ -54,9 +54,16 @@ class SettingsCategoriesTest {
         "open.about",
     )
 
+    /** The Pebble watch category: all new. */
+    private val pebbleRows = setOf(
+        "pebble.watchapp", "pebble.touchNavigation", "pebble.buttonsOnly", "pebble.gesture.up", "pebble.gesture.down", "pebble.gesture.left",
+        "pebble.gesture.right", "pebble.gesture.hold", "pebble.menu", "pebble.actions", "pebble.library", "pebble.menuTimeoutSeconds",
+        "pebble.showVolumeControls", "pebble.showProgressBar", "pebble.showAlbumArt", "pebble.autoOpen",
+    )
+
     /** Registry settings the old page did not show, now in their category. */
     private val added = setOf("queue.mode", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
-        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating")
+        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating") + pebbleRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
     private val screenCategories = mapOf(
@@ -72,6 +79,7 @@ class SettingsCategoriesTest {
         SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.defaultOffsetMs", "lyrics.showTranslations"),
         SettingsCategory.Library to setOf("ratings.loveThreshold", "open.filters", "open.stats"),
         SettingsCategory.Battery to setOf("battery.saver", "battery.autoEngage"),
+        SettingsCategory.Pebble to pebbleRows,
         SettingsCategory.Backup to setOf("backup.includeSecrets", "backup.export", "backup.import", "backup.diagnostics"),
     )
 

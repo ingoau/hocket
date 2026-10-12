@@ -34,6 +34,7 @@ crates/hocket-android/        UniFFI cdylib: JSON in/out + event callback
 crates/hocket-node/           napi-rs addon: JSON in/out + event callback
 android/                      Gradle project (Kotlin, Compose, Material 3 Expressive, Media3)
 desktop/                      Electron + React + Vite + TypeScript (pnpm)
+pebble/                       Pebble watchapp (C, Pebble SDK); src/c/hocket.h is its message protocol (docs/pebble.md)
 docs/                         design notes, this file, protocol notes
 scripts/                      codegen and build helpers
 ```
@@ -94,6 +95,9 @@ that the harness can swap for an in-memory implementation.
   `MediaSession` is the `MediaSessionAdapter`, fed by `Event::MediaSession`.
   The Compose UI talks to the core through the service via a bound
   `CoreClient` (dispatch / query / event flow). No business logic in Kotlin.
+  The same service owns `PebbleBridge`, the phone side of the Pebble watchapp
+  (PebbleKit 2): it turns watch messages into `Command`s / `Query`s and pushes
+  state back, like any other remote.
 - Desktop: Electron main process owns one `HocketCore` (napi). Audio is native
   in the core. The playwire addon (`crates/hocket-node` feature or a sibling
   crate) is the `MediaSessionAdapter`, fed by `Event::MediaSession`. The React
@@ -139,6 +143,10 @@ pnpm dist:dir                                    # electron-builder unpacked bui
 # Android (Gradle 9, AGP 9, Kotlin 2.4, compileSdk 37.1, Material 3 Expressive)
 scripts/build-android-core.sh release            # cargo-ndk -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
 cd android && ./gradlew testDebugUnitTest assembleDebug :app:lintDebug   # ANDROID_HOME=/opt/android-sdk
+
+# Pebble watchapp (uv tool install pebble-tool && pebble sdk install latest)
+scripts/build-pebble.sh                          # pebble build -> pebble/build/android-assets/hocket.pbw, bundled by the next APK build
+cd pebble && HOCKET_DEMO=1 pebble build          # sample data, for emulator screenshots without a phone
 
 # Coordinator
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket

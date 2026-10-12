@@ -105,6 +105,7 @@ import app.hocket.ui.screens.settings.BatterySettingsScreen
 import app.hocket.ui.screens.settings.DownloadsSettingsScreen
 import app.hocket.ui.screens.settings.LibrarySettingsScreen
 import app.hocket.ui.screens.settings.LyricsSettingsScreen
+import app.hocket.ui.screens.settings.PebbleSettingsScreen
 import app.hocket.ui.screens.settings.PlaybackSettingsScreen
 import app.hocket.ui.screens.settings.AudioSettingsScreen
 import app.hocket.ui.screens.settings.ConnectSettingsScreen
@@ -544,6 +545,7 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.SettingsPlayback>(transitions) { PlaybackSettingsScreen(nav) }
         screen<Route.SettingsDownloads>(transitions) { DownloadsSettingsScreen(nav) }
         screen<Route.SettingsLyrics>(transitions) { LyricsSettingsScreen(nav) }
+        screen<Route.SettingsPebble>(transitions) { PebbleSettingsScreen(nav) }
         screen<Route.SettingsLibrary>(transitions) { LibrarySettingsScreen(nav) }
         screen<Route.SettingsBattery>(transitions) { BatterySettingsScreen(nav) }
         screen<Route.SettingsBackup>(transitions) { BackupSettingsScreen(nav) }

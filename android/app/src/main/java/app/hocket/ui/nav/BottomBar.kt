@@ -232,7 +232,7 @@ fun NavDestination.isSettings(): Boolean = listOf(
     Route.Settings::class, Route.AudioSettings::class, Route.TranscodingSettings::class, Route.ConnectSettings::class,
     Route.CustomiseSettings::class, Route.About::class, Route.SettingsAccount::class, Route.SettingsAppearance::class,
     Route.SettingsPlayback::class, Route.SettingsDownloads::class, Route.SettingsLyrics::class, Route.SettingsLibrary::class,
-    Route.SettingsBattery::class, Route.SettingsBackup::class,
+    Route.SettingsBattery::class, Route.SettingsBackup::class, Route.SettingsPebble::class,
 ).any { hasRoute(it) }
 
 fun NavItem.icon(selected: Boolean): ImageVector = when (this) {
