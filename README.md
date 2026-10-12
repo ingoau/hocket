@@ -1,4 +1,4 @@
-Note: This is a work in progress. Do not install it, and if you do, do not expect it to work or to get support
+> **Note:** This is a work in progress. Do not install it, and if you do, do not expect it to work or to get support.
 
 # Hocket
 
