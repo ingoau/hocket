@@ -70,7 +70,8 @@ class PebbleBridge(
         private const val PLAYLIST_PAGE = 500u
     }
 
-    private val sender by lazy { DefaultPebbleSender(context) }
+    private val senderLazy = lazy { DefaultPebbleSender(context) }
+    private val sender by senderLazy
     private val sendLock = Mutex()
     private var nowJob: Job? = null
     private var artJob: Job? = null
@@ -142,7 +143,8 @@ class PebbleBridge(
 
     fun release() {
         appClosed()
-        runCatching { sender.close() }
+        // Never create the sender just to close it (it connects to the Pebble app as it starts).
+        if (senderLazy.isInitialized()) runCatching { sender.close() }
     }
 
     suspend fun onMessage(data: PebbleDictionary) {
