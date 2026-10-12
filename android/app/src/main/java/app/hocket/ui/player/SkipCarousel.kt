@@ -90,8 +90,9 @@ internal fun previousRestarts(ownsTransport: Boolean, positionMs: Long, historyE
 /**
  * A three-slot carousel (previous, current, next) under the finger: [offset] follows it 1:1 (px,
  * negative towards next). Released past half of [span] (the slot's width plus the gap to its
- * neighbour) or flung, it settles on the neighbour, sends Next / Previous, and once the new track
- * is current snaps back to 0, the neighbour now being the current one; otherwise it springs back.
+ * neighbour) or flung, it settles on the neighbour, sends Next / Previous (unless the song changed
+ * meanwhile), and once the new track is current snaps back to 0, the neighbour now being the
+ * current one; otherwise it springs back. While it settles a new drag is not taken.
  * Where there is no neighbour it rubber-bands as the old skip swipe did (and still skips past
  * [rubberThreshold], so a swipe past the end of the queue ends it). [restartPeek] says the previous
  * slot shows the current track again (Previous will restart it).
@@ -151,7 +152,8 @@ internal class SkipCarousel {
         return draggable(
             state = state,
             orientation = Orientation.Horizontal,
-            enabled = enabled,
+            // Not while a skip settles: a second drag would stop it half way, and the skip with it.
+            enabled = enabled && !committing,
             onDragStarted = {
                 offset.stop()
                 drag.raw = offset.value
@@ -169,18 +171,25 @@ internal class SkipCarousel {
                         reduced -> if (abs(raw) > rubberThreshold || flung) dispatch(client, forward = raw < 0f)
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
-                            committing = true
-                            offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
-                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                            val restart = !forward && restartPeek
+                            // The song the skip is from: if another takes its place while the
+                            // swipe settles (it ended, or another device skipped), that was the skip.
                             val before = client.nowPlaying.value?.item?.key
-                            dispatch(client, forward)
-                            if (!restart) withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != before } }
-                            // Let the new track's cover compose before the strip jumps back under it.
-                            withFrameNanos { }
-                            withFrameNanos { }
-                            offset.snapTo(0f)
-                            committing = false
+                            committing = true
+                            try {
+                                offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
+                                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                                if (client.nowPlaying.value?.item?.key == before) {
+                                    val restart = !forward && restartPeek
+                                    dispatch(client, forward)
+                                    if (!restart) withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != before } }
+                                }
+                                // Let the new track's cover compose before the strip jumps back under it.
+                                withFrameNanos { }
+                                withFrameNanos { }
+                                offset.snapTo(0f)
+                            } finally {
+                                committing = false
+                            }
                         }
                         !slot && abs(shown) > rubberThreshold -> {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
