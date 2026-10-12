@@ -123,8 +123,8 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
   );
 }
 
-/** Without a Lyrics card, how long the fade back into the pane runs below the title (the stylesheet's gap there matches). */
-const NO_LYRICS_FADE = 180;
+/** Without any card under the title, how long a reflection's fade runs below it. */
+const NO_CARD_FADE = 180;
 /** Muted text's opacity over the continuation (--fg-muted there): the scrim is sized for it. */
 const MUTED_ALPHA = 0.8;
 
@@ -135,9 +135,9 @@ function Overview() {
   const scene = useOverviewScene(track?.coverArt);
   const overview = useRef<HTMLDivElement>(null);
   const immersive = !!scene.edge;
-  // A reflection fades into its end colour behind the Lyrics card: from the title row's bottom to
-  // the next card's top (without lyrics, over as long below the title). Kept on the overview for
-  // the stylesheet as the content and the width change.
+  // A reflection fades into its end colour behind the first card under the title row (Lyrics, or
+  // Up next without lyrics): from the title row's bottom to that card's bottom. Kept on the
+  // overview for the stylesheet as the content and the width change.
   useLayoutEffect(() => {
     const el = overview.current;
     if (!el || !immersive) return;
@@ -145,9 +145,8 @@ function Overview() {
       const title = el.querySelector<HTMLElement>(".side-title-row");
       if (!title) return;
       const start = title.offsetTop + title.offsetHeight;
-      const lyrics = el.querySelector<HTMLElement>('[data-card="lyrics"]');
-      const after = (lyrics ?? title).nextElementSibling as HTMLElement | null;
-      const end = after ? after.offsetTop : start + NO_LYRICS_FADE;
+      const first = title.nextElementSibling as HTMLElement | null;
+      const end = first ? first.offsetTop + first.offsetHeight : start + NO_CARD_FADE;
       el.style.setProperty("--side-fade-at", `${start}px`);
       el.style.setProperty("--side-fade-len", `${Math.max(1, end - start)}px`);
     };

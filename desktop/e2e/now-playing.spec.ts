@@ -454,7 +454,7 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
       await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("always") } }));
       await page.evaluate(async () => {
         const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
@@ -655,6 +655,15 @@ async function checkFade(page: Page, label: string): Promise<void> {
   };
   const margin = geo.pane.x + 6;
   run(margin, geo.fadeAt - 8, Math.max(geo.upTop, geo.fadeEnd) + 24, "margin");
+  // Spread over the whole fade, one way: no stretch of 12 px carries more than 30% of the change
+  // (a fade squeezed into a gap reads as a band), and it never turns back.
+  const v: number[] = [];
+  for (let y = Math.ceil(geo.fadeAt); y <= Math.floor(geo.fadeEnd) && y < bottom; y++) v.push(level(px(margin, y)));
+  const total = v.at(-1)! - v[0]!;
+  if (Math.abs(total) >= 6) {
+    for (let i = 12; i < v.length; i++) expect(Math.abs(v[i]! - v[i - 12]!), `${label}: ${(v[i]! - v[i - 12]!).toFixed(1)} of ${total.toFixed(1)} levels within 12 px at ${i} px`).toBeLessThanOrEqual(0.3 * Math.abs(total) + 2);
+    for (let i = 1; i < v.length; i++) expect((v[i]! - v[i - 1]!) * Math.sign(total), `${label}: the fade turns back at ${i} px`).toBeGreaterThanOrEqual(-1.5);
+  }
   run(geo.pane.x + geo.pane.w / 2, geo.upTop - 11, geo.upTop - 1, "gap above Up next");
   // Past the fade, the overview's colour to the bottom of the pane.
   for (let y = Math.ceil(geo.fadeEnd) + 2; y < bottom; y += 6) {
@@ -705,7 +714,7 @@ test.describe("immersive artwork from the classifier", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
       await playCover(page, 1);
       await page.getByTestId("toggle-fullscreen").click();
       const fs = page.getByTestId("fullscreen-player");
@@ -755,7 +764,7 @@ test.describe("immersive artwork from the classifier", () => {
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
       const panel = page.getByTestId("right-panel");
       const overview = page.getByTestId("side-overview");
       const art = page.getByTestId("sidebar-art");
@@ -782,12 +791,13 @@ test.describe("immersive artwork from the classifier", () => {
           await expect(overview).toHaveAttribute("data-fill", "");
           await expect(page.getByTestId("sidebar-upnext-card")).not.toHaveCSS("backdrop-filter", "none");
           if (style === "mirror") {
-            // A reflection fades into that colour behind the Lyrics card, from the title row to Up next.
+            // A reflection fades into that colour behind the first card under the title row,
+            // from the title row to that card's bottom.
             const fade = await overview.evaluate((el) => {
               const title = el.querySelector<HTMLElement>(".side-title-row")!;
-              const upNext = el.querySelector<HTMLElement>('[data-card="upnext"]')!;
+              const first = title.nextElementSibling as HTMLElement;
               const start = title.offsetTop + title.offsetHeight;
-              return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px` };
+              return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${first.offsetTop + first.offsetHeight - start}px` };
             });
             expect(fade.at).toBe(fade.want);
             expect(fade.len).toBe(fade.wantLen);
@@ -833,12 +843,12 @@ test.describe("immersive artwork from the classifier", () => {
       rmSync(userData, { recursive: true, force: true });
     }
   });
-  test("the side panel's reflection fades into the cover's colour behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
+  test("the side panel's reflection fades into the cover's colour behind the first card, smoothly, at any width, with lyrics or without", async () => {
     const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
       await completeSetup(page);
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912));
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1456, 912); return true; });
       const panel = page.getByTestId("right-panel");
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
@@ -869,11 +879,27 @@ test.describe("immersive artwork from the classifier", () => {
       for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowLeft");
       await page.waitForTimeout(400);
       await checkFade(page, "wider");
-      // Without lyrics, the fade runs below the title, Up next after it.
-      await toTrackWithLyrics(page, false);
-      await expect(page.getByTestId("sidebar-lyrics-card")).toHaveCount(0);
-      await page.waitForTimeout(800);
-      await checkFade(page, "no lyrics");
+      // Without lyrics, behind Up next (the first card then), in both themes and for each reflection.
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
+        for (const [n, name] of [[5, "mirror"], [8, "dark mirror"], [9, "light mirror"]] as const) {
+          await playCover(page, n);
+          await toTrackWithLyrics(page, false);
+          await expect(page.getByTestId("sidebar-lyrics-card")).toHaveCount(0);
+          await expect(page.getByTestId("side-overview")).toHaveAttribute("data-style", "mirror");
+          await page.waitForTimeout(800);
+          const fade = await page.getByTestId("side-overview").evaluate((el) => {
+            const title = el.querySelector<HTMLElement>(".side-title-row")!;
+            const first = title.nextElementSibling as HTMLElement;
+            return { len: Number.parseFloat(el.style.getPropertyValue("--side-fade-len")), card: first.getAttribute("data-card"), want: first.offsetTop + first.offsetHeight - (title.offsetTop + title.offsetHeight) };
+          });
+          expect(fade.card).toBe("upnext");
+          expect(fade.len, `${theme} ${name}, no lyrics: the fade spans Up next`).toBe(fade.want);
+          await checkFade(page, `${theme} ${name}, no lyrics`);
+          const { min, worst } = await overviewContrast(page);
+          expect(min, `${theme} theme, ${name}, no lyrics: ${worst}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     } finally {
       await app.close().catch(() => undefined);
       rmSync(userData, { recursive: true, force: true });

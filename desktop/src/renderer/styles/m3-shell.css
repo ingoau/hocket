@@ -167,6 +167,9 @@
 .side-overview[data-fill][data-tone="light"] > .side-card { background: rgba(255, 255, 255, 0.42); }
 .side-overview[data-fill][data-tone="dark"] > .side-card { background: rgba(0, 0, 0, 0.24); }
 .side-overview[data-fill] > .side-card { -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent); }
+/* A reflection fades into its end colour behind the first card under the title, so that card is
+   near-opaque in that colour: its text reads the same over the whole fade. */
+.side-overview[data-style="mirror"] > .side-title-row + .side-card { background: rgba(var(--side-fill), 0.86); }
 .side-overview[data-fill] .upnext-row .art { background: color-mix(in srgb, var(--fg) 12%, transparent); }
 .side-title-row { display: flex; align-items: center; gap: 2px; padding: 4px 0 4px 2px; }
 .side-titles { flex: 1 1 auto; min-width: 0; }
