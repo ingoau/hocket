@@ -99,7 +99,6 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -646,13 +645,15 @@ private val STAR_SIZE = 20.dp
  * row's bottom padding and the seek bar's least gap, so it never reaches the seek bar.
  */
 private val STAR_TOUCH_OVERHANG = 8.dp
-/** The room between the artist line (trimmed to its text) and the stars' icons. */
+/** The room between the artist line's box and the stars' icons (about 8 dp from its descenders to the star glyphs). */
 private val STAR_GAP = 1.dp
+/** How much closer than their line boxes the artist line sits to the title (about 2 dp between the glyphs). */
+private val TITLE_ARTIST_PULL = 7.6.dp
 /** How far above its icon's bottom the star glyph ends (Material Symbols "star": 4 of 24 units). */
 private const val STAR_GLYPH_BOTTOM_INSET = 4.05f / 24f
 /** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
 private val THUMB_GAP = 14.dp
-private val THUMB_MIN = 40.dp
+private val THUMB_MIN = 32.dp
 private val THUMB_MAX = 96.dp
 /** The thumbnail's largest share of the row's width (keeps room for the text at large font sizes). */
 private const val THUMB_MAX_SHARE = 0.22f
@@ -681,10 +682,22 @@ private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 /** Title (emphasized headline) and "artist · album" (muted), each ellipsised. */
 @Composable
 private fun TrackLines(track: TrackSummary, compact: Boolean, tagged: Boolean = true) {
+    // Grouped by proximity: the artist line tucks up under the title ([TITLE_ARTIST_PULL] into the
+    // two line boxes' leading), the stars keep their distance below ([STAR_GAP]).
     Text(track.title, style = MaterialTheme.typography.headlineSmallEmphasized, fontWeight = FontWeight.ExtraBold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // The line box trimmed under the text, so the stars sit just below its descenders.
-        val sub = MaterialTheme.typography.bodyLarge.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.LastLineBottom))
+    Row(
+        Modifier.layout { m, c ->
+            // Measured at its full height (the pull reports less), so a box that fits the lines
+            // exactly (a neighbour's, matching the current one's) never squeezes the text.
+            val pull = TITLE_ARTIST_PULL.roundToPx()
+            val p = m.measure(c.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+            layout(p.width, (p.height - pull).coerceIn(c.minHeight, c.maxHeight)) { p.place(0, -pull) }
+        },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Untrimmed line boxes (trimming clips the text at large font scales): the pull above and
+        // [STAR_GAP] below account for their leading.
+        val sub = MaterialTheme.typography.bodyLarge
         val subColor = MaterialTheme.colorScheme.onSurfaceVariant
         Text(track.artist ?: stringResource(R.string.unknown_artist), style = sub, color = subColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false).then(if (tagged) Modifier.testTag("player.artist") else Modifier))

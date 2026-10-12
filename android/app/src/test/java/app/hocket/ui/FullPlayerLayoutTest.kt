@@ -211,7 +211,7 @@ class FullPlayerLayoutTest {
         val starBottom = stars.top + (20f - 20f * 4.05f / 24f) * dp
         // Right under the artist line, touching but not overlapping the title block (whose taps
         // open the details).
-        assertEquals("stars right under the title block", bounds("player.title").bottom + 1f * dp, stars.top, 1f)
+        assertEquals("stars a little under the title block", bounds("player.title").bottom + 1f * dp, stars.top, 1f)
         assertEquals("thumbnail top on the title's cap height", capTop, thumb.top, 2f)
         assertEquals("thumbnail bottom on the star glyphs' bottom", starBottom, thumb.bottom, 2f)
         assertEquals("square", thumb.width, thumb.height, 1f)
