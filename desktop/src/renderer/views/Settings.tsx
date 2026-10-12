@@ -75,8 +75,9 @@ function Row({ title, desc, settingKey, children, stacked = false }: { title: st
   );
 }
 
-function Toggle({ settingKey, title, desc }: { settingKey: string; title: string; desc?: string }) {
-  const value = useSetting(settingKey, false);
+/** A switch for a boolean setting; `fallback` is what it shows before the setting has a value (the setting's own default). */
+function Toggle({ settingKey, title, desc, fallback = false }: { settingKey: string; title: string; desc?: string; fallback?: boolean }) {
+  const value = useSetting(settingKey, fallback);
   const set = useApp((s) => s.setSetting);
   return (
     <Row title={title} desc={desc} settingKey={settingKey}>
@@ -488,7 +489,7 @@ function Appearance() {
       <Row title={t("settings.immersiveArtwork")} settingKey={SK.displayImmersiveArtwork}>
         <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
       </Row>
-      <Toggle settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} />
+      <Toggle settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} fallback />
       <IdleHideRow />
       <LyricsSizeRow />
       <LyricsAnimatedRow />

@@ -120,8 +120,9 @@ function loadPanels(): PanelState {
   const saved = loadLocal<Partial<PanelState> & Record<string, unknown>>("panels", {});
   const panels: PanelState = { ...defaultPanels };
   if (typeof saved.rightOpen === "boolean") panels.rightOpen = saved.rightOpen;
-  if (typeof saved.rightWidth === "number") panels.rightWidth = saved.rightWidth;
-  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = saved.sidebarWidth;
+  // Saved widths are clamped to what the resize handles allow (an older build, a hand-edited file).
+  if (typeof saved.rightWidth === "number") panels.rightWidth = Math.max(300, Math.min(560, saved.rightWidth));
+  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = Math.max(160, Math.min(360, saved.sidebarWidth));
   if (SIDE_VIEWS.includes(saved.rightView as SideView)) panels.rightView = saved.rightView as SideView;
   return panels;
 }
