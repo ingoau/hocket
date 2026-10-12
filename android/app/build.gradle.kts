@@ -46,6 +46,9 @@ android {
     packaging {
         resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1", "META-INF/LICENSE*", "META-INF/DEPENDENCIES")
     }
+    // The Pebble watchapp, when scripts/build-pebble.sh has staged it (docs/pebble.md, Distribution).
+    val pebbleAssets = rootProject.file("../pebble/build/android-assets")
+    if (pebbleAssets.isDirectory) sourceSets.getByName("main").assets.directories.add(pebbleAssets.path)
     lint {
         abortOnError = false
         checkReleaseBuilds = false
