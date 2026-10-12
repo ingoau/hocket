@@ -4,7 +4,8 @@
 // folder. With HOCKET_FAKE_COVERS (a folder of covers; album n wears cover
 // n - 1, so put a busy card cover first, then one with flat edges and one to
 // mirror both ways, the twelfth one that carries on to the right only, then a
-// white one with pixel squares and one of columns, both carried on below)
+// white one with pixel squares and one of columns, both carried on below, and reflections below:
+// a lake, a night sky and a pastel one)
 // it also shoots the immersive layouts, against a native addon built
 // with `pnpm gen` (the fake core borrows its classifier). HOCKET_SCREENSHOT_ONLY limits which
 // shots are written (comma-separated name fragments):
@@ -231,16 +232,22 @@ test("now playing surfaces", async () => {
       // in the fullscreen player; cover 11 carries on to the right only, so it stays on the left).
       if (covers) {
         await setSetting(page, "display.immersiveArtwork", "automatic");
-        for (const [index, name] of [[1, "extend"], [2, "mirror"], [11, "right"], [12, "extend-white"], [13, "extend-columns"]] as const) {
+        // [cover, name, the side panel's shot and the bottom edge's style it must show, or none].
+        // The landscape (2) mirrors both ways in the fullscreen player but ends in a flat band at the
+        // bottom (an extension in the side panel); the lake (14) is it without the band, mirrored.
+        const entries = [[1, "extend", "extend", "extend"], [2, "mirror", undefined, undefined], [11, "right", undefined, undefined], [12, "extend-white", "extend-white", "extend"], [13, "extend-columns", "extend-columns", "extend"], [14, "lake", "mirror", "mirror"], [15, "night", "mirror-dark", "mirror"], [16, "pastel", "mirror-light", "mirror"]] as const;
+        for (const [index, name, side, style] of entries) {
           await playAlbum(page, index, "Road trip");
-          if (name !== "right") {
+          if (side && style) {
             const panel = page.getByTestId("right-panel");
             if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
             if ((await panel.getAttribute("data-view")) !== "overview") await page.getByTestId("sidebar-back").click();
             await expect(panel).toHaveAttribute("data-view", "overview");
             await expect(page.getByTestId("side-overview")).toHaveClass(/immersive/);
-            await shot(`sidebar-overview-immersive-${name}`);
-            if (name === "mirror" && wanted("sidebar-overview-immersive-mirror-nolyrics")) {
+            await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
+            await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", style);
+            await shot(`sidebar-overview-immersive-${side}`);
+            if (side === "mirror" && wanted("sidebar-overview-immersive-mirror-nolyrics")) {
               // A song without lyrics: the fade runs below the title instead.
               for (let i = 0; i < 12; i++) {
                 const tier = await page.evaluate(async () => {
@@ -257,8 +264,8 @@ test("now playing surfaces", async () => {
               await playAlbum(page, index, "Road trip");
             }
           }
-          // (The white and columns covers are for the side panel.)
-          if (name === "extend-white" || name === "extend-columns") continue;
+          // (The white, columns and lake covers are for the side panel.)
+          if (!["extend", "mirror", "right"].includes(name)) continue;
           await page.getByTestId("toggle-fullscreen").click();
           const fs = page.getByTestId("fullscreen-player");
           await fs.waitFor();

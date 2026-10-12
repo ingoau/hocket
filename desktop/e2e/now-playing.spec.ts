@@ -535,13 +535,12 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     };
     const ratio = (a: C, b: C) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
     const style = getComputedStyle(root);
-    const base = parse(`rgb(${style.getPropertyValue("--side-fill")})`);
-    const panel = parse(getComputedStyle(root.closest(".side-pane")!).backgroundColor);
+    const base = parse(`rgb(${(root.closest('[data-testid="sidebar-scroll"]') as HTMLElement).style.getPropertyValue("--side-fill")})`);
     const at = Number.parseFloat(style.getPropertyValue("--side-fade-at"));
     const len = Number.parseFloat(style.getPropertyValue("--side-fade-len"));
     const top0 = root.getBoundingClientRect().top;
-    /** An extension fills the whole overview: no fade, every card over it. */
-    const fill = root.hasAttribute("data-fill");
+    /** A reflection's canvas fades into the overview's colour; an extension's does not. */
+    const mirror = root.getAttribute("data-style") === "mirror";
     const ss = (t: number) => {
       const u = Math.max(0, Math.min(1, t));
       return u * u * (3 - 2 * u);
@@ -552,11 +551,7 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const sx = canvas.width / box.width;
     let min = Infinity;
     let worst = "";
-    const texts = root.querySelectorAll<HTMLElement>(
-      fill
-        ? ":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)"
-        : ":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > [data-card='lyrics'] :is(.side-card-title, .side-card-link, .peek-line)",
-    );
+    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
     for (const el of Array.from(texts)) {
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
@@ -571,9 +566,9 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
           let back = base;
           if (y < box.bottom) {
             const d = ctx.getImageData(Math.floor((x - box.left) * sx), Math.floor((y - box.top) * sx), 1, 1).data;
-            back = over([d[0]!, d[1]!, d[2]!, (d[3]! / 255) * (fill ? 1 : 1 - ss((local - (at - 64)) / 64))], base);
+            back = over([d[0]!, d[1]!, d[2]!, (d[3]! / 255) * (mirror ? 1 - ss((local - at) / len) : 1)], base);
           }
-          let bg = over([back[0], back[1], back[2], fill ? 1 : 1 - ss((local - at) / len)], panel);
+          let bg = back;
           if (fill) bg = over(fill, bg);
           const c = ratio(over(fg, bg), bg);
           if (c < min) {
@@ -604,10 +599,10 @@ async function toTrackWithLyrics(page: Page, want: boolean): Promise<void> {
 }
 
 /**
- * The fade from the continuation back to the pane, measured on screen: a column in the overview's
+ * A reflection's fade into the overview's colour, measured on screen: a column in the overview's
  * margin (outside the cards) from the top of the fade to below the top of Up next, and the middle
- * of the gap above Up next. The fade must run one way with no step above 6 levels per pixel, and
- * Up next must sit on the plain pane.
+ * of the gap above Up next, with no step above 6 levels per pixel; past the fade, down to the
+ * pane's bottom, the overview's colour itself.
  */
 async function checkFade(page: Page, label: string): Promise<void> {
   const overview = page.getByTestId("side-overview");
@@ -616,8 +611,9 @@ async function checkFade(page: Page, label: string): Promise<void> {
     const upNext = el.querySelector('[data-card="upnext"]')!.getBoundingClientRect();
     const top = el.getBoundingClientRect().top;
     const s = getComputedStyle(el);
-    const bg = getComputedStyle(el.closest(".side-pane")!).backgroundColor.match(/\d+/g)!.map(Number);
-    return { pane: { x: pane.x, y: pane.y, w: pane.width, h: pane.height }, upTop: upNext.top, upBottom: upNext.bottom, fadeAt: top + Number.parseFloat(s.getPropertyValue("--side-fade-at")), bg };
+    const fill = (el.closest('[data-testid="sidebar-scroll"]') as HTMLElement).style.getPropertyValue("--side-fill").split(",").map(Number);
+    const at = Number.parseFloat(s.getPropertyValue("--side-fade-at"));
+    return { pane: { x: pane.x, y: pane.y, w: pane.width, h: pane.height }, upTop: upNext.top, fadeAt: top + at, fadeEnd: top + at + Number.parseFloat(s.getPropertyValue("--side-fade-len")), fill };
   });
   const shot = readPng(await page.screenshot({ clip: { x: geo.pane.x, y: geo.pane.y, width: geo.pane.w, height: geo.pane.h } }));
   const px = (x: number, y: number) => {
@@ -625,24 +621,22 @@ async function checkFade(page: Page, label: string): Promise<void> {
     return [shot.data[i]!, shot.data[i + 1]!, shot.data[i + 2]!];
   };
   const level = (c: number[]) => (c[0]! + c[1]! + c[2]!) / 3;
+  const bottom = geo.pane.y + geo.pane.h - 32; // clear of the pane's rounded corners
   const run = (x: number, from: number, to: number, what: string) => {
-    const v: number[] = [];
-    for (let y = Math.ceil(from); y < Math.min(to, geo.pane.y + geo.pane.h - 1); y++) v.push(level(px(x, y)));
-    const dir = Math.sign(v.at(-1)! - v[0]!);
-    for (let i = 1; i < v.length; i++) {
-      const d = v[i]! - v[i - 1]!;
-      expect(Math.abs(d), `${label}, ${what}: step of ${d.toFixed(1)} at ${i} px`).toBeLessThanOrEqual(6);
-      expect(d * dir, `${label}, ${what}: turns back at ${i} px`).toBeGreaterThanOrEqual(-1);
+    let prev: number | undefined;
+    for (let y = Math.ceil(from); y < Math.min(to, bottom); y++) {
+      const v = level(px(x, y));
+      if (prev !== undefined) expect(Math.abs(v - prev), `${label}, ${what}: step of ${(v - prev).toFixed(1)} at ${Math.round(y - from)} px`).toBeLessThanOrEqual(6);
+      prev = v;
     }
   };
   const margin = geo.pane.x + 6;
-  run(margin, geo.fadeAt - 8, geo.upTop + 24, "margin");
+  run(margin, geo.fadeAt - 8, Math.max(geo.upTop, geo.fadeEnd) + 24, "margin");
   run(geo.pane.x + geo.pane.w / 2, geo.upTop - 11, geo.upTop - 1, "gap above Up next");
-  // Up next on the plain pane: its margin is the pane's own colour, top to bottom.
-  // (Clear of the pane's rounded bottom corners.)
-  for (let y = geo.upTop; y < Math.min(geo.upBottom, geo.pane.y + geo.pane.h - 32); y += 4) {
+  // Past the fade, the overview's colour to the bottom of the pane.
+  for (let y = Math.ceil(geo.fadeEnd) + 2; y < bottom; y += 6) {
     const c = px(margin, y);
-    for (let k = 0; k < 3; k++) expect(Math.abs(c[k]! - geo.bg[k]!), `${label}: beside Up next at ${Math.round(y - geo.upTop)} px`).toBeLessThanOrEqual(2);
+    for (let k = 0; k < 3; k++) expect(Math.abs(c[k]! - geo.fill[k]!), `${label}: the overview's colour ${Math.round(y - geo.fadeEnd)} px past the fade`).toBeLessThanOrEqual(3);
   }
 }
 
@@ -668,6 +662,13 @@ test.describe("immersive artwork from the classifier", () => {
       return x < gx + 3 || (x < gx + 9 && y < 229) || (x >= gx + 6 && x < gx + 9 && y >= 232);
     };
     writeCover(covers, "6-columns", (x, y) => (glyph(x, y) ? [20, 20, 24] : [Math.round(40 + x * 0.6), 90, Math.round(200 - x * 0.5)]));
+    // al-8, al-9: soft textures, dark and light, mirrored too.
+    const soft = (lo: number, tint: [number, number, number]) => (x: number, y: number): [number, number, number] => {
+      const v = (Math.sin(x / 9) * Math.cos(y / 11) * 0.5 + 0.5) * 80;
+      return [Math.min(255, Math.round(lo + v * tint[0])), Math.min(255, Math.round(lo + v * tint[1])), Math.min(255, Math.round(lo + v * tint[2]))];
+    };
+    writeCover(covers, "7-darksoft", soft(28, [0.5, 0.7, 1]));
+    writeCover(covers, "8-lightsoft", soft(170, [1, 0.85, 0.7]));
     // al-5: a soft, mid-tone texture, mirrored.
     writeCover(covers, "4-soft", (x, y) => {
       const v = (Math.sin(x / 9) * Math.cos(y / 11) * 0.5 + 0.5) * 120;
@@ -738,11 +739,12 @@ test.describe("immersive artwork from the classifier", () => {
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
         // Extensions: dark flat, light flat, white with pixel squares, columns; and a reflection.
-        for (const [n, style, tone] of [[1, "extend", "dark"], [4, "extend", "light"], [6, "extend", "light"], [7, "extend", undefined], [5, "mirror", undefined]] as const) {
+        for (const [n, style, tone] of [[1, "extend", "dark"], [4, "extend", "light"], [6, "extend", "light"], [7, "extend", undefined], [5, "mirror", undefined], [8, "mirror", "dark"], [9, "mirror", undefined]] as const) {
           await playCover(page, n);
           if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
           await expect(panel).toHaveAttribute("data-view", "overview");
           await expect(overview).toHaveClass(/immersive/);
+          await expect(overview).toHaveAttribute("data-style", style);
           await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
           await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", style);
           if (tone) await expect(overview).toHaveAttribute("data-tone", tone);
@@ -753,23 +755,21 @@ test.describe("immersive artwork from the classifier", () => {
           expect(Math.abs(box!.y - pane!.y)).toBeLessThan(1.5);
           expect(Math.abs(box!.x - pane!.x)).toBeLessThan(1.5);
           expect(await art.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe("0px");
+          // The overview wears the cover's colour to the end; every card is glass over it.
+          await expect(overview).toHaveAttribute("data-fill", "");
+          await expect(page.getByTestId("sidebar-upnext-card")).not.toHaveCSS("backdrop-filter", "none");
           if (style === "mirror") {
-            // A reflection fades back into the pane behind the Lyrics card, from the title row
-            // to Up next, so the cards after it are the usual ones.
-            await expect(overview).not.toHaveAttribute("data-fill", "");
+            // A reflection fades into that colour behind the Lyrics card, from the title row to Up next.
             const fade = await overview.evaluate((el) => {
               const title = el.querySelector<HTMLElement>(".side-title-row")!;
               const upNext = el.querySelector<HTMLElement>('[data-card="upnext"]')!;
               const start = title.offsetTop + title.offsetHeight;
-              return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px`, upNextGlass: getComputedStyle(upNext).backdropFilter };
+              return { at: el.style.getPropertyValue("--side-fade-at"), len: el.style.getPropertyValue("--side-fade-len"), want: `${start}px`, wantLen: `${upNext.offsetTop - start}px` };
             });
             expect(fade.at).toBe(fade.want);
             expect(fade.len).toBe(fade.wantLen);
-            expect(fade.upNextGlass).toBe("none");
           } else {
-            // An extension fills the whole overview: the bottom of the pane is its colour, not the pane's.
-            await expect(overview).toHaveAttribute("data-fill", "");
-            await expect(page.getByTestId("sidebar-upnext-card")).not.toHaveCSS("backdrop-filter", "none");
+            // An extension's colour reaches the bottom of the pane, the canvas ending in it.
             const pane = await panel.locator(".side-pane").boundingBox();
             const shot = readPng(await page.screenshot({ clip: { x: pane!.x, y: pane!.y, width: pane!.width, height: pane!.height } }));
             const want = (await page.getByTestId("sidebar-scroll").evaluate((el) => (el as HTMLElement).style.getPropertyValue("--side-fill"))).split(",").map(Number);
@@ -810,7 +810,7 @@ test.describe("immersive artwork from the classifier", () => {
       rmSync(userData, { recursive: true, force: true });
     }
   });
-  test("the side panel's reflection fades back into the pane behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
+  test("the side panel's reflection fades into the cover's colour behind the Lyrics card, smoothly, at any width; without lyrics below the title", async () => {
     const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
     const { app, page } = await launchFake(userData, { HOCKET_FAKE_COVERS: covers });
     try {
@@ -819,15 +819,22 @@ test.describe("immersive artwork from the classifier", () => {
       const panel = page.getByTestId("right-panel");
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
-        for (const [n, name] of [[5, "mirror"]] as const) {
+        // Mid-tone, dark and light reflections in both themes (a dark one in the light theme, a light one in the dark).
+        for (const [n, name] of [[5, "mirror"], [8, "dark mirror"], [9, "light mirror"]] as const) {
           await playCover(page, n);
           await toTrackWithLyrics(page, true);
           if (!(await panel.count())) await page.getByTestId("toggle-side-panel").click();
           await expect(panel).toHaveAttribute("data-view", "overview");
           await expect(page.getByTestId("sidebar-lyrics-card")).toBeVisible();
           await expect(page.getByTestId("sidebar-continuation")).toHaveCount(1);
+          // A reflection, or this checks nothing (an extension does not fade).
+          await expect(page.getByTestId("sidebar-continuation")).toHaveAttribute("data-style", "mirror");
+          await expect(page.getByTestId("side-overview")).toHaveAttribute("data-style", "mirror");
           await page.waitForTimeout(800);
           await checkFade(page, `${theme} ${name}`);
+          const { min, worst } = await overviewContrast(page);
+          console.log(`${theme} ${name}: lowest contrast ${worst}`);
+          expect(min, `${theme} theme, ${name}: ${worst}`).toBeGreaterThanOrEqual(4.5);
         }
       }
       // Narrower and wider, the fade follows.

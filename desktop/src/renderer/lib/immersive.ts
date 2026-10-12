@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
 import { resolveArtwork } from "../components/Artwork";
-import { BLACK, composite, contrast, WHITE, type Rgb } from "./contrast";
+import { BLACK, composite, contrast, mix, roundRgb, WHITE, type Rgb } from "./contrast";
 
 /** What the classifier gets: the cover at this side (it resamples to 128 itself). */
 const SIDE = 256;
@@ -168,6 +168,87 @@ export function scrimFor(edge: ArtworkEdge, light: boolean, textAlpha = 1): numb
     need = Math.max(need, hi);
   }
   return Math.min(0.85, need);
+}
+
+const ends = new WeakMap<HTMLImageElement, Rgb>();
+/**
+ * Where a reflection ends up: the average of the cover's bottom strip (what the reflection's
+ * blur, carried far enough, comes to). Cached per image.
+ */
+export function endColour(img: HTMLImageElement): Rgb | undefined {
+  const known = ends.get(img);
+  if (known) return known;
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 4;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx || !img.width) return undefined;
+  const strip = Math.max(1, Math.round(img.height * 0.12));
+  ctx.drawImage(img, 0, img.height - strip, img.width, strip, 0, 0, 32, 4);
+  const d = ctx.getImageData(0, 0, 32, 4).data;
+  c.width = c.height = 0;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    r += d[i]!;
+    g += d[i + 1]!;
+    b += d[i + 2]!;
+  }
+  const n = d.length / 4;
+  const end = { r: Math.round(r / n), g: Math.round(g / n), b: Math.round(b / n) };
+  ends.set(img, end);
+  return end;
+}
+
+/**
+ * `bg` darkened (under light text) or lightened (under dark text, `light`), keeping its hue, just
+ * enough that text at `textAlpha` over it reaches 4.5:1.
+ */
+export function toneForText(bg: Rgb, light: boolean, textAlpha = 1): Rgb {
+  const fg = light ? DARK_FG : WHITE;
+  const toward = light ? WHITE : BLACK;
+  for (let t = 0; t <= 1.0001; t += 0.01) {
+    const c = roundRgb(mix(bg, toward, t));
+    if (contrast(composite(fg, textAlpha, c), c) >= 4.6) return c;
+  }
+  return toward;
+}
+
+/**
+ * After a draw: the scrim (white under dark text when `light`, black under light text) that text
+ * at `textAlpha` needs over what the canvas shows between rows `from` and `to` (device px), so the
+ * part nearest the artwork (where a reflection, or an extension's bridge, still shows the
+ * artwork's own detail) reads as well as the colours along the edge. Sampled every 4 px.
+ */
+export function scrimOver(canvas: HTMLCanvasElement, from: number, to: number, light: boolean, textAlpha: number, max = 0.7): number {
+  const ctx = canvas.getContext("2d");
+  const y0 = Math.max(0, Math.floor(from));
+  const h = Math.min(canvas.height, Math.ceil(to)) - y0;
+  if (!ctx || h <= 0) return 0;
+  const d = ctx.getImageData(0, y0, canvas.width, h).data;
+  const fg = light ? DARK_FG : WHITE;
+  const under = light ? WHITE : BLACK;
+  const ok = (bg: Rgb) => contrast(composite(fg, textAlpha, bg), bg) >= 4.6;
+  let need = 0;
+  for (let y = 0; y < h; y += 4) {
+    for (let x = 0; x < canvas.width; x += 4) {
+      const i = (y * canvas.width + x) * 4;
+      if (d[i + 3]! < 200) continue;
+      const c = { r: d[i]!, g: d[i + 1]!, b: d[i + 2]! };
+      if (ok(composite(under, need, c))) continue;
+      let lo = need;
+      let hi = max;
+      for (let k = 0; k < 10; k++) {
+        const mid = (lo + hi) / 2;
+        if (ok(composite(under, mid, c))) hi = mid;
+        else lo = mid;
+      }
+      need = hi;
+      if (need >= max) return max;
+    }
+  }
+  return need;
 }
 
 const toned = new WeakMap<ArtworkEdge, Map<string, ArtworkEdge>>();

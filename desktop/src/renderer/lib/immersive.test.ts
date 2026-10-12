@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ArtworkEdge } from "@core/api";
 import { composite, contrast, WHITE } from "./contrast";
-import { scrimFor, withTone } from "./immersive";
+import { scrimFor, toneForText, withTone } from "./immersive";
 
 const edge = (colors: number[], light: boolean, scrim = 0): ArtworkEdge => ({
   style: "extend",
@@ -37,5 +37,23 @@ describe("the scrim for the other tone", () => {
     const flipped = withTone(e, true);
     expect(flipped.light).toBe(true);
     expect(flipped).toBe(withTone(e, true));
+  });
+});
+
+describe("a reflection's end colour, toned for the text over it", () => {
+  const dark = { r: 0x1c, g: 0x1b, b: 0x1f };
+  it("darkens under light text and lightens under dark text until muted text reaches 4.5:1, keeping the hue", () => {
+    const purple = { r: 150, g: 110, b: 190 };
+    const under = toneForText(purple, false, 0.8);
+    expect(contrast(composite(WHITE, 0.8, under), under)).toBeGreaterThanOrEqual(4.5);
+    expect(under.b).toBeGreaterThan(under.r);
+    expect(under.r).toBeGreaterThan(under.g);
+    const over = toneForText(purple, true, 0.8);
+    expect(contrast(composite(dark, 0.8, over), over)).toBeGreaterThanOrEqual(4.5);
+    expect(over.b).toBeGreaterThan(over.g);
+  });
+
+  it("leaves a colour that already reads alone", () => {
+    expect(toneForText({ r: 20, g: 24, b: 40 }, false, 0.8)).toEqual({ r: 20, g: 24, b: 40 });
   });
 });

@@ -33,7 +33,7 @@ import { AboutSong, formatLine } from "./AboutSong";
 import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
-import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Scene } from "../lib/immersive";
+import { drawContinuation, endColour, isFlat, prepareScene, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -135,9 +135,9 @@ function Overview() {
   const scene = useOverviewScene(track?.coverArt);
   const overview = useRef<HTMLDivElement>(null);
   const immersive = !!scene.edge;
-  // The continuation fades back into the pane behind the Lyrics card: from the title row's bottom
-  // to the next card's top (without lyrics, over as long below the title, which the stylesheet
-  // leaves clear). Kept on the overview for the stylesheet as the content and the width change.
+  // A reflection fades into its end colour behind the Lyrics card: from the title row's bottom to
+  // the next card's top (without lyrics, over as long below the title). Kept on the overview for
+  // the stylesheet as the content and the width change.
   useLayoutEffect(() => {
     const el = overview.current;
     if (!el || !immersive) return;
@@ -158,13 +158,15 @@ function Overview() {
   }, [immersive]);
   if (!track || !now) return <div className="side-scroll"><EmptyState message={t("player.nothingPlaying")} icon="music" action={<span className="small muted">{t("player.nothingPlayingHint")}</span>} testId="sidebar-empty" /></div>;
   const { layers, edge, fading, settle } = scene;
-  const style = edge ? ({ "--side-fill": fillOf(edge) } as CSSProperties) : undefined;
-  // An extension fills the whole overview in its colour, and every card sits on it; a reflection
-  // fades back into the pane behind the Lyrics card.
-  const fill = edge?.style === "extend";
+  // The overview takes the cover's colour to the end of the scroll: an extension its own (under its
+  // scrim), a reflection the colour it fades into, both toned for the text over them; every card
+  // sits on it in the edge's tone.
+  const img = layers.at(-1)?.scene.img;
+  const style = edge ? ({ "--side-fill": fillOf(edge, img) } as CSSProperties) : undefined;
+  const fill = !!edge;
   return (
     <div className="side-scroll" data-fill={fill ? "" : undefined} style={style} data-testid="sidebar-scroll">
-      <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} data-fill={fill ? "" : undefined} data-testid="side-overview">
+      <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-style={edge?.style} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} data-fill={fill ? "" : undefined} data-testid="side-overview">
       {edge ? (
         <div className="side-backdrop" aria-hidden="true">
           {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
@@ -189,10 +191,17 @@ function Overview() {
   );
 }
 
-/** What the continuation carries on in past its canvas: the edge's base colour under its scrim, as `r, g, b`. */
-function fillOf(edge: ArtworkEdge): string {
+/**
+ * The overview's colour past the canvas, as `r, g, b`: for an extension its base colour under its
+ * scrim (exactly what its canvas ends in); for a reflection the colour it ends up at (the cover's
+ * bottom strip averaged), toned, keeping its hue, so the text over it reaches 4.5:1.
+ */
+function fillOf(edge: ArtworkEdge, img: HTMLImageElement | undefined): string {
+  const base = { r: (edge.baseColor >> 16) & 255, g: (edge.baseColor >> 8) & 255, b: edge.baseColor & 255 };
   const under = edge.light ? 255 : 0;
-  return [16, 8, 0].map((shift) => Math.round(((edge.baseColor >> shift) & 255) * (1 - edge.scrim) + under * edge.scrim)).join(", ");
+  const scrimmed = { r: base.r * (1 - edge.scrim) + under * edge.scrim, g: base.g * (1 - edge.scrim) + under * edge.scrim, b: base.b * (1 - edge.scrim) + under * edge.scrim };
+  const c = edge.style === "mirror" ? toneForText((img && endColour(img)) ?? scrimmed, edge.light, MUTED_ALPHA) : { r: Math.round(scrimmed.r), g: Math.round(scrimmed.g), b: Math.round(scrimmed.b) };
+  return `${c.r}, ${c.g}, ${c.b}`;
 }
 
 /** The latest a new cover's scene has faded in over the last (side-art-in is quicker). */
@@ -254,6 +263,28 @@ function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | und
     el.width = Math.round(width * dpr);
     el.height = Math.round(width * 2 * dpr);
     drawContinuation(el, img, edge, "bottom", undefined, { bottomFade: false, baseFill: true });
+    // Under the title and the first card, where the artwork's own detail still shows, as much more
+    // scrim as the text needs there: eased in under the artwork's fading edge, out again before
+    // the canvas ends in the overview's colour.
+    const S = el.width;
+    const extra = scrimOver(el, S, S * 1.45, edge.light, MUTED_ALPHA);
+    const ctx = el.getContext("2d");
+    if (ctx && extra > 0.005) {
+      const rgb = edge.light ? "255,255,255" : "0,0,0";
+      const g = ctx.createLinearGradient(0, S * 0.7, 0, S * 1.9);
+      const stops: [number, number][] = [[0, 0], [0.25, 1], [0.625, 1], [1, 0]];
+      for (let i = 0; i < stops.length - 1; i++) {
+        const [p0, a0] = stops[i]!;
+        const [p1, a1] = stops[i + 1]!;
+        for (let k = 0; k < 8; k++) {
+          const t = k / 8;
+          g.addColorStop(p0 + (p1 - p0) * t, `rgba(${rgb},${(a0 + (a1 - a0) * t * t * (3 - 2 * t)) * extra})`);
+        }
+      }
+      g.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, S * 0.7, el.width, S * 1.2);
+    }
   }, [img, edge, width]);
   return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} />;
 }

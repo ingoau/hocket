@@ -142,36 +142,26 @@
 .side-scroll:has(> .side-overview) { padding: 0; }
 .side-overview { position: relative; isolation: isolate; flex: 0 0 auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 /* Immersive (lib/immersive.ts, the cover's bottom edge): the artwork flush to the panel's top and
-   sides (the pane's corners clip it), fading over its last 30% onto the continuation. Behind it
-   all, one backdrop: the continuation's canvas (twice the artwork's height) settling into the
-   edge's base colour (under its scrim) by the bottom of the title row, then the whole backdrop
-   fading back into the pane behind the Lyrics card, from the title row's bottom to the next
-   card's top (--side-fade-at, --side-fade-len, kept by the overview), along a smoothstep. One
-   mask over both, so the fade never doubles up where the canvas ends. The title row and the
-   Lyrics card follow the edge's tone; that card is near-opaque glass in the base colour, so its
-   text holds 4.5:1 over the whole fade. Up next and the rest sit on the pane as usual. */
+   sides (the pane's corners clip it), fading over its last 30% onto the continuation, a canvas
+   twice the artwork's height on a backdrop of the overview's colour (--side-fill), which the
+   scroller wears too, to the end of the scroll and past it. An extension's canvas ends in that
+   colour. A reflection's fades into it behind the Lyrics card, from the title row's bottom to the
+   next card's top (--side-fade-at, --side-fade-len, kept by the overview), along a smoothstep. */
 .side-overview.immersive {
   --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent;
   --side-fade-at: 100%; --side-fade-len: 180px;
 }
-.side-backdrop { position: absolute; z-index: -1; inset: 0; overflow: hidden; pointer-events: none; background: rgb(var(--side-fill)); mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) var(--side-fade-at), rgba(0, 0, 0, 0.9888) calc(var(--side-fade-at) + var(--side-fade-len) * 0.0625), rgba(0, 0, 0, 0.957) calc(var(--side-fade-at) + var(--side-fade-len) * 0.125), rgba(0, 0, 0, 0.9077) calc(var(--side-fade-at) + var(--side-fade-len) * 0.1875), rgba(0, 0, 0, 0.8438) calc(var(--side-fade-at) + var(--side-fade-len) * 0.25), rgba(0, 0, 0, 0.7681) calc(var(--side-fade-at) + var(--side-fade-len) * 0.3125), rgba(0, 0, 0, 0.6836) calc(var(--side-fade-at) + var(--side-fade-len) * 0.375), rgba(0, 0, 0, 0.5933) calc(var(--side-fade-at) + var(--side-fade-len) * 0.4375), rgba(0, 0, 0, 0.5) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5), rgba(0, 0, 0, 0.4067) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5625), rgba(0, 0, 0, 0.3164) calc(var(--side-fade-at) + var(--side-fade-len) * 0.625), rgba(0, 0, 0, 0.2319) calc(var(--side-fade-at) + var(--side-fade-len) * 0.6875), rgba(0, 0, 0, 0.1562) calc(var(--side-fade-at) + var(--side-fade-len) * 0.75), rgba(0, 0, 0, 0.0923) calc(var(--side-fade-at) + var(--side-fade-len) * 0.8125), rgba(0, 0, 0, 0.043) calc(var(--side-fade-at) + var(--side-fade-len) * 0.875), rgba(0, 0, 0, 0.0112) calc(var(--side-fade-at) + var(--side-fade-len) * 0.9375), rgba(0, 0, 0, 0) calc(var(--side-fade-at) + var(--side-fade-len) * 1)); }
-.side-continuation { position: absolute; top: 0; left: 0; width: 100%; height: auto; aspect-ratio: 1 / 2; mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) calc(var(--side-fade-at) - 64px + 0px), rgba(0, 0, 0, 0.957) calc(var(--side-fade-at) - 64px + 8px), rgba(0, 0, 0, 0.8438) calc(var(--side-fade-at) - 64px + 16px), rgba(0, 0, 0, 0.6836) calc(var(--side-fade-at) - 64px + 24px), rgba(0, 0, 0, 0.5) calc(var(--side-fade-at) - 64px + 32px), rgba(0, 0, 0, 0.3164) calc(var(--side-fade-at) - 64px + 40px), rgba(0, 0, 0, 0.1562) calc(var(--side-fade-at) - 64px + 48px), rgba(0, 0, 0, 0.043) calc(var(--side-fade-at) - 64px + 56px), rgba(0, 0, 0, 0) calc(var(--side-fade-at) - 64px + 64px)); }
-/* Without lyrics, the fade has the room below the title to itself. */
-.side-overview.immersive:not([data-fill]):not(:has(> [data-card="lyrics"])) > .side-title-row { margin-bottom: 168px; }
+.side-backdrop { position: absolute; z-index: -1; inset: 0; overflow: hidden; pointer-events: none; background: rgb(var(--side-fill)); }
+.side-continuation { position: absolute; top: 0; left: 0; width: 100%; height: auto; aspect-ratio: 1 / 2; }
+.side-overview[data-style="mirror"] .side-continuation { mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) var(--side-fade-at), rgba(0, 0, 0, 0.9888) calc(var(--side-fade-at) + var(--side-fade-len) * 0.0625), rgba(0, 0, 0, 0.957) calc(var(--side-fade-at) + var(--side-fade-len) * 0.125), rgba(0, 0, 0, 0.9077) calc(var(--side-fade-at) + var(--side-fade-len) * 0.1875), rgba(0, 0, 0, 0.8438) calc(var(--side-fade-at) + var(--side-fade-len) * 0.25), rgba(0, 0, 0, 0.7681) calc(var(--side-fade-at) + var(--side-fade-len) * 0.3125), rgba(0, 0, 0, 0.6836) calc(var(--side-fade-at) + var(--side-fade-len) * 0.375), rgba(0, 0, 0, 0.5933) calc(var(--side-fade-at) + var(--side-fade-len) * 0.4375), rgba(0, 0, 0, 0.5) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5), rgba(0, 0, 0, 0.4067) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5625), rgba(0, 0, 0, 0.3164) calc(var(--side-fade-at) + var(--side-fade-len) * 0.625), rgba(0, 0, 0, 0.2319) calc(var(--side-fade-at) + var(--side-fade-len) * 0.6875), rgba(0, 0, 0, 0.1562) calc(var(--side-fade-at) + var(--side-fade-len) * 0.75), rgba(0, 0, 0, 0.0923) calc(var(--side-fade-at) + var(--side-fade-len) * 0.8125), rgba(0, 0, 0, 0.043) calc(var(--side-fade-at) + var(--side-fade-len) * 0.875), rgba(0, 0, 0, 0.0112) calc(var(--side-fade-at) + var(--side-fade-len) * 0.9375), rgba(0, 0, 0, 0) calc(var(--side-fade-at) + var(--side-fade-len) * 1)); }
 .side-continuation.fade-in-art { animation: side-art-in var(--dur-spring-long) var(--ease-emphasized-decel) both; }
 .side-overview.immersive .side-art { width: calc(100% + 32px); margin: -16px -16px 0; border-radius: 0; box-shadow: none; background: none; }
 .side-overview.immersive:not([data-flat]) .side-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
-.side-overview[data-tone="light"] > :is(.side-title-row, [data-card="lyrics"]) { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --accent-text: #1c1b1f; --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --state-selected: rgba(0, 0, 0, 0.08); --focus-ring: #1c1b1f; }
-.side-overview[data-tone="dark"] > :is(.side-title-row, [data-card="lyrics"]) { color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --fg-faint: rgba(255, 255, 255, 0.8); --accent-text: #fff; --bg-hover: rgba(255, 255, 255, 0.1); --bg-active: rgba(255, 255, 255, 0.16); --state-selected: rgba(255, 255, 255, 0.14); --focus-ring: #fff; }
-.side-overview.immersive:not([data-fill]) > [data-card="lyrics"] { background: rgba(var(--side-fill), 0.88); }
-.side-overview.immersive > [data-card="lyrics"] { -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent); }
-/* An extension (data-fill) fills the whole overview instead, down to the end of the scroll and
-   past it (the scroller wears the colour too), never fading back; the canvas's own bands play out
-   (columns soften sideways into the base colour). Every card is glass in the edge's tone over it:
-   light with dark text over a light extension, dark with light text over a dark one. */
+/* The overview's colour (data-fill) runs to the end of the scroll and past it (the scroller wears
+   it too). Every card is glass in the edge's tone over it: light with dark text over a light
+   continuation, dark with light text over a dark one; the title, links and accents follow. */
 .side-scroll { transition: background-color var(--dur-spring-long) var(--ease-emphasized); }
 .side-scroll[data-fill] { background: rgb(var(--side-fill)); }
-.side-overview[data-fill] .side-backdrop, .side-overview[data-fill] .side-continuation { mask-image: none; }
 .side-overview[data-fill][data-tone="light"] { color: #1c1b1f; --fg: #1c1b1f; --fg-muted: rgba(28, 27, 31, 0.8); --fg-faint: rgba(28, 27, 31, 0.8); --accent-text: #1c1b1f; --bg-hover: rgba(0, 0, 0, 0.06); --bg-active: rgba(0, 0, 0, 0.1); --state-selected: rgba(0, 0, 0, 0.08); --focus-ring: #1c1b1f; }
 .side-overview[data-fill][data-tone="dark"] { color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --fg-faint: rgba(255, 255, 255, 0.8); --accent-text: #fff; --bg-hover: rgba(255, 255, 255, 0.1); --bg-active: rgba(255, 255, 255, 0.16); --state-selected: rgba(255, 255, 255, 0.14); --focus-ring: #fff; }
 .side-overview[data-fill][data-tone="light"] > .side-card { background: rgba(255, 255, 255, 0.42); }
