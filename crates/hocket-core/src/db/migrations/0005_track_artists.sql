@@ -2,6 +2,8 @@
 -- for rows synced before it, read as the one artist `artist_id` + `artist` name). The mirror only
 -- learns the list from the server: make each server's next sync a full one (it refetches every
 -- song), keeping its "synced once" state so the library stays usable meanwhile.
+-- A full sync already under way when this runs resumes and finishes rather than restarting, so
+-- the rows it wrote before the upgrade keep the one artist until the next daily reconcile.
 ALTER TABLE tracks ADD COLUMN artists TEXT;
 
 UPDATE saved_state SET json = json_set(json, '$.lastFullAt', 0)
