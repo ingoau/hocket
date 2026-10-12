@@ -27,8 +27,8 @@ const wanted = (name: string) => !only?.length || only.some((f) => name.includes
 
 test.use({ trace: "off" });
 
-async function size(app: ElectronApplication, width: number, height: number): Promise<void> {
-  await resizeWindow(app, app.windows()[0]!, width, height);
+async function size(app: ElectronApplication, page: Page, width: number, height: number): Promise<void> {
+  await resizeWindow(app, page, width, height);
 }
 
 /** Waits for the finite animations to finish, so a shot is never caught mid-transition. */
@@ -104,7 +104,7 @@ test("now playing surfaces", async () => {
       await completeSetup(page);
       await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });
       await setSetting(page, "display.theme", theme);
-      await size(app, 1456, 912);
+      await size(app, page, 1456, 912);
       // Two albums first, so the queue selector has a saved queue to offer.
       await playAlbum(page, 3, "Late night drive");
       await playAlbum(page, 0, "Road trip");
@@ -177,14 +177,33 @@ test("now playing surfaces", async () => {
         await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-connect-local.png`) });
       }
 
+      // The bar at middling widths, this device playing and another (its name on the right).
+      if (wanted("bar-width")) {
+        for (const where of ["local", "remote"] as const) {
+          if (where === "remote") {
+            await handoff(page, "remote");
+            await expect(page.getByTestId("connect-button-name")).toBeVisible();
+          }
+          for (const w of [960, 1024, 1100, 1280]) {
+            await size(app, page, w, 800);
+            await settle(page);
+            await page.getByTestId("player-bar").screenshot({ path: join(out!, `desktop-${theme}-bar-width-${w}-${where}.png`) });
+          }
+          if (where === "remote") {
+            await handoff(page, "self");
+            await expect(page.getByTestId("connect-button-name")).toHaveCount(0);
+          }
+        }
+        await size(app, page, 1456, 912);
+      }
       // Narrow: the bar's two rows, the side panel a drawer.
-      await size(app, 860, 760);
+      await size(app, page, 860, 760);
       await shot("narrow-bar");
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("narrow-drawer-queue");
       await page.keyboard.press("Escape");
-      await size(app, 1456, 912);
+      await size(app, page, 1456, 912);
 
       // Fullscreen, card layout (cover 0 is busy: a card; "never" makes sure).
       await setSetting(page, "display.immersiveArtwork", "never");
@@ -214,19 +233,19 @@ test("now playing surfaces", async () => {
         await page.keyboard.press("Escape");
         await expect(page.getByTestId("artist-menu")).toHaveCount(0);
       }
-      await size(app, 1600, 1000);
+      await size(app, page, 1600, 1000);
       await shot("fs-card-art-1600");
       await fsMode(page, "lyrics");
       await shot("fs-card-lyrics-1600");
-      await size(app, 900, 1400);
+      await size(app, page, 900, 1400);
       await shot("fs-tall-card-lyrics");
       await fsMode(page, "art");
       await shot("fs-tall-card-art");
-      await size(app, 1456, 912);
+      await size(app, page, 1456, 912);
       await page.keyboard.press("Escape");
-      await size(app, 1600, 1000);
+      await size(app, page, 1600, 1000);
       await shot("sidebar-overview-1600");
-      await size(app, 1456, 912);
+      await size(app, page, 1456, 912);
 
       // Immersive (cover 1 has flat edges to extend, cover 2 is a landscape to mirror, both centred
       // in the fullscreen player; cover 11 carries on to the right only, so it stays on the left).
@@ -293,12 +312,12 @@ test("now playing surfaces", async () => {
           }
           await fsMode(page, "art");
           if (name === "mirror") {
-            await size(app, 1600, 1000);
+            await size(app, page, 1600, 1000);
             await shot(`fs-immersive-${name}-art-1600`);
           }
-          await size(app, 900, 1400);
+          await size(app, page, 900, 1400);
           await shot(`fs-tall-${name}`);
-          await size(app, 1456, 912);
+          await size(app, page, 1456, 912);
           await page.keyboard.press("Escape");
         }
       }

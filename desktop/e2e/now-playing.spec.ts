@@ -434,6 +434,43 @@ test.describe("the artist in the now playing subtitle", () => {
   });
 });
 
+test.describe("the player bar at middling widths", () => {
+  test("the song, the transport and the buttons never overlap, with another device's name showing too", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    /** The three blocks' painted extents: what each one's children cover, not its grid cell. */
+    const blocks = () => page.getByTestId("player-bar").evaluate((bar) => {
+      const span = (els: Element[]) => {
+        const rs = els.map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
+        return { left: Math.min(...rs.map((r) => r.left)), right: Math.max(...rs.map((r) => r.right)) };
+      };
+      const now = bar.querySelector(".now")!;
+      return {
+        now: span(Array.from(now.querySelectorAll(".art, .text > *, .now-actions"))),
+        transport: span(Array.from(bar.querySelectorAll(".transport > *"))),
+        right: span(Array.from(bar.querySelector(".right")!.children)),
+        width: bar.getBoundingClientRect().width,
+      };
+    });
+    for (const remote of [false, true]) {
+      if (remote) {
+        await handoff(page, "remote");
+        await expect(page.getByTestId("connect-button-name")).toBeVisible();
+      }
+      for (const w of [960, 1100]) {
+        await resizeWindow(app, page, w, 800);
+        await page.waitForTimeout(200);
+        const b = await blocks();
+        const label = `${w} px${remote ? ", remote" : ""}: ${JSON.stringify(b)}`;
+        expect(b.now.right, label).toBeLessThanOrEqual(b.transport.left);
+        expect(b.transport.right, label).toBeLessThanOrEqual(b.right.left);
+        expect(b.right.right, label).toBeLessThanOrEqual(b.width);
+      }
+    }
+  });
+});
+
 // Immersive artwork needs the classifier, which the fake core borrows from the native addon.
 const addonBuilt = existsSync(join(resolve(__dirname, ".."), "native", "index.js"));
 

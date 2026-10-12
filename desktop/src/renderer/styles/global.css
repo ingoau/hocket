@@ -459,9 +459,10 @@ h3 { font-size: var(--fs-lg); }
    toggle that is on fills tonally and squares off), and a wide filled
    play/pause that morphs from a pill (paused) to a rounded square (playing). */
 .player {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 520px) minmax(max-content, 1fr); align-items: center; gap: 16px;
-  padding: 0 16px 0 12px; background: var(--bg); position: relative;
+  display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.2fr) minmax(max-content, 1fr); align-items: center; gap: 16px;
+  padding: 0 16px 0 12px; background: var(--bg); position: relative; container: player / inline-size;
 }
+
 .player .now { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .player .now .art { width: 64px; height: 64px; border-radius: var(--shape-md); background: var(--bg-sunken); object-fit: cover; flex: 0 0 auto; box-shadow: var(--shadow-1); }
 .art.placeholder { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); background: var(--bg-sunken); }
@@ -472,7 +473,8 @@ h3 { font-size: var(--fs-lg); }
 .player .now .artist a:hover, .player .now .title a:hover { text-decoration: underline; }
 .player .now .stars { margin-top: 3px; display: inline-flex; gap: 2px; }
 .player .now-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
-.player .center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+/* The centre grows with the bar up to 520px (a flexible track, so the song's side keeps its share). */
+.player .center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; width: 100%; max-width: 520px; justify-self: center; }
 .transport { display: flex; align-items: center; gap: 8px; }
 .player .btn {
   transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized),
@@ -529,6 +531,29 @@ h3 { font-size: var(--fs-lg); }
 .player .notice { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 10px; font-size: var(--fs-xs); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; box-shadow: var(--shadow); white-space: nowrap; max-width: 90%; }
 .player .notice .btn { height: 20px; padding: 0 6px; font-size: var(--fs-xs); }
 .player .notice .btn.icon { width: 20px; border-radius: 10px; }
+/* Between the two-row layout (900px) and room for everything, the song's side gives way first:
+   the stars, then add to playlist and More (both stay in its context menu and the side panel),
+   sooner while another device's name takes room on the right; then the volume slider and that
+   name shorten. The song's block never shrinks below its art and some of its title. */
+@container player (min-width: 901px) and (max-width: 1360px) {
+  .player:has(.connect-pill.remote) .now .stars { display: none; }
+}
+@container player (min-width: 901px) and (max-width: 1280px) {
+  .player:has(.connect-pill.remote) .now-actions { display: none; }
+}
+@container player (min-width: 901px) and (max-width: 1180px) {
+  .player .now .stars { display: none; }
+  .player .connect-pill .connect-name { max-width: 120px; }
+}
+@container player (min-width: 901px) and (max-width: 1060px) {
+  .player .now-actions { display: none; }
+  .player .volume .m3-slider { flex: 0 0 72px; min-width: 72px; }
+}
+@container player (min-width: 901px) and (max-width: 1000px) {
+  .player:has(.connect-pill.remote) .volume .m3-slider { display: none; }
+  .player .connect-pill .connect-name { max-width: 88px; }
+}
+
 
 /* Right panel */
 .right-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
@@ -851,7 +876,7 @@ button.qrow { width: 100%; }
   .window-controls .btn { width: 30px; }
   .player { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "now right" "center center"; padding: 6px 10px; row-gap: 4px; }
   .player .now { grid-area: now; }
-  .player .center { grid-area: center; }
+  .player .center { grid-area: center; max-width: none; }
   .player .right { grid-area: right; flex-wrap: wrap; }
   .player .now .art { width: 40px; height: 40px; }
   .volume { width: auto; }

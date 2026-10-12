@@ -31,10 +31,15 @@ export async function launchFake(userData: string, extraEnv: Record<string, stri
  * the renderer's size, not the call, is what the spec waits on.
  */
 export async function resizeWindow(app: ElectronApplication, page: Page, width: number, height: number): Promise<void> {
+  let size: [number, number] = [width, height];
   for (let attempt = 0; ; attempt++) {
     try {
       const bw = await app.browserWindow(page);
-      await bw.evaluate((w, s) => w.setContentSize(s[0], s[1]), [width, height] as const);
+      // What the window settled on (its minimum size may have the last word).
+      size = (await bw.evaluate((w, s) => {
+        w.setContentSize(s[0], s[1]);
+        return w.getContentSize();
+      }, [width, height] as const)) as [number, number];
       await bw.dispose().catch(() => undefined);
       break;
     } catch (error) {
@@ -42,7 +47,7 @@ export async function resizeWindow(app: ElectronApplication, page: Page, width: 
       await page.waitForTimeout(100);
     }
   }
-  await page.waitForFunction((s) => window.innerWidth === s[0] && window.innerHeight === s[1], [width, height] as const, { timeout: 10_000 });
+  await page.waitForFunction((s) => window.innerWidth === s[0] && window.innerHeight === s[1], size, { timeout: 10_000 });
 }
 
 export const test = base.extend<{ hocket: AppFixture }>({
