@@ -123,6 +123,8 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
   );
 }
 
+/** How long the side panel's width holds still before its continuation is drawn again. */
+const RESIZE_SETTLE_MS = 160;
 /** Without any card under the title, how long a reflection's fade runs below it. */
 const NO_CARD_FADE = 180;
 /** Muted text's opacity over the continuation (--fg-muted there): the scrim is sized for it. */
@@ -248,12 +250,28 @@ function useOverviewScene(coverArt: string | undefined) {
 function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | undefined; edge: ArtworkEdge; entering: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
+  /** The width last drawn at. */
+  const drawn = useRef(0);
+  // The first size draws at once; later ones (dragging the panel's edge) only once the width has
+  // held for a moment, the last drawing stretched to fit meanwhile: a draw blurs several large
+  // working canvases and reads one back, too much for every frame of a drag.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    let timer = 0;
+    const ro = new ResizeObserver(() => {
+      window.clearTimeout(timer);
+      const w = el.clientWidth;
+      if (!drawn.current) setWidth(w);
+      else timer = window.setTimeout(() => setWidth(w), RESIZE_SETTLE_MS);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+      // Give the bitmap back now, not at the next collection.
+      el.width = el.height = 0;
+    };
   }, []);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -261,6 +279,7 @@ function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | und
     const dpr = window.devicePixelRatio || 1;
     el.width = Math.round(width * dpr);
     el.height = Math.round(width * 2 * dpr);
+    drawn.current = width;
     drawContinuation(el, img, edge, "bottom", undefined, { bottomFade: false, baseFill: true });
     // Under the title and the first card, where the artwork's own detail still shows, as much more
     // scrim as the text needs there: eased in under the artwork's fading edge, out again before
@@ -285,7 +304,7 @@ function SideContinuation({ img, edge, entering }: { img: HTMLImageElement | und
       ctx.fillRect(0, S * 0.7, el.width, S * 1.2);
     }
   }, [img, edge, width]);
-  return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} />;
+  return <canvas ref={ref} className={`side-continuation ${entering ? "fade-in-art" : ""}`} aria-hidden="true" data-testid="sidebar-continuation" data-style={edge.style} data-drawn={width || undefined} />;
 }
 
 function Card({ id, title, link, onLink, children, testId, drill }: { id: string; title: string; link: string; onLink: () => void; children: React.ReactNode; testId: string; drill: SideView }) {

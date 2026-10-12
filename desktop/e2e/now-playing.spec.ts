@@ -923,9 +923,17 @@ test.describe("immersive artwork from the classifier", () => {
           expect(min, `${theme} theme, ${name}: ${worst}`).toBeGreaterThanOrEqual(4.5);
         }
       }
-      // Narrower and wider, the fade follows.
+      // Dragging the panel's edge redraws the continuation once the width holds, not every step.
+      const canvas = page.getByTestId("sidebar-continuation");
+      const drawnAt = Number(await canvas.getAttribute("data-drawn"));
       const handle = page.getByTestId("side-panel-resize");
       await handle.focus();
+      for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+      expect(Number(await canvas.getAttribute("data-drawn"))).toBe(drawnAt);
+      await expect.poll(async () => Number(await canvas.getAttribute("data-drawn"))).toBe(drawnAt + 64);
+      for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowRight");
+      await expect.poll(async () => Number(await canvas.getAttribute("data-drawn"))).toBe(drawnAt);
+      // Narrower and wider, the fade follows.
       for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
       await page.waitForTimeout(400);
       await checkFade(page, "narrower");
