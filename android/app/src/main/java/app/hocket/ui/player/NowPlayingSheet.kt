@@ -235,6 +235,8 @@ internal class HeroGeometry {
     var immersive by mutableStateOf(false)
     /** The header's height (px) as the page laid it out: the immersive artwork starts this far above the area. */
     var headerHeight = 0f
+    /** How much the title row's stars have folded away (px; they show in artwork mode only): the mode area takes it. */
+    var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
     var swipe: () -> Float = { 0f }
 

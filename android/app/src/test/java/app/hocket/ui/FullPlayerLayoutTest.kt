@@ -192,11 +192,48 @@ class FullPlayerLayoutTest {
     }
 
     /**
-     * In lyrics and queue modes the thumbnail spans the title block: its top on the title's cap
-     * height, its bottom on the star glyphs' bottom, or (rating hidden) on the artist line's baseline.
+     * The stars show over the artwork only, right under the artist line; lyrics and the queue
+     * leave the title block to the thumbnail, the title and the artist.
      */
     @Test
-    fun theThumbnailSpansTheTitleArtistAndRating() {
+    fun theStarsShowOverTheArtworkOnly() {
+        startExpanded()
+        assertTrue(exists("rating"))
+        assertEquals("stars a little under the title block", bounds("player.title").bottom + 1f * dp, bounds("rating").top, 1f)
+        compose.mainClock.autoAdvance = false
+        try {
+            for (mode in listOf("queue", "lyrics")) {
+                tap("player.mode.$mode")
+                compose.mainClock.advanceTimeBy(1_500)
+                assertFalse("no stars in $mode", exists("rating"))
+                tap("player.mode.$mode")
+                compose.mainClock.advanceTimeBy(1_500)
+                assertTrue("stars back over the artwork", exists("rating"))
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** The seek bar, the transport and the action row stay put as the mode changes (the stars fold into the area). */
+    @Test
+    fun theControlsStayPutAcrossModes() {
+        startExpanded()
+        val tags = listOf("player.seekBar", "player.playPause", "player.mode.queue")
+        val before = tags.map(::bounds)
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        tags.zip(before).forEach { (tag, b) -> assertEquals("$tag stays put", b.top, bounds(tag).top, 1f) }
+    }
+
+    /**
+     * In lyrics and queue modes the thumbnail is 48 dp with the title and artist (their cap height
+     * to the artist's baseline) centred on it.
+     */
+    @Test
+    fun theThumbnailCentresTheTitleAndArtist() {
         startExpanded()
         val track = core.client.nowPlaying.value!!.track
         tap("player.mode.queue")
@@ -205,25 +242,11 @@ class FullPlayerLayoutTest {
         compose.waitForIdle()
         val thumb = bounds("player.artwork")
         val capTop = baseline(track.title) - titleCapHeight()
-        val stars = bounds("rating")
-        // The star glyphs' bottom: the stars sit at the top of their 48 dp row; the glyph ends
-        // above its 20 dp icon's bottom by its own inset.
-        val starBottom = stars.top + (20f - 20f * 4.05f / 24f) * dp
-        // Right under the artist line, touching but not overlapping the title block (whose taps
-        // open the details).
-        assertEquals("stars a little under the title block", bounds("player.title").bottom + 1f * dp, stars.top, 1f)
-        assertEquals("thumbnail top on the title's cap height", capTop, thumb.top, 2f)
-        assertEquals("thumbnail bottom on the star glyphs' bottom", starBottom, thumb.bottom, 2f)
+        val artistBaseline = baseline(track.artist!!)
+        assertTrue("the pair spans under 48 dp", artistBaseline - capTop < 48f * dp)
+        assertEquals("48 dp", 48f * dp, thumb.height, 1f)
         assertEquals("square", thumb.width, thumb.height, 1f)
-        assertTrue("about 72 dp: ${thumb.height / dp}", thumb.height / dp in 60f..90f)
-        // Without the stars: title to the artist line.
-        core.client.dispatch(Commands.setSetting(SettingKeys.DISPLAY_PLAYER_RATING, "false"))
-        compose.waitUntil(5_000) { !exists("rating") }
-        compose.mainClock.advanceTimeBy(1_500)
-        compose.waitForIdle()
-        val small = bounds("player.artwork")
-        assertEquals("top on the cap height", baseline(track.title) - titleCapHeight(), small.top, 2f)
-        assertEquals("bottom on the artist's baseline", baseline(track.artist!!), small.bottom, 2f)
+        assertEquals("the pair centred on the thumbnail", (capTop + artistBaseline) / 2f, thumb.center.y, 2f)
     }
 
     @Test
@@ -246,7 +269,8 @@ class FullPlayerLayoutTest {
         val page = compose.onNodeWithTag("player.page").fetchSemanticsNode().boundsInRoot
         assertEquals("the page's width", page.width, slot.width, 1f)
         assertEquals("the artwork's top", art.top, slot.top, 2f)
-        assertEquals("the artwork's height", art.height, slot.height, 2f)
+        // The artwork's height, plus the room the folded stars gave it.
+        assertTrue("the artwork's height and the stars' room: ${slot.height} vs ${art.height}", slot.height - art.height in -2f..(44f * dp))
     }
 
     /**

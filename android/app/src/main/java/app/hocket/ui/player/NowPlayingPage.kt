@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -328,7 +329,9 @@ private fun PlayerLayout(
         val tp = slots[2].map { it.measure(loose) }
         val ip = slots.drop(3).map { s -> s.map { it.measure(loose) } }
         val hh = hp.maxOfOrNull { it.height } ?: 0
-        val th = tp.maxOfOrNull { it.height } ?: 0
+        // The title row less what its folding stars have taken off: the area gets that back.
+        val fold = hero.titleFold.roundToInt()
+        val th = (tp.maxOfOrNull { it.height } ?: 0) + fold
         val ih = ip.map { p -> p.maxOfOrNull { it.height } ?: 0 }
         // An empty item (no resume offer) takes no gap either.
         val gaps = ih.mapIndexed { i, h -> if (h > 0) ITEM_GAPS.getOrElse(i) { 0.dp }.roundToPx() else 0 }
@@ -344,13 +347,13 @@ private fun PlayerLayout(
         val spare = (view - hh - areaH - th - rest).coerceAtLeast(0)
         val shares = ih.count { it > 0 } + 1
         val share = spare.toFloat() / shares
-        val ap = slots[1].map { it.measure(Constraints.fixed(w, areaH)) }
+        val ap = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
         var y = hh + areaH + th
         val tops = ih.mapIndexed { i, h -> if (h > 0) { y += gaps[i] + share.roundToInt(); val top = y; y += h; top } else y }
         layout(w, maxOf(y + share.roundToInt(), view)) {
             hp.forEach { it.place(0, 0) }
             ap.forEach { it.place(0, hh) }
-            tp.forEach { it.place(0, hh + areaH) }
+            tp.forEach { it.place(0, hh + areaH + fold) }
             ip.forEachIndexed { i, p -> p.forEach { it.place(0, tops[i]) } }
         }
     }
@@ -402,23 +405,24 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
             when (m) {
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
-                PlayerMode.Queue -> ModeSlot(hero) {
+                PlayerMode.Queue -> ModeSlot {
                     QueueList(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
                 }
-                PlayerMode.Lyrics -> ModeSlot(hero) { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
+                PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
             }
         }
     }
 }
 
 /**
- * Where lyrics and the queue sit: the artwork's slot (its top and bottom; with an immersive
- * artwork, the area under the handle less the usual margin), across the page's full width, straight
+ * Where lyrics and the queue sit: the artwork's slot (its top, down to the title row, which gives it
+ * the room its folded stars took; with an immersive artwork, the area under the handle less the
+ * usual margin), across the page's full width, straight
  * on the player's backdrop with no container. Content is clipped to the slot; the lists fade at its
  * edges.
  */
 @Composable
-private fun ModeSlot(hero: HeroGeometry, content: @Composable () -> Unit) {
+private fun ModeSlot(content: @Composable () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
@@ -426,8 +430,8 @@ private fun ModeSlot(hero: HeroGeometry, content: @Composable () -> Unit) {
                 val w = constraints.maxWidth
                 val h = constraints.maxHeight
                 val pad = ART_PAD.roundToPx()
-                val side = hero.artSide.roundToInt()
-                val sh = if (hero.immersive || side <= 0) h - 2 * pad else minOf(side, h - 2 * pad)
+                // The artwork's height plus whatever the title row's folded stars gave the area.
+                val sh = h - 2 * pad
                 val p = measurable.measure(Constraints.fixed(w, sh.coerceAtLeast(0)))
                 layout(w, h) { p.place(0, pad) }
             }
@@ -530,9 +534,10 @@ private fun SeekStatus() {
  * Title and "artist · album" as one target that opens the song's details ([SongInfoSheet]), the
  * star rating under them (when [showRating]), and add to playlist (a tonal round button). In a
  * non-artwork mode a thumbnail slot opens at the start of the row (its width follows
- * [HeroGeometry.modeFraction] in the layout phase); the one artwork lands in it. The thumbnail spans
- * the text block as one unit: its top on the title's cap height, its bottom on the star glyphs' bottom
- * (without them, on the artist line's baseline), sized from the measured block. While the artwork
+ * [HeroGeometry.modeFraction] in the layout phase); the one artwork lands in it. The thumbnail is
+ * 48 dp with the title and artist centred on it (or, where they span more, from the title's cap
+ * height to the artist's baseline). The stars show in artwork mode only, folding away with the
+ * mode change ([HeroGeometry.titleFold]: the mode area takes the room, so nothing below moves). While the artwork
  * is swiped, the neighbour's title and artist crossfade in with the swipe.
  */
 @Composable
@@ -542,9 +547,12 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
     val previous = if (carousel.restartPeek) track else neighbours.previous?.track
     val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
-    // The thumbnail's side as the last layout worked it out (it follows the text block's metrics,
-    // which change only with the font scale or the rating setting).
+    // The thumbnail's side as the last layout worked it out (it follows the title and artist lines'
+    // metrics, which change only with the font scale).
     var thumbSide by remember { mutableIntStateOf(0) }
+    // The stars show in artwork mode only: they fade and fold away as the artwork flies to the
+    // thumbnail (and stay composed until that has finished).
+    val starsLeft by remember(hero) { derivedStateOf { hero.modeFraction() < 1f } }
     Layout(
         contents = listOf(
             {
@@ -571,7 +579,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                             Column(Modifier.matchParentSize().graphicsLayer { alpha = incomingAlpha(carousel.fraction() * sign) }.clearAndSetSemantics { }) { TrackLines(neighbour, compact = true, tagged = false) }
                         }
                     }
-                    if (showRating) {
+                    if (showRating && (!compact || starsLeft)) {
                         RatingStars(
                             track.rating.toInt(),
                             onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
@@ -583,12 +591,14 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                             // touch area hangs below them past the room it takes in the layout.
                             verticalAlignment = Alignment.Top,
                             modifier = Modifier
+                                .then(if (compact) Modifier.clearAndSetSemantics { } else Modifier)
                                 .layout { m, c ->
                                     val p = m.measure(c)
                                     val gap = STAR_GAP.roundToPx()
-                                    layout(p.width, p.height - STAR_TOUCH_OVERHANG.roundToPx() + gap) { p.place(0, gap) }
+                                    val full = p.height - STAR_TOUCH_OVERHANG.roundToPx() + gap
+                                    layout(p.width, (full * (1f - hero.modeFraction())).roundToInt().coerceAtLeast(0)) { p.place(0, gap) }
                                 }
-                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) },
+                                .graphicsLayer { alpha = outgoingAlpha(carousel.fraction()) * (1f - 2f * hero.modeFraction()).coerceIn(0f, 1f) },
                         )
                     }
                 }
@@ -610,26 +620,24 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val reserve = ((side0 + gap) * hero.modeFraction()).roundToInt()
         val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
         val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
-        // The thumbnail spans the text block: from the title's cap height (not its line box) to the
-        // stars' bottom, or without them the artist line's baseline.
+        // The thumbnail and the title + artist pair: their span (the title's cap height to the
+        // artist's baseline) centred on it, at least [THUMB_MIN]; large fonts on narrow screens cap
+        // it (a share of the row), centred the same way.
         val first = t[FirstBaseline]
         val last = t[LastBaseline]
         val top = if (first == AlignmentLine.Unspecified) 0 else (first - capHeight).roundToInt().coerceAtLeast(0)
-        // The stars sit at the top of their row (48 dp less what hangs below the layout); the
-        // star glyph ends ~17% above its icon's bottom.
-        val starsSlack = (48.dp - STAR_TOUCH_OVERHANG - STAR_SIZE + STAR_SIZE * STAR_GLYPH_BOTTOM_INSET).roundToPx()
-        val bottom = when {
-            showRating -> t.height - starsSlack
-            last != AlignmentLine.Unspecified -> last
-            else -> t.height
-        }
-        // Large fonts on narrow screens: capped (a share of the row), then centred on the block.
+        val bottom = if (last == AlignmentLine.Unspecified) t.height else last
         val span = bottom - top
         val side = span.coerceIn(THUMB_MIN.roundToPx(), minOf(THUMB_MAX.roundToPx(), (w * THUMB_MAX_SHARE).roundToInt()))
         if (side != thumbSide) thumbSide = side
         val thumb = thumbSlot.first().measure(Constraints.fixed(side, side))
         val h = maxOf(t.height, a.height)
         val textY = (h - t.height) / 2
+        // How much the folding stars have taken off the row: the mode area takes it, so nothing
+        // below moves.
+        val starsFull = if (showRating) (48.dp - STAR_TOUCH_OVERHANG + STAR_GAP).roundToPx() else 0
+        val folded = (starsFull * hero.modeFraction()).roundToInt()
+        hero.titleFold = (maxOf(t.height + folded, a.height) - h).toFloat()
         layout(w, h) {
             thumb.place(0, textY + top + (span - side) / 2)
             t.place(reserve, textY)
@@ -649,11 +657,9 @@ private val STAR_TOUCH_OVERHANG = 8.dp
 private val STAR_GAP = 1.dp
 /** How much closer than their line boxes the artist line sits to the title (about 2 dp between the glyphs). */
 private val TITLE_ARTIST_PULL = 7.6.dp
-/** How far above its icon's bottom the star glyph ends (Material Symbols "star": 4 of 24 units). */
-private const val STAR_GLYPH_BOTTOM_INSET = 4.05f / 24f
 /** The gap between the thumbnail and the text, and the thumbnail's bounds (it follows the text block). */
 private val THUMB_GAP = 14.dp
-private val THUMB_MIN = 32.dp
+private val THUMB_MIN = 48.dp
 private val THUMB_MAX = 96.dp
 /** The thumbnail's largest share of the row's width (keeps room for the text at large font sizes). */
 private const val THUMB_MAX_SHARE = 0.22f
