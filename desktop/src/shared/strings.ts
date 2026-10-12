@@ -155,6 +155,7 @@ const STRINGS = {
   "lyrics.noneHint": "Turn on external lyrics in Settings to search other sources.",
   "lyrics.nothingPlaying": "Lyrics appear here while something plays.",
   "lyrics.options": "Lyrics options",
+  "lyrics.optionsHint": "Right-click for lyrics options",
   "lyrics.offset": "Offset",
   "lyrics.offsetReset": "Reset",
   "lyrics.size": "Lyrics size",

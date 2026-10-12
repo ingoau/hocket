@@ -183,7 +183,7 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "queue");
   });
 
-  test("lyrics options live in a popover from the lyrics view's header and the fullscreen pill", async ({ hocket }) => {
+  test("lyrics options live in a popover from the lyrics view's header, and from a right-click on the lyrics toggles", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await page.evaluate(async () => {
@@ -213,19 +213,56 @@ test.describe("now playing", () => {
     await page.keyboard.press("Escape");
     await expect(options).toHaveCount(0);
     await expect(button).toBeFocused();
-    // Fullscreen: the pill offers it while the lyrics show, and only then.
+    // The bar's lyrics toggle: a right-click opens the options above it (a click still toggles the
+    // lyrics), and so do Shift+F10 and the context-menu key; it says so.
+    const toggle = page.getByTestId("toggle-lyrics");
+    await expect(toggle).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(toggle).toHaveAccessibleDescription("Right-click for lyrics options");
+    await toggle.click({ button: "right" });
+    await expect(options).toBeVisible();
+    await expect(panel).toHaveAttribute("data-view", "lyrics");
+    const [barPop, barToggle] = await Promise.all([options.boundingBox(), toggle.boundingBox()]);
+    expect(barPop!.y + barPop!.height).toBeLessThanOrEqual(barToggle!.y);
+    await page.keyboard.press("Escape");
+    await expect(options).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("Shift+F10");
+    await expect(options).toBeVisible();
+    await expect(page.getByTestId("lyrics-offset-earlier")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("ContextMenu");
+    await expect(options).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Fullscreen: nothing is added to the pill for the lyrics, so its buttons stay put between views.
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");
     await expect(fs).toHaveAttribute("data-mode", "queue");
     await expect(fs.getByTestId("fs-pill").getByTestId("lyrics-options")).toHaveCount(0);
+    const positions = () => fs.getByTestId("fs-pill").locator("button").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return `${el.getAttribute("data-testid")}@${Math.round(r.x)},${Math.round(r.y)}`; }));
+    const before = await positions();
     await fs.getByTestId("fs-mode-lyrics").click();
-    const fsButton = fs.getByTestId("fs-pill").getByTestId("lyrics-options");
-    await fsButton.click();
+    await expect(fs).toHaveAttribute("data-mode", "lyrics");
+    await page.waitForTimeout(400);
+    expect(await positions()).toEqual(before);
+    await expect(fs.getByTestId("fs-pill").getByTestId("lyrics-options")).toHaveCount(0);
+    // A right-click on the pill's lyrics toggle opens the options, rising above the pill.
+    const fsToggle = fs.getByTestId("fs-mode-lyrics");
+    await fsToggle.click({ button: "right" });
+    await expect(fs).toHaveAttribute("data-mode", "lyrics");
     await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
-    // It rises above the pill.
     const [pop, pill] = await Promise.all([fs.getByTestId("lyrics-tools").boundingBox(), fs.getByTestId("fs-pill").boundingBox()]);
     expect(pop!.y + pop!.height).toBeLessThanOrEqual(pill!.y);
     // Escape closes the options, not the player.
+    await page.keyboard.press("Escape");
+    await expect(fs.getByTestId("lyrics-tools")).toHaveCount(0);
+    await expect(fs).toBeVisible();
+    await expect(fsToggle).toBeFocused();
+    // Shift+F10 on the focused toggle too, with the lyrics view closed.
+    await fs.getByTestId("fs-mode-queue").click();
+    await fsToggle.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(fs.getByTestId("lyrics-tools")).toHaveCount(0);
     await expect(fs).toBeVisible();

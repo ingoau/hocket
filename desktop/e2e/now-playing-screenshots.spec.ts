@@ -140,6 +140,15 @@ test("now playing surfaces", async () => {
       await expect(page.getByTestId("lyrics-tools")).toBeVisible();
       await shot("sidebar-lyrics-options");
       await page.keyboard.press("Escape");
+      if (wanted("bar-lyrics-options")) {
+        // The bar's lyrics toggle, right-clicked: the same options, above it.
+        await expect(page.getByTestId("lyrics-tools")).toHaveCount(0);
+        await page.getByTestId("toggle-lyrics").click({ button: "right" });
+        await expect(page.getByTestId("lyrics-tools")).toBeVisible();
+        await shot("bar-lyrics-options");
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("lyrics-tools")).toHaveCount(0);
+      }
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("sidebar-queue");
@@ -185,7 +194,7 @@ test("now playing surfaces", async () => {
         await shot(`fs-card-${mode}`);
       }
       await fsMode(page, "lyrics");
-      await page.getByTestId("fullscreen-player").getByTestId("lyrics-options").click();
+      await page.getByTestId("fullscreen-player").getByTestId("fs-mode-lyrics").click({ button: "right" });
       await shot("fs-card-lyrics-options");
       await page.keyboard.press("Escape");
       await fsMode(page, "queue");

@@ -22,6 +22,7 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { isOfflineNotice, noticeText } from "../lib/notice";
 import { ArtistChooser } from "./ArtistChooser";
+import { useLyricsOptionsTrigger } from "./LyricsOptions";
 import { Stars } from "./Stars";
 import { Slider } from "./controls";
 import { WavySeek } from "./WavySeek";
@@ -47,6 +48,8 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const track = now?.track;
   const playing = transport.position.isPlaying;
   const lyricsOn = sideOpen && panels.rightView === "lyrics";
+  // A right-click (or the context-menu key, Shift+F10) on the lyrics toggle opens the lyrics options.
+  const lyricsOptions = useLyricsOptionsTrigger("above");
   const queueOn = sideOpen && (panels.rightView === "queue" || panels.rightView === "recent");
 
   return (
@@ -93,7 +96,8 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         {batterySaver ? <span className="badge"><Icon name="battery" size={11} title={t("player.batterySaver")} /></span> : null}
         <Volume />
         <button type="button" className={`btn icon toggle ${sideOpen ? "on" : ""}`} aria-label={sideOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} aria-expanded={sideOpen} aria-controls="side-panel" title={sideOpen ? t("a11y.hideSidePanel") : t("a11y.showSidePanel")} onClick={() => toggleSidePanel()} data-testid="toggle-side-panel"><Icon name="sidePanel" size={20} /></button>
-        <button type="button" className={`btn icon toggle ${lyricsOn ? "on" : ""}`} aria-pressed={lyricsOn} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} data-testid="toggle-lyrics"><Icon name="lyrics" size={20} filled={lyricsOn} /></button>
+        <button type="button" className={`btn icon toggle ${lyricsOn ? "on" : ""}`} aria-pressed={lyricsOn} aria-label={t("player.lyrics")} title={`${t("player.lyrics")} (L)`} onClick={() => void executeAction("ui.lyrics")} {...lyricsOptions.trigger} data-testid="toggle-lyrics"><Icon name="lyrics" size={20} filled={lyricsOn} /></button>
+        {lyricsOptions.extra}
         <button type="button" className={`btn icon toggle ${queueOn ? "on" : ""}`} aria-pressed={queueOn} aria-label={t("player.queue")} title={`${t("player.queue")} (Q)`} onClick={() => void executeAction("ui.queue")} data-testid="toggle-queue"><Icon name="queue" size={20} filled={queueOn} /></button>
         <ConnectPill testId="connect-button" />
         <button type="button" className="btn icon" aria-label={t("player.miniPlayer")} title={`${t("player.miniPlayer")} (M)`} onClick={() => bridge().window.openMiniPlayer()} data-testid="toggle-mini"><Icon name="mini" size={20} /></button>

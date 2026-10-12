@@ -148,7 +148,7 @@ test.describe("axe: no violations anywhere", () => {
         await page.waitForTimeout(700);
         await expectNoViolations(page, `${theme} fullscreen/${mode}`);
         if (mode === "lyrics") {
-          await fs.getByTestId("lyrics-options").click();
+          await fs.getByTestId("fs-mode-lyrics").click({ button: "right" });
           await expect(fs.getByTestId("lyrics-tools")).toBeVisible();
           await expectNoViolations(page, `${theme} fullscreen/lyrics options`);
           await page.keyboard.press("Escape");
