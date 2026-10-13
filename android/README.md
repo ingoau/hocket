@@ -119,12 +119,16 @@ the one core for the process through `CoreHost`:
   library changes (debounced 2 s). Browsers asking for the "recent" root get the session to resume
   (one playable `resume` item); the "suggested" root offers Shuffle loved songs and the albums played
   most recently (`shuffle/<server>/<kind>` ids play `QuickPlay` filter contexts).
-- Playback resumption: Media3's `MediaButtonReceiver` is declared, guarded by a signature permission
+- Playback resumption: Media3's `MediaButtonReceiver` is declared (`HocketMediaButtonReceiver`, which
+  does not start the service when the last session had no track), guarded by a signature permission
   (`<applicationId>.permission.MEDIA_BUTTON`: the system's sends and the session's own PendingIntent
   pass, other apps cannot send to it). That makes Media3 serve System UI's recent root and start a
   stopped service for a play key; `onPlaybackResumption` answers with the core's persisted session as
   the `resume` item (cover as bytes, for the boot-time card), which plays as `MediaSessionAction.Play`.
-  It is still explicit: the system only asks after the user pressed play.
+  It is still explicit: the system only asks after the user pressed play. A service started by a
+  media key holds the foreground with a silent deferred notification (`ForegroundHold`) until
+  Media3's playback notification takes over, or lets go after 15 s when nothing plays, so a resume
+  that does not play cannot trip the `startForegroundService` timeout.
 - Ratings: `onSetRating` (Media3, and the legacy session's heart, since items carry a `HeartRating`)
   loves/unloves (heart, thumbs) or rates (stars, percentage, as stars of five) the current track or
   any library/queue id.

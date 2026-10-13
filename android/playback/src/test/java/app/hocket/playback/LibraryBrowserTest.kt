@@ -11,6 +11,8 @@ import app.hocket.core.QuickPlay
 import app.hocket.core.api.Command
 import app.hocket.core.api.ContextKind
 import app.hocket.core.api.MediaSessionAction
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -175,6 +177,19 @@ class LibraryBrowserTest {
         // Playing it resumes the session rather than starting anything new.
         assertTrue(browser.playNow(listOf(LibraryBrowser.RESUME), 0))
         assertEquals(Commands.mediaSessionCommand(MediaSessionAction.Play), sent.single())
+    }
+
+    @Test
+    fun nothingLoadedMeansNothingToResume() = runBlocking {
+        val empty = object : CoreHandle by fake {
+            override suspend fun query(query: Query): QueryResult {
+                val result = fake.query(query)
+                return if (result is QueryResult.SnapshotResult) QueryResult.SnapshotResult(result.data.copy(mediaSession = result.data.mediaSession.copy(metadata = null))) else result
+            }
+        }
+        val browser = LibraryBrowser(app, { empty }, { server }, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        assertNull(browser.resumeItem())
+        assertEquals(emptyList<Any>(), browser.children(MediaId.RECENT, 0, 10))
     }
 
     @Test

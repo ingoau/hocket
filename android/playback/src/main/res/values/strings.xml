@@ -13,6 +13,8 @@
     <string name="quickplay_shuffle_loved">Shuffle loved songs</string>
     <string name="quickplay_shuffle_all">Shuffle all songs</string>
     <string name="quickplay_shuffle_offline">Shuffle offline songs</string>
+    <!-- The silent notification held while a media key starts playback (rarely shown). -->
+    <string name="foreground_hold_channel">Starting playback</string>
     <!-- The Pebble watchapp: its update notification. -->
     <string name="pebble_channel">Pebble watch</string>
     <string name="pebble_update_title">Update the Hocket watchapp</string>

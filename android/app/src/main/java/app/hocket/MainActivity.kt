@@ -43,8 +43,15 @@ class MainActivity : ComponentActivity() {
         handleShortcut(intent)
     }
 
+    /**
+     * Runs the launcher shortcut [intent] stands for, once: a task started by a shortcut keeps it as
+     * its base intent, which Android hands back when the task is relaunched from Recents (after a
+     * reboot, or once Back finished the activity), so a relaunch from history never runs it, and a
+     * handled one is cleared.
+     */
     private fun handleShortcut(intent: Intent?) {
         val shortcut = AppShortcuts.parse(this, intent) ?: return
+        setIntent(Intent(intent).setAction(Intent.ACTION_MAIN).replaceExtras(null as android.os.Bundle?))
         (application as HocketApp).runShortcut(shortcut)
     }
 }

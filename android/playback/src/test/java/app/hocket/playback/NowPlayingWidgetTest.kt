@@ -14,6 +14,7 @@ import app.hocket.core.api.RepeatMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -58,10 +59,44 @@ class NowPlayingWidgetTest {
     @Test
     fun buttonsMapToSessionCommands() {
         val playing = WidgetState(title = "x", playing = true)
-        assertEquals(MediaSessionAction.Pause, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PLAY_PAUSE, playing))
-        assertEquals(MediaSessionAction.Play, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PLAY_PAUSE, playing.copy(playing = false)))
-        assertEquals(MediaSessionAction.Next, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_NEXT, playing))
-        assertEquals(MediaSessionAction.Previous, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PREVIOUS, playing))
-        assertNull(WidgetActionReceiver.command("something.else", playing))
+        assertEquals(MediaSessionAction.Pause, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PLAY_PAUSE, playing, running = true))
+        assertEquals(MediaSessionAction.Play, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PLAY_PAUSE, playing.copy(playing = false), running = true))
+        assertEquals(MediaSessionAction.Next, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_NEXT, playing, running = true))
+        assertEquals(MediaSessionAction.Previous, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PREVIOUS, playing, running = true))
+        assertNull(WidgetActionReceiver.command("something.else", playing, running = true))
+        // Saved as playing, but the process died without onDestroy (a reboot): play, not pause.
+        assertEquals(MediaSessionAction.Play, WidgetActionReceiver.command(WidgetActionReceiver.ACTION_PLAY_PAUSE, playing, running = false))
+    }
+
+    @Test
+    fun aStoppedServiceIsDrawnAsNotPlaying() {
+        val stored = WidgetState("Blue Train", null, null, true, "MacBook")
+        assertEquals(stored, NowPlayingWidget.shown(stored, running = true))
+        assertEquals(stored.copy(playing = false, remoteDevice = null), NowPlayingWidget.shown(stored, running = false))
+    }
+
+    @Test
+    fun theMediaKeyReceiverOnlyStartsTheServiceWithSomethingToResume() {
+        val receiver = HocketMediaButtonReceiver()
+        val start = android.content.Intent(android.content.Intent.ACTION_MEDIA_BUTTON)
+        WidgetState().save(app)
+        assertFalse(receiver.shouldStartForegroundServiceForTest(start))
+        WidgetState(title = "Blue Train").save(app)
+        assertTrue(receiver.shouldStartForegroundServiceForTest(start))
+    }
+
+    private fun HocketMediaButtonReceiver.shouldStartForegroundServiceForTest(intent: android.content.Intent): Boolean {
+        val method = HocketMediaButtonReceiver::class.java.getDeclaredMethod("shouldStartForegroundService", android.content.Context::class.java, android.content.Intent::class.java)
+        method.isAccessible = true
+        return method.invoke(this, app, intent) as Boolean
+    }
+
+    @Test
+    fun coversAreScaledToTheWidgetSize() {
+        val file = java.io.File(app.cacheDir, "cover.png")
+        file.outputStream().use { android.graphics.Bitmap.createBitmap(1000, 600, android.graphics.Bitmap.Config.ARGB_8888).compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        val art = NowPlayingWidget.decode(file.path)!!
+        assertTrue("longer side ${art.width} at most 256", art.width <= 256 && art.height <= 256)
+        assertNull(NowPlayingWidget.decode(java.io.File(app.cacheDir, "gone.png").path))
     }
 }

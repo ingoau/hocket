@@ -22,7 +22,8 @@ import java.io.File
 /**
  * What the home-screen widget shows: the session's track and, while another Connect device plays it,
  * that device. Kept in SharedPreferences (excluded from backups) so a widget placed or redrawn while
- * the service is stopped shows the last state instead of a blank.
+ * the service is stopped shows the last state instead of a blank; it is also how a stopped service's
+ * media key path knows whether there is anything to resume ([HocketMediaButtonReceiver]).
  */
 data class WidgetState(
     val title: String? = null,
@@ -79,8 +80,15 @@ class NowPlayingWidget : AppWidgetProvider() {
             val manager = AppWidgetManager.getInstance(context) ?: return
             val ids = manager.getAppWidgetIds(ComponentName(context, NowPlayingWidget::class.java))
             if (ids.isEmpty()) return
-            runCatching { manager.updateAppWidget(ids, views(context, state)) }.onFailure { Log.w(TAG, "widget update failed: ${it.message}") }
+            runCatching { manager.updateAppWidget(ids, views(context, shown(state))) }.onFailure { Log.w(TAG, "widget update failed: ${it.message}") }
         }
+
+        /**
+         * What to draw from [stored] given whether the service runs: a stopped service plays
+         * nothing, whatever was saved (the process can die without `onDestroy`: a reboot, an update,
+         * the low-memory killer).
+         */
+        fun shown(stored: WidgetState, running: Boolean = CoreHost.current != null): WidgetState = if (running) stored else stored.copy(playing = false, remoteDevice = null)
 
         fun views(context: Context, state: WidgetState): RemoteViews = RemoteViews(context.packageName, R.layout.widget_now_playing).apply {
             setTextViewText(R.id.widget_title, state.title ?: context.getString(R.string.widget_nothing_playing))
@@ -97,30 +105,36 @@ class NowPlayingWidget : AppWidgetProvider() {
             if (art != null) setImageViewBitmap(R.id.widget_art, art) else setImageViewResource(R.id.widget_art, R.drawable.widget_art_placeholder)
             setImageViewResource(R.id.widget_play, if (state.playing) R.drawable.widget_pause else R.drawable.widget_play)
             setContentDescription(R.id.widget_play, context.getString(if (state.playing) R.string.widget_pause else R.string.widget_play))
-            setOnClickPendingIntent(R.id.widget_play, WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PLAY_PAUSE))
             setOnClickPendingIntent(R.id.widget_next, WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_NEXT))
             setOnClickPendingIntent(R.id.widget_previous, WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PREVIOUS))
             val buttons = if (state.hasTrack) View.VISIBLE else View.GONE
             setViewVisibility(R.id.widget_next, buttons)
             setViewVisibility(R.id.widget_previous, buttons)
-            context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
-                setOnClickPendingIntent(R.id.widget_root, PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            val open = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+                PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             }
+            open?.let { setOnClickPendingIntent(R.id.widget_root, it) }
+            // Nothing loaded: play has nothing to resume, so it opens the app instead.
+            val play = if (state.hasTrack) WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PLAY_PAUSE) else open
+            play?.let { setOnClickPendingIntent(R.id.widget_play, it) }
         }
 
-        /** The cached cover at [path], sampled down to about [ART_PX]; null when it is gone. */
-        private fun decode(path: String): Bitmap? = runCatching {
+        /** The cached cover at [path], at most [ART_PX] on its longer side; null when it is gone. */
+        internal fun decode(path: String): Bitmap? = runCatching {
             val file = File(path.removePrefix("file://")).takeIf { it.isFile } ?: return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.path, bounds)
             var sample = 1
             while (bounds.outWidth / (sample * 2) >= ART_PX && bounds.outHeight / (sample * 2) >= ART_PX) sample *= 2
-            BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            val sampled = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+            val longer = maxOf(sampled.width, sampled.height)
+            if (longer <= ART_PX) sampled
+            else Bitmap.createScaledBitmap(sampled, sampled.width * ART_PX / longer, sampled.height * ART_PX / longer, true).also { if (it !== sampled) sampled.recycle() }
         }.getOrNull()
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        appWidgetManager.updateAppWidget(appWidgetIds, views(context, last ?: WidgetState.load(context)))
+        appWidgetManager.updateAppWidget(appWidgetIds, views(context, shown(last ?: WidgetState.load(context))))
     }
 }
 
@@ -141,9 +155,12 @@ class WidgetActionReceiver : BroadcastReceiver() {
         fun intent(context: Context, action: String): PendingIntent =
             PendingIntent.getBroadcast(context, action.hashCode(), Intent(context, WidgetActionReceiver::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-        /** The session command for [action] given the widget's [state]; null when there is none. */
-        fun command(action: String?, state: WidgetState): MediaSessionAction? = when (action) {
-            ACTION_PLAY_PAUSE -> if (state.playing) MediaSessionAction.Pause else MediaSessionAction.Play
+        /**
+         * The session command for [action] given the widget's [state] and whether the service is
+         * [running]; null when there is none. A stopped service plays nothing, whatever was saved.
+         */
+        fun command(action: String?, state: WidgetState, running: Boolean): MediaSessionAction? = when (action) {
+            ACTION_PLAY_PAUSE -> if (running && state.playing) MediaSessionAction.Pause else MediaSessionAction.Play
             ACTION_NEXT -> MediaSessionAction.Next
             ACTION_PREVIOUS -> MediaSessionAction.Previous
             else -> null
@@ -151,13 +168,16 @@ class WidgetActionReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        val action = command(intent.action, WidgetState.load(context)) ?: return
+        val state = WidgetState.load(context)
         val core = CoreHost.current
+        val action = command(intent.action, state, running = core != null) ?: return
         if (core != null) {
             core.dispatch(Commands.mediaSessionCommand(action))
             return
         }
-        if (action != MediaSessionAction.Play) return
+        // Stopped: only a play with something to resume starts the service (it then holds the
+        // foreground until playback does: ForegroundHold).
+        if (action != MediaSessionAction.Play || !state.hasTrack) return
         val start = Intent(Intent.ACTION_MEDIA_BUTTON)
             .setClass(context, PlaybackService::class.java)
             .putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY))

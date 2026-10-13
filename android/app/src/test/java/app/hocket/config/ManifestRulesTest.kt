@@ -65,12 +65,12 @@ class ManifestRulesTest {
     fun theOnlyReceiversAreTheGuardedMediaButtonOneAndTheWidgets() {
         val receivers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml").flatMap { elements(it, "receiver") }
         assertEquals(
-            setOf("androidx.media3.session.MediaButtonReceiver", "app.hocket.playback.NowPlayingWidget", "app.hocket.playback.WidgetActionReceiver"),
+            setOf("app.hocket.playback.HocketMediaButtonReceiver", "app.hocket.playback.NowPlayingWidget", "app.hocket.playback.WidgetActionReceiver"),
             receivers.map { it.getAttribute("android:name") }.toSet(),
         )
         // Never the legacy androidx.media receiver: exported unguarded, it let any app start playback.
-        // Media3's is exported for the system but only this app (signature) may send to it.
-        val mediaButton = receivers.single { it.getAttribute("android:name") == "androidx.media3.session.MediaButtonReceiver" }
+        // Media3's (subclassed) is exported for the system but only this app (signature) may send to it.
+        val mediaButton = receivers.single { it.getAttribute("android:name") == "app.hocket.playback.HocketMediaButtonReceiver" }
         val permission = "\${applicationId}.permission.MEDIA_BUTTON"
         assertEquals(permission, mediaButton.getAttribute("android:permission"))
         val declared = elements("android/playback/src/main/AndroidManifest.xml", "permission").single { it.getAttribute("android:name") == permission }

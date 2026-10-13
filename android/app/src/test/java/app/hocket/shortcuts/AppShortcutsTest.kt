@@ -43,6 +43,7 @@ class AppShortcutsTest {
         assertNull(AppShortcuts.parse(app, forged))
         assertNull(AppShortcuts.parse(app, Intent(forged).putExtra(AppShortcuts.EXTRA_TOKEN, "guess")))
         assertNull(AppShortcuts.parse(app, Intent(Intent.ACTION_MAIN)))
+        assertNull("a relaunch from Recents does not play it again", AppShortcuts.parse(app, Intent(ours).addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)))
     }
 
     @Test

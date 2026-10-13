@@ -22,16 +22,24 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * The activity has to be exported, so any app can send this intent, and the sender cannot be told
  * apart. Playing straight away therefore follows "Allow control by other apps" ([ExternalControl]):
- * with it off (the default), or when nothing matches, the app opens on search with the query typed
- * in, and the user decides.
+ * with it off (the default), when nothing matches, or when the core is not ready soon enough (signed
+ * out, a slow start), the app opens on search with the query typed in, and the user decides.
+ *
+ * Its window is transparent and lets touches through (it is never in the way while it waits), and
+ * it stays until playback has started, briefly: Media3 then promotes the service to the foreground
+ * while the app is still in front, which a background app may not do.
  */
 class MediaSearchActivity : ComponentActivity() {
     companion object {
-        private const val WAIT_MS = 20_000L
+        /** For the core and its server (a cold start). */
+        private const val READY_MS = 5_000L
+        /** For the played item to start, before finishing anyway. */
+        private const val PLAYING_MS = 5_000L
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
         if (savedInstanceState != null) { finish(); return }
         if (intent?.action != MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) { finish(); return }
         val query = intent.getStringExtra(SearchManager.QUERY).orEmpty()
@@ -39,14 +47,16 @@ class MediaSearchActivity : ComponentActivity() {
         val app = application as HocketApp
         val extras = intent.extras
         lifecycleScope.launch {
-            val played = withTimeoutOrNull(WAIT_MS) {
-                val client = app.client.filterNotNull().first()
-                val server = client.servers.first { it.isNotEmpty() }.first().id
-                val browser = LibraryBrowser(this@MediaSearchActivity, { client.core }, { server }, app.scope)
-                val item = browser.resolveSearch(query, extras)
-                item != null && browser.playNow(listOf(item.mediaId), 0)
-            } == true
-            if (played) finish() else openSearch(query)
+            val client = withTimeoutOrNull(READY_MS) {
+                app.client.filterNotNull().first().also { c -> c.servers.first { it.isNotEmpty() } }
+            }
+            val server = client?.servers?.value?.firstOrNull()?.id
+            if (client == null || server == null) { openSearch(query); return@launch }
+            val browser = LibraryBrowser(this@MediaSearchActivity, { client.core }, { server }, app.scope)
+            val item = browser.resolveSearch(query, extras)
+            if (item == null || !browser.playNow(listOf(item.mediaId), 0)) { openSearch(query); return@launch }
+            withTimeoutOrNull(PLAYING_MS) { client.mediaSession.first { it.isPlaying } }
+            finish()
         }
     }
 

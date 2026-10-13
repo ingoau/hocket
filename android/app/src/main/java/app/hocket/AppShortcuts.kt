@@ -73,9 +73,14 @@ object AppShortcuts {
         .putExtra(EXTRA_TOKEN, token(context))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
-    /** The shortcut [intent] stands for, when it is one of ours (token checked); null otherwise. */
+    /**
+     * The shortcut [intent] stands for, when it is one of ours (token checked) and fresh; null
+     * otherwise. A relaunch from Recents hands back a shortcut-started task's base intent, which
+     * must not play again.
+     */
     fun parse(context: Context, intent: Intent?): AppShortcut? {
         if (intent?.action != ACTION) return null
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return null
         if (!java.security.MessageDigest.isEqual(token.toByteArray(), token(context).toByteArray())) return null
         val id = intent.getStringExtra(EXTRA_ID)

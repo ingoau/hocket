@@ -261,7 +261,9 @@ class LibraryBrowser(
         val session = (query(app.hocket.core.api.Query.Snapshot) as? QueryResult.SnapshotResult)?.data?.mediaSession ?: return null
         val meta = session.metadata ?: return null
         val artwork = meta.artworkPath?.let { path ->
-            runCatching { java.io.File(path.removePrefix("file://")).takeIf { it.isFile && it.length() in 1..ARTWORK_DATA_MAX_BYTES }?.readBytes() }.getOrNull()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { java.io.File(path.removePrefix("file://")).takeIf { it.isFile && it.length() in 1..ARTWORK_DATA_MAX_BYTES }?.readBytes() }.getOrNull()
+            }
         }
         return MediaItem.Builder().setMediaId(RESUME).setMediaMetadata(
             MediaMetadata.Builder()

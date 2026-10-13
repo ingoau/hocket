@@ -46,6 +46,8 @@ import kotlinx.coroutines.launch
  *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself; a player that is still buffering
  *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says.
+ * - Started by a media key (playback resumption from a stopped service), holds the foreground until
+ *   Media3's playback notification takes over or it is clear nothing will play ([ForegroundHold]).
  * - Keeps the home-screen [NowPlayingWidget] in step with the session and the playing Connect device.
  * - Owns the [PebbleBridge] (the Pebble watchapp's phone side), fed the same events; the watch's
  *   messages reach it through [app.hocket.playback.pebble.PebbleListenerService], which binds here.
@@ -94,6 +96,7 @@ class PlaybackService : MediaLibraryService() {
     private var routeDiscovery: Any? = null
     private var serverId: String? = null
     private var libraryNotify: Job? = null
+    private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
 
     override fun onCreate() {
         super.onCreate()
@@ -194,6 +197,12 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val result = super.onStartCommand(intent, flags, startId)
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON) foregroundHold.hold()
+        return result
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = bridge.session
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -233,6 +242,7 @@ class PlaybackService : MediaLibraryService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) (routeDiscovery as? ConnectRouteDiscovery)?.stop()
         ConnectRoutes.clear()
         backend.release()
+        foregroundHold.release()
         bridge.release()
         pebble.release()
         scope.cancel()
