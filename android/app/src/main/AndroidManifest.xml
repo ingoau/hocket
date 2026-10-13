@@ -4,6 +4,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" xmlns:tools="http://schemas.android.com/tools" />
 
+    <!-- Package visibility (API 30+): whether the device has an equalizer panel to link to
+         (Settings > Audio, AudioEffectSession.controlPanelIntent). -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+        </intent>
+    </queries>
+
     <application
         android:name="app.hocket.HocketApp"
         android:allowBackup="true"
@@ -36,6 +44,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A music app, for the system's "open the music app" (a car's media button, the default
+                 music app setting). -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.APP_MUSIC" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
         <!-- Assistant's discovery intent ("play … on Hocket"): no UI, finishes once it has played or

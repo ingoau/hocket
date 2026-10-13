@@ -130,11 +130,14 @@ the one core for the process through `CoreHost`:
   any library/queue id.
 - Equalizers: `ExoBackend` broadcasts `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION` for the main
   player's audio session when it first plays and `ACTION_CLOSE_…` on release (`AudioEffectSession`).
+  Settings > Audio links to the device's equalizer panel for that session when one exists.
 - Home-screen widget (`NowPlayingWidget`): cover, title, artist, the Connect device playing it, and
   previous / play-pause / next. `PlaybackService` pushes changes; the last state is kept in
   `hocket-widget` (excluded from backups) for redraws while the service is stopped. Buttons go to the
   non-exported `WidgetActionReceiver`: a session command to the running core, or a play key that
-  starts the service (resumption) when it is stopped.
+  starts the service (resumption) when it is stopped. Settings > Playback can pin it where the
+  launcher supports that.
+- `MainActivity` also declares `CATEGORY_APP_MUSIC`, so the system can open Hocket as the music app.
 - "Allow control by other apps" (`media.externalControl`, device-local, off by default; Settings >
   Playback) gates all of the above: while off, `onConnect` accepts only the system's own controls
   (`ExternalControl`: this app, Media3's notification controller, and uids holding the privileged

@@ -13,6 +13,24 @@ import androidx.media3.common.C
  * released). Main thread.
  */
 class AudioEffectSession(private val context: Context) {
+    companion object {
+        /** The session announced last in this process (for the settings' equalizer link); 0 (the output mix) when none. */
+        @Volatile
+        var current: Int = 0
+            private set
+
+        /**
+         * The system's (or an installed app's) equalizer panel for the playing session, or for the
+         * output mix when nothing has played yet. Null when nothing on the device offers one.
+         */
+        fun controlPanelIntent(context: Context): Intent? =
+            Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, current)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+                .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+                .takeIf { it.resolveActivity(context.packageManager) != null }
+    }
+
     /** The session id announced as open, or [C.AUDIO_SESSION_ID_UNSET]. */
     var openSessionId: Int = C.AUDIO_SESSION_ID_UNSET
         private set
@@ -23,6 +41,7 @@ class AudioEffectSession(private val context: Context) {
         close()
         broadcast(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION, sessionId)
         openSessionId = sessionId
+        current = sessionId
     }
 
     /** The player's session id changed: an announced one moves to [sessionId]. */
@@ -34,6 +53,7 @@ class AudioEffectSession(private val context: Context) {
         if (openSessionId == C.AUDIO_SESSION_ID_UNSET) return
         broadcast(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION, openSessionId)
         openSessionId = C.AUDIO_SESSION_ID_UNSET
+        current = 0
     }
 
     private fun broadcast(action: String, sessionId: Int) {

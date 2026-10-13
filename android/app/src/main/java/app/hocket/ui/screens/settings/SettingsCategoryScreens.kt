@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
  */
 
 @Composable
-private fun Chevron() = Icon(HocketIcons.Filled.ChevronRight, null)
+internal fun Chevron() = Icon(HocketIcons.Filled.ChevronRight, null)
 
 /** Account & server: the settings-sync master switch, the server, sync now / full sync, sign out. */
 @Composable
@@ -215,22 +215,31 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
         SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
             subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
-        LauncherShortcutsSection()
+        HomeScreenSection()
     }
 }
 
 /**
- * Which launcher shortcuts the app icon's long-press menu offers ([AppShortcuts]), at most
+ * The home screen: pinning the now-playing widget, and which launcher shortcuts the app icon's long-press menu offers ([AppShortcuts]), at most
  * [AppShortcuts.MAX]; a device-local app preference. Hidden without the app's preferences
  * (previews, tests on a bare Application).
  */
 @Composable
-private fun LauncherShortcutsSection() {
+private fun HomeScreenSection() {
     val hocket = androidx.compose.ui.platform.LocalContext.current.applicationContext as? HocketApp ?: return
     val chosen by hocket.prefs.shortcuts.collectAsStateWithLifecycle(initialValue = null)
     val current = chosen ?: return
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val full = current.size >= AppShortcuts.MAX
+    // Pinning the widget straight from here, where the launcher supports it (API 26+ launchers may not).
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val widgets = androidx.compose.runtime.remember { android.appwidget.AppWidgetManager.getInstance(context) }
+    if (widgets?.isRequestPinAppWidgetSupported == true) {
+        SettingsSection(stringResource(R.string.settings_home_screen))
+        SettingRow(stringResource(R.string.settings_widget_add), stringResource(R.string.settings_widget_add_body), onClick = {
+            runCatching { widgets.requestPinAppWidget(android.content.ComponentName(context, app.hocket.playback.NowPlayingWidget::class.java), null, null) }
+        }, tag = "widget.add")
+    }
     SettingsSection(stringResource(R.string.settings_shortcuts))
     Text(stringResource(R.string.settings_shortcuts_summary, AppShortcuts.MAX), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
     AppShortcut.entries.forEach { shortcut ->
