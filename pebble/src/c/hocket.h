@@ -7,12 +7,6 @@
 #define HOCKET_WATCH_VERSION "dev"
 #endif
 
-// Colours from Hocket's logo (purple #8F80F5, pale #E4DFFF, dark #221D3A), as the nearest Pebble
-// colours that still read with white text. Colour watches only; black-and-white ones stay as they were.
-#define HOCKET_ACCENT GColorLavenderIndigo      // highlights, progress
-#define HOCKET_ACCENT_PALE GColorBabyBlueEyes   // a pale tint
-#define HOCKET_DARK GColorOxfordBlue            // dark backgrounds
-
 // Bumped on any incompatible change to the messages below. The phone checks it on Hello.
 #define HOCKET_PROTO 1
 
