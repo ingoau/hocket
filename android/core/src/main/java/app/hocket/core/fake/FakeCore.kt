@@ -271,8 +271,11 @@ class FakeCore(
                 autoplayTail().forEach { upcoming += it }
             }
         }
+        // Like the core: with Repeat All and nothing left, the first item in play order comes next.
+        val wrapNext = order.firstOrNull()?.takeIf { context != null && repeat == RepeatMode.All && insertions.isEmpty() && upcoming.isEmpty() }
+            ?.let { idx -> entry(QueueItem("ctx-wrap-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false)) }
         return QueueView(context?.label, history.mapNotNull(::entry), current?.let(::entry), insertions.mapNotNull(::entry), upcoming,
-            shuffle != null, repeat, autoplay, mode, (order.size - cursor - 1).coerceAtLeast(0).toUInt())
+            shuffle != null, repeat, autoplay, mode, (order.size - cursor - 1).coerceAtLeast(0).toUInt(), wrapNext)
     }
 
     private var autoplayCache: List<QueueEntry>? = null
@@ -564,6 +567,7 @@ class FakeCore(
                 emit(Event.FiltersChanged(EventFiltersChangedInner(filters.toList())))
                 emit(Event.PlayerNotice(playerNotice ?: EventPlayerNoticeInner()))
                 emit(Event.NetworkChanged(EventNetworkChangedInner(network)))
+                emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(batterySaver)))
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(pickerOpen, devices.filter { !it.isSelf })))
             }
             Command.Shutdown -> advanceJob?.cancel()
@@ -590,7 +594,7 @@ class FakeCore(
                 }
             }
             is Command.SetVisibility -> Unit
-            is Command.SetBatterySaver -> { batterySaver = c.data.enabled; emit(Event.Snapshot(EventSnapshotInner(snapshot()))) }
+            is Command.SetBatterySaver -> if (batterySaver != c.data.enabled) { batterySaver = c.data.enabled; emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(batterySaver))) }
 
             is Command.AddServer -> addServer(c.data)
             is Command.RemoveServer -> { servers.clear(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }

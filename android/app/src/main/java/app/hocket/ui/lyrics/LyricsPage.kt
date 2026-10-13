@@ -30,6 +30,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -318,7 +319,9 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     Column(
         Modifier.fillMaxWidth().padding(vertical = 8.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f) }
-            .blur(blur).alpha(alpha)
+            // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
+            // the halo of text near the sides was cut off (#68).
+            .blur(blur, BlurredEdgeTreatment.Unbounded).alpha(alpha)
             .clickable(enabled = line.startMs != null, onClickLabel = seekHere, onClick = onClick)
             .testTag("lyrics.line.$index")
             // One item per line: its text (and translation), its state; no live region.

@@ -44,6 +44,15 @@ impl Resolver for DbResolver<'_> {
             .map(|i| i.track_id)
     }
 
+    fn is_upcoming(&self, key: &QueueKey) -> bool {
+        let Some(e) = self.actor.engine.as_ref() else {
+            return false;
+        };
+        let doc = e.document();
+        doc.insertions.iter().any(|i| &i.key == key)
+            || derive(doc).upcoming.iter().any(|i| &i.key == key)
+    }
+
     fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
         self.actor.resolve_context_tracks(server_id, kind)
     }
@@ -979,6 +988,7 @@ impl Actor {
             .chain(derived.current.iter())
             .chain(derived.playing_next.iter())
             .chain(derived.upcoming.iter())
+            .chain(derived.wrap_next.iter())
         {
             if !ids.contains(&i.track_id) {
                 ids.push(i.track_id.clone());

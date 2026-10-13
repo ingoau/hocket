@@ -313,3 +313,37 @@ async fn network_changes_are_announced_and_replayed() {
     assert_eq!(network_events(&t), [Some(wifi)]);
     t.core.shutdown().await;
 }
+
+fn battery_saver_events(t: &TestCore) -> Vec<bool> {
+    t.events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::BatterySaverChanged { enabled } => Some(enabled),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Snapshot.batterySaver` does not go stale either (#65).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn battery_saver_changes_are_announced_and_replayed() {
+    let t = TestCore::start(
+        "battery-saver-event",
+        hocket_core::core::test_support::seeded_server(2, 100.0),
+    )
+    .await;
+    t.events.clear();
+    t.run(Command::SetBatterySaver { enabled: true }).await;
+    assert_eq!(battery_saver_events(&t), [true]);
+    // The same state again is not a change.
+    t.run(Command::SetBatterySaver { enabled: true }).await;
+    assert_eq!(battery_saver_events(&t), [true]);
+    t.run(Command::SetBatterySaver { enabled: false }).await;
+    assert_eq!(battery_saver_events(&t), [true, false]);
+
+    t.events.clear();
+    t.run(Command::RequestSnapshot).await;
+    assert_eq!(battery_saver_events(&t), [false]);
+    t.core.shutdown().await;
+}

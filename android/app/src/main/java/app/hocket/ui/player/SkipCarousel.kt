@@ -26,9 +26,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
-import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
-import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.theme.Motion
@@ -41,11 +39,9 @@ import kotlin.math.sign
 
 /**
  * What a skip swipe peeks at: the next item (the first of "playing next", else the first upcoming,
- * autoplay's included) and the previous one (the last of the history). At the end of the queue, as
- * the core (`session::reducer`'s `candidate`): with Repeat All it wraps to the context's first item
- * in play order, which unshuffled is the context's item 0 (found in the history or current); with
- * shuffle that is the shuffled order's first, which the queue view does not tell, so no peek (the
- * swipe rubber-bands, and still skips). Nothing for Repeat One or Off.
+ * autoplay's included) and the previous one (the last of the history). At the end of the queue it is
+ * the core's [QueueView.wrapNext]: with Repeat All, the context's first item in play order (the
+ * shuffled order's first with shuffle on). Nothing for Repeat One or Off.
  */
 @Immutable
 internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?) {
@@ -53,14 +49,8 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
         val None = Neighbours(null, null)
 
         fun of(queue: QueueView): Neighbours {
-            val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull() ?: wrap(queue)
+            val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull() ?: queue.wrapNext
             return Neighbours(previous = queue.history.lastOrNull(), next = next)
-        }
-
-        private fun wrap(queue: QueueView): QueueEntry? {
-            if (queue.repeat != RepeatMode.All || queue.shuffle) return null
-            fun first(e: QueueEntry) = (e.item.source as? QueueSource.Context)?.data?.index == 0u
-            return queue.current?.takeIf(::first) ?: queue.history.lastOrNull(::first)
         }
     }
 }

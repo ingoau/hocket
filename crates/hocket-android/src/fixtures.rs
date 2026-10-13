@@ -348,6 +348,7 @@ mod tests {
                 autoplay: true,
                 mode: QueueMode::Apple,
                 total_upcoming: 1,
+                wrap_next: Some(entry("ctx-0", QueueSource::Context { index: 0 })),
             })),
         );
         push(
@@ -506,6 +507,10 @@ mod tests {
         push(
             "event.networkChanged.none",
             json!(Event::NetworkChanged { network: None }),
+        );
+        push(
+            "event.batterySaverChanged",
+            json!(Event::BatterySaverChanged { enabled: true }),
         );
         push(
             "event.libraryChanged",

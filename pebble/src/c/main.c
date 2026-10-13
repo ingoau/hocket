@@ -178,7 +178,11 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
 
 static void prv_apply_settings(void) {
 #if defined(PBL_TOUCH)
-  app_touch_navigation_enable(g_settings.touch_navigation);
+  // Always opted in: an app that is not delivers no touch to its windows' recognizers either, so
+  // the gestures died with the setting off (#67). The setting instead decides per window whether the
+  // system's swipe/tap-to-button bridge runs (window_set_touch_bridge_disabled): Now Playing and the
+  // lyrics always handle touch themselves, lists and the notice only with the setting off.
+  app_touch_navigation_enable(true);
 #endif
   now_playing_settings_changed();
   list_refresh_local();
@@ -518,6 +522,9 @@ void show_notice(const char *text) {
   touch_set_hold_handler(NULL, NULL);
   if (!s_notice_window) {
     s_notice_window = window_create();
+#if defined(PBL_TOUCH)
+    window_set_touch_bridge_disabled(s_notice_window, !g_settings.touch_navigation);
+#endif
     window_set_background_color(s_notice_window, PBL_IF_COLOR_ELSE(HOCKET_DARK, GColorBlack));
     window_set_window_handlers(s_notice_window, (WindowHandlers){.unload = prv_notice_unload});
     Layer *root = window_get_root_layer(s_notice_window);

@@ -1350,6 +1350,7 @@ impl Actor {
     pub(crate) fn set_battery_saver(&mut self, enabled: bool) {
         if self.battery_saver != enabled {
             self.battery_saver = enabled;
+            self.emit(Event::BatterySaverChanged { enabled });
             self.mark_prefetch_check();
             self.media_art = None;
             self.emit_media_session();

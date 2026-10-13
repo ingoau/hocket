@@ -571,3 +571,47 @@ async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
     assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
     assert!(t.backend.is_playing());
 }
+
+/// Play next on a song already in "continue playing" moves it up to play next instead of adding
+/// it a second time (#37).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_next_on_an_upcoming_item_moves_it() {
+    let t = synced_core("play-next-move").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    let ids = |q: &QueueView| {
+        q.playing_next
+            .iter()
+            .chain(q.upcoming.iter())
+            .map(|e| e.track.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let q = t.queue().await;
+    assert_eq!(ids(&q), ["t1", "t2", "t3"]);
+    let last = q.upcoming.last().unwrap().clone();
+    t.run(Command::RunAction {
+        action_id: "playNext".into(),
+        target: ActionTarget::QueueItems {
+            keys: vec![last.item.key.clone()],
+        },
+    })
+    .await;
+    t.run_for(500.0).await;
+    let q = t.queue().await;
+    assert_eq!(ids(&q), ["t3", "t1", "t2"], "moved, not added twice");
+    // A played song (here the current one) is still queued again.
+    let current = q.current.clone().unwrap();
+    t.run(Command::RunAction {
+        action_id: "playNext".into(),
+        target: ActionTarget::QueueItems {
+            keys: vec![current.item.key.clone()],
+        },
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(ids(&t.queue().await), ["t0", "t3", "t1", "t2"]);
+}

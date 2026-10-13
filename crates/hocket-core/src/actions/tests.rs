@@ -9,6 +9,9 @@ impl Resolver for FakeResolver {
     fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
         key.strip_prefix("key-").map(|t| format!("track-{t}"))
     }
+    fn is_upcoming(&self, key: &QueueKey) -> bool {
+        key.starts_with("key-up")
+    }
     fn context_tracks(&self, _server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
         match kind {
             ContextKind::Album { id } => vec![format!("{id}-1"), format!("{id}-2")],
@@ -426,6 +429,48 @@ fn handlers_map_to_commands() {
         vec![Command::PlayNext {
             server_id: "srv".into(),
             track_ids: vec!["track-1".into(), "track-2".into()]
+        }]
+    );
+    // Items still to play move up instead of being queued twice (#37); played ones are queued
+    // again, ahead of them.
+    assert_eq!(
+        r.commands(
+            "playNext",
+            &ActionTarget::QueueItems {
+                keys: vec!["key-up1".into(), "key-1".into(), "key-up2".into()]
+            },
+            &s,
+            &res
+        )
+        .unwrap(),
+        vec![
+            Command::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["track-1".into()]
+            },
+            Command::MoveQueueItem {
+                key: "key-up1".into(),
+                to_index: 1
+            },
+            Command::MoveQueueItem {
+                key: "key-up2".into(),
+                to_index: 2
+            },
+        ]
+    );
+    assert_eq!(
+        r.commands(
+            "playNext",
+            &ActionTarget::QueueItems {
+                keys: vec!["key-up1".into()]
+            },
+            &s,
+            &res
+        )
+        .unwrap(),
+        vec![Command::MoveQueueItem {
+            key: "key-up1".into(),
+            to_index: 0
         }]
     );
     assert_eq!(

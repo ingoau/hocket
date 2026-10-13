@@ -336,7 +336,7 @@ export function connectStore(): () => void {
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
     if (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps")) recomputePerf();
-    if (snapshot) recomputePerf();
+    if (snapshot || e.type === "batterySaverChanged") recomputePerf();
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));

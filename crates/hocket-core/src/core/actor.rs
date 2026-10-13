@@ -793,6 +793,9 @@ impl Actor {
         self.emit(Event::NetworkChanged {
             network: snapshot.network.clone(),
         });
+        self.emit(Event::BatterySaverChanged {
+            enabled: snapshot.battery_saver,
+        });
         self.emit(Event::DevicesChanged {
             devices: snapshot.devices.clone(),
         });

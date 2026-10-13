@@ -20,6 +20,7 @@ import app.hocket.core.client.PositionClock
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import android.os.Looper
+import android.util.Log
 
 /**
  * The `MediaSessionAdapter` seam on Android: a Media3 [Player] whose state is exactly the core's
@@ -71,9 +72,18 @@ class CoreSessionPlayer(
         fun timeline(queue: QueueView?, currentTrackId: String?): QueueTimeline {
             val current = queue?.current ?: return QueueTimeline.EMPTY
             if (currentTrackId != null && current.track.id != currentTrackId) return QueueTimeline.EMPTY
-            val history = queue.history.takeLast(HISTORY_SHOWN)
-            return QueueTimeline(history + current + queue.playingNext + queue.upcoming, history.size)
+            // Media3 requires unique playlist UIDs and the UID is the queue key. A document from an
+            // older core can repeat keys (#54); drop the repeats rather than crash, keeping current.
+            val seen = hashSetOf(current.item.key)
+            val shownHistory = queue.history.takeLast(HISTORY_SHOWN)
+            val history = shownHistory.filter { seen.add(it.item.key) }
+            val after = (queue.playingNext + queue.upcoming).filter { seen.add(it.item.key) }
+            val dropped = shownHistory.size + queue.playingNext.size + queue.upcoming.size - history.size - after.size
+            if (dropped > 0) Log.w(TAG, "dropped $dropped queue entries with duplicate keys")
+            return QueueTimeline(history + current + after, history.size)
         }
+
+        private const val TAG = "CoreSessionPlayer"
     }
 
     /** The queue entries the playlist shows and where the current one is. */

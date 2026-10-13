@@ -635,6 +635,12 @@ pub struct QueueView {
     pub autoplay: bool,
     pub mode: QueueMode,
     pub total_upcoming: u32,
+    /// What plays after the last entry when the queue would wrap (Repeat
+    /// All with nothing in `playing_next` or `upcoming`): the first entry of
+    /// the context in play order, which with shuffle on only the core knows.
+    /// `None` when the queue does not wrap.
+    #[serde(default)]
+    pub wrap_next: Option<QueueEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2495,6 +2501,12 @@ pub enum Event {
     /// replay. `None` until the platform first reports one.
     NetworkChanged {
         network: Option<NetworkState>,
+    },
+    /// Battery saver as last set with `SetBatterySaver`
+    /// (`Snapshot.batterySaver`): emitted whenever it changes and in every
+    /// replay.
+    BatterySaverChanged {
+        enabled: bool,
     },
     DevicesChanged {
         devices: Vec<DeviceInfo>,
