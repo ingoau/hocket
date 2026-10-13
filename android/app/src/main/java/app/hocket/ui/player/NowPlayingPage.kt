@@ -473,7 +473,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
                 PlayerMode.Queue -> ModeSlot {
                     QueueList(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
                 }
-                PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE)) }
+                PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE_BOTTOM)) }
             }
         }
     }
@@ -506,6 +506,9 @@ private fun ModeSlot(content: @Composable () -> Unit) {
 
 /** How far the lyric lines fade in and out at the slot's top and bottom. */
 private val LYRICS_FADE = 72.dp
+// The focused line sits near the top (`LyricsList` scrolls it 220 px in), so only the bottom, where
+// the upcoming lines run out, has room for a longer fade (#34).
+private val LYRICS_FADE_BOTTOM = 128.dp
 
 /**
  * Content scrolling out of the mode slot fades at its top and bottom edges instead of being cut:
@@ -662,7 +665,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable(onClickLabel = artistsLabel, role = Role.Button, onClick = onArtists)
                                 .testTag("player.artistLine"),
-                        ) { ArtistLine(track, tagged = true) }
+                        ) { ArtistLine(track, tagged = true, running = !swiping) }
                     }
                     // The neighbours' lines, faded in as the artwork is swiped towards them.
                     for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
@@ -791,22 +794,20 @@ private fun incomingAlpha(f: Float): Float = (2f * f - 1f).coerceIn(0f, 1f)
 @Composable
 private fun titleStyle() = MaterialTheme.typography.headlineSmallEmphasized.copy(fontWeight = FontWeight.ExtraBold)
 
-/** The artist line: the track's artist string as given (muted, one line, ellipsised). */
+/** The artist line: the track's artist string as given (muted, one line; the playing track's scrolls when too long). */
 @Composable
-private fun ArtistLine(track: TrackSummary, tagged: Boolean) {
-    Text(
-        track.artist ?: stringResource(R.string.unknown_artist),
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .then(if (tagged) Modifier.testTag("player.artist") else Modifier)
-            .layout { m, c ->
-                val p = m.measure(c)
-                layout(p.width, p.height, mapOf(ArtistBottom to p.height)) { p.place(0, 0) }
-            },
-    )
+private fun ArtistLine(track: TrackSummary, tagged: Boolean, running: Boolean = false) {
+    val text = track.artist ?: stringResource(R.string.unknown_artist)
+    val style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val modifier = Modifier
+        .layout { m, c ->
+            val p = m.measure(c)
+            layout(p.width, p.height, mapOf(ArtistBottom to p.height)) { p.place(0, 0) }
+        }
+    // The playing track's artists scroll like its title rather than being cut short (#17); a
+    // neighbour's line (shown only mid-swipe) keeps the ellipsis.
+    if (tagged) Box(modifier) { MarqueeText(text, style, running, marqueeTag = "player.artist.marquee", textTag = "player.artist") }
+    else Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
 }
 
 /** The bottom of the artist line's text (its target can reach further down): the stars go under it. */
@@ -821,9 +822,10 @@ private val ArtistBottom = HorizontalAlignmentLine(::minOf)
  * the semantics either way.
  */
 @Composable
-private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean) {
+private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean, marqueeTag: String = "player.title.marquee", textTag: String? = null) {
+    val textModifier = if (textTag != null) Modifier.testTag(textTag) else Modifier
     if (LocalReducedMotion.current) {
-        Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = textModifier)
         return
     }
     val density = LocalDensity.current
@@ -845,10 +847,10 @@ private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle,
         }
     }
     Layout(
-        content = { Text(text, style = style, maxLines = 1, softWrap = false) },
+        content = { Text(text, style = style, maxLines = 1, softWrap = false, modifier = textModifier) },
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (overflows) Modifier.testTag("player.title.marquee") else Modifier)
+            .then(if (overflows) Modifier.testTag(marqueeTag) else Modifier)
             .clipToBounds()
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {

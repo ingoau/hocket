@@ -253,6 +253,7 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         this.emit({ type: "networkChanged", data: { network: this.network } });
+        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
         return;
       case "setNetworkState": {
         const wasOffline = this.isOffline();
@@ -271,9 +272,7 @@ export class FakeCore implements CoreHandle {
       case "setBatterySaver":
         if (this.batterySaver === cmd.data.enabled) return;
         this.batterySaver = cmd.data.enabled;
-        // The renderer reads it from snapshots; send one so a change shows (the real core does
-        // not announce it on its own yet).
-        this.emit({ type: "snapshot", data: { snapshot: this.snapshot() } });
+        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
         return;
       case "addServer":
         this.addServer(cmd.data.url, cmd.data.username, cmd.data.name ?? new URL(cmd.data.url).host, false);

@@ -135,6 +135,10 @@ pub struct StateView {
 /// [`NoResolver`] answers nothing (tests, pure descriptors).
 pub trait Resolver {
     fn track_for_key(&self, key: &QueueKey) -> Option<TrackId>;
+    /// The queue item is still to play (in playing next or upcoming).
+    fn is_upcoming(&self, _key: &QueueKey) -> bool {
+        false
+    }
     fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId>;
     fn context_label(&self, server_id: &str, kind: &ContextKind) -> String;
 }
@@ -787,11 +791,35 @@ fn queue_commands(
     next: bool,
 ) -> Vec<Command> {
     let server_id = state.server_id.clone().unwrap_or_default();
-    let track_ids = track_ids_of(target, state, resolver);
+    // Play next on queue items still to play moves them up rather than queueing them again (#37):
+    // they are removed and queued again by the same PlayNext, behind the played ones (history, the
+    // current item), which are queued again as before. Removing them all in one op keeps every key
+    // valid; a MoveQueueItem per key would not, as moving one context item renumbers the index-based
+    // keys (`ctx-<n>`) of the others.
+    let (track_ids, remove) = match target {
+        ActionTarget::QueueItems { keys } if next => {
+            let (upcoming, played): (Vec<_>, Vec<_>) =
+                keys.iter().cloned().partition(|k| resolver.is_upcoming(k));
+            let mut track_ids =
+                track_ids_of(&ActionTarget::QueueItems { keys: played }, state, resolver);
+            let upcoming: Vec<_> = upcoming
+                .into_iter()
+                .filter_map(|k| resolver.track_for_key(&k).map(|t| (k, t)))
+                .collect();
+            let (remove, moved): (Vec<_>, Vec<_>) = upcoming.into_iter().unzip();
+            track_ids.extend(moved);
+            (track_ids, remove)
+        }
+        _ => (track_ids_of(target, state, resolver), vec![]),
+    };
     if track_ids.is_empty() {
         return vec![];
     }
-    vec![if next {
+    let mut out = vec![];
+    if !remove.is_empty() {
+        out.push(Command::RemoveQueueItems { keys: remove });
+    }
+    out.push(if next {
         Command::PlayNext {
             server_id,
             track_ids,
@@ -801,7 +829,8 @@ fn queue_commands(
             server_id,
             track_ids,
         }
-    }]
+    });
+    out
 }
 
 #[cfg(test)]

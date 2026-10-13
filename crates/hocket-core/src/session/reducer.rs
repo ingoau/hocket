@@ -321,6 +321,8 @@ pub struct DerivedQueue {
     pub autoplay: bool,
     pub mode: QueueMode,
     pub total_upcoming: u32,
+    /// See [`crate::api::QueueView::wrap_next`].
+    pub wrap_next: Option<QueueItem>,
 }
 
 impl DerivedQueue {
@@ -342,6 +344,7 @@ impl DerivedQueue {
             autoplay: self.autoplay,
             mode: self.mode,
             total_upcoming: self.total_upcoming,
+            wrap_next: self.wrap_next.map(&mut entry),
         }
     }
 
@@ -396,6 +399,19 @@ pub fn derive(doc: &SessionDocument) -> DerivedQueue {
             unavailable: false,
         })
         .collect();
+    // Mirrors `Candidate::Wrap` in `advance`.
+    let wrap_next =
+        (doc.insertions.is_empty() && upcoming.is_empty() && doc.repeat == RepeatMode::All)
+            .then(|| p.to_context(0))
+            .flatten()
+            .and_then(|index| {
+                Some(QueueItem {
+                    key: context_key(index),
+                    track_id: ts.get(index as usize)?.clone(),
+                    source: QueueSource::Context { index },
+                    unavailable: false,
+                })
+            });
     DerivedQueue {
         context_label: doc.context.as_ref().map(|c| c.label.clone()),
         history: doc.history.clone(),
@@ -407,6 +423,7 @@ pub fn derive(doc: &SessionDocument) -> DerivedQueue {
         repeat: doc.repeat,
         autoplay: doc.autoplay,
         mode: doc.mode,
+        wrap_next,
     }
 }
 
@@ -469,6 +486,7 @@ pub fn reduce(
         effects: &mut effects,
         start_position: &mut start_position,
     };
+    r.repair_duplicate_keys();
     r.apply(op)?;
     prune_offline_skipped(&mut next);
     if next.current.as_ref().map(|c| &c.key) != doc.current.as_ref().map(|c| &c.key) {
@@ -1030,6 +1048,27 @@ impl Reducer<'_, '_> {
         if let Some(c) = self.doc.current.as_mut() {
             fix(c);
         }
+        self.doc.insertions.iter_mut().for_each(&mut fix);
+    }
+
+    /// Earlier builds could reuse queue keys across restarts (#54), and a
+    /// live document carrying such duplicates crashes clients that need
+    /// unique keys. Rename all but the first of each key before every op;
+    /// the current item keeps its key so playback isn't disturbed. Draws
+    /// entropy only when a duplicate exists, and the entropy is per op, so
+    /// every replica repairs the same way.
+    fn repair_duplicate_keys(&mut self) {
+        let mut seen: HashSet<QueueKey> = HashSet::new();
+        let entropy = self.ctx.entropy;
+        let mut fix = |item: &mut QueueItem| {
+            while !seen.insert(item.key.clone()) {
+                item.key = entropy.next_key();
+            }
+        };
+        if let Some(c) = self.doc.current.as_mut() {
+            fix(c);
+        }
+        self.doc.history.iter_mut().for_each(&mut fix);
         self.doc.insertions.iter_mut().for_each(&mut fix);
     }
 
@@ -1643,6 +1682,74 @@ mod tests {
         let (d4, _) = step(&d3, &e, QueueOp::SetAutoplay { enabled: true });
         let (_, fx) = step(&d4, &e, QueueOp::TrackEnded);
         assert_eq!(fx, vec![Effect::NeedsAutoplay]);
+    }
+
+    #[test]
+    fn wrap_next_is_what_repeat_all_plays_after_the_end() {
+        let e = DeterministicEntropy::new(4);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 5),
+            Some(0),
+            true,
+        );
+        assert_eq!(derive(&d).wrap_next, None, "repeat off: no wrap");
+        let (mut d, _) = step(
+            &d,
+            &e,
+            QueueOp::SetRepeat {
+                mode: RepeatMode::All,
+            },
+        );
+        assert_eq!(derive(&d).wrap_next, None, "upcoming left: no wrap");
+        while !derive(&d).upcoming.is_empty() {
+            d = step(&d, &e, QueueOp::Next).0;
+        }
+        let peek = derive(&d).wrap_next.expect("wraps");
+        let (wrapped, _) = step(&d, &e, QueueOp::Next);
+        assert_eq!(cur_track(&wrapped), peek.track_id);
+        assert_eq!(wrapped.current.unwrap().source, peek.source);
+        // Something in playing next plays first, so nothing wraps yet.
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["x".into()],
+            },
+        );
+        assert_eq!(derive(&d).wrap_next, None);
+    }
+
+    #[test]
+    fn duplicate_keys_are_repaired_without_touching_current() {
+        let e = DeterministicEntropy::new(3);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 4),
+            Some(0),
+            false,
+        );
+        let (d, _) = step(&d, &e, QueueOp::Next);
+        let (mut d, _) = step(&d, &e, QueueOp::Next);
+        // A document from a build that reused keys across restarts (#54).
+        let cur_key = d.current.as_ref().unwrap().key.clone();
+        d.history[0].key = cur_key.clone();
+        d.history[1].key = cur_key.clone();
+        let out = reduce(&d, QueueOp::SetAutoplay { enabled: true }, &ctx(&e, 2.0, 0)).unwrap();
+        let next = out.0;
+        validate(&next).unwrap();
+        assert_eq!(next.current.as_ref().unwrap().key, cur_key);
+        let mut keys: Vec<_> = next.history.iter().map(|i| i.key.clone()).collect();
+        keys.push(cur_key);
+        let unique: HashSet<_> = keys.iter().collect();
+        assert_eq!(unique.len(), keys.len());
+        assert!(!out
+            .1
+            .iter()
+            .any(|fx| matches!(fx, Effect::CurrentChanged { .. })));
     }
 
     #[test]

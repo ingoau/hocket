@@ -178,7 +178,12 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
 
 static void prv_apply_settings(void) {
 #if defined(PBL_TOUCH)
-  app_touch_navigation_enable(g_settings.touch_navigation);
+  // Always opted in: the OS feeds windows' recognizers only through touch navigation, so with the
+  // app opted out the gestures died with the setting off (#67). An opted-in app's MenuLayers scroll
+  // and select by touch themselves; with the setting off, lists cover theirs with an empty layer
+  // (list.c), so touch there only does the gestures. (The OS already keeps the swipe/tap-to-button
+  // bridge off for an app with a raw touch subscriber, as this one has for press and hold.)
+  app_touch_navigation_enable(true);
 #endif
   now_playing_settings_changed();
   list_refresh_local();
@@ -518,6 +523,9 @@ void show_notice(const char *text) {
   touch_set_hold_handler(NULL, NULL);
   if (!s_notice_window) {
     s_notice_window = window_create();
+#if defined(PBL_TOUCH)
+    window_set_touch_bridge_disabled(s_notice_window, !g_settings.touch_navigation);
+#endif
     window_set_background_color(s_notice_window, PBL_IF_COLOR_ELSE(HOCKET_DARK, GColorBlack));
     window_set_window_handlers(s_notice_window, (WindowHandlers){.unload = prv_notice_unload});
     Layer *root = window_get_root_layer(s_notice_window);

@@ -19,11 +19,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,11 +93,12 @@ fun HomeScreen(nav: NavHostController) {
         value = (client.query(Queries.albums(serverId, Page(0u, 20u), SortOrder.PlayCount, descending = true)) as? QueryResult.Albums)?.data?.items?.filter { it.playCount > 0u } ?: value ?: emptyList()
     }
     val saved by client.savedQueues.collectAsStateWithLifecycle()
-    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
     var jobs by remember { mutableStateOf(false) }
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.home_greeting)) }, subtitle = { Text(server?.name ?: "") }, actions = { JobsIndicator(onClick = { jobs = true }); AccountButton() }, scrollBehavior = scroll) },
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
+        // No title: the tab already says where you are, and the server is in the account sheet (#29).
+        topBar = { TopAppBar(title = {}, actions = { JobsIndicator(onClick = { jobs = true }); AccountButton() }, scrollBehavior = scroll) },
     ) { padding ->
         val recentList = recent
         val addedList = added

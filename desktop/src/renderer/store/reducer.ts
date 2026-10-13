@@ -197,6 +197,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, connection: e.data.state };
     case "networkChanged":
       return { ...state, network: e.data.network ?? undefined };
+    case "batterySaverChanged":
+      return { ...state, batterySaver: e.data.enabled };
     case "devicesChanged":
       return { ...state, devices: e.data.devices };
     case "handoffPickerChanged":

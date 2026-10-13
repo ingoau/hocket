@@ -45,7 +45,8 @@ class NextPeekWrapTest : PlayerRulesTestBase() {
         TrackSummary(id = "t-$key", serverId = "s", title = key, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
     )
 
-    private fun atTheEnd(repeat: RepeatMode, shuffle: Boolean = false) = QueueView(
+    /** As the core derives it: [QueueView.wrapNext] only with Repeat All, [wrapsTo] in play order. */
+    private fun atTheEnd(repeat: RepeatMode, shuffle: Boolean = false, wrapsTo: QueueEntry = entry("ctx-0", 0)) = QueueView(
         contextLabel = "Album",
         // Played from the context's second item, a queued song between: the context's first is not
         // the history's first.
@@ -53,6 +54,7 @@ class NextPeekWrapTest : PlayerRulesTestBase() {
         current = entry("ctx-3", 3),
         playingNext = emptyList(), upcoming = emptyList(),
         shuffle = shuffle, repeat = repeat, autoplay = false, mode = QueueMode.Apple, totalUpcoming = 0u,
+        wrapNext = wrapsTo.takeIf { repeat == RepeatMode.All },
     )
 
     @Test
@@ -67,8 +69,8 @@ class NextPeekWrapTest : PlayerRulesTestBase() {
     }
 
     @Test
-    fun repeatAllWithShuffleDoesNotGuessTheShuffledFirst() {
-        // The core wraps to the shuffled order's first item, which the queue view does not tell.
-        assertNull(Neighbours.of(atTheEnd(RepeatMode.All, shuffle = true)).next)
+    fun repeatAllWithShufflePeeksAtTheShuffledFirst() {
+        // The core wraps to the shuffled order's first item and says which in `wrapNext`.
+        assertEquals("ctx-2", Neighbours.of(atTheEnd(RepeatMode.All, shuffle = true, wrapsTo = entry("ctx-2", 2))).next?.item?.key)
     }
 }

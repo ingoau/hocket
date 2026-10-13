@@ -79,6 +79,13 @@ describe("reducer", () => {
     expect(s.network).toBeUndefined();
   });
 
+  it("tracks battery saver from its event, without waiting for a snapshot", () => {
+    let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { enabled: true } });
+    expect(s.batterySaver).toBe(true);
+    s = reduce(s, { type: "batterySaverChanged", data: { enabled: false } });
+    expect(s.batterySaver).toBe(false);
+  });
+
   it("announces a fresh queue-replacing undo entry with one Undo toast, never twice, and not on undo/redo", () => {
     const entry = (id: string, label: string, replacesQueue = true) => ({ id, label, deviceId: "me", at: 1, note: undefined, replacesQueue });
     let s = reduce(initialCoreState, { type: "undoChanged", data: { state: { canUndo: true, undoLabel: "Play Album", canRedo: false, redoLabel: undefined, history: [entry("u1", "Play Album")] } } });

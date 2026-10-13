@@ -364,9 +364,9 @@ class FullPlayerLayoutTest {
     }
 
     /** Opens the player on a song whose title is far too long for the line. */
-    private fun startWithLongTitle(reducedMotion: Boolean) {
+    private fun startWithLongTitle(reducedMotion: Boolean, artist: String? = null) {
         val lib = core.fake.library
-        lib.tracks[0] = lib.tracks[0].copy(title = LONG_TITLE)
+        lib.tracks[0] = lib.tracks[0].copy(title = LONG_TITLE).let { if (artist != null) it.copy(artist = artist) else it }
         compose.setThemedContent(core) {
             androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.a11y.LocalReducedMotion provides reducedMotion) { AppRoot(core.client) }
         }
@@ -397,6 +397,15 @@ class FullPlayerLayoutTest {
         assertTrue("wider than the line, unshortened", titleLayout().size.width > bounds("player.title").width && !titleLayout().isLineEllipsized(0))
         assertTrue("scrolling", compose.onAllNodesWithTag("player.title.marquee", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         assertTrue("the whole title for TalkBack", compose.onNodeWithTag("player.title").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single().contains(LONG_TITLE))
+    }
+
+    @Test
+    fun aLongArtistLineScrollsToo() {
+        val artists = "The Harbour Room Orchestra feat. Every Singer Along The Coast"
+        startWithLongTitle(reducedMotion = false, artist = artists)
+        assertTrue("scrolling", compose.onAllNodesWithTag("player.artist.marquee", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        val line = compose.onAllNodesWithTag("player.artist", useUnmergedTree = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].joinToString { it.text }
+        assertEquals(artists, line)
     }
 
     @Test

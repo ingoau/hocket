@@ -528,7 +528,40 @@
       "repeat": "all",
       "autoplay": true,
       "mode": "apple",
-      "totalUpcoming": 1
+      "totalUpcoming": 1,
+      "wrapNext": {
+        "item": {
+          "key": "ctx-0",
+          "trackId": "t-ctx-0",
+          "source": {
+            "type": "context",
+            "data": {
+              "index": 0
+            }
+          },
+          "unavailable": false
+        },
+        "track": {
+          "id": "t-ctx-0",
+          "serverId": "srv",
+          "title": "Title",
+          "artist": "Artist",
+          "album": "Album",
+          "albumId": "al1",
+          "artistId": null,
+          "durationMs": 213000,
+          "coverArt": "al1",
+          "rating": 3,
+          "loved": true,
+          "offline": "cached",
+          "artists": [
+            {
+              "id": "ar1",
+              "name": "Artist"
+            }
+          ]
+        }
+      }
     }
   },
   "result.lyrics": {
@@ -714,6 +747,12 @@
     "type": "networkChanged",
     "data": {
       "network": null
+    }
+  },
+  "event.batterySaverChanged": {
+    "type": "batterySaverChanged",
+    "data": {
+      "enabled": true
     }
   },
   "event.libraryChanged": {

@@ -3,7 +3,6 @@ package app.hocket.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
@@ -36,9 +35,9 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
-        // A server that meets the floor takes us into the shell: the Home title appears.
+        // A server that meets the floor takes us into the shell: Home appears.
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
-        compose.onNodeWithText("Your music").assertIsDisplayed()
+        compose.onNodeWithTag("home.screen").assertIsDisplayed()
     }
 
     @Test

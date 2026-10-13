@@ -122,7 +122,6 @@
     <string name="home_continue">Continue listening</string>
     <string name="home_saved_queues">Recent queues</string>
     <string name="home_see_all">See all</string>
-    <string name="home_greeting">Your music</string>
 
     <!-- Library -->
     <string name="library_albums">Albums</string>

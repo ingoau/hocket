@@ -72,6 +72,17 @@ class CoreSessionQueueTest {
     }
 
     @Test
+    fun duplicateQueueKeysAreDroppedInsteadOfCrashing() {
+        player.apply(state("t2"))
+        // k2 (current) repeated in history and upcoming, k3 repeated in upcoming (#54).
+        player.applyQueue(queue.copy(history = listOf(entry(0), entry(2)), upcoming = listOf(entry(3), entry(4), entry(2))))
+        settle()
+        assertEquals(4, player.mediaItemCount)
+        assertEquals(1, player.currentMediaItemIndex)
+        assertEquals(MediaId.QueueItem("k4").format(), player.getMediaItemAt(3).mediaId)
+    }
+
+    @Test
     fun aQueueThatHasNotCaughtUpShowsOnlyTheCurrentTrack() {
         player.apply(state("t9"))
         player.applyQueue(queue)

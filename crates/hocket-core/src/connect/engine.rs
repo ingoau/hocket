@@ -582,6 +582,10 @@ pub struct Engine {
     unsynced: Vec<PendingOp>,
     unsynced_overflow: bool,
     sync_base: Option<SyncBase>,
+    /// Per-run part of every op id. The counter restarts at 0 with the
+    /// engine, so without it a restarted device reissued op ids (and the
+    /// queue keys derived from them) that earlier runs had already used.
+    op_nonce: String,
     op_counter: u32,
 
     remote: Option<Remote>,
@@ -731,6 +735,7 @@ impl Engine {
             unsynced: vec![],
             unsynced_overflow: false,
             sync_base,
+            op_nonce: format!("{:x}", now.max(0.0) as u64),
             op_counter: 0,
             remote: None,
             upstream_ready: false,
@@ -2905,7 +2910,10 @@ impl Engine {
 
     fn next_op_id(&mut self) -> String {
         self.op_counter += 1;
-        format!("{}-{}", self.cfg.device.id, self.op_counter)
+        format!(
+            "{}-{}-{}",
+            self.cfg.device.id, self.op_nonce, self.op_counter
+        )
     }
 
     fn on_local_op(&mut self, op: SessionOp) {
@@ -4290,12 +4298,10 @@ mod tests {
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::ConnectionChanged(s) if s.round_trip_ms.is_some())));
+        let op_id = e.pending.back().unwrap().op_id.clone();
         let outs = e.handle(Input::WireIn {
             peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "a-2".into(),
-                revision: 1,
-            }),
+            msg: WireMessage::new(Msg::OpAck { op_id, revision: 1 }),
         });
         assert!(
             outs.is_empty()

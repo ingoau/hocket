@@ -133,6 +133,20 @@ class FakeCoreTest {
     }
 
     @Test
+    fun repeatAllWithShuffleTellsWhatItWrapsTo() = runTest {
+        val core = core()
+        core.dispatchAndWait(Commands.setShuffle(true))
+        core.dispatchAndWait(Commands.setRepeat(RepeatMode.All))
+        assertNull(core.queue().wrapNext)
+        var guard = 0
+        while (core.queue().let { it.playingNext.isNotEmpty() || it.upcoming.isNotEmpty() } && guard++ < 500) core.dispatchAndWait(Command.Next)
+        val peek = core.queue().wrapNext
+        assertNotNull(peek)
+        core.dispatchAndWait(Command.Next)
+        assertEquals(peek!!.track.id, core.queue().current!!.track.id)
+    }
+
+    @Test
     fun shuffleKeepsCurrentAndUndoRestoresOrder() = runTest {
         val core = core()
         val before = core.queue()

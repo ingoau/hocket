@@ -368,6 +368,7 @@ class CoreClient(
             is Event.ConnectionChanged -> _connection.value = event.data.state
             // The core announces every SetNetworkState change (and replays it on attach).
             is Event.NetworkChanged -> _network.value = event.data.network
+            is Event.BatterySaverChanged -> _batterySaver.value = event.data.enabled
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer
