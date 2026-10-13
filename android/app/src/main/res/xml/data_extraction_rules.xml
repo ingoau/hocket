@@ -13,6 +13,8 @@
         <exclude domain="sharedpref" path="hocket-credentials.xml" />
         <exclude domain="sharedpref" path="hocket-credential-names.xml" />
         <exclude domain="sharedpref" path="hocket-media-control.xml" />
+        <exclude domain="sharedpref" path="hocket-widget.xml" />
+        <exclude domain="sharedpref" path="hocket-shortcuts.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="hocket/cache" />
@@ -26,5 +28,7 @@
         <exclude domain="sharedpref" path="hocket-credentials.xml" />
         <exclude domain="sharedpref" path="hocket-credential-names.xml" />
         <exclude domain="sharedpref" path="hocket-media-control.xml" />
+        <exclude domain="sharedpref" path="hocket-widget.xml" />
+        <exclude domain="sharedpref" path="hocket-shortcuts.xml" />
     </device-transfer>
 </data-extraction-rules>

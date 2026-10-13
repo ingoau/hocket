@@ -104,6 +104,11 @@ class CoreSessionPlayer(
         invalidateState()
     }
 
+    /** The track behind queue entry [key] in the current queue view; null when it is not there. */
+    fun trackIdForQueueKey(key: String): String? = queue?.let { q ->
+        (q.history.asSequence() + listOfNotNull(q.current) + q.playingNext + q.upcoming).firstOrNull { it.item.key == key }?.track?.id
+    }
+
     /** Playing on another device (see the class docs). */
     val isRemote: Boolean get() = remote
 

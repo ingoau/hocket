@@ -19,6 +19,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.core.content.pm.ShortcutManagerCompat
 import kotlinx.coroutines.launch
 import okio.Path.Companion.toOkioPath
 
@@ -47,6 +52,28 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         // Bound only while UI is visible (never from here): an idle service can then stop, and the
         // process can go after the task is removed. Media3 keeps it alive while playing.
         ProcessLifecycleOwner.get().lifecycle.addObserver(ForegroundBinder(connection))
+        scope.launch { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
+    }
+
+    /**
+     * Runs a launcher shortcut ([AppShortcuts]): search opens the search screen; the rest wait for the
+     * core and its server (a cold start from the launcher) and dispatch the shortcut's command.
+     */
+    fun runShortcut(shortcut: AppShortcut) {
+        ShortcutManagerCompat.reportShortcutUsed(this, shortcut.id)
+        if (shortcut == AppShortcut.Search) { AppLinks.openSearch(null); return }
+        scope.launch {
+            withTimeoutOrNull(SHORTCUT_WAIT_MS) {
+                val client = client.filterNotNull().first()
+                val server = client.servers.first { it.isNotEmpty() }.first()
+                shortcut.command(this@HocketApp, server.id)?.let(client::dispatch)
+            }
+        }
+    }
+
+    companion object {
+        /** How long a shortcut waits for the core to come up before it gives up. */
+        const val SHORTCUT_WAIT_MS = 20_000L
     }
 
     /** Swap in a different core (UI tests). */

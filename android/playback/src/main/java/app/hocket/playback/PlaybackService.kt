@@ -46,6 +46,9 @@ import kotlinx.coroutines.launch
  *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself; a player that is still buffering
  *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says.
+ * - Started by a media key (playback resumption from a stopped service), holds the foreground until
+ *   Media3's playback notification takes over or it is clear nothing will play ([ForegroundHold]).
+ * - Keeps the home-screen [NowPlayingWidget] in step with the session and the playing Connect device.
  * - Owns the [PebbleBridge] (the Pebble watchapp's phone side), fed the same events; the watch's
  *   messages reach it through [app.hocket.playback.pebble.PebbleListenerService], which binds here.
  * - Exposes a [LocalBinder] so the app process can obtain the [CoreHandle] by binding. Only the
@@ -93,6 +96,7 @@ class PlaybackService : MediaLibraryService() {
     private var routeDiscovery: Any? = null
     private var serverId: String? = null
     private var libraryNotify: Job? = null
+    private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
 
     override fun onCreate() {
         super.onCreate()
@@ -166,7 +170,9 @@ class PlaybackService : MediaLibraryService() {
     /** Session state to the bridge, remote when another Connect device plays it. */
     private fun applySession(state: app.hocket.core.api.MediaSessionState) {
         ConnectRoutes.onMediaSession(state)
-        bridge.apply(state, clockOffsetMs, remote = ConnectRoutes.state.value.remote != null)
+        val remote = ConnectRoutes.state.value.remote
+        bridge.apply(state, clockOffsetMs, remote = remote != null)
+        NowPlayingWidget.update(this, WidgetState.of(state, remote?.name))
     }
 
     private fun scheduleLibraryNotify() {
@@ -189,6 +195,12 @@ class PlaybackService : MediaLibraryService() {
                 scheduleIdleStop()
             }
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val result = super.onStartCommand(intent, flags, startId)
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON) foregroundHold.hold()
+        return result
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = bridge.session
@@ -223,11 +235,14 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        // Whatever was showing stays, but nothing plays from here any more.
+        NowPlayingWidget.update(this, WidgetState.of(bridge.player.state, null).copy(playing = false))
         network.stop()
         battery.stop()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) (routeDiscovery as? ConnectRouteDiscovery)?.stop()
         ConnectRoutes.clear()
         backend.release()
+        foregroundHold.release()
         bridge.release()
         pebble.release()
         scope.cancel()

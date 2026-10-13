@@ -244,6 +244,14 @@
     <string name="sleep_end_of_track">Stop at end of track</string>
     <string name="settings_external_control">Allow control by other apps</string>
     <string name="settings_external_control_summary">Let apps like Android Auto, Wear and media browsers browse your library, see the queue and control playback. Notification, lock screen and Bluetooth controls always work.</string>
+    <string name="settings_system_eq">Device equalizer</string>
+    <string name="settings_system_eq_body">Your phone\'s sound effects, applied to what Hocket plays</string>
+    <string name="settings_home_screen">Home screen</string>
+    <string name="settings_widget_add">Add the now-playing widget</string>
+    <string name="settings_widget_add_body">Shows what is playing, and on which device, on your home screen</string>
+    <string name="settings_shortcuts">Launcher shortcuts</string>
+    <string name="settings_shortcuts_summary">Shown when you touch and hold the app icon, up to %1$d.</string>
+    <string name="settings_shortcuts_full">Turn another one off first</string>
     <string name="sleep_active">Stops in %1$s</string>
     <string name="sleep_active_end_of_track">Stops at end of track</string>
     <string name="sleep_start">Start</string>

@@ -71,6 +71,15 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavBarPrefs {
     override suspend fun setNavItems(ids: List<String>) {
         store.edit { it[navItemsKey] = ids.joinToString(",") }
     }
+
+    private val shortcutsKey = stringPreferencesKey("shortcuts")
+
+    /** The launcher shortcuts, in order ([AppShortcuts.fromIds]; never chosen = the default set). */
+    val shortcuts: Flow<List<AppShortcut>> = store.data.map { p -> AppShortcuts.fromIds(p[shortcutsKey]?.split(',')?.filter { it.isNotBlank() }) }
+
+    suspend fun setShortcuts(shortcuts: List<AppShortcut>) {
+        store.edit { it[shortcutsKey] = shortcuts.joinToString(",") { s -> s.id } }
+    }
 }
 
 /** For hosts without the app's DataStore (previews, tests on a bare Application): lives as long as the composition. */

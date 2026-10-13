@@ -11,6 +11,7 @@ import androidx.media3.session.MediaConstants
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.Queries
+import app.hocket.core.QuickPlay
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Command
@@ -38,7 +39,13 @@ import kotlinx.coroutines.launch
  *
  * Play requests become the same commands the UI sends: an album, artist, playlist or genre plays as
  * that context (from the tapped track, for a track inside one), a lone track via `PlayTracks`, a
- * queue entry is a jump. Enqueued items become `PlayNext` / `PlayLater`.
+ * queue entry is a jump, a quick play ([MediaId.Shuffle]) its [QuickPlay] command. Enqueued items
+ * become `PlayNext` / `PlayLater`.
+ *
+ * Besides the main tree there are two more roots, for browsers that ask for them: "recent" (the
+ * session to resume, as one playable item: [resumeItem]) and "suggested" (quick plays and recently
+ * played albums, for surfaces that suggest something to play). System UI's own recent root (playback
+ * resumption) is Media3's, which asks the session's callback for the same [resumeItem].
  */
 class LibraryBrowser(
     private val context: Context,
@@ -51,6 +58,12 @@ class LibraryBrowser(
         /** Id of the item a voice "play something" (empty query) resolves to: resume the session. */
         const val RESUME = "resume"
         const val SEARCH_LIMIT = 25
+        /** Recently played albums the suggested root offers. */
+        const val SUGGESTED_ALBUMS = 8
+        /** History rows read to find them (one album's songs fill several). */
+        private const val HISTORY_SCAN = 200
+        /** The largest cover handed over as bytes (resumption, where a content URI may not be readable yet). */
+        private const val ARTWORK_DATA_MAX_BYTES = 512 * 1024
         /** Enough to enqueue a whole playlist in one query. */
         private const val PLAYLIST_ALL = 10_000
 
@@ -75,12 +88,18 @@ class LibraryBrowser(
 
     fun root(): MediaItem = folder(MediaId.Root, context.getString(R.string.browse_root), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, rootExtras())
 
+    fun recentRoot(): MediaItem = folder(MediaId.Recent, context.getString(R.string.browse_recent), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_LIST))
+
+    fun suggestedRoot(): MediaItem = folder(MediaId.Suggested, context.getString(R.string.browse_suggested), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_GRID, STYLE_GRID))
+
     /** The children of [parentId], one page; null when [parentId] is not a browsable id of ours. */
     suspend fun children(parentId: String, page: Int, pageSize: Int): List<MediaItem>? {
         val id = MediaId.parse(parentId) ?: return null
         val window = Page((page.coerceAtLeast(0).toLong() * pageSize).coerceAtMost(UInt.MAX_VALUE.toLong()).toUInt(), pageSize.coerceAtLeast(1).toUInt())
         return when (id) {
             MediaId.Root -> LibrarySection.entries.map(::section).window(window)
+            MediaId.Recent -> listOfNotNull(resumeItem()).window(window)
+            MediaId.Suggested -> suggestions().window(window)
             is MediaId.Section -> {
                 val server = serverId() ?: return emptyList()
                 when (id.section) {
@@ -114,6 +133,9 @@ class LibraryBrowser(
         is MediaId.Genre -> folder(id, id.name, MediaMetadata.MEDIA_TYPE_GENRE, style(STYLE_GRID), playable = true)
         is MediaId.Track -> trackDetail(id.id)?.let { track(it.toSummary(), id) }
         is MediaId.QueueItem -> null
+        MediaId.Recent -> recentRoot()
+        MediaId.Suggested -> suggestedRoot()
+        is MediaId.Shuffle -> shuffle(id)
     }
 
     /** Local results only: a controller's search must not wait on (or reach) the server. */
@@ -188,7 +210,8 @@ class LibraryBrowser(
             is MediaId.Genre -> Commands.playContext(Commands.genreContext(id.serverId, id.name))
             is MediaId.Track -> Commands.playTracks(id.serverId, listOf(id.id), 0, label(id.id))
             is MediaId.QueueItem -> Commands.jumpToQueueItem(id.key)
-            MediaId.Root, is MediaId.Section, null -> null
+            is MediaId.Shuffle -> quickPlay(id)
+            MediaId.Root, is MediaId.Section, MediaId.Recent, MediaId.Suggested, null -> null
         } ?: return false
         dispatch(command)
         return true
@@ -216,6 +239,86 @@ class LibraryBrowser(
         }
         return any
     }
+
+    /**
+     * The track a rating from a controller is for: a library track id, a track inside an album or
+     * playlist; null for anything else (a queue entry is the session's to resolve).
+     */
+    suspend fun trackIdFor(mediaId: String): String? = when (val id = MediaId.parse(mediaId)) {
+        is MediaId.Track -> id.id
+        is MediaId.AlbumTrack -> albumTracks(id.albumId).getOrNull(id.index)?.id
+        is MediaId.PlaylistTrack -> playlistTrack(id.playlistId, id.index)?.id
+        else -> null
+    }
+
+    /**
+     * The session to resume, as one playable item ([RESUME]) carrying what is loaded: the core's
+     * persisted session when nothing has reached the service yet (a cold start for playback
+     * resumption, System UI asking after a reboot). Null when nothing is loaded. The cover goes as
+     * bytes: at boot the asking app may not be allowed to open an artwork URI yet.
+     */
+    suspend fun resumeItem(): MediaItem? {
+        val session = (query(app.hocket.core.api.Query.Snapshot) as? QueryResult.SnapshotResult)?.data?.mediaSession ?: return null
+        val meta = session.metadata ?: return null
+        val artwork = meta.artworkPath?.let { path ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { java.io.File(path.removePrefix("file://")).takeIf { it.isFile && it.length() in 1..ARTWORK_DATA_MAX_BYTES }?.readBytes() }.getOrNull()
+            }
+        }
+        return MediaItem.Builder().setMediaId(RESUME).setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(meta.title)
+                .setArtist(meta.artist)
+                .setAlbumTitle(meta.album)
+                .setDurationMs(meta.durationMs.toLong())
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setUserRating(androidx.media3.common.HeartRating(meta.loved))
+                .apply { if (artwork != null) setArtworkData(artwork, MediaMetadata.PICTURE_TYPE_FRONT_COVER) }
+                .build(),
+        ).build()
+    }
+
+    /** Where [resumeItem] resumes from, for a resumption request's start position. */
+    suspend fun resumePositionMs(): Long =
+        (query(app.hocket.core.api.Query.Snapshot) as? QueryResult.SnapshotResult)?.data?.mediaSession?.position?.positionMs?.toLong() ?: 0L
+
+    /** The suggested root: shuffle loved songs, then the albums played most recently on this server. */
+    private suspend fun suggestions(): List<MediaItem> {
+        val server = serverId() ?: return emptyList()
+        val history = (query(Queries.recentlyPlayed(HISTORY_SCAN)) as? QueryResult.History)?.data.orEmpty()
+        val albums = history.asSequence().map { it.track }
+            .filter { it.serverId == server && it.albumId != null }
+            .distinctBy { it.albumId }
+            .take(SUGGESTED_ALBUMS)
+            .map { t ->
+                folder(MediaId.Album(server, t.albumId!!), t.album ?: t.title, MediaMetadata.MEDIA_TYPE_ALBUM, style(STYLE_LIST), playable = true, artwork = art(t.coverArt), subtitle = t.artist)
+            }.toList()
+        return listOf(shuffle(MediaId.Shuffle(server, ShuffleKind.Loved))) + albums
+    }
+
+    private fun shuffleLabel(kind: ShuffleKind): String = context.getString(when (kind) {
+        ShuffleKind.Loved -> R.string.quickplay_shuffle_loved
+        ShuffleKind.All -> R.string.quickplay_shuffle_all
+        ShuffleKind.Offline -> R.string.quickplay_shuffle_offline
+    })
+
+    private fun quickPlay(id: MediaId.Shuffle): Command = when (id.kind) {
+        ShuffleKind.Loved -> QuickPlay.shuffleLoved(id.serverId, shuffleLabel(id.kind))
+        ShuffleKind.All -> QuickPlay.shuffleAll(id.serverId, shuffleLabel(id.kind))
+        ShuffleKind.Offline -> QuickPlay.shuffleOffline(id.serverId, shuffleLabel(id.kind))
+    }
+
+    private fun shuffle(id: MediaId.Shuffle): MediaItem =
+        MediaItem.Builder().setMediaId(id.format()).setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(shuffleLabel(id.kind))
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+                .build(),
+        ).build()
 
     private suspend fun label(trackId: String): String =
         trackDetail(trackId)?.title ?: context.getString(R.string.browse_root)

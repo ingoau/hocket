@@ -4,7 +4,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PercentageRating
+import androidx.media3.common.Rating
+import androidx.media3.common.StarRating
+import androidx.media3.common.ThumbRating
 import androidx.media3.common.Player
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
@@ -26,6 +31,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * Builds the Media3 [MediaLibrarySession] over a [CoreSessionPlayer] and keeps its custom button
@@ -36,8 +42,18 @@ import kotlinx.coroutines.launch
  * The library side ([browser]) answers other apps' browsing and search (Android Auto, Wear,
  * Assistant, any `MediaBrowser`); a "play …" search request (voice, Auto's search) is resolved to one
  * library item here, before the player dispatches it. Every connected controller may open artwork
- * URIs ([ArtworkProvider.allow]). The "recent" root (system playback resumption) is refused, as
- * resumption is.
+ * URIs ([ArtworkProvider.allow]). Browsers asking for the "recent" or "suggested" root get
+ * [LibraryBrowser]'s; System UI's recent root is Media3's own.
+ *
+ * Playback resumption ([onPlaybackResumption]): a play request while nothing is loaded (System UI's
+ * resumption card, a headset's play key reaching a stopped service through Media3's
+ * `MediaButtonReceiver`) resumes the core's session. That stays an explicit request, as the design
+ * requires: the system only asks after the user pressed play. When System UI only asks what it would
+ * resume (after a reboot), it gets the session's item without anything playing.
+ *
+ * Ratings: a controller's standard rating (`setRating`, the legacy session's heart) loves or unloves
+ * the track ([HeartRating], [ThumbRating]) or rates it ([StarRating], [PercentageRating], as stars of
+ * five), for the current item or for any library or queue id.
  *
  * Who may connect is [control]'s ("Allow control by other apps"): with it off, only the system's own
  * controls and Media3's notification controller are accepted, and every request is checked again,
@@ -58,6 +74,19 @@ class MediaSessionBridge(
         const val CMD_REPEAT = "app.hocket.REPEAT"
         const val CMD_RATE = "app.hocket.RATE"
         const val EXTRA_RATING = "rating"
+
+        /**
+         * A controller's rating as the core's command: hearts and thumbs love (thumbs down and an
+         * unset heart unlove), stars and percentages rate out of five (unset clears the rating).
+         * Null for a rating type there is no meaning for.
+         */
+        fun ratingCommand(trackId: String, rating: Rating): Command? = when (rating) {
+            is HeartRating -> Commands.loveTrack(trackId, rating.isRated && rating.isHeart)
+            is ThumbRating -> Commands.loveTrack(trackId, rating.isRated && rating.isThumbsUp)
+            is StarRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.starRating / rating.maxStars * 5).roundToInt().coerceIn(0, 5) else 0)
+            is PercentageRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.percent / 20f).roundToInt().coerceIn(0, 5) else 0)
+            else -> null
+        }
     }
 
     private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE).map { SessionCommand(it, Bundle.EMPTY) }
@@ -98,16 +127,47 @@ class MediaSessionBridge(
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
 
-            override fun onPlaybackResumption(session: MediaSession, controller: MediaSession.ControllerInfo): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-                // Never auto-resume from the system (design: resuming is always explicit). Report what we
-                // have so the notification can stay; the core decides whether anything plays.
-                return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L))
+            override fun onPlaybackResumption(session: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+                // Not checked against [control]: whoever asks is a controller onConnect already accepted, or
+                // Media3's stand-in for a media key that reached the service (from the system, or this
+                // app's own guarded receiver and widget), which carries no uid to check.
+                // The resume item plays as `MediaSessionAction.Play` ([LibraryBrowser.playNow]): the core
+                // carries on with its own session. Nothing loaded: an empty list, and the play that
+                // follows is still the core's to judge.
+                return async {
+                    val item = this@MediaSessionBridge.browser.resumeItem()
+                    if (item == null) MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
+                    else MediaSession.MediaItemsWithStartPosition(listOf(item), 0, this@MediaSessionBridge.browser.resumePositionMs())
+                }
+            }
+
+            override fun onSetRating(session: MediaSession, controller: MediaSession.ControllerInfo, rating: Rating): ListenableFuture<SessionResult> {
+                if (!permitted(session, controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                return Futures.immediateFuture(rate(player.state.metadata?.trackId, rating))
+            }
+
+            override fun onSetRating(session: MediaSession, controller: MediaSession.ControllerInfo, mediaId: String, rating: Rating): ListenableFuture<SessionResult> {
+                if (!permitted(session, controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                return async {
+                    val trackId = when (val id = MediaId.parse(mediaId)) {
+                        is MediaId.QueueItem -> player.trackIdForQueueKey(id.key)
+                        null -> if (mediaId == LibraryBrowser.RESUME || mediaId == player.state.metadata?.trackId) player.state.metadata?.trackId else null
+                        else -> this@MediaSessionBridge.browser.trackIdFor(mediaId)
+                    }
+                    rate(trackId, rating)
+                }
             }
 
             override fun onGetLibraryRoot(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
                 if (!permitted(session, browser)) return refused()
-                if (params?.isRecent == true) return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
-                return Futures.immediateFuture(LibraryResult.ofItem(this@MediaSessionBridge.browser.root(), MediaLibraryService.LibraryParams.Builder().setExtras(LibraryBrowser.rootExtras()).build()))
+                val lib = this@MediaSessionBridge.browser
+                val root = when {
+                    params?.isRecent == true -> lib.recentRoot()
+                    params?.isSuggested == true -> lib.suggestedRoot()
+                    else -> lib.root()
+                }
+                return Futures.immediateFuture(LibraryResult.ofItem(root, MediaLibraryService.LibraryParams.Builder()
+                    .setRecent(params?.isRecent == true).setSuggested(params?.isSuggested == true).setExtras(LibraryBrowser.rootExtras()).build()))
             }
 
             override fun onGetChildren(session: MediaLibraryService.MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: MediaLibraryService.LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
@@ -184,6 +244,13 @@ class MediaSessionBridge(
                 else -> session.setAvailableCommands(controller, SessionCommands.EMPTY, Player.Commands.EMPTY)
             }
         }
+    }
+
+    /** Dispatches [rating] for [trackId] ([ratingCommand]); a bad value when either is unusable. */
+    private fun rate(trackId: String?, rating: Rating): SessionResult {
+        val command = trackId?.let { ratingCommand(it, rating) } ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
+        dispatch(command)
+        return SessionResult(SessionResult.RESULT_SUCCESS)
     }
 
     /** Push a new queue view to the player (its playlist). Main thread. */

@@ -15,6 +15,7 @@ class MediaIdsTest {
             MediaId.Artist("s1", "ar/1"), MediaId.Playlist("s1", "pl:9"), MediaId.PlaylistTrack("s1", "pl:9", 0),
             MediaId.Genre("s1", "Drum/Bass & Jungle"), MediaId.Genre("s1", "Électro 100%"),
             MediaId.Track("server with spaces", "t1"), MediaId.QueueItem("k-42"),
+            MediaId.Recent, MediaId.Suggested, MediaId.Shuffle("s1", ShuffleKind.Loved), MediaId.Shuffle("s/2", ShuffleKind.Offline),
         )
         for (id in ids) assertEquals(id, MediaId.parse(id.format()))
     }
@@ -27,7 +28,7 @@ class MediaIdsTest {
 
     @Test
     fun foreignOrMalformedIdsAreRejected() {
-        for (bad in listOf("", "album", "album/s1", "album/s1/al1/x", "album/s1/al1/-1", "album//al1", "track/s1", "queue", "unknown/a/b", "album/s1/%zz"))
+        for (bad in listOf("", "album", "album/s1", "album/s1/al1/x", "album/s1/al1/-1", "album//al1", "track/s1", "queue", "unknown/a/b", "album/s1/%zz", "shuffle/s1", "shuffle/s1/nope"))
             assertNull(bad, MediaId.parse(bad))
     }
 }

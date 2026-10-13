@@ -1,5 +1,6 @@
 package app.hocket
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,11 +28,30 @@ class MainActivity : ComponentActivity() {
                 else -> Unit
             }
         })
+        // A launcher shortcut (only a fresh start: a recreation must not play it again).
+        if (savedInstanceState == null) handleShortcut(intent)
         setContent {
             val client by app.client.collectAsStateWithLifecycle()
             HocketTheme(client = client) {
                 AppRoot(client = client)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShortcut(intent)
+    }
+
+    /**
+     * Runs the launcher shortcut [intent] stands for, once: a task started by a shortcut keeps it as
+     * its base intent, which Android hands back when the task is relaunched from Recents (after a
+     * reboot, or once Back finished the activity), so a relaunch from history never runs it, and a
+     * handled one is cleared.
+     */
+    private fun handleShortcut(intent: Intent?) {
+        val shortcut = AppShortcuts.parse(this, intent) ?: return
+        setIntent(Intent(intent).setAction(Intent.ACTION_MAIN).replaceExtras(null as android.os.Bundle?))
+        (application as HocketApp).runShortcut(shortcut)
     }
 }

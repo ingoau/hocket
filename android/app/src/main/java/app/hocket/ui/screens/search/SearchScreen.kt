@@ -104,6 +104,14 @@ fun SearchScreen(nav: NavHostController) {
             remote = remote?.let { LibraryPatches.search(it, c.items) }
         }
     }
+    // A search opened from outside the app (Assistant, a launcher shortcut) arrives with its query.
+    LaunchedEffect(Unit) {
+        app.hocket.AppLinks.search.collect { link ->
+            if (link == null) return@collect
+            link.query?.let { query = it }
+            app.hocket.AppLinks.consume(link)
+        }
+    }
     // The keyboard comes up on the first visit only; coming back to the tab keeps the results in view.
     var focusedOnce by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {

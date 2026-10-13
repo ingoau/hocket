@@ -7,7 +7,8 @@
          ciphertext plus names (the key never leaves the device, so the ciphertext is useless elsewhere
          and the plaintext keys would leak the server address and username), and the mirror of
          "allow control by other apps" (a device-local choice: restoring it must not let other apps
-         in on a new device). -->
+         in on a new device), the widget's last state (it names cache files) and the launcher shortcuts'
+         token (a per-install secret). -->
     <exclude domain="file" path="hocket/cache" />
     <exclude domain="file" path="hocket/downloads" />
     <exclude domain="file" path="hocket/hocket.sqlite" />
@@ -19,4 +20,6 @@
     <exclude domain="sharedpref" path="hocket-credentials.xml" />
     <exclude domain="sharedpref" path="hocket-credential-names.xml" />
     <exclude domain="sharedpref" path="hocket-media-control.xml" />
+    <exclude domain="sharedpref" path="hocket-widget.xml" />
+    <exclude domain="sharedpref" path="hocket-shortcuts.xml" />
 </full-backup-content>

@@ -62,6 +62,8 @@ import kotlin.math.pow
  * - Audio focus and becoming-noisy are handled by ExoPlayer; focus loss is reported as
  *   `AudioFocusLost` (transient when Media3 reports a suppression reason instead of a pause: ExoPlayer
  *   then resumes by itself when focus returns and reports `Playing`).
+ * - The main player's audio session is announced to equalizer apps once it first plays, and closed
+ *   on release ([AudioEffectSession]).
  * - The player holds a wake lock and a Wi-Fi lock while playing ([C.WAKE_MODE_NETWORK]): without
  *   them a stream stalls once the screen is off and the CPU or Wi-Fi radio sleeps.
  * - `Paused` is reported only when the player no longer means to play (`playWhenReady` false: a
@@ -148,6 +150,8 @@ class ExoBackend(
         .build()
 
     private var preBufferPlayer: ExoPlayer? = null
+    /** The main player's audio session as effect apps see it (the pre-buffer player stays silent). */
+    private val effects = AudioEffectSession(context)
     private var preBufferKey: String? = null
     private var masterVolume = 1.0
     private var currentGainDb = 0.0
@@ -193,6 +197,7 @@ class ExoBackend(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 val key = currentKey() ?: return
                 if (isPlaying) {
+                    effects.open(player.audioSessionId)
                     report(BackendReport.Playing(BackendReportPlayingInner(key, position())))
                     startPositionLoop()
                 } else {
@@ -222,6 +227,8 @@ class ExoBackend(
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = true)))
                 }
             }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) = effects.onSessionIdChanged(audioSessionId)
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
@@ -397,6 +404,7 @@ class ExoBackend(
         cancelRecovery()
         preBufferPlayer?.release()
         preBufferPlayer = null
+        effects.close()
         player.release()
     }
 

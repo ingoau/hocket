@@ -116,7 +116,32 @@ the one core for the process through `CoreHost`:
   Adding items is `PlayNext` (right after the current entry) or `PlayLater`; artists and genres are
   too broad to enqueue. Voice "play …" requests (`onAddMediaItems` with a search query) resolve to the
   best match, honouring `EXTRA_MEDIA_FOCUS`; an empty query resumes. Subscribed browsers hear about
-  library changes (debounced 2 s). The "recent" root is refused, as resumption is.
+  library changes (debounced 2 s). Browsers asking for the "recent" root get the session to resume
+  (one playable `resume` item); the "suggested" root offers Shuffle loved songs and the albums played
+  most recently (`shuffle/<server>/<kind>` ids play `QuickPlay` filter contexts).
+- Playback resumption: Media3's `MediaButtonReceiver` is declared (`HocketMediaButtonReceiver`, which
+  does not start the service when the last session had no track), guarded by a signature permission
+  (`<applicationId>.permission.MEDIA_BUTTON`: the system's sends and the session's own PendingIntent
+  pass, other apps cannot send to it). That makes Media3 serve System UI's recent root and start a
+  stopped service for a play key; `onPlaybackResumption` answers with the core's persisted session as
+  the `resume` item (cover as bytes, for the boot-time card), which plays as `MediaSessionAction.Play`.
+  It is still explicit: the system only asks after the user pressed play. A service started by a
+  media key holds the foreground with a silent deferred notification (`ForegroundHold`) until
+  Media3's playback notification takes over, or lets go after 15 s when nothing plays, so a resume
+  that does not play cannot trip the `startForegroundService` timeout.
+- Ratings: `onSetRating` (Media3, and the legacy session's heart, since items carry a `HeartRating`)
+  loves/unloves (heart, thumbs) or rates (stars, percentage, as stars of five) the current track or
+  any library/queue id.
+- Equalizers: `ExoBackend` broadcasts `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION` for the main
+  player's audio session when it first plays and `ACTION_CLOSE_…` on release (`AudioEffectSession`).
+  Settings > Audio links to the device's equalizer panel for that session when one exists.
+- Home-screen widget (`NowPlayingWidget`): cover, title, artist, the Connect device playing it, and
+  previous / play-pause / next. `PlaybackService` pushes changes; the last state is kept in
+  `hocket-widget` (excluded from backups) for redraws while the service is stopped. Buttons go to the
+  non-exported `WidgetActionReceiver`: a session command to the running core, or a play key that
+  starts the service (resumption) when it is stopped. Settings > Playback can pin it where the
+  launcher supports that.
+- `MainActivity` also declares `CATEGORY_APP_MUSIC`, so the system can open Hocket as the music app.
 - "Allow control by other apps" (`media.externalControl`, device-local, off by default; Settings >
   Playback) gates all of the above: while off, `onConnect` accepts only the system's own controls
   (`ExternalControl`: this app, Media3's notification controller, and uids holding the privileged
@@ -138,7 +163,15 @@ the one core for the process through `CoreHost`:
   device on the media controls' output chip; the other devices are routes in the system output
   switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds
   `ConnectRoutes` from `DevicesChanged`/`TransportChanged`/`MediaSession` and registers the app's
-  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound. Playback resumption from the system is refused (resuming is always explicit).
+  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound.
+- Launcher shortcuts (`AppShortcuts`, app module): Resume, Shuffle loved / all / offline songs and
+  Search, up to four, chosen in Settings > Playback (an app preference). They are dynamic shortcuts
+  to `MainActivity` whose intents carry a per-install token (`hocket-shortcuts`, excluded from
+  backups): MainActivity is exported, so an intent without it only opens the app.
+- Assistant: `MediaSearchActivity` handles `MEDIA_PLAY_FROM_SEARCH` (the discovery intent) with
+  `LibraryBrowser.resolveSearch` and plays the match. Any app can send that intent, so it plays
+  directly only with "Allow control by other apps" on; otherwise (or with no match) it opens search
+  with the query.
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
   `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
 - The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported

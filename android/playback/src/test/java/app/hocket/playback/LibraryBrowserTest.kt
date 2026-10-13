@@ -5,10 +5,14 @@ import android.os.Bundle
 import android.provider.MediaStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
+import app.hocket.core.QuickPlay
 import app.hocket.core.api.Command
 import app.hocket.core.api.ContextKind
 import app.hocket.core.api.MediaSessionAction
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -159,5 +163,67 @@ class LibraryBrowserTest {
         ArtworkProvider.allow("com.google.android.projection.gearhead")
         assertTrue(ArtworkProvider.isAllowed("com.google.android.projection.gearhead", app.packageName))
         assertEquals("content://${app.packageName}.artwork/320/al%2F1", ArtworkProvider.uri(app, "al/1").toString())
+    }
+
+    @Test
+    fun theRecentRootIsTheSessionToResume() = runBlocking {
+        val album = fake.library.albums.first()
+        fake.dispatch(Commands.playContext(Commands.albumContext(server, album.id, album.name)))
+        val items = browser.children(MediaId.RECENT, 0, 10)!!
+        assertEquals(listOf(LibraryBrowser.RESUME), items.map { it.mediaId })
+        assertEquals(fake.library.albumTracks(album.id).first().title, items[0].mediaMetadata.title.toString())
+        assertTrue(items[0].mediaMetadata.isPlayable == true)
+        assertEquals(MediaId.RECENT, browser.recentRoot().mediaId)
+        // Playing it resumes the session rather than starting anything new.
+        assertTrue(browser.playNow(listOf(LibraryBrowser.RESUME), 0))
+        assertEquals(Commands.mediaSessionCommand(MediaSessionAction.Play), sent.single())
+    }
+
+    @Test
+    fun nothingLoadedMeansNothingToResume() = runBlocking {
+        val empty = object : CoreHandle by fake {
+            override suspend fun query(query: Query): QueryResult {
+                val result = fake.query(query)
+                return if (result is QueryResult.SnapshotResult) QueryResult.SnapshotResult(result.data.copy(mediaSession = result.data.mediaSession.copy(metadata = null))) else result
+            }
+        }
+        val browser = LibraryBrowser(app, { empty }, { server }, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        assertNull(browser.resumeItem())
+        assertEquals(emptyList<Any>(), browser.children(MediaId.RECENT, 0, 10))
+    }
+
+    @Test
+    fun theSuggestedRootOffersShuffleLovedThenRecentlyPlayedAlbums() = runBlocking {
+        val items = browser.children(MediaId.SUGGESTED, 0, 100)!!
+        assertEquals(MediaId.Shuffle(server, ShuffleKind.Loved).format(), items.first().mediaId)
+        val albums = items.drop(1).map { MediaId.parse(it.mediaId) }
+        assertTrue(albums.isNotEmpty() && albums.size <= LibraryBrowser.SUGGESTED_ALBUMS)
+        assertTrue(albums.all { it is MediaId.Album })
+        assertEquals("no album twice", albums.size, albums.toSet().size)
+        assertTrue(items.all { it.mediaMetadata.isPlayable == true })
+        serverId = null
+        assertEquals(emptyList<Any>(), browser.children(MediaId.SUGGESTED, 0, 100))
+    }
+
+    @Test
+    fun aQuickPlayShufflesItsFilter() = runBlocking {
+        val id = MediaId.Shuffle(server, ShuffleKind.Loved).format()
+        assertEquals("Shuffle loved songs", browser.item(id)!!.mediaMetadata.title.toString())
+        assertTrue(browser.playNow(listOf(id), 0))
+        val play = sent.single() as Command.PlayContext
+        assertTrue(play.data.args.shuffle)
+        val kind = play.data.args.context.kind as ContextKind.Filter
+        assertEquals(QuickPlay.LOVED_FILTER_ID, kind.data.filter.id)
+        assertEquals(server, play.data.args.context.serverId)
+    }
+
+    @Test
+    fun ratingsResolveLibraryIdsToTracks() = runBlocking {
+        val album = fake.library.albums.first()
+        val tracks = fake.library.albumTracks(album.id)
+        assertEquals(tracks[1].id, browser.trackIdFor(MediaId.AlbumTrack(server, album.id, 1).format()))
+        assertEquals("t9", browser.trackIdFor(MediaId.Track(server, "t9").format()))
+        assertNull(browser.trackIdFor(MediaId.Album(server, album.id).format()))
+        assertNull(browser.trackIdFor("nonsense"))
     }
 }

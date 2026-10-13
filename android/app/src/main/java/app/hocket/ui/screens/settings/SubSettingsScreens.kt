@@ -117,6 +117,14 @@ fun AudioSettingsScreen(nav: NavHostController) {
             label = eqPreampLabel, valueText = eqPreampValue, modifier = Modifier.padding(horizontal = 16.dp))
         val bands = audio.eq.bands.ifEmpty { FakeCore.defaultBands() }
         EqEditor(bands, enabled = audio.eq.enabled) { new -> client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(bands = new, preset = null)))) }
+        // The device's own equalizer (or an installed effects app), attached to the player's session.
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val systemEq = androidx.compose.runtime.remember { app.hocket.playback.AudioEffectSession.controlPanelIntent(context) }
+        if (systemEq != null) {
+            SettingRow(stringResource(R.string.settings_system_eq), stringResource(R.string.settings_system_eq_body), onClick = {
+                runCatching { context.startActivity(app.hocket.playback.AudioEffectSession.controlPanelIntent(context) ?: systemEq) }
+            }, tag = "audio.systemEq") { Chevron() }
+        }
         if (outputs.isNotEmpty()) {
             SettingsSection(stringResource(R.string.settings_output_device))
             val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
