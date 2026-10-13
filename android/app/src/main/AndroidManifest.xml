@@ -38,5 +38,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Assistant's discovery intent ("play … on Hocket"): no UI, finishes once it has played or
+             handed the query to search (MediaSearchActivity; plays directly only with "Allow control
+             by other apps" on). -->
+        <activity
+            android:name="app.hocket.MediaSearchActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

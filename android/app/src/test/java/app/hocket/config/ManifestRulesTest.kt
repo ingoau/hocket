@@ -29,12 +29,13 @@ class ManifestRulesTest {
 
     /** Everything the device must keep to itself: the library mirror and its backups (large, and a
      * cache), the Connect device id (must be unique per install), the keystore ciphertext and names, and
-     * the "allow control by other apps" mirror (device-local). */
+     * the "allow control by other apps" mirror (device-local), the widget's state (names cache files)
+     * and the launcher shortcuts' token (a per-install secret). */
     private val mustExclude = setOf(
         "file:hocket/hocket.sqlite", "file:hocket/hocket.sqlite-wal", "file:hocket/hocket.sqlite-shm", "file:hocket/backups",
         "file:hocket/downloads", "file:hocket/cache",
         "sharedpref:hocket-core.xml", "sharedpref:hocket-credentials.xml", "sharedpref:hocket-credential-names.xml",
-        "sharedpref:hocket-media-control.xml",
+        "sharedpref:hocket-media-control.xml", "sharedpref:hocket-widget.xml", "sharedpref:hocket-shortcuts.xml",
     )
 
     private fun excludes(section: Element): Set<String> = section.children("exclude").map { it.getAttribute("domain") + ":" + it.getAttribute("path") }.toSet()
@@ -57,13 +58,25 @@ class ManifestRulesTest {
         }
     }
 
+    private fun elements(path: String, tag: String): List<Element> =
+        parse(path).getElementsByTagName(tag).let { list -> (0 until list.length).map { list.item(it) as Element } }
+
     @Test
-    fun noLegacyMediaButtonReceiverIsDeclared() {
-        // Media3 declares its own receiver; the exported legacy one let any app start playback.
-        for (path in listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")) {
-            val receivers = parse(path).getElementsByTagName("receiver")
-            assertEquals("$path declares no broadcast receiver", 0, receivers.length)
-        }
+    fun theOnlyReceiversAreTheGuardedMediaButtonOneAndTheWidgets() {
+        val receivers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml").flatMap { elements(it, "receiver") }
+        assertEquals(
+            setOf("androidx.media3.session.MediaButtonReceiver", "app.hocket.playback.NowPlayingWidget", "app.hocket.playback.WidgetActionReceiver"),
+            receivers.map { it.getAttribute("android:name") }.toSet(),
+        )
+        // Never the legacy androidx.media receiver: exported unguarded, it let any app start playback.
+        // Media3's is exported for the system but only this app (signature) may send to it.
+        val mediaButton = receivers.single { it.getAttribute("android:name") == "androidx.media3.session.MediaButtonReceiver" }
+        val permission = "\${applicationId}.permission.MEDIA_BUTTON"
+        assertEquals(permission, mediaButton.getAttribute("android:permission"))
+        val declared = elements("android/playback/src/main/AndroidManifest.xml", "permission").single { it.getAttribute("android:name") == permission }
+        assertEquals("signature", declared.getAttribute("android:protectionLevel"))
+        // The widget's buttons are reachable only through its own PendingIntents.
+        assertEquals("false", receivers.single { it.getAttribute("android:name") == "app.hocket.playback.WidgetActionReceiver" }.getAttribute("android:exported"))
     }
 
     @Test

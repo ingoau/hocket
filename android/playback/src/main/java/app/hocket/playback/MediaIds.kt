@@ -20,6 +20,9 @@ import java.net.URLEncoder
  * - `genre/<server>/<name>` (its albums; playable: the genre)
  * - `track/<server>/<id>` (a lone track: search results)
  * - `queue/<key>` (a queue entry in the session's timeline)
+ * - `recent` (the root for "recent" browsers: the session to resume), `suggested` (the root for
+ *   "suggested" browsers: recently played albums and quick plays)
+ * - `shuffle/<server>/<kind>` (a quick play: shuffle loved songs, all songs, songs available offline)
  */
 sealed class MediaId {
     data object Root : MediaId()
@@ -32,6 +35,9 @@ sealed class MediaId {
     data class Genre(val serverId: String, val name: String) : MediaId()
     data class Track(val serverId: String, val id: String) : MediaId()
     data class QueueItem(val key: String) : MediaId()
+    data object Recent : MediaId()
+    data object Suggested : MediaId()
+    data class Shuffle(val serverId: String, val kind: ShuffleKind) : MediaId()
 
     fun format(): String = when (this) {
         Root -> ROOT
@@ -44,16 +50,23 @@ sealed class MediaId {
         is Genre -> join("genre", serverId, name)
         is Track -> join("track", serverId, id)
         is QueueItem -> join("queue", key)
+        Recent -> RECENT
+        Suggested -> SUGGESTED
+        is Shuffle -> join("shuffle", serverId, kind.id)
     }
 
     override fun toString(): String = format()
 
     companion object {
         const val ROOT = "root"
+        const val RECENT = "recent"
+        const val SUGGESTED = "suggested"
 
         /** Null for anything this app did not hand out. */
         fun parse(id: String): MediaId? {
             if (id == ROOT) return Root
+            if (id == RECENT) return Recent
+            if (id == SUGGESTED) return Suggested
             LibrarySection.entries.firstOrNull { it.id == id }?.let { return Section(it) }
             val parts = id.split('/').map { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: return null }
             if (parts.any { it.isEmpty() }) return null
@@ -72,6 +85,7 @@ sealed class MediaId {
                 "genre" -> if (parts.size == 3) Genre(parts[1], parts[2]) else null
                 "track" -> if (parts.size == 3) Track(parts[1], parts[2]) else null
                 "queue" -> if (parts.size == 2) QueueItem(parts[1]) else null
+                "shuffle" -> if (parts.size == 3) ShuffleKind.entries.firstOrNull { it.id == parts[2] }?.let { Shuffle(parts[1], it) } else null
                 else -> null
             }
         }
@@ -86,4 +100,11 @@ enum class LibrarySection(val id: String) {
     Artists("artists"),
     Playlists("playlists"),
     Genres("genres"),
+}
+
+/** The library-wide shuffles a [MediaId.Shuffle] plays ([app.hocket.core.QuickPlay]). */
+enum class ShuffleKind(val id: String) {
+    Loved("loved"),
+    All("all"),
+    Offline("offline"),
 }

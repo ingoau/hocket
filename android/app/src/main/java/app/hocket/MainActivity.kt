@@ -1,5 +1,6 @@
 package app.hocket
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,11 +28,23 @@ class MainActivity : ComponentActivity() {
                 else -> Unit
             }
         })
+        // A launcher shortcut (only a fresh start: a recreation must not play it again).
+        if (savedInstanceState == null) handleShortcut(intent)
         setContent {
             val client by app.client.collectAsStateWithLifecycle()
             HocketTheme(client = client) {
                 AppRoot(client = client)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShortcut(intent)
+    }
+
+    private fun handleShortcut(intent: Intent?) {
+        val shortcut = AppShortcuts.parse(this, intent) ?: return
+        (application as HocketApp).runShortcut(shortcut)
     }
 }

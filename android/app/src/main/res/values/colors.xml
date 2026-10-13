@@ -3,4 +3,7 @@
     <!-- The Crescendo mark's Tonal Violet dark tile. -->
     <color name="splash_background">#FF221D3A</color>
     <color name="ic_launcher_background">#FF221D3A</color>
+    <!-- Launcher shortcut icons: the same tile, a light violet glyph. -->
+    <color name="shortcut_background">#FF221D3A</color>
+    <color name="shortcut_foreground">#FFD7CCFF</color>
 </resources>

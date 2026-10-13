@@ -12,6 +12,13 @@
     <!-- Reading the SSID (for per-network transcoding profiles) needs location on Android 8.1+. Optional: without it the network id falls back to the transport type. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Who may send media keys to the media button receiver below: this app only (signature). The
+         system's sends pass any permission check, and the session's own media button PendingIntent
+         carries this app's identity. -->
+    <permission
+        android:name="${applicationId}.permission.MEDIA_BUTTON"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.permission.MEDIA_BUTTON" />
 
     <application>
         <service
@@ -62,9 +69,36 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/pebble_paths" />
         </provider>
-        <!-- Media buttons: Media3 declares its own androidx.media3.session.MediaButtonReceiver (it
-             FGS-starts the service only for a PLAY key while nothing plays). The legacy
-             androidx.media.session.MediaButtonReceiver must not be declared as well: exported with a
-             MEDIA_BUTTON filter, it let any app start playback here with an arbitrary key event. -->
+        <!-- Playback resumption: a play key while the service is stopped (a headset, the system's
+             last media button receiver, the widget's play button) reaches Media3's receiver, which
+             FGS-starts the service only for PLAY / PLAY_PAUSE / HEADSETHOOK; the session then resumes
+             through onPlaybackResumption. Declaring it is also what makes Media3 offer System UI its
+             recent root (the resumption card). Guarded by the signature permission above, so no
+             other app can start playback with a key event (the legacy
+             androidx.media.session.MediaButtonReceiver, exported unguarded, once let any app). -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true"
+            android:permission="${applicationId}.permission.MEDIA_BUTTON">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+        <!-- The now-playing home-screen widget. Exported for the launcher's APPWIDGET_UPDATE (a
+             forged one only redraws the stored state); its buttons go to the private receiver. -->
+        <receiver
+            android:name="app.hocket.playback.NowPlayingWidget"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/now_playing_widget_info" />
+        </receiver>
+        <receiver
+            android:name="app.hocket.playback.WidgetActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

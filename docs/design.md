@@ -178,6 +178,7 @@ A device going quiet might have died or might have lost network and kept playing
 
 - A returning diverged device doesn't merge and doesn't overwrite — its state becomes a saved queue entry.
 - Never auto-resume on connect. Opening a laptop should not start playing music.
+- The OS's playback resumption (Android's resume card, a headset's play key while the app is stopped) counts as explicit: it only happens when someone presses play.
 - Surface it dormant in the player bar: *Pixel was playing Track · Resume here*.
 - Don't extrapolate position across the offline gap. Past about an hour, snap to the start of the track.
 - Without a coordinator this degrades rather than breaks: on LAN the elected coordinator holds the replica. A device that was never present and can't reach a peer gets nothing, and the UI says so.
@@ -428,7 +429,7 @@ Server setup is the entire first screen, nothing else. Every other empty state n
 
 ### Android v1
 
-Media notification only. Lockscreen comes free with MediaSession. Now-playing screen with queue and lyrics reachable by swipe or tab rather than a side panel — the split panel and fullscreen player are desktop shapes. Widget, quick settings tile, Auto and Wear come later; they're shallow but they multiply the surface area of every playback state bug not yet found.
+Media notification only. Lockscreen comes free with MediaSession. Now-playing screen with queue and lyrics reachable by swipe or tab rather than a side panel — the split panel and fullscreen player are desktop shapes. Widget, quick settings tile, Auto and Wear come later; they're shallow but they multiply the surface area of every playback state bug not yet found. *(Since: Auto, Wear and media browsers through the library session; system playback resumption; a now-playing widget naming the Connect device that plays; launcher shortcuts; Assistant's play-from-search; the audio-effect session broadcast for equalizer apps.)*
 
 
 ## Licence  

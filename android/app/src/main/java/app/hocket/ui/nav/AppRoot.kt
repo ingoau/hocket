@@ -362,6 +362,16 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
             }
             val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
+            // Search opened from outside (a launcher shortcut, Assistant): the search screen takes the
+            // query and consumes the link.
+            LaunchedEffect(nav) {
+                app.hocket.AppLinks.search.collect { link ->
+                    if (link == null) return@collect
+                    launch { sheet.collapse() }
+                    if (NavItem.Search in currentItems) { if (currentSelected != NavItem.Search) go(NavItem.Search) }
+                    else nav.navigate(Route.Search) { launchSingleTop = true }
+                }
+            }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
             Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {

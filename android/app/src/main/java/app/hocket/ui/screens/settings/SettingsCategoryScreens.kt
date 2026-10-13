@@ -64,6 +64,9 @@ import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
 import kotlinx.coroutines.launch
+import app.hocket.AppShortcut
+import app.hocket.AppShortcuts
+import app.hocket.HocketApp
 import kotlin.math.roundToInt
 
 /*
@@ -212,6 +215,35 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
         SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
             subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
+        LauncherShortcutsSection()
+    }
+}
+
+/**
+ * Which launcher shortcuts the app icon's long-press menu offers ([AppShortcuts]), at most
+ * [AppShortcuts.MAX]; a device-local app preference. Hidden without the app's preferences
+ * (previews, tests on a bare Application).
+ */
+@Composable
+private fun LauncherShortcutsSection() {
+    val hocket = androidx.compose.ui.platform.LocalContext.current.applicationContext as? HocketApp ?: return
+    val chosen by hocket.prefs.shortcuts.collectAsStateWithLifecycle(initialValue = null)
+    val current = chosen ?: return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val full = current.size >= AppShortcuts.MAX
+    SettingsSection(stringResource(R.string.settings_shortcuts))
+    Text(stringResource(R.string.settings_shortcuts_summary, AppShortcuts.MAX), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+    AppShortcut.entries.forEach { shortcut ->
+        val on = shortcut in current
+        SwitchRow(
+            stringResource(shortcut.label), on,
+            { checked ->
+                if (checked && full) return@SwitchRow
+                scope.launch { hocket.prefs.setShortcuts(if (checked) current + shortcut else current - shortcut) }
+            },
+            subtitle = if (!on && full) stringResource(R.string.settings_shortcuts_full) else null,
+            tag = "shortcuts.${shortcut.id}",
+        )
     }
 }
 

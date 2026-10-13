@@ -6,6 +6,13 @@
     <string name="browse_artists">Artists</string>
     <string name="browse_playlists">Playlists</string>
     <string name="browse_genres">Genres</string>
+    <string name="browse_recent">Recent</string>
+    <string name="browse_suggested">Suggested</string>
+    <!-- Library-wide plays: launcher shortcuts and the browser's suggestions (the queue's name too). -->
+    <string name="quickplay_resume">Resume</string>
+    <string name="quickplay_shuffle_loved">Shuffle loved songs</string>
+    <string name="quickplay_shuffle_all">Shuffle all songs</string>
+    <string name="quickplay_shuffle_offline">Shuffle offline songs</string>
     <!-- The Pebble watchapp: its update notification. -->
     <string name="pebble_channel">Pebble watch</string>
     <string name="pebble_update_title">Update the Hocket watchapp</string>
