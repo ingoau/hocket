@@ -526,7 +526,7 @@ void show_notice(const char *text) {
 #if defined(PBL_TOUCH)
     window_set_touch_bridge_disabled(s_notice_window, !g_settings.touch_navigation);
 #endif
-    window_set_background_color(s_notice_window, PBL_IF_COLOR_ELSE(HOCKET_DARK, GColorBlack));
+    window_set_background_color(s_notice_window, PBL_IF_COLOR_ELSE(GColorDukeBlue, GColorBlack));
     window_set_window_handlers(s_notice_window, (WindowHandlers){.unload = prv_notice_unload});
     Layer *root = window_get_root_layer(s_notice_window);
     GRect b = layer_get_bounds(root);
