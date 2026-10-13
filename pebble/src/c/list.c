@@ -19,6 +19,7 @@ struct List {
   List *next;  // the open lists
   Window *window;
   MenuLayer *menu;
+  Layer *touch_shield;  // see prv_load; NULL with touch navigation on
   ListKind kind;
   char path[96];
   char title[48];
@@ -425,6 +426,13 @@ static void prv_load(Window *window) {
     // Touch only does gestures: swipe right goes back, press and hold acts on the selected row.
     window_set_touch_bridge_disabled(window, true);
     window_attach_recognizer(window, swipe_recognizer_create(prv_swipe, NULL, SwipeDirection_Right));
+    // The app is always opted into touch navigation (main.c), and an opted-in app's MenuLayer
+    // scrolls and selects by touch on its own: the OS hands a touch to it when the layer under the
+    // finger is the menu or inside it. An empty layer over the whole menu is what the finger lands
+    // on instead, so the list ignores touch. The window's recognizers and the press-and-hold (raw
+    // touch) don't depend on that layer and keep working.
+    l->touch_shield = layer_create(bounds);
+    layer_add_child(root, l->touch_shield);
   }
 #endif
   if (l->kind == ListRemote) prv_request(l, 0);
@@ -455,6 +463,7 @@ static void prv_unload(Window *window) {
       break;
     }
   }
+  if (l->touch_shield) layer_destroy(l->touch_shield);
   menu_layer_destroy(l->menu);
   window_destroy(window);
   free(l);

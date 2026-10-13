@@ -178,10 +178,11 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
 
 static void prv_apply_settings(void) {
 #if defined(PBL_TOUCH)
-  // Always opted in: an app that is not delivers no touch to its windows' recognizers either, so
-  // the gestures died with the setting off (#67). The setting instead decides per window whether the
-  // system's swipe/tap-to-button bridge runs (window_set_touch_bridge_disabled): Now Playing and the
-  // lyrics always handle touch themselves, lists and the notice only with the setting off.
+  // Always opted in: the OS feeds windows' recognizers only through touch navigation, so with the
+  // app opted out the gestures died with the setting off (#67). An opted-in app's MenuLayers scroll
+  // and select by touch themselves; with the setting off, lists cover theirs with an empty layer
+  // (list.c), so touch there only does the gestures. (The OS already keeps the swipe/tap-to-button
+  // bridge off for an app with a raw touch subscriber, as this one has for press and hold.)
   app_touch_navigation_enable(true);
 #endif
   now_playing_settings_changed();
