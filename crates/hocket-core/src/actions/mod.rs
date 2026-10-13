@@ -791,26 +791,35 @@ fn queue_commands(
     next: bool,
 ) -> Vec<Command> {
     let server_id = state.server_id.clone().unwrap_or_default();
-    // Play next on queue items still to play moves them up rather than queueing them again (#37);
-    // played ones (history, the current item) are queued again as before, ahead of the moved ones.
-    let (moves, played) = match target {
+    // Play next on queue items still to play moves them up rather than queueing them again (#37):
+    // they are removed and queued again by the same PlayNext, behind the played ones (history, the
+    // current item), which are queued again as before. Removing them all in one op keeps every key
+    // valid; a MoveQueueItem per key would not, as moving one context item renumbers the index-based
+    // keys (`ctx-<n>`) of the others.
+    let (track_ids, remove) = match target {
         ActionTarget::QueueItems { keys } if next => {
             let (upcoming, played): (Vec<_>, Vec<_>) =
                 keys.iter().cloned().partition(|k| resolver.is_upcoming(k));
-            (upcoming, Some(ActionTarget::QueueItems { keys: played }))
+            let mut track_ids =
+                track_ids_of(&ActionTarget::QueueItems { keys: played }, state, resolver);
+            let upcoming: Vec<_> = upcoming
+                .into_iter()
+                .filter_map(|k| resolver.track_for_key(&k).map(|t| (k, t)))
+                .collect();
+            let (remove, moved): (Vec<_>, Vec<_>) = upcoming.into_iter().unzip();
+            track_ids.extend(moved);
+            (track_ids, remove)
         }
-        _ => (vec![], None),
+        _ => (track_ids_of(target, state, resolver), vec![]),
     };
-    let track_ids = track_ids_of(played.as_ref().unwrap_or(target), state, resolver);
-    let first = track_ids.len() as u32;
-    let moves = moves
-        .into_iter()
-        .zip(first..)
-        .map(|(key, to_index)| Command::MoveQueueItem { key, to_index });
     if track_ids.is_empty() {
-        return moves.collect();
+        return vec![];
     }
-    let mut out = vec![if next {
+    let mut out = vec![];
+    if !remove.is_empty() {
+        out.push(Command::RemoveQueueItems { keys: remove });
+    }
+    out.push(if next {
         Command::PlayNext {
             server_id,
             track_ids,
@@ -820,8 +829,7 @@ fn queue_commands(
             server_id,
             track_ids,
         }
-    }];
-    out.extend(moves);
+    });
     out
 }
 

@@ -431,8 +431,8 @@ fn handlers_map_to_commands() {
             track_ids: vec!["track-1".into(), "track-2".into()]
         }]
     );
-    // Items still to play move up instead of being queued twice (#37); played ones are queued
-    // again, ahead of them.
+    // Items still to play move up instead of being queued twice (#37): removed in one op (their
+    // keys may be index-based) and queued again behind the played ones.
     assert_eq!(
         r.commands(
             "playNext",
@@ -444,17 +444,12 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![
+            Command::RemoveQueueItems {
+                keys: vec!["key-up1".into(), "key-up2".into()]
+            },
             Command::PlayNext {
                 server_id: "srv".into(),
-                track_ids: vec!["track-1".into()]
-            },
-            Command::MoveQueueItem {
-                key: "key-up1".into(),
-                to_index: 1
-            },
-            Command::MoveQueueItem {
-                key: "key-up2".into(),
-                to_index: 2
+                track_ids: vec!["track-1".into(), "track-up1".into(), "track-up2".into()]
             },
         ]
     );
@@ -468,10 +463,15 @@ fn handlers_map_to_commands() {
             &res
         )
         .unwrap(),
-        vec![Command::MoveQueueItem {
-            key: "key-up1".into(),
-            to_index: 0
-        }]
+        vec![
+            Command::RemoveQueueItems {
+                keys: vec!["key-up1".into()]
+            },
+            Command::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["track-up1".into()]
+            },
+        ]
     );
     assert_eq!(
         r.commands(

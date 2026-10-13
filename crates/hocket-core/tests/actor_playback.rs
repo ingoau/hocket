@@ -615,3 +615,37 @@ async fn play_next_on_an_upcoming_item_moves_it() {
     t.run_for(500.0).await;
     assert_eq!(ids(&t.queue().await), ["t0", "t3", "t1", "t2"]);
 }
+
+/// Several upcoming songs at once move up in the order chosen, even though each context item's key
+/// is its index and moving one renumbers the rest (#37).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_next_on_several_upcoming_items_moves_each_of_them() {
+    let t = synced_core("play-next-move-many").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    let ids = |q: &QueueView| {
+        q.playing_next
+            .iter()
+            .chain(q.upcoming.iter())
+            .map(|e| e.track.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let q = t.queue().await;
+    assert_eq!(ids(&q), ["t1", "t2", "t3"]);
+    t.run(Command::RunAction {
+        action_id: "playNext".into(),
+        target: ActionTarget::QueueItems {
+            keys: vec![
+                q.upcoming[2].item.key.clone(),
+                q.upcoming[0].item.key.clone(),
+            ],
+        },
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert_eq!(ids(&t.queue().await), ["t3", "t1", "t2"]);
+}
