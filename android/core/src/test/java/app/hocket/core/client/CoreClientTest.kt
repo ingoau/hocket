@@ -82,6 +82,12 @@ class CoreClientTest {
         assertFalse(client.batterySaver.value)
         client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(true)))
         assertTrue(client.batterySaver.value)
+        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(false)))
+        assertFalse(client.batterySaver.value)
+        // Through the core: each change is announced on its own.
+        client.dispatch(Commands.setBatterySaver(true))
+        runCurrent()
+        assertTrue(client.batterySaver.value)
         client.dispatch(Commands.setBatterySaver(false))
         runCurrent()
         assertFalse(client.batterySaver.value)
