@@ -530,6 +530,44 @@ impl Downloads {
         Ok(())
     }
 
+    /// The stream behind an entry is `total` bytes, shorter than the length
+    /// it was begun with (Navidrome's estimate for a transcode it had not
+    /// cached yet): keep the spans when they all fit (the same bytes, the
+    /// length was only a guess) and promote the row if they now cover it.
+    /// `None` when a span lies past `total` or the row is gone; the caller
+    /// then resets the entry.
+    pub fn cache_shorten(&self, key: &EntryKey, total: u64) -> DbResult<Option<MergeOutcome>> {
+        let path = key.path.to_string_lossy().into_owned();
+        let fits = self.inner.db.with_tx(|tx| {
+            let row = tx
+                .query_row(
+                    &format!("SELECT {ROW_COLUMNS} FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4"),
+                    params![key.server_id, key.track_id, key.profile, path],
+                    CacheRow::from_row,
+                )
+                .optional()?;
+            let Some(row) = row else {
+                return Ok(false);
+            };
+            if row.complete || row.spans.max_end() > total {
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE cache_entries SET total_bytes = ?5 WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4",
+                params![key.server_id, key.track_id, key.profile, path, total as f64],
+            )?;
+            Ok(true)
+        })?;
+        if !fits {
+            return Ok(None);
+        }
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&key.path) {
+            let _ = f.set_len(total);
+        }
+        self.cache_merge(key, &SpanSet::new(), Some(total), None)
+            .map(Some)
+    }
+
     /// Merge spans a reader wrote (and flushed) into its entry. Only lands
     /// while the row still points at the writer's file and agrees on the
     /// total. Promotes the row when the spans cover the whole stream, then

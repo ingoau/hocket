@@ -560,6 +560,9 @@ pub enum UpstreamBehaviour {
     /// many bytes too long, the media, then the connection drops. After
     /// that, [`Serve`](Self::Serve) (the transcode is cached).
     EstimatedOnce(usize),
+    /// [`EstimatedOnce`](Self::EstimatedOnce) every time: a server whose
+    /// transcoding cache is off.
+    Estimated(usize),
 }
 
 /// One `stream` request the fake saw.
@@ -699,7 +702,9 @@ impl StreamUpstream for FakeUpstream {
                     body: futures::stream::iter([Ok(bytes::Bytes::from_static(body))]).boxed(),
                 });
             }
-            if let UpstreamBehaviour::EstimatedOnce(over) = behaviour {
+            if let UpstreamBehaviour::EstimatedOnce(over) | UpstreamBehaviour::Estimated(over) =
+                behaviour
+            {
                 return Ok(UpstreamResponse {
                     status: 200,
                     content_type: Some(content_type),

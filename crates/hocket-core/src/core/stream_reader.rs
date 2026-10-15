@@ -60,7 +60,8 @@ use url::Url;
 use crate::api::TranscodingProfile;
 use crate::downloads::spans::SpanSet;
 use crate::downloads::{
-    stream_options, CacheRow, Downloads, EntryKey, StreamMinter, StreamTarget, TrackKey,
+    stream_options, CacheRow, Downloads, EntryKey, MergeOutcome, StreamMinter, StreamTarget,
+    TrackKey,
 };
 use crate::subsonic::SubsonicApi;
 use crate::util::Clock;
@@ -747,6 +748,19 @@ struct Segment {
     /// reads it to its end.
     stop: Option<u64>,
     eof: bool,
+    /// Asked for from here, but the server ignored the `Range` and sent the
+    /// whole stream (`Some` only then, for an offset past 0).
+    skip_to: Option<u64>,
+}
+
+impl Segment {
+    /// The body ended (cleanly or not) exactly where the range it ignored
+    /// began: a transcode served with an estimated length, asked again at
+    /// the real end where the last one stopped (see the module docs). A
+    /// dropped connection landing on that very byte is not plausible.
+    fn ended_at_skip(&self) -> bool {
+        self.skip_to.is_some_and(|p| self.next_abs == p)
+    }
 }
 
 /// The cache file a handle reads from and writes into.
@@ -908,6 +922,11 @@ impl CacheSource {
                 }
                 if seg.eof {
                     let ended_at = seg.next_abs;
+                    if seg.ended_at_skip() && self.total.is_some_and(|t| ended_at < t) {
+                        tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream ended where it was asked to start; that is its end");
+                        self.shorten(ended_at);
+                        continue;
+                    }
                     let short = match (seg.stop, self.total) {
                         (Some(s), _) => ended_at < s,
                         (None, Some(t)) => ended_at < t,
@@ -954,6 +973,11 @@ impl CacheSource {
                             seg.pending = chunk.slice(skip..);
                             seg.pending_at = at + skip as u64;
                         }
+                        self.seg = Some(seg);
+                    }
+                    Some(Err(_)) if seg.ended_at_skip() => {
+                        // Read as the end of the stream (above).
+                        seg.eof = true;
                         self.seg = Some(seg);
                     }
                     Some(Err(e)) => {
@@ -1090,12 +1114,7 @@ impl CacheSource {
             let Some(real) = real.filter(|t| pos >= *t) else {
                 return Err(StreamError::RangeNotSatisfiable);
             };
-            if self.total != Some(real) {
-                tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream is shorter than announced; discarding its cached spans");
-                self.discard_spans(Some(real), None);
-            }
-            self.total = Some(real);
-            self.update_end();
+            self.shorten(real);
             return Ok(());
         }
         if !(200..300).contains(&up.status) {
@@ -1154,8 +1173,50 @@ impl CacheSource {
             pending_at: pos,
             stop: if whole { None } else { gap_end },
             eof: false,
+            skip_to: (whole && pos > 0).then_some(pos),
         });
         Ok(())
+    }
+
+    /// The stream is `real` bytes, less than it was announced with (an
+    /// estimate): end there. The cached spans stay when they all fit (the
+    /// same bytes; only the length was a guess), and may now complete the
+    /// entry.
+    fn shorten(&mut self, real: u64) {
+        if self.total != Some(real) {
+            self.persist();
+            let kept = match &self.entry {
+                None => Some(MergeOutcome::default()),
+                Some(e) => self
+                    .sh
+                    .downloads
+                    .cache_shorten(&e.key, real)
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(target: "hocket_core", error = %err, "shortening cache entry");
+                        None
+                    }),
+            };
+            match kept {
+                Some(out) => {
+                    tracing::info!(target: "hocket_core", track = %self.token.track_id, real, "the server's stream is shorter than announced");
+                    if let Some(e) = &mut self.entry {
+                        if out.complete {
+                            e.read_only = true;
+                            e.file = None;
+                        }
+                    }
+                    if !out.changed.is_empty() {
+                        (self.sh.notify)(out.changed);
+                    }
+                }
+                None => {
+                    tracing::info!(target: "hocket_core", track = %self.token.track_id, real, "the server's stream is shorter than announced; discarding its cached spans");
+                    self.discard_spans(Some(real), None);
+                }
+            }
+        }
+        self.total = Some(real);
+        self.update_end();
     }
 
     /// Forget the cached spans: the server's stream is not the one they came
