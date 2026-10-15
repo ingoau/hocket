@@ -1215,6 +1215,17 @@ impl Downloads {
             .or_insert(0) += 1;
     }
 
+    /// Handles holding `path` open right now.
+    pub fn readers_of(&self, path: &Path) -> usize {
+        self.inner
+            .cache_use
+            .lock()
+            .readers
+            .get(path)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// The reader of `path` is done. Runs deferred removals and the budget;
     /// returns the tracks whose offline state changed.
     pub fn release_reader(&self, path: &Path) -> Vec<TrackKey> {

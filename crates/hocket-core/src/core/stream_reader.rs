@@ -30,13 +30,21 @@
 //! stream the entry is promoted to complete in place and the actor is told
 //! which tracks changed offline state. Fetched bytes must be audio (not a
 //! JSON/XML Subsonic error envelope) and every range must agree on the
-//! stream's total length and type; a change discards the spans. A cache
+//! stream's total length and type; a change discards the spans, except a
+//! shorter real length the spans all fit in (an estimate corrected, below),
+//! which keeps them. A cache
 //! file the OS removed or truncated is a miss (the row goes, the read falls
 //! back to the server), never an error to the player.
 //!
 //! Offsets are always honoured: when the server ignores `Range` (on-the-fly
-//! transcodes) the reader skips to the offset itself. Open handles are
-//! bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
+//! transcodes) the reader skips to the offset itself. An offset at or past
+//! the known end is an empty stream, not an error. A transcode Navidrome
+//! has not cached yet is served unseekable with an estimated length
+//! (`estimateContentLength`) that can overshoot, so a player told the
+//! estimate resumes or seeks past the real end. Once cached, the server's
+//! 416 says how long it really is; uncached, the stream sent again ends
+//! exactly where the reader was asked to start. Either is the end of the
+//! stream, at its real length. Open handles are bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
 //! closed on the next open.
 
 use std::collections::HashMap;
@@ -56,7 +64,8 @@ use url::Url;
 use crate::api::TranscodingProfile;
 use crate::downloads::spans::SpanSet;
 use crate::downloads::{
-    stream_options, CacheRow, Downloads, EntryKey, StreamMinter, StreamTarget, TrackKey,
+    stream_options, CacheRow, Downloads, EntryKey, MergeOutcome, StreamMinter, StreamTarget,
+    TrackKey,
 };
 use crate::subsonic::SubsonicApi;
 use crate::util::Clock;
@@ -679,15 +688,14 @@ async fn open_file(
         .await
         .map_err(|e| StreamError::Io(e.to_string()))?
         .len();
-    if offset > len {
-        return Err(StreamError::RangeNotSatisfiable);
-    }
-    if offset > 0 {
-        file.seek(std::io::SeekFrom::Start(offset))
+    // Past the end: an empty stream (see the module docs).
+    let start = offset.min(len);
+    if start > 0 {
+        file.seek(std::io::SeekFrom::Start(start))
             .await
             .map_err(|e| StreamError::Io(e.to_string()))?;
     }
-    let remaining = length.map_or(len - offset, |n| n.min(len - offset));
+    let remaining = length.map_or(len - start, |n| n.min(len - start));
     Ok((
         Source::File {
             file,
@@ -744,6 +752,19 @@ struct Segment {
     /// reads it to its end.
     stop: Option<u64>,
     eof: bool,
+    /// Asked for from here, but the server ignored the `Range` and sent the
+    /// whole stream (`Some` only then, for an offset past 0).
+    skip_to: Option<u64>,
+}
+
+impl Segment {
+    /// The body ended (cleanly or not) exactly where the range it ignored
+    /// began: a transcode served with an estimated length, asked again at
+    /// the real end where the last one stopped (see the module docs). A
+    /// dropped connection landing on that very byte is not plausible.
+    fn ended_at_skip(&self) -> bool {
+        self.skip_to.is_some_and(|p| self.next_abs == p)
+    }
 }
 
 /// The cache file a handle reads from and writes into.
@@ -860,9 +881,6 @@ impl CacheSource {
     /// otherwise open the first fetch now (so a server error surfaces at
     /// open).
     async fn prepare(&mut self, cancel: &CancellationToken) -> Result<StreamInfo, StreamError> {
-        if self.total.is_some_and(|t| self.offset > t) {
-            return Err(StreamError::RangeNotSatisfiable);
-        }
         self.update_end();
         let at_end = self.end.is_some_and(|e| self.pos >= e);
         if !at_end && self.known.end_at(self.pos).is_none() {
@@ -908,6 +926,11 @@ impl CacheSource {
                 }
                 if seg.eof {
                     let ended_at = seg.next_abs;
+                    if seg.ended_at_skip() && self.total.is_some_and(|t| ended_at < t) {
+                        tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream ended where it was asked to start; that is its end");
+                        self.shorten(ended_at, true);
+                        continue;
+                    }
                     let short = match (seg.stop, self.total) {
                         (Some(s), _) => ended_at < s,
                         (None, Some(t)) => ended_at < t,
@@ -954,6 +977,11 @@ impl CacheSource {
                             seg.pending = chunk.slice(skip..);
                             seg.pending_at = at + skip as u64;
                         }
+                        self.seg = Some(seg);
+                    }
+                    Some(Err(_)) if seg.ended_at_skip() => {
+                        // Read as the end of the stream (above).
+                        seg.eof = true;
                         self.seg = Some(seg);
                     }
                     Some(Err(e)) => {
@@ -1082,7 +1110,16 @@ impl CacheSource {
                 })?,
         };
         if up.status == 416 {
-            return Err(StreamError::RangeNotSatisfiable);
+            // Past the end. When the server says how long the stream really
+            // is (`bytes */N`), that is the end of input, as Media3's own
+            // HTTP source treats it: the length the player was told may have
+            // been an estimate (see the module docs).
+            let real = up.content_range.as_deref().and_then(content_range_total);
+            let Some(real) = real.filter(|t| pos >= *t) else {
+                return Err(StreamError::RangeNotSatisfiable);
+            };
+            self.shorten(real, false);
+            return Ok(());
         }
         if !(200..300).contains(&up.status) {
             tracing::warn!(target: "hocket_core", status = up.status, track = %self.token.track_id, "stream upstream status");
@@ -1115,20 +1152,7 @@ impl CacheSource {
         };
         if changed_len || changed_type {
             tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream changed; discarding its cached spans");
-            self.known.clear();
-            self.disk = None;
-            if let Some(e) = &mut self.entry {
-                e.pending.clear();
-                e.pending_bytes = 0;
-                if let Err(err) =
-                    self.sh
-                        .downloads
-                        .cache_reset(&e.key, total, up.content_type.as_deref())
-                {
-                    tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
-                }
-                e.read_only = false;
-            }
+            self.discard_spans(total, up.content_type.as_deref());
             self.total = total;
             self.content_type = up.content_type.clone();
             self.update_end();
@@ -1153,8 +1177,82 @@ impl CacheSource {
             pending_at: pos,
             stop: if whole { None } else { gap_end },
             eof: false,
+            skip_to: (whole && pos > 0).then_some(pos),
         });
         Ok(())
+    }
+
+    /// The stream is `real` bytes, less than it was announced with (an
+    /// estimate): end there. The cached spans stay when they all fit (the
+    /// same bytes; only the length was a guess), and may now complete the
+    /// entry. `alone`: keep them only while no other handle holds the
+    /// entry, whose writes may have come from another run of the transcode.
+    fn shorten(&mut self, real: u64, alone: bool) {
+        if self.total != Some(real) {
+            let kept = match &self.entry {
+                None => Some(MergeOutcome::default()),
+                Some(e) if alone && self.sh.downloads.readers_of(&e.key.path) > 1 => None,
+                Some(e) => self
+                    .sh
+                    .downloads
+                    .cache_shorten(&e.key, real)
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(target: "hocket_core", error = %err, "shortening cache entry");
+                        None
+                    }),
+            };
+            match kept {
+                Some(out) => {
+                    tracing::info!(target: "hocket_core", track = %self.token.track_id, real, "the server's stream is shorter than announced");
+                    if let Some(e) = &mut self.entry {
+                        if out.complete || !out.accepted {
+                            e.read_only = true;
+                            e.file = None;
+                        }
+                        if !out.accepted {
+                            e.pending.clear();
+                            e.pending_bytes = 0;
+                        }
+                    }
+                    if !out.changed.is_empty() {
+                        (self.sh.notify)(out.changed);
+                    }
+                }
+                None => {
+                    tracing::info!(target: "hocket_core", track = %self.token.track_id, real, "the server's stream is shorter than announced; discarding its cached spans");
+                    self.discard_spans(Some(real), None);
+                }
+            }
+        }
+        self.total = Some(real);
+        self.update_end();
+        // What this handle wrote and has not merged lands under the real
+        // length (and may complete the entry).
+        self.persist();
+    }
+
+    /// Forget the cached spans: the server's stream is not the one they came
+    /// from (another length or type). The entry starts over at `total`.
+    fn discard_spans(&mut self, total: Option<u64>, content_type: Option<&str>) {
+        self.known.clear();
+        self.disk = None;
+        if let Some(e) = &mut self.entry {
+            e.pending.clear();
+            e.pending_bytes = 0;
+            let reset = self
+                .sh
+                .downloads
+                .cache_reset(&e.key, total, content_type)
+                .unwrap_or_else(|err| {
+                    tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
+                    false
+                });
+            // Not reset (complete already, or gone): write nothing into it.
+            e.read_only = !reset;
+            if !reset {
+                e.file = None;
+            }
+        }
     }
 
     /// Start writing into a cache entry when this stream may be cached.
@@ -1340,6 +1438,17 @@ fn is_error_envelope(content_type: Option<&str>) -> bool {
     ct.starts_with("application/json")
         || ct.starts_with("application/xml")
         || ct.starts_with("text/")
+}
+
+/// The total of a `Content-Range` (`bytes a-b/N` or a 416's `bytes */N`).
+fn content_range_total(v: &str) -> Option<u64> {
+    v.trim()
+        .strip_prefix("bytes")?
+        .split_once('/')?
+        .1
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// `bytes 100-199/1000` (or `/*`) → (start, total).
@@ -1561,6 +1670,9 @@ mod tests {
         assert_eq!(parse_content_range("bytes 0-9/10"), Some((0, Some(10))));
         assert_eq!(parse_content_range("bytes 5-9/*"), Some((5, None)));
         assert_eq!(parse_content_range("items 5-9/10"), None);
+        assert_eq!(content_range_total("bytes */10"), Some(10));
+        assert_eq!(content_range_total("bytes 0-9/10"), Some(10));
+        assert_eq!(content_range_total("bytes 0-9/*"), None);
         let a = new_token();
         assert_eq!(a.len(), 32);
         assert_ne!(a, new_token());

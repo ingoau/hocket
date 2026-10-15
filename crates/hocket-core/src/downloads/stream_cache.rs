@@ -507,27 +507,91 @@ impl Downloads {
     }
 
     /// The stream behind an entry changed (another length or type): forget
-    /// its spans, keep the file.
+    /// its spans, keep the file. A complete row is left alone (another
+    /// reader finished it; a writer holding an older idea of the stream
+    /// must not undo that): `false`, and the caller stops writing.
     pub fn cache_reset(
         &self,
         key: &EntryKey,
         total: Option<u64>,
         content_type: Option<&str>,
-    ) -> DbResult<()> {
-        self.inner.db.with_conn(|c| {
-            c.execute(
-                "UPDATE cache_entries SET spans = '', bytes = 0, complete = 0, total_bytes = ?5, content_type = COALESCE(?6, content_type) WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4",
+    ) -> DbResult<bool> {
+        let n = self.inner.db.with_conn(|c| {
+            Ok(c.execute(
+                "UPDATE cache_entries SET spans = '', bytes = 0, complete = 0, total_bytes = ?5, content_type = COALESCE(?6, content_type) WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4 AND complete = 0",
                 params![key.server_id, key.track_id, key.profile, key.path.to_string_lossy().as_ref(), total.map(|t| t as f64), content_type],
-            )?;
-            Ok(())
+            )?)
         })?;
+        if n == 0 {
+            return Ok(false);
+        }
         if let (Some(t), Ok(f)) = (
             total,
             std::fs::OpenOptions::new().write(true).open(&key.path),
         ) {
             let _ = f.set_len(t);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    /// The stream behind an entry is `total` bytes, shorter than the length
+    /// it was begun with (Navidrome's estimate for a transcode it had not
+    /// cached yet): keep the spans when they all fit (the same bytes, the
+    /// length was only a guess) and promote the row if they now cover it.
+    /// A complete row is left alone: another reader got there first (the
+    /// outcome is accepted when it agrees on `total`), as is a gone one.
+    /// `None` when a span lies past `total`; the caller then resets the
+    /// entry.
+    pub fn cache_shorten(&self, key: &EntryKey, total: u64) -> DbResult<Option<MergeOutcome>> {
+        enum Found {
+            Gone,
+            Complete { agrees: bool },
+            SpanPastEnd,
+            Shortened,
+        }
+        let path = key.path.to_string_lossy().into_owned();
+        let found = self.inner.db.with_tx(|tx| {
+            let row = tx
+                .query_row(
+                    &format!("SELECT {ROW_COLUMNS} FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4"),
+                    params![key.server_id, key.track_id, key.profile, path],
+                    CacheRow::from_row,
+                )
+                .optional()?;
+            let Some(row) = row else {
+                return Ok(Found::Gone);
+            };
+            if row.complete {
+                return Ok(Found::Complete {
+                    agrees: row.total == Some(total),
+                });
+            }
+            if row.spans.max_end() > total {
+                return Ok(Found::SpanPastEnd);
+            }
+            tx.execute(
+                "UPDATE cache_entries SET total_bytes = ?5 WHERE server_id = ?1 AND track_id = ?2 AND profile = ?3 AND path = ?4",
+                params![key.server_id, key.track_id, key.profile, path, total as f64],
+            )?;
+            Ok(Found::Shortened)
+        })?;
+        let left = |accepted| MergeOutcome {
+            accepted,
+            complete: accepted,
+            changed: vec![],
+        };
+        match found {
+            Found::Gone => Ok(Some(left(false))),
+            Found::Complete { agrees } => Ok(Some(left(agrees))),
+            Found::SpanPastEnd => Ok(None),
+            Found::Shortened => {
+                if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&key.path) {
+                    let _ = f.set_len(total);
+                }
+                self.cache_merge(key, &SpanSet::new(), Some(total), None)
+                    .map(Some)
+            }
+        }
     }
 
     /// Merge spans a reader wrote (and flushed) into its entry. Only lands

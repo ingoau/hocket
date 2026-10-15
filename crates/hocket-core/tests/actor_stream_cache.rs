@@ -114,11 +114,10 @@ async fn an_offset_open_keeps_its_bytes_and_a_later_read_fetches_only_the_gap() 
     assert_eq!(row.total, Some(100_000.0));
     assert_eq!(offline(&t, "t1").await, OfflineState::None);
     assert!(temp_files(&t).is_empty());
-    // Past the end is refused.
-    assert_eq!(
-        t.core.stream_open(&s.url, 200_000, None).await.unwrap_err(),
-        StreamError::RangeNotSatisfiable
-    );
+    // Past the end is an empty stream.
+    let (info, bytes) = read_from(&t, &s.url, 200_000).await.unwrap();
+    assert!(bytes.is_empty());
+    assert_eq!(info.length, Some(0));
     // A read from the start fetches only the missing head, then serves the
     // rest from disk, and the entry is complete.
     let (_, whole) = read_from(&t, &s.url, 0).await.unwrap();
@@ -226,6 +225,135 @@ async fn a_stream_whose_length_changes_on_the_server_discards_its_spans() {
     assert_eq!((row.complete, row.total), (true, Some(120_000.0)));
     let (_, again) = read_from(&t, &s.url, 0).await.unwrap();
     assert_eq!(again, new);
+    t.core.shutdown().await;
+}
+
+/// A transcode Navidrome has not cached yet comes with an estimated length
+/// that overshoots and a body that ends short. The player, told the
+/// estimate, resumes at the real end (or seeks past it) once the transcode
+/// is cached and the server answers 416: that is the end of the stream,
+/// not ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn past_the_real_end_of_an_overestimated_transcode_is_the_end_of_input() {
+    let t = started("estimate", 1).await;
+    let media: Vec<u8> = (0..100_000u32).map(|i| (i % 239) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::EstimatedOnce(4_000));
+    let s = source(&t, "t0").await;
+    let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    assert_eq!(info.length, Some(104_000));
+    let mut got = vec![];
+    let err = loop {
+        match t.core.stream_read(info.handle, 64 * 1024).await {
+            Ok(b) => got.extend_from_slice(&b),
+            Err(e) => break e,
+        }
+    };
+    t.core.stream_close(info.handle);
+    assert_eq!(got, media);
+    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+    // The player's retry at the real end: end of input.
+    let (info, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
+    assert!(rest.is_empty());
+    assert_eq!((info.total_length, info.length), (Some(100_000), Some(0)));
+    let calls = t.upstream.calls();
+    assert_eq!(
+        calls.last().unwrap().range.as_deref(),
+        Some("bytes=100000-")
+    );
+    // The bytes the first play fetched are the whole stream: cached after
+    // one play, not discarded.
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    let row = row_of(&t, "t0");
+    assert_eq!((row.complete, row.total), (true, Some(100_000.0)));
+    // A seek between the real end and the estimate, likewise the end.
+    let (_, rest) = read_from(&t, &s.url, 102_000).await.unwrap();
+    assert!(rest.is_empty());
+    // Replays never reach the server.
+    let (_, whole) = read_from(&t, &s.url, 0).await.unwrap();
+    assert_eq!(whole, media);
+    assert_eq!(t.upstream.calls().len(), 2);
+    t.core.shutdown().await;
+}
+
+/// Two handles on a track whose length was an estimate: one learns the
+/// real length and completes the entry; the other, still holding the
+/// estimate, reaches the real end later and must leave that entry be.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_handle_with_the_estimate_keeps_the_entry_another_completed() {
+    let t = started("estimate2", 1).await;
+    let media: Vec<u8> = (0..100_000u32).map(|i| (i % 229) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::EstimatedOnce(4_000));
+    let s = source(&t, "t0").await;
+    read_from(&t, &s.url, 0).await.unwrap_err();
+    wait_handles_closed(&t).await;
+    // B starts a replay from disk, still told the estimate.
+    let b = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    assert_eq!(b.length, Some(104_000));
+    let mut got = t.core.stream_read(b.handle, 1024).await.unwrap().to_vec();
+    // A, the retry at the real end, completes the entry.
+    let (_, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
+    assert!(rest.is_empty());
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    // B reaches the real end: 416, and the entry stays complete.
+    loop {
+        let chunk = t.core.stream_read(b.handle, 64 * 1024).await.unwrap();
+        if chunk.is_empty() {
+            break;
+        }
+        got.extend_from_slice(&chunk);
+    }
+    t.core.stream_close(b.handle);
+    assert_eq!(got, media);
+    wait_handles_closed(&t).await;
+    let row = row_of(&t, "t0");
+    assert_eq!(
+        (row.complete, row.spans.as_str(), row.total),
+        (true, "0-100000", Some(100_000.0))
+    );
+    assert_eq!(offline(&t, "t0").await, OfflineState::Cached);
+    t.core.shutdown().await;
+}
+
+/// With the server's transcoding cache off, every answer is the unseekable
+/// estimate: the player's retry at the real end gets the whole stream again,
+/// which ends right where the retry asked to start. That is the end of the
+/// stream, not a dropped connection to retry until playback gives up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unseekable_transcode_that_ends_where_it_was_asked_to_start_has_ended() {
+    let t = started("unseekable", 1).await;
+    let media: Vec<u8> = (0..100_000u32).map(|i| (i % 233) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::Estimated(4_000));
+    let s = source(&t, "t0").await;
+    let err = read_from(&t, &s.url, 0).await.unwrap_err();
+    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+    let (info, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(info.length, Some(104_000 - 100_000), "told before the body");
+    let calls = t.upstream.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].range.as_deref(), Some("bytes=100000-"));
+    // The second answer rewrote the whole stream: cached, at its real length.
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    let row = row_of(&t, "t0");
+    assert_eq!((row.complete, row.total), (true, Some(100_000.0)));
+    let (_, whole) = read_from(&t, &s.url, 0).await.unwrap();
+    assert_eq!(whole, media);
+    let (_, rest) = read_from(&t, &s.url, 102_000).await.unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(t.upstream.calls().len(), 2);
+    // A connection that drops anywhere else is still an error.
+    t.upstream.set_media("t1", vec![3u8; 100_000], "audio/ogg");
+    t.upstream
+        .set_behaviour("t1", UpstreamBehaviour::Estimated(4_000));
+    let s = source(&t, "t1").await;
+    let err = read_from(&t, &s.url, 50_000).await.unwrap_err();
+    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
     t.core.shutdown().await;
 }
 
