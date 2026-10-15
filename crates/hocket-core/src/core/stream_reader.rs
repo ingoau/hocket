@@ -30,17 +30,21 @@
 //! stream the entry is promoted to complete in place and the actor is told
 //! which tracks changed offline state. Fetched bytes must be audio (not a
 //! JSON/XML Subsonic error envelope) and every range must agree on the
-//! stream's total length and type; a change discards the spans. A cache
+//! stream's total length and type; a change discards the spans, except a
+//! shorter real length the spans all fit in (an estimate corrected, below),
+//! which keeps them. A cache
 //! file the OS removed or truncated is a miss (the row goes, the read falls
 //! back to the server), never an error to the player.
 //!
 //! Offsets are always honoured: when the server ignores `Range` (on-the-fly
 //! transcodes) the reader skips to the offset itself. An offset at or past
-//! the end is an empty stream, not an error: a transcode Navidrome has not
-//! cached yet is served with an estimated length (`estimateContentLength`)
-//! that can overshoot, so a player told the estimate resumes or seeks past
-//! the real end (the 416 that follows says how long it really is). Open handles are
-//! bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
+//! the known end is an empty stream, not an error. A transcode Navidrome
+//! has not cached yet is served unseekable with an estimated length
+//! (`estimateContentLength`) that can overshoot, so a player told the
+//! estimate resumes or seeks past the real end. Once cached, the server's
+//! 416 says how long it really is; uncached, the stream sent again ends
+//! exactly where the reader was asked to start. Either is the end of the
+//! stream, at its real length. Open handles are bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
 //! closed on the next open.
 
 use std::collections::HashMap;
@@ -924,7 +928,7 @@ impl CacheSource {
                     let ended_at = seg.next_abs;
                     if seg.ended_at_skip() && self.total.is_some_and(|t| ended_at < t) {
                         tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream ended where it was asked to start; that is its end");
-                        self.shorten(ended_at);
+                        self.shorten(ended_at, true);
                         continue;
                     }
                     let short = match (seg.stop, self.total) {
@@ -1114,7 +1118,7 @@ impl CacheSource {
             let Some(real) = real.filter(|t| pos >= *t) else {
                 return Err(StreamError::RangeNotSatisfiable);
             };
-            self.shorten(real);
+            self.shorten(real, false);
             return Ok(());
         }
         if !(200..300).contains(&up.status) {
@@ -1181,12 +1185,13 @@ impl CacheSource {
     /// The stream is `real` bytes, less than it was announced with (an
     /// estimate): end there. The cached spans stay when they all fit (the
     /// same bytes; only the length was a guess), and may now complete the
-    /// entry.
-    fn shorten(&mut self, real: u64) {
+    /// entry. `alone`: keep them only while no other handle holds the
+    /// entry, whose writes may have come from another run of the transcode.
+    fn shorten(&mut self, real: u64, alone: bool) {
         if self.total != Some(real) {
-            self.persist();
             let kept = match &self.entry {
                 None => Some(MergeOutcome::default()),
+                Some(e) if alone && self.sh.downloads.readers_of(&e.key.path) > 1 => None,
                 Some(e) => self
                     .sh
                     .downloads
@@ -1200,9 +1205,13 @@ impl CacheSource {
                 Some(out) => {
                     tracing::info!(target: "hocket_core", track = %self.token.track_id, real, "the server's stream is shorter than announced");
                     if let Some(e) = &mut self.entry {
-                        if out.complete {
+                        if out.complete || !out.accepted {
                             e.read_only = true;
                             e.file = None;
+                        }
+                        if !out.accepted {
+                            e.pending.clear();
+                            e.pending_bytes = 0;
                         }
                     }
                     if !out.changed.is_empty() {
@@ -1217,6 +1226,9 @@ impl CacheSource {
         }
         self.total = Some(real);
         self.update_end();
+        // What this handle wrote and has not merged lands under the real
+        // length (and may complete the entry).
+        self.persist();
     }
 
     /// Forget the cached spans: the server's stream is not the one they came
@@ -1227,10 +1239,19 @@ impl CacheSource {
         if let Some(e) = &mut self.entry {
             e.pending.clear();
             e.pending_bytes = 0;
-            if let Err(err) = self.sh.downloads.cache_reset(&e.key, total, content_type) {
-                tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
+            let reset = self
+                .sh
+                .downloads
+                .cache_reset(&e.key, total, content_type)
+                .unwrap_or_else(|err| {
+                    tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
+                    false
+                });
+            // Not reset (complete already, or gone): write nothing into it.
+            e.read_only = !reset;
+            if !reset {
+                e.file = None;
             }
-            e.read_only = false;
         }
     }
 

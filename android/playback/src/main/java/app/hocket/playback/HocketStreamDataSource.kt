@@ -199,7 +199,8 @@ class CoreStreamDataSourceFactory(
 
 /**
  * `DefaultLoadErrorHandlingPolicy`, except that core stream failures a retry cannot fix fail at once:
- * an unknown/expired token (the core must resolve a fresh one), an offset past the end, and a core
+ * an unknown/expired token (the core must resolve a fresh one), an offset past an end the server will
+ * not name (the core reads one it knows as end of input), and a core
  * that has shut down. Media3's default retries everything but `FileNotFoundException`-typed errors,
  * which would re-open an expired token three times. A handle the core closed under the player
  * (idle for ten minutes while the player's buffer was full, or reaped) is retried: the retry opens a

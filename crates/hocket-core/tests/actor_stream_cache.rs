@@ -277,6 +277,47 @@ async fn past_the_real_end_of_an_overestimated_transcode_is_the_end_of_input() {
     t.core.shutdown().await;
 }
 
+/// Two handles on a track whose length was an estimate: one learns the
+/// real length and completes the entry; the other, still holding the
+/// estimate, reaches the real end later and must leave that entry be.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_handle_with_the_estimate_keeps_the_entry_another_completed() {
+    let t = started("estimate2", 1).await;
+    let media: Vec<u8> = (0..100_000u32).map(|i| (i % 229) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::EstimatedOnce(4_000));
+    let s = source(&t, "t0").await;
+    read_from(&t, &s.url, 0).await.unwrap_err();
+    wait_handles_closed(&t).await;
+    // B starts a replay from disk, still told the estimate.
+    let b = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    assert_eq!(b.length, Some(104_000));
+    let mut got = t.core.stream_read(b.handle, 1024).await.unwrap().to_vec();
+    // A, the retry at the real end, completes the entry.
+    let (_, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
+    assert!(rest.is_empty());
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    // B reaches the real end: 416, and the entry stays complete.
+    loop {
+        let chunk = t.core.stream_read(b.handle, 64 * 1024).await.unwrap();
+        if chunk.is_empty() {
+            break;
+        }
+        got.extend_from_slice(&chunk);
+    }
+    t.core.stream_close(b.handle);
+    assert_eq!(got, media);
+    wait_handles_closed(&t).await;
+    let row = row_of(&t, "t0");
+    assert_eq!(
+        (row.complete, row.spans.as_str(), row.total),
+        (true, "0-100000", Some(100_000.0))
+    );
+    assert_eq!(offline(&t, "t0").await, OfflineState::Cached);
+    t.core.shutdown().await;
+}
+
 /// With the server's transcoding cache off, every answer is the unseekable
 /// estimate: the player's retry at the real end gets the whole stream again,
 /// which ends right where the retry asked to start. That is the end of the

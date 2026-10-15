@@ -57,11 +57,12 @@ internal class FakeStreams(private val files: Map<String, ByteArray>, private va
         calls += "open $url @$offset${length?.let { "+$it" } ?: ""}"
         failOpenWith?.let { throw it }
         val bytes = files[url.removePrefix("hocket-stream://")] ?: throw CoreStreamException(CoreStreamException.Kind.UnknownToken)
-        if (offset > bytes.size) throw CoreStreamException(CoreStreamException.Kind.RangeNotSatisfiable)
-        val end = if (length != null) minOf(bytes.size.toLong(), offset + length).toInt() else bytes.size
+        // Past the end is an empty stream, as in the core.
+        val start = minOf(offset, bytes.size.toLong())
+        val end = if (length != null) minOf(bytes.size.toLong(), start + length).toInt() else bytes.size
         val h = next++
-        open[h] = Triple(bytes, offset.toInt(), end)
-        return CoreStreamInfo(h, offset, bytes.size.toLong(), (end - offset), "audio/wav")
+        open[h] = Triple(bytes, start.toInt(), end)
+        return CoreStreamInfo(h, offset, bytes.size.toLong(), (end - start), "audio/wav")
     }
 
     @Synchronized
