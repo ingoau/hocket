@@ -114,11 +114,10 @@ async fn an_offset_open_keeps_its_bytes_and_a_later_read_fetches_only_the_gap() 
     assert_eq!(row.total, Some(100_000.0));
     assert_eq!(offline(&t, "t1").await, OfflineState::None);
     assert!(temp_files(&t).is_empty());
-    // Past the end is refused.
-    assert_eq!(
-        t.core.stream_open(&s.url, 200_000, None).await.unwrap_err(),
-        StreamError::RangeNotSatisfiable
-    );
+    // Past the end is an empty stream.
+    let (info, bytes) = read_from(&t, &s.url, 200_000).await.unwrap();
+    assert!(bytes.is_empty());
+    assert_eq!(info.length, Some(0));
     // A read from the start fetches only the missing head, then serves the
     // rest from disk, and the entry is complete.
     let (_, whole) = read_from(&t, &s.url, 0).await.unwrap();
@@ -226,6 +225,51 @@ async fn a_stream_whose_length_changes_on_the_server_discards_its_spans() {
     assert_eq!((row.complete, row.total), (true, Some(120_000.0)));
     let (_, again) = read_from(&t, &s.url, 0).await.unwrap();
     assert_eq!(again, new);
+    t.core.shutdown().await;
+}
+
+/// A transcode Navidrome has not cached yet comes with an estimated length
+/// that overshoots and a body that ends short. The player, told the
+/// estimate, resumes at the real end (or seeks past it) once the transcode
+/// is cached and the server answers 416: that is the end of the stream,
+/// not ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn past_the_real_end_of_an_overestimated_transcode_is_the_end_of_input() {
+    let t = started("estimate", 1).await;
+    let media: Vec<u8> = (0..100_000u32).map(|i| (i % 239) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::EstimatedOnce(4_000));
+    let s = source(&t, "t0").await;
+    let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    assert_eq!(info.length, Some(104_000));
+    let mut got = vec![];
+    let err = loop {
+        match t.core.stream_read(info.handle, 64 * 1024).await {
+            Ok(b) => got.extend_from_slice(&b),
+            Err(e) => break e,
+        }
+    };
+    t.core.stream_close(info.handle);
+    assert_eq!(got, media);
+    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+    // The player's retry at the real end: end of input.
+    let (info, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
+    assert!(rest.is_empty());
+    assert_eq!((info.total_length, info.length), (Some(100_000), Some(0)));
+    let calls = t.upstream.calls();
+    assert_eq!(
+        calls.last().unwrap().range.as_deref(),
+        Some("bytes=100000-")
+    );
+    // A seek between the real end and the estimate, likewise.
+    let (_, rest) = read_from(&t, &s.url, 102_000).await.unwrap();
+    assert!(rest.is_empty());
+    // The entry now knows the real length and fills in.
+    let (_, whole) = read_from(&t, &s.url, 0).await.unwrap();
+    assert_eq!(whole, media);
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    assert_eq!(row_of(&t, "t0").total, Some(100_000.0));
     t.core.shutdown().await;
 }
 

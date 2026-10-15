@@ -555,6 +555,11 @@ pub enum UpstreamBehaviour {
     FailAfter(usize),
     /// HTTP 200 with a Subsonic JSON error envelope.
     ErrorEnvelope,
+    /// Once, what Navidrome sends for a transcode it has not cached yet:
+    /// HTTP 200 whatever the `Range`, an estimated `Content-Length` this
+    /// many bytes too long, the media, then the connection drops. After
+    /// that, [`Serve`](Self::Serve) (the transcode is cached).
+    EstimatedOnce(usize),
 }
 
 /// One `stream` request the fake saw.
@@ -672,10 +677,16 @@ impl StreamUpstream for FakeUpstream {
                 range: request.range.clone(),
                 url: request.url.clone(),
             });
-            st.behaviour
+            let b = st
+                .behaviour
                 .get(&track_id)
                 .copied()
-                .unwrap_or(UpstreamBehaviour::Serve)
+                .unwrap_or(UpstreamBehaviour::Serve);
+            if matches!(b, UpstreamBehaviour::EstimatedOnce(_)) {
+                st.behaviour
+                    .insert(track_id.clone(), UpstreamBehaviour::Serve);
+            }
+            b
         };
         Box::pin(async move {
             if behaviour == UpstreamBehaviour::ErrorEnvelope {
@@ -686,6 +697,19 @@ impl StreamUpstream for FakeUpstream {
                     content_length: Some(body.len() as u64),
                     content_range: None,
                     body: futures::stream::iter([Ok(bytes::Bytes::from_static(body))]).boxed(),
+                });
+            }
+            if let UpstreamBehaviour::EstimatedOnce(over) = behaviour {
+                return Ok(UpstreamResponse {
+                    status: 200,
+                    content_type: Some(content_type),
+                    content_length: Some((media.len() + over) as u64),
+                    content_range: None,
+                    body: futures::stream::iter([
+                        Ok(media),
+                        Err("connection closed before message completed".to_string()),
+                    ])
+                    .boxed(),
                 });
             }
             let len = media.len() as u64;

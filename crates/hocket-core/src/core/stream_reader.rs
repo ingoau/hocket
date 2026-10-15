@@ -35,7 +35,11 @@
 //! back to the server), never an error to the player.
 //!
 //! Offsets are always honoured: when the server ignores `Range` (on-the-fly
-//! transcodes) the reader skips to the offset itself. Open handles are
+//! transcodes) the reader skips to the offset itself. An offset at or past
+//! the end is an empty stream, not an error: a transcode Navidrome has not
+//! cached yet is served with an estimated length (`estimateContentLength`)
+//! that can overshoot, so a player told the estimate resumes or seeks past
+//! the real end (the 416 that follows says how long it really is). Open handles are
 //! bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
 //! closed on the next open.
 
@@ -679,15 +683,14 @@ async fn open_file(
         .await
         .map_err(|e| StreamError::Io(e.to_string()))?
         .len();
-    if offset > len {
-        return Err(StreamError::RangeNotSatisfiable);
-    }
-    if offset > 0 {
-        file.seek(std::io::SeekFrom::Start(offset))
+    // Past the end: an empty stream (see the module docs).
+    let start = offset.min(len);
+    if start > 0 {
+        file.seek(std::io::SeekFrom::Start(start))
             .await
             .map_err(|e| StreamError::Io(e.to_string()))?;
     }
-    let remaining = length.map_or(len - offset, |n| n.min(len - offset));
+    let remaining = length.map_or(len - start, |n| n.min(len - start));
     Ok((
         Source::File {
             file,
@@ -860,9 +863,6 @@ impl CacheSource {
     /// otherwise open the first fetch now (so a server error surfaces at
     /// open).
     async fn prepare(&mut self, cancel: &CancellationToken) -> Result<StreamInfo, StreamError> {
-        if self.total.is_some_and(|t| self.offset > t) {
-            return Err(StreamError::RangeNotSatisfiable);
-        }
         self.update_end();
         let at_end = self.end.is_some_and(|e| self.pos >= e);
         if !at_end && self.known.end_at(self.pos).is_none() {
@@ -1082,7 +1082,21 @@ impl CacheSource {
                 })?,
         };
         if up.status == 416 {
-            return Err(StreamError::RangeNotSatisfiable);
+            // Past the end. When the server says how long the stream really
+            // is (`bytes */N`), that is the end of input, as Media3's own
+            // HTTP source treats it: the length the player was told may have
+            // been an estimate (see the module docs).
+            let real = up.content_range.as_deref().and_then(content_range_total);
+            let Some(real) = real.filter(|t| pos >= *t) else {
+                return Err(StreamError::RangeNotSatisfiable);
+            };
+            if self.total != Some(real) {
+                tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream is shorter than announced; discarding its cached spans");
+                self.discard_spans(Some(real), None);
+            }
+            self.total = Some(real);
+            self.update_end();
+            return Ok(());
         }
         if !(200..300).contains(&up.status) {
             tracing::warn!(target: "hocket_core", status = up.status, track = %self.token.track_id, "stream upstream status");
@@ -1115,20 +1129,7 @@ impl CacheSource {
         };
         if changed_len || changed_type {
             tracing::info!(target: "hocket_core", track = %self.token.track_id, "the server's stream changed; discarding its cached spans");
-            self.known.clear();
-            self.disk = None;
-            if let Some(e) = &mut self.entry {
-                e.pending.clear();
-                e.pending_bytes = 0;
-                if let Err(err) =
-                    self.sh
-                        .downloads
-                        .cache_reset(&e.key, total, up.content_type.as_deref())
-                {
-                    tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
-                }
-                e.read_only = false;
-            }
+            self.discard_spans(total, up.content_type.as_deref());
             self.total = total;
             self.content_type = up.content_type.clone();
             self.update_end();
@@ -1155,6 +1156,21 @@ impl CacheSource {
             eof: false,
         });
         Ok(())
+    }
+
+    /// Forget the cached spans: the server's stream is not the one they came
+    /// from (another length or type). The entry starts over at `total`.
+    fn discard_spans(&mut self, total: Option<u64>, content_type: Option<&str>) {
+        self.known.clear();
+        self.disk = None;
+        if let Some(e) = &mut self.entry {
+            e.pending.clear();
+            e.pending_bytes = 0;
+            if let Err(err) = self.sh.downloads.cache_reset(&e.key, total, content_type) {
+                tracing::warn!(target: "hocket_core", error = %err, "resetting cache entry");
+            }
+            e.read_only = false;
+        }
     }
 
     /// Start writing into a cache entry when this stream may be cached.
@@ -1340,6 +1356,17 @@ fn is_error_envelope(content_type: Option<&str>) -> bool {
     ct.starts_with("application/json")
         || ct.starts_with("application/xml")
         || ct.starts_with("text/")
+}
+
+/// The total of a `Content-Range` (`bytes a-b/N` or a 416's `bytes */N`).
+fn content_range_total(v: &str) -> Option<u64> {
+    v.trim()
+        .strip_prefix("bytes")?
+        .split_once('/')?
+        .1
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// `bytes 100-199/1000` (or `/*`) → (start, total).
@@ -1561,6 +1588,9 @@ mod tests {
         assert_eq!(parse_content_range("bytes 0-9/10"), Some((0, Some(10))));
         assert_eq!(parse_content_range("bytes 5-9/*"), Some((5, None)));
         assert_eq!(parse_content_range("items 5-9/10"), None);
+        assert_eq!(content_range_total("bytes */10"), Some(10));
+        assert_eq!(content_range_total("bytes 0-9/10"), Some(10));
+        assert_eq!(content_range_total("bytes 0-9/*"), None);
         let a = new_token();
         assert_eq!(a.len(), 32);
         assert_ne!(a, new_token());
