@@ -82,6 +82,8 @@ class PebbleBridge(
     /** The watchapp is open on a watch: state is pushed only then. */
     private var open = false
     private var session: MediaSessionState? = null
+    /** The playing device has reported its volume (an older one doesn't): a step has a base. */
+    private var volumeKnown = true
     private var clockOffsetMs = 0.0
     private var queue: QueueView? = null
     private var devices: List<DeviceInfo> = emptyList()
@@ -98,6 +100,7 @@ class PebbleBridge(
             is Event.MediaSession -> onSession(event.data.state)
             is Event.QueueChanged -> { queue = event.data.queue; pushNowSoon() }
             is Event.DevicesChanged -> devices = event.data.devices
+            is Event.TransportChanged -> volumeKnown = event.data.transport.volumeDevice != null
             is Event.ResumeOfferChanged -> { resumeOffer = event.data.offer; pushNowSoon() }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.SettingChanged -> {
@@ -116,6 +119,7 @@ class PebbleBridge(
         queue = snapshot.queue
         devices = snapshot.devices
         resumeOffer = snapshot.resumeOffer
+        volumeKnown = snapshot.transport.volumeDevice != null
         snapshot.settings.forEach { settings[it.key] = it.value }
         settingsLoaded = true
         if (open) scope.launch { send(settingsMessage()) }
@@ -254,14 +258,15 @@ class PebbleBridge(
      * when muted (a press unmutes).
      */
     private fun changeVolume(up: Boolean) {
-        val s = session ?: return
+        val s = session?.takeIf { volumeKnown } ?: return
+        if (!up && s.muted == true) return
         val from = if (s.muted == true) 0.0 else s.volume
         dispatch(Commands.setVolume((from + if (up) VOLUME_STEP else -VOLUME_STEP).coerceIn(0.0, 1.0)))
     }
 
     /** The level [changeVolume] changes, 0..100 (255 = unknown). */
     private fun volumePercent(): Int {
-        val s = session ?: return 255
+        val s = session?.takeIf { volumeKnown } ?: return 255
         return if (s.muted == true) 0 else (s.volume.coerceIn(0.0, 1.0) * 100).roundToInt()
     }
 

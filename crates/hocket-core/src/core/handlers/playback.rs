@@ -291,10 +291,16 @@ impl Actor {
             let actions = self.scrobbler.track_ended(&id, Some(pos));
             self.apply_scrobble_actions(actions);
         }
-        let volume = self.playback.volume;
+        let p = &self.playback;
+        let (volume, muted, system_volume, fade_gain) =
+            (p.volume, p.muted, p.system_volume, p.fade_gain);
         let restore = self.playback.restore_position.take();
+        // The device's volume outlives what was loaded.
         self.playback = crate::core::state::Playback {
             volume,
+            muted,
+            system_volume,
+            fade_gain,
             restore_position: restore,
             ..Default::default()
         };
@@ -683,6 +689,20 @@ impl Actor {
         }
     }
 
+    /// A held remote volume that the device's stamps never confirmed (a
+    /// dropped request) goes back to what the device last reported.
+    pub(crate) fn remote_volume_tick(&mut self, now: f64) {
+        let expired = self
+            .playback
+            .remote_volume_hold
+            .as_ref()
+            .is_some_and(|(_, _, at)| now - at >= REMOTE_VOLUME_HOLD_MS);
+        if expired {
+            self.playback.remote_volume_hold = None;
+            self.emit_transport();
+        }
+    }
+
     /// The volume control moved (UI, keys, media session, a watch): set the
     /// volume of the device playing, or this one when nobody is. `volume`
     /// `None` keeps the level (a mute toggle); setting a level unmutes.
@@ -719,14 +739,17 @@ impl Actor {
     /// remote control while it plays), persist it and tell the others.
     pub(crate) fn set_local_volume(&mut self, volume: f64, muted: bool) {
         let volume = crate::audio::backend::clamp_volume(volume);
-        self.playback.volume = volume;
-        self.playback.muted = muted;
         if self.playback.system_volume {
-            // The platform keeps it; its report comes back as a SystemVolume.
+            // The platform keeps it, in its own steps: its SystemVolume report
+            // is what this device's volume becomes (and what the others see).
             if let Err(e) = self.backend.set_system_volume(volume, muted) {
                 self.log("debug", format!("set_system_volume: {e}"));
             }
-        } else {
+            return;
+        }
+        self.playback.volume = volume;
+        self.playback.muted = muted;
+        {
             if let Err(e) = self.backend.set_volume(self.effective_volume()) {
                 self.log("debug", format!("set_volume: {e}"));
             }
@@ -746,7 +769,11 @@ impl Actor {
     /// and tell the others. From the first report on, the platform owns this
     /// device's volume and the in-player gain carries only the sleep fade.
     fn on_system_volume(&mut self, volume: f64, muted: bool) {
-        let volume = crate::audio::backend::clamp_volume(volume);
+        let mut volume = crate::audio::backend::clamp_volume(volume);
+        // Android reports a muted stream at 0; mute keeps the level it had.
+        if muted && volume == 0.0 && self.playback.system_volume && self.playback.volume > 0.0 {
+            volume = self.playback.volume;
+        }
         let first = !self.playback.system_volume;
         let changed = first || volume != self.playback.volume || muted != self.playback.muted;
         self.playback.system_volume = true;

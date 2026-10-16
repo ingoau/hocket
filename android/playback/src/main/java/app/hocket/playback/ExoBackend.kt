@@ -370,6 +370,9 @@ class ExoBackend(
                     if (steps != player.deviceVolume) player.setDeviceVolume(steps, 0)
                     if (command.data.muted != player.isDeviceMuted) player.setDeviceMuted(command.data.muted, 0)
                 }
+                // Always answer: a level that rounds to the step it is already at changes nothing,
+                // and the core shows what the stream is, not what was asked.
+                reportSystemVolume()
             }
             is BackendCommand.PreBuffer -> {
                 val p = preBufferPlayer ?: ExoPlayer.Builder(context)

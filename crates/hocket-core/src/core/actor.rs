@@ -865,6 +865,7 @@ impl Actor {
         }
         self.prefetch_tick(now);
         self.playback_tick(now);
+        self.remote_volume_tick(now);
         self.prime_next();
         self.cache_tick(now);
         // Sleep timer.

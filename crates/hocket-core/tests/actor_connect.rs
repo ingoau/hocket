@@ -512,6 +512,48 @@ async fn a_system_volume_is_mirrored_and_driven_remotely() {
     assert_eq!(a.backend.system_volume(), Some((0.9, false)));
     assert_eq!(a.backend.volume(), 1.0);
     b.run(Command::SetMuted { muted: true }).await;
-    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
     assert_eq!(a.backend.system_volume(), Some((0.9, true)));
+    // The platform reports a muted stream at 0; the level is kept for the
+    // unmute, here and on the other device.
+    assert_eq!(a.snapshot().await.transport.volume, 0.9);
+    let tb = b.snapshot().await.transport;
+    assert!(tb.muted);
+    assert_eq!(tb.volume, 0.9);
+    b.run(Command::SetMuted { muted: false }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.backend.system_volume(), Some((0.9, false)));
+
+    // Clearing the queue keeps the phone on its system volume.
+    a.run(Command::Stop).await;
+    a.run(Command::ClearQueue).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    a.run(Command::SetVolume { volume: 0.3 }).await;
+    a.core.settle().await;
+    assert_eq!(a.backend.system_volume(), Some((0.3, false)));
+    assert_eq!(a.backend.volume(), 1.0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn volume_steps_do_nothing_while_the_playing_devices_volume_is_unknown() {
+    let (a, b) = pair().await;
+    play_on(&a, &b).await;
+    // The playing device's volume is known: a step moves it.
+    b.run(Command::RunAction {
+        action_id: "volumeDown".into(),
+        target: ActionTarget::None,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.snapshot().await.transport.volume, 0.95);
+    // Muted: down stays muted, up unmutes from silence.
+    a.run(Command::SetMuted { muted: true }).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    b.run(Command::RunAction {
+        action_id: "volumeDown".into(),
+        target: ActionTarget::None,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(a.snapshot().await.transport.muted);
 }

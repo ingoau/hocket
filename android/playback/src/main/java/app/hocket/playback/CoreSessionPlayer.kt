@@ -256,6 +256,8 @@ class CoreSessionPlayer(
     }
 
     override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> {
+        // Down while muted stays muted.
+        if (current.muted == true) return Futures.immediateVoidFuture()
         dispatch(Commands.setVolume(ConnectRoutes.level(ConnectRoutes.steps(current.volume) - 1)))
         return Futures.immediateVoidFuture()
     }

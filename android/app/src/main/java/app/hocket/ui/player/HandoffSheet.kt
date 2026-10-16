@@ -3,10 +3,8 @@ package app.hocket.ui.player
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,7 +17,6 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -27,9 +24,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -42,6 +36,7 @@ import app.hocket.core.api.ConnectionTier
 import app.hocket.core.api.Platform
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.LabelledSlider
 import app.hocket.ui.components.formatAgo
 import app.hocket.ui.icons.HocketIcons
 
@@ -123,11 +118,13 @@ private fun VolumeRow() {
                 Icon(if (muted || shown == 0f) HocketIcons.Filled.VolumeOff else HocketIcons.Filled.VolumeUp,
                     stringResource(if (muted) R.string.volume_unmute else R.string.volume_mute))
             }
-            Slider(
+            LabelledSlider(
                 value = shown,
                 onValueChange = { client.dispatch(Commands.setVolume(it.toDouble())) },
+                label = label,
+                valueText = state,
                 enabled = !unknown,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = label; stateDescription = state }.testTag("handoff.volume.slider"),
+                modifier = Modifier.weight(1f).testTag("handoff.volume.slider"),
             )
         }
         if (unknown) Text(stringResource(R.string.volume_unknown, remote.name), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

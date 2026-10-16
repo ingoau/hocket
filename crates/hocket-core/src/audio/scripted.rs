@@ -211,9 +211,15 @@ impl ScriptedBackend {
     }
 
     /// Act like a platform that owns the media volume (Android): report it
-    /// now, and again whenever it changes.
+    /// now, and again whenever it changes. Like Android, a muted stream
+    /// reports a volume of 0.
     pub fn use_system_volume(&self, volume: f64, muted: bool) {
         self.state.lock().system_volume = Some((volume, muted));
+        self.emit_system_volume(volume, muted);
+    }
+
+    fn emit_system_volume(&self, volume: f64, muted: bool) {
+        let volume = if muted { 0.0 } else { volume };
         self.emit(BackendReport::SystemVolume { volume, muted });
     }
 
@@ -516,7 +522,7 @@ impl PlaybackBackend for ScriptedBackend {
             st.system_volume = Some((volume, muted));
         }
         // The platform echoes its own change, as Android's broadcast does.
-        self.emit(BackendReport::SystemVolume { volume, muted });
+        self.emit_system_volume(volume, muted);
         Ok(())
     }
 

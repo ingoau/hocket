@@ -698,3 +698,26 @@ async fn a_volume_saved_as_a_linear_gain_keeps_its_loudness() {
     let t = t.restart("legacy").await;
     assert_eq!(snapshot_volume(&t).await, 0.9);
 }
+
+#[tokio::test]
+async fn mute_survives_clearing_the_queue() {
+    let t = synced_core("mute").await;
+    t.run(Command::PlayContext {
+        args: album_args(&t.server_id, "al0"),
+    })
+    .await;
+    t.run(Command::SetVolume { volume: 0.6 }).await;
+    t.run(Command::SetMuted { muted: true }).await;
+    assert_eq!(t.backend.volume(), 0.0);
+    t.run(Command::Stop).await;
+    t.run(Command::ClearQueue).await;
+    let tr = match t.query(Query::Snapshot).await {
+        QueryResult::SnapshotResult(s) => s.transport,
+        other => panic!("unexpected {other:?}"),
+    };
+    assert!(tr.muted, "still muted");
+    assert_eq!(tr.volume, 0.6);
+    assert_eq!(t.backend.volume(), 0.0, "and still silent");
+    t.run(Command::SetMuted { muted: false }).await;
+    assert!((t.backend.volume() - hocket_core::audio::backend::volume_to_gain(0.6)).abs() < 1e-12);
+}

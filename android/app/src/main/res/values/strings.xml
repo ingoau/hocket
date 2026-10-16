@@ -262,7 +262,7 @@
     <string name="volume_mute">Mute</string>
     <string name="volume_unmute">Unmute</string>
     <string name="volume_muted">Muted</string>
-    <string name="volume_unknown">%1$s doesn\'t share its volume (it needs an update)</string>
+    <string name="volume_unknown">%1$s\'s volume isn\'t available here yet</string>
     <string name="handoff_this_device">This device</string>
     <string name="handoff_ready">Ready</string>
     <string name="handoff_preparing">Preparing…</string>

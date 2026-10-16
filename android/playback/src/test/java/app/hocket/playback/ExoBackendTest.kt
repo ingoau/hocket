@@ -76,9 +76,13 @@ class ExoBackendTest {
 
     @Test
     fun theMusicVolumeIsReportedAndSetAsTheSystemVolume() {
-        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-        val first = reports().filterIsInstance<BackendReport.SystemVolume>().firstOrNull()
-        assertTrue("reported at start", first != null)
+        // ExoPlayer reads the stream's volume off the main thread: wait for its first report.
+        val deadline = System.currentTimeMillis() + 5_000
+        while (reports().none { it is BackendReport.SystemVolume } && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(10)
+        }
+        assertTrue("reported at start", reports().any { it is BackendReport.SystemVolume })
         val max = backend.player.deviceInfo.maxVolume
         backend.handle(BackendCommand.SetSystemVolume(app.hocket.core.api.BackendCommandSetSystemVolumeInner(1.0, false)))
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()

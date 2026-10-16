@@ -1122,7 +1122,15 @@ impl Actor {
             has_cleared_selection: self.undo.has_cleared_selection(),
             text_field_focused: false,
             saved_queue_count: doc.map(|d| d.saved_queues.len() as u32).unwrap_or(0),
-            volume: self.volume_control().1.volume,
+            volume: {
+                let (_, v) = self.volume_control();
+                if v.muted {
+                    0.0
+                } else {
+                    v.volume
+                }
+            },
+            volume_unknown: self.volume_control().0.is_none(),
         }
     }
 
