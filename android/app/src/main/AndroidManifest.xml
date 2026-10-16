@@ -34,6 +34,18 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
 
+        <!-- Images handed to the share sheet (a lyrics card): never exported, read grant per intent
+             only, serving nothing but its own cache directory. -->
+        <provider
+            android:name="app.hocket.share.ShareFileProvider"
+            android:authorities="${applicationId}.share"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/share_paths" />
+        </provider>
+
         <activity
             android:name="app.hocket.MainActivity"
             android:exported="true"

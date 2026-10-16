@@ -93,10 +93,10 @@ class ManifestRulesTest {
     }
 
     @Test
-    fun theOnlyProvidersAreArtworkAndThePrivateWatchappFile() {
+    fun theOnlyProvidersAreArtworkAndThePrivateWatchappAndSharedImageFiles() {
         val providers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")
             .flatMap { path -> parse(path).getElementsByTagName("provider").let { list -> (0 until list.length).map { list.item(it) as Element } } }
-        assertEquals(setOf("app.hocket.playback.ArtworkProvider", "app.hocket.playback.pebble.PebbleFileProvider"), providers.map { it.getAttribute("android:name") }.toSet())
+        assertEquals(setOf("app.hocket.playback.ArtworkProvider", "app.hocket.playback.pebble.PebbleFileProvider", "app.hocket.share.ShareFileProvider"), providers.map { it.getAttribute("android:name") }.toSet())
         // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
         val artwork = providers.single { it.getAttribute("android:name") == "app.hocket.playback.ArtworkProvider" }
         assertFalse(artwork.hasAttribute("android:grantUriPermissions"))
@@ -110,5 +110,13 @@ class ManifestRulesTest {
             (0 until root.childNodes.length).map { root.childNodes.item(it) }.filterIsInstance<Element>()
         }
         assertEquals(listOf("cache-path:pebble/"), paths.map { it.tagName + ":" + it.getAttribute("path") })
+        // Shared images (a lyrics card): the same, over their own cache directory only.
+        val share = providers.single { it.getAttribute("android:name") == "app.hocket.share.ShareFileProvider" }
+        assertEquals("false", share.getAttribute("android:exported"))
+        assertFalse(share.hasAttribute("android:writePermission"))
+        val sharePaths = parse("android/app/src/main/res/xml/share_paths.xml").documentElement.let { root ->
+            (0 until root.childNodes.length).map { root.childNodes.item(it) }.filterIsInstance<Element>()
+        }
+        assertEquals(listOf("cache-path:shared/"), sharePaths.map { it.tagName + ":" + it.getAttribute("path") })
     }
 }

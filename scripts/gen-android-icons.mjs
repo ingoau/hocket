@@ -38,7 +38,7 @@ const SYMBOLS = {
   PlaylistPlay: "playlist_play", PlaylistRemove: "playlist_remove", PushPin: "push_pin", QueueMusic: "queue_music",
   Redo: "redo", Refresh: "refresh", Remove: "remove", RemoveCircleOutline: "do_not_disturb_on:outline", Repeat: "repeat",
   RepeatOne: "repeat_one", RestartAlt: "restart_alt", Save: "save", Search: "search", SelectAll: "select_all",
-  Settings: "settings", SettingsBackupRestore: "settings_backup_restore", Shuffle: "shuffle", SkipNext: "skip_next",
+  Settings: "settings", Share: "share", SettingsBackupRestore: "settings_backup_restore", Shuffle: "shuffle", SkipNext: "skip_next",
   SkipPrevious: "skip_previous", Sort: "sort", Speaker: "speaker", Star: "star", StarOutline: "star:outline", Stop: "stop",
   Sync: "sync", Tune: "tune", Undo: "undo", Visibility: "visibility", VisibilityOff: "visibility_off", VolumeUp: "volume_up",
   Watch: "watch",
@@ -53,7 +53,7 @@ const GROUPS = [
     "History", "Home", "Info", "KeyboardArrowDown", "LibraryMusic", "Lyrics", "MoreVert", "MusicNote", "NetworkCheck", "Palette",
     "Pause", "Person", "PhoneAndroid", "PlayArrow", "PlaylistAdd", "PlaylistAddCheck", "PlaylistPlay", "PlaylistRemove",
     "PushPin", "QueueMusic", "Refresh", "Remove", "RemoveCircleOutline", "Repeat", "RepeatOne", "RestartAlt", "Save", "Search",
-    "SelectAll", "Settings", "SettingsBackupRestore", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
+    "SelectAll", "Settings", "SettingsBackupRestore", "Share", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
     "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeUp", "Watch",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [

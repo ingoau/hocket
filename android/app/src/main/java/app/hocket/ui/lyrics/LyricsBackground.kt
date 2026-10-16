@@ -91,7 +91,7 @@ val LyricsBackgroundAnimated = SemanticsPropertyKey<Boolean>("LyricsBackgroundAn
  * Stops animating when not visible. Darkened by the adaptive [LyricsContrast] scrim.
  */
 @Composable
-fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, modifier: Modifier = Modifier) {
+fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, modifier: Modifier = Modifier, tag: String = "lyrics.background") {
     val client = LocalCoreClient.current
     val reducedMotion = LocalReducedMotion.current
     val prepared by produceState<Pair<Bitmap, Float>?>(initialValue = null, coverArt) {
@@ -119,7 +119,7 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
             }
         }
-        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag("lyrics.background")) {
+        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
             shader.setFloatUniform("size", size.width, size.height)
             shader.setFloatUniform("time", if (shouldAnimate) time else 0f)
             drawIntoCanvas { c ->
@@ -129,7 +129,7 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
             drawRect(Color.Black.copy(alpha = scrim))
         }
     } else {
-        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = false }.testTag("lyrics.background")) {
+        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = false }.testTag(tag)) {
             drawIntoCanvas { c ->
                 val p = android.graphics.Paint().apply { setShader(BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).also { s ->
                     val m = android.graphics.Matrix(); m.setScale(size.width / tex.width, size.height / tex.height); s.setLocalMatrix(m)

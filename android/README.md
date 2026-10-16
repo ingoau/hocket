@@ -297,7 +297,18 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   removes from the queue (undo from the core's toast).
 - Lyrics: syllable gradient sweep per syllable driven by `withFrameNanos` and `LyricsCursor`,
   30 fps in battery saver, stopped when not visible; AGSL warp background on Android 13+, static
-  blurred still otherwise or when battery saver / "animated background off" applies.
+  blurred still otherwise or when battery saver / "animated background off" applies. Holding a line
+  (`LyricsShareDialog`) flies its text out of the lyrics into its place on a share card, which forms
+  around it over a fading scrim while the options slide up (two copies of the line crossfade in
+  flight, one laid out like the list, one like the card; the line in the list and its copy on the
+  card are hidden meanwhile): album art, title and artist at the top, the chosen lines (up to six) on the blurred artwork
+  (or the artwork's colour), the brand lockup in one light colour at the bottom (`ui/brand`: the
+  bare wave and the Unbounded word mark, docs/brand.md); alignment and square / tall
+  shape. The card is recorded into a `GraphicsLayer` at 1080 px wide (drawn from it scaled down)
+  and exported as a PNG: Share through
+  `ShareFileProvider` (`cache/shared/`, never exported, a read grant per intent), Save to
+  Pictures/Hocket (MediaStore, Android 10+) or to a picked document before that. Closing runs the
+  motion back into the line; reduced motion makes it appear and go at once.
 - Touch targets are at least 48 dp; every interactive element has a content description; strings
   live in `res/values/strings.xml`.
 
@@ -317,8 +328,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
 - Adjustable controls speak values, not percentages: the seek bar ("1 minute 32 seconds of 3 minutes
   32 seconds", whole-second range, `setProgress` seeks), the rating ("3 of 5 stars", one node,
   steps of one star), sliders (`LabelledSlider`: a 48 dp slot owns the semantics) and EQ bands.
-- Lyrics: one labelled container; lines are items with "current line" / "background vocal" states;
-  nothing is a live region.
+- Lyrics: one labelled container; lines are items with "current line" / "background vocal" states
+  and "Share lyrics" as their long-click action; nothing is a live region.
 - Reduced motion: `LocalReducedMotion` (provided by `HocketTheme`) follows the animator duration
   scale, which "Remove animations" sets to 0. Frame-driven motion honours it: the syllable sweep
   becomes a static highlight of the lit line, no depth-of-field blur or line scaling, jump scrolling,
