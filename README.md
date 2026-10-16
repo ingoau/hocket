@@ -11,6 +11,7 @@ performer plays all of it.
 
 - `docs/design.md` — the design notes (decision record)
 - `docs/ARCHITECTURE.md` — repository layout, the core seam, build
+- `docs/brand.md` — the mark, the word mark, colour and the lockup
 - `crates/` — Rust core, coordinator, bindings
 - `android/` — Android app (Compose, Material 3 Expressive, Media3)
 - `desktop/` — Electron desktop app
