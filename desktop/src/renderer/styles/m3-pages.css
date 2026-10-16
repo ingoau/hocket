@@ -357,7 +357,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .lib-fan { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 132px; height: 80px; pointer-events: none; }
 .lib-fan .lib-fan-cover { position: absolute; top: 6px; width: 68px; height: 68px; border-radius: 10px; box-shadow: var(--shadow-2); object-fit: cover; }
 .lib-fan .n0 { left: 0; transform: rotate(-8deg); z-index: 3; }
-.lib-fan .n1 { left: 32px; transform: rotate(4deg); z-index: 2; }
+.lib-fan .n1 { left: 32px; transform: translateY(-6px) rotate(4deg); z-index: 2; }
 .lib-fan .n2 { left: 64px; transform: rotate(12deg); z-index: 1; }
 @media (max-width: 1100px) { .lib-fan { display: none; } }
 .lib-tile-icon { display: grid; place-items: center; width: 44px; height: 44px; clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }

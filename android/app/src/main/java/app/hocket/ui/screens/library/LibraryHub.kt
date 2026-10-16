@@ -322,7 +322,8 @@ private fun AlbumFan(covers: List<String>, modifier: Modifier = Modifier) {
             app.hocket.ui.components.Artwork(
                 cover, 128, null,
                 shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.offset(x = step * i).size(size).graphicsLayer { rotationZ = angle; shadowElevation = 6f; shape = RoundedCornerShape(10.dp); clip = true },
+                // The middle cover sits a little higher, so the three read as a fan rather than a row.
+                modifier = Modifier.offset(x = step * i, y = if (i == 1) (-6).dp else 0.dp).size(size).graphicsLayer { rotationZ = angle; shadowElevation = 6f; shape = RoundedCornerShape(10.dp); clip = true },
             )
         }
     }
