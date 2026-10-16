@@ -55,6 +55,8 @@ class FakeCore(
      * queue (nobody plays until Play takes the lease), as after Stop.
      */
     leaseHeld: Boolean = true,
+    /** A lease left by a device that is no longer listed (gone before it lapsed), in place of [leaseHeld]. */
+    staleLeaseOwner: DeviceId? = null,
 ) : CoreHandle {
     override val kind: CoreKind = CoreKind.Fake
     private val scope = CoroutineScope((parentScope?.coroutineContext ?: SupervisorJob()) + dispatcher + SupervisorJob())
@@ -81,7 +83,7 @@ class FakeCore(
     private var stamp = PositionStamp(0u, now(), 1.0, false)
     private var volume = 1.0
     private var buffering = false
-    private var transportOwner: DeviceId? = if (leaseHeld) deviceId else null
+    private var transportOwner: DeviceId? = staleLeaseOwner ?: if (leaseHeld) deviceId else null
     private var epoch = 1u
     private var playedMs = 0L
     private val savedQueues = ArrayList<SavedQueue>()
