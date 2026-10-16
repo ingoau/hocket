@@ -978,7 +978,7 @@ fn random_scenarios_lan_then_coordinator_with_a_hostile_peer() {
 
 /// Seed 860326 (from the proptest): a device reaches a play's scrobble
 /// point while cut off, loses the play, takes it back unscrobbled and
-/// reaches the point again before the first verdict came. Both reaches
+/// reaches the point again before the first verdict had come. Both reaches
 /// used to be asked on rejoin as separate queries, and both were allowed.
 #[test]
 fn a_play_reached_twice_by_one_device_scrobbles_once() {

@@ -3698,7 +3698,8 @@ impl Engine {
         // wait would be asked as a second query, and the room answers each
         // of our own queries "not a duplicate" (a retry after a lost answer
         // must be allowed), so the play would be submitted twice. The one
-        // verdict settles every reach of it.
+        // verdict settles every reach of it: it carries the first reach's
+        // `startedAt`, which a play taken back keeps (the stamp's, unchanged).
         if let Some(d) = self
             .deferred_scrobbles
             .iter_mut()
@@ -5213,6 +5214,34 @@ mod tests {
         assert_eq!(scrobble_verdicts(&outs), vec![true]);
         let outs = reach(&mut e);
         assert_eq!(scrobble_verdicts(&outs), vec![false]);
+    }
+
+    /// The second reach finds the play shared (it came back from another
+    /// device): the wait it joins becomes a shared one, with the longer
+    /// grace, counted from the first wait.
+    #[test]
+    fn reaching_a_pending_play_again_once_shared_makes_its_wait_shared() {
+        let (mut e, clock) = engine("a");
+        attach(&mut e, None, vec![]);
+        e.handle(Input::Disconnected { peer: "up".into() });
+        let reach = |e: &mut Engine| {
+            e.handle(Input::ScrobbleReached {
+                track_id: "t".into(),
+                started_at: 5_000.0,
+            })
+        };
+        assert!(scrobble_verdicts(&reach(&mut e)).is_empty());
+        e.mark_shared(5_000.0);
+        assert!(scrobble_verdicts(&reach(&mut e)).is_empty());
+        let awaiting: Vec<Option<EpochMs>> = e
+            .known_scrobbled()
+            .iter()
+            .map(|k| k.awaiting_since)
+            .collect();
+        assert_eq!(awaiting, vec![Some(10_000.0)]);
+        // the plain grace no longer settles it
+        clock.0.store(10_000 + 700_000, Ordering::SeqCst);
+        assert!(scrobble_verdicts(&e.handle(Input::Tick)).is_empty());
     }
 
     #[test]
