@@ -106,6 +106,7 @@ import app.hocket.core.api.Lyrics
 import app.hocket.core.api.TrackSummary
 import app.hocket.share.ShareImages
 import app.hocket.ui.a11y.LocalReducedMotion
+import app.hocket.ui.brand.Lockup
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.ChoiceRow
 import app.hocket.ui.icons.HocketIcons
@@ -474,22 +475,12 @@ internal fun LyricsCard(
                     Text(line.text, style = lineStyle, color = color, modifier = modifier)
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIcon(d(22.dp))
-                Spacer(Modifier.width(d(8.dp)))
-                Text(stringResource(R.string.app_name), style = TextStyle(fontSize = textSize(14.dp), fontWeight = FontWeight.SemiBold), color = LyricsContrast.secondary)
-            }
+            // The brand's lockup in white (docs/brand.md): the bare wave and the word mark.
+            Lockup(fontSize = d(15.dp))
         }
     }
 }
 
-/** The launcher icon: its background colour in a circle under the foreground mark (the adaptive icon's 72 of 108). */
-@Composable
-private fun AppIcon(size: Dp) {
-    Box(Modifier.size(size).clip(CircleShape).background(colorResource(R.color.ic_launcher_background)), contentAlignment = Alignment.Center) {
-        Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.requiredSize(size * 1.5f))
-    }
-}
 
 /** What goes on the card and the Save / Share buttons. */
 @Composable

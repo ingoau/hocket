@@ -302,7 +302,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   around it over a fading scrim while the options slide up (two copies of the line crossfade in
   flight, one laid out like the list, one like the card; the line in the list and its copy on the
   card are hidden meanwhile): album art, title and artist at the top, the chosen lines (up to six) on the blurred artwork
-  (or the artwork's colour), the app's icon and name at the bottom; alignment and square / tall
+  (or the artwork's colour), the brand lockup in one light colour at the bottom (`ui/brand`: the
+  bare wave and the Unbounded word mark, docs/brand.md); alignment and square / tall
   shape. The card is recorded into a `GraphicsLayer` at 1080 px wide (drawn from it scaled down)
   and exported as a PNG: Share through
   `ShareFileProvider` (`cache/shared/`, never exported, a read grant per intent), Save to

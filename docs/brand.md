@@ -76,4 +76,4 @@ The app icon (the tile, not the bare wave) to the left of the word mark, centred
 
 - **Outlined SVGs.** The word mark and lockup should ship as outlined paths beside `desktop/build/icon.svg`, so no surface has to load Unbounded just to draw the name. Until then, anywhere that sets it as live text has to bundle the font.
 - **The desktop setup screen** still sets the name in the system font at weight 800 (`.setup .brand` in `desktop/src/renderer/styles/m3-pages.css`), so it looks different on each platform. It should move to the word mark.
-- **Android** has no word mark use yet.
+- **Android** uses the word mark once, live: the lyrics share card's footer (`ui/brand/Wordmark.kt`) sets the bare wave and `hocket` in `#ECE9FF` on the card's dark ground. It bundles the whole variable Unbounded (`res/font/unbounded.ttf`, licence in `assets/licenses/unbounded-OFL.txt`), with the weights mapped onto its axis for later use.

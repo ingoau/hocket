@@ -27,6 +27,8 @@ import kotlinx.coroutines.SupervisorJob
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
+import org.junit.runners.model.Statement
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -37,17 +39,32 @@ import java.io.File
  * The lyrics share screen in the full player, for review by eye: the transition frame by frame
  * (`share-frame-NNN.png`, enough for a video) and the card with each option. Not an assertion test:
  * it runs only with `HOCKET_SCREENSHOT_DIR`; `HOCKET_COVERS` (its first image) gives every album a
- * real cover instead of the placeholder. SDK 32: Robolectric's native graphics cannot run the
- * Android 13+ AGSL backdrop, so this shows the still blur (what Android 12 and older draw).
+ * real cover instead of the placeholder. Gradle's configuration cache keeps the environment of the
+ * run that stored it, so run it with `--no-configuration-cache`.
+ *
+ * SDK 32 (so the backdrop is the still blur): at 35 Robolectric's native graphics aborts the JVM in
+ * this test every time ("JniConstants: Class not found: java/nio/FloatBuffer"), and at 32 now and
+ * then; a rerun gets through. The share card's recording layer is the likely trigger.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32], qualifiers = "w411dp-h891dp-night-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LyricsShareScreenshotTest {
-    @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
-
     private fun env(name: String): String? = (System.getProperty(name) ?: System.getenv(name))?.takeIf { it.isNotBlank() }
+
+    /** Skips before the activity starts: skipping after left its decoders running as the JVM exited. */
+    @get:Rule(order = 0)
+    val needsDir = TestRule { base, _ ->
+        object : Statement() {
+            override fun evaluate() {
+                assumeTrue("set HOCKET_SCREENSHOT_DIR", env("HOCKET_SCREENSHOT_DIR") != null)
+                base.evaluate()
+            }
+        }
+    }
+
+    @get:Rule(order = 1)
+    val compose = createAndroidComposeRule<ComponentActivity>()
 
     /** The fake core, every artwork answered with [cover] when there is one. */
     private class CoverHandle(private val fake: FakeCore, private val cover: File?) : CoreHandle by fake {
@@ -57,9 +74,8 @@ class LyricsShareScreenshotTest {
 
     @Test
     fun shareScreen() {
-        val dir = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
-        assumeTrue("set HOCKET_SCREENSHOT_DIR", dir != null)
-        dir!!.mkdirs()
+        val dir = File(env("HOCKET_SCREENSHOT_DIR")!!)
+        dir.mkdirs()
         val cover = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.minByOrNull { f -> f.name } }
         var clock = 1_000_000.0
         val now = { clock }
