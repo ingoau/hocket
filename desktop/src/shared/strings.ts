@@ -251,7 +251,6 @@ const STRINGS = {
   "home.customiseSync": "Drag to reorder. Changes sync to your other devices.",
   "home.customiseReset": "Reset to default",
   "home.customiseClose": "Close",
-  "home.sectionOptions": "Options for {title}",
   "home.moveUp": "Move up",
   "home.moveDown": "Move down",
   "home.moveUpNamed": "Move {title} up",

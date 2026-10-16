@@ -12,6 +12,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -75,8 +76,8 @@ class HomeLibraryScreenshotTest {
         shot(dir, "$prefix-01-home")
 
         step {
-            awaitTag("home.section.rediscover.more")
-            compose.onNodeWithTag("home.section.rediscover.more").performClick()
+            awaitTag("home.section.rediscover")
+            compose.onNodeWithTag("home.section.rediscover").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnLongClick)
             settle()
             shot(dir, "$prefix-02-section-menu")
             dismissSheet()

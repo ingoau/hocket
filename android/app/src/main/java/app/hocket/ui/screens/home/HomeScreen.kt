@@ -61,6 +61,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -181,7 +183,7 @@ fun HomeScreen(nav: NavHostController) {
                     any = true
                     item(key = "h.${pref.id}", contentType = "sectionHeader") {
                         val title = sectionTitle(section, content)
-                        HomeSectionHeader(title, Modifier.animateItem().testTag("home.section.${pref.id}"), moreTag = "home.section.${pref.id}.more", onMenu = { sectionMenu = pref })
+                        HomeSectionHeader(title, Modifier.animateItem().testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
                     }
                     item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
                         Box(Modifier.animateItem()) {
@@ -238,22 +240,26 @@ private fun sectionTitle(section: HomeSection, content: SectionContent): String 
     else -> stringResource(section.title)
 }
 
-/** A section's header: its title, long-press or the menu button for its options. */
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * A section's header: its title. Long-press opens the section's menu (TalkBack offers it as the
+ * long-press action); everything in it is also in Customise Home, at the end of the feed.
+ */
 @Composable
-private fun HomeSectionHeader(title: String, modifier: Modifier = Modifier, moreTag: String? = null, onMenu: () -> Unit) {
+private fun HomeSectionHeader(title: String, modifier: Modifier = Modifier, onMenu: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val options = stringResource(R.string.home_section_options, title)
-    // Long-press anywhere on the header opens its menu; the menu button is the labelled way in.
-    Row(
-        modifier.fillMaxWidth()
+    Text(
+        title,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.fillMaxWidth()
             .pointerInput(onMenu) { detectTapGestures(onLongPress = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() }) }
-            .heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 16.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics { heading() })
-        IconButton(onClick = onMenu, modifier = if (moreTag != null) Modifier.testTag(moreTag) else Modifier) { Icon(HocketIcons.Filled.MoreVert, options, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-    }
+            .semantics { heading(); onLongClick(label = options) { onMenu(); true } }
+            .heightIn(min = 56.dp).padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp)
+            .wrapContentHeight(Alignment.Bottom),
+    )
 }
 
 /** One section's items in its style. */

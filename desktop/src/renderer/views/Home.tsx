@@ -5,7 +5,7 @@ import { useApp, useJsonSetting, type MenuItem } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
-import { openContextMenu, openItemsMenu, openItemsMenuFromButton } from "../components/ContextMenu";
+import { openContextMenu, openItemsMenu } from "../components/ContextMenu";
 import { Tile, TileList } from "../components/Tile";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
@@ -124,11 +124,11 @@ function Section({ pref, onEmpty, menu }: { pref: SectionPref; onEmpty: (empty: 
   const items = menu(title);
   return (
     <section className="home-section" aria-labelledby={headingId} data-testid={`home-section-${id}`}>
-      <div className="home-section-head" onContextMenu={(e) => openItemsMenu(e, items)}>
+      {/* Right-click for the section's menu; all of it is also in Customise (top and end of the feed). */}
+      <div className="home-section-head" onContextMenu={(e) => openItemsMenu(e, items)} data-testid={`home-section-head-${id}`}>
         <div className="grow">
           <h2 className="section-heading" id={headingId}>{title}</h2>
         </div>
-        <button type="button" className="btn icon section-more" aria-label={t("home.sectionOptions", { title })} onClick={(e) => openItemsMenuFromButton(e, items)} data-testid={`home-section-more-${id}`}><Icon name="more" size={18} /></button>
       </div>
       {data.listening ? <ListeningTile {...data.listening} /> : <SectionItems items={data.items} style={style} label={title} />}
     </section>

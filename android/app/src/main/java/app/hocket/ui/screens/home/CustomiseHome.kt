@@ -14,10 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -70,8 +68,7 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
             Text(stringResource(R.string.home_customise), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Text(stringResource(R.string.home_customise_sync), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
             Spacer(Modifier.height(8.dp))
-            val list = rememberLazyListState()
-            LazyColumn(Modifier.weight(1f, fill = false), state = list) {
+            LazyColumn(Modifier.weight(1f, fill = false)) {
                 items(known, key = { it.id }) { pref ->
                     val section = pref.section ?: return@items
                     val title = stringResource(section.title)
@@ -103,8 +100,6 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                     }
                 }
             }
-            // The edge between the list and Reset only shows while there's more list under it.
-            if (list.canScrollForward) HorizontalDivider()
             TextButton(onClick = { save(HomeSections.DEFAULT) }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { Text(stringResource(R.string.home_customise_reset)) }
         }
     }

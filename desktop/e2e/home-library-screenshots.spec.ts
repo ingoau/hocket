@@ -60,7 +60,7 @@ test("home and library", async () => {
       await expect(page.getByTestId("sidebar-pin").first()).toBeVisible();
       await shot("01-home");
 
-      await page.getByTestId("home-section-more-rediscover").or(page.getByTestId("home-section-more-filters")).first().click({ force: true });
+      await page.getByTestId("home-section-head-rediscover").or(page.getByTestId("home-section-head-filters")).first().click({ button: "right" });
       await expect(page.getByTestId("context-menu")).toBeVisible();
       await shot("02-section-menu");
       await page.keyboard.press("Escape");

@@ -283,8 +283,6 @@
 .home-section { margin-bottom: 28px; }
 .home-section-head { display: flex; align-items: flex-end; gap: 8px; margin: 0 0 10px var(--page-title-inset); }
 .home-section-head .section-heading { margin: 0; }
-.home-section-head .section-more { opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
-.home-section-head:hover .section-more, .home-section-head:focus-within .section-more { opacity: 1; }
 .home-section .grid { --tile-w: 168px; }
 .home-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); column-gap: 16px; }
 .home-list-row { display: flex; align-items: center; gap: 4px; border-radius: var(--shape-md); padding: 0 4px 0 6px; }
