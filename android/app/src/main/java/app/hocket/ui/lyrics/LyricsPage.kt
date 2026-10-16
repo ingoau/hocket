@@ -308,7 +308,7 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, on
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (androidx.compose.ui.geometry.Rect?) -> Unit) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> androidx.compose.ui.geometry.Rect?) -> Unit) {
     val animatedScale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
     val scale = if (reducedMotion) 1f else animatedScale
     val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
@@ -323,9 +323,10 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     val shareLabel = stringResource(R.string.lyrics_share)
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
-    // Where the line was last laid out, for the share card to grow out of (not state: read on hold only).
+    // Where the line is laid out, for the share card to grow out of and go back to (not state: read
+    // on hold and on close only).
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val share: (() -> Unit)? = if (line.text.isBlank()) null else ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); onShare(screenBounds(view, coords[0])) })
+    val share: (() -> Unit)? = if (line.text.isBlank()) null else ({ onShare { screenBounds(view, coords[0]) } })
     val currentShare by rememberUpdatedState(share)
     val a11yText = listOfNotNull(line.text, line.translation).joinToString(". ")
     val a11yState = listOfNotNull(if (focused) currentState else null, if (line.background) backgroundState else null).joinToString(", ")
@@ -350,7 +351,8 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
             .then(
                 when {
                     line.startMs != null -> Modifier.combinedClickable(onClickLabel = seekHere, onClick = onClick, onLongClickLabel = shareLabel, onLongClick = share)
-                    share != null -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { currentShare?.invoke() }) }
+                    // combinedClickable gives the long-press haptic itself; here it is ours to give.
+                    share != null -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); currentShare?.invoke() }) }
                     else -> Modifier
                 },
             )

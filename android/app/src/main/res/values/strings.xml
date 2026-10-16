@@ -339,6 +339,7 @@
     <string name="lyrics_share_save">Save</string>
     <string name="lyrics_share_send">Share</string>
     <string name="lyrics_share_saved">Saved to Pictures</string>
+    <string name="lyrics_share_saved_document">Saved</string>
     <string name="lyrics_share_failed">Couldn\'t create the image</string>
     <string name="lyrics_share_card_a11y">Lyrics card: %1$s</string>
 

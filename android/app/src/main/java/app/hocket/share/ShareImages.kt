@@ -37,7 +37,7 @@ object ShareImages {
         val uri = withContext(Dispatchers.IO) {
             val dir = File(context.cacheDir, DIR).apply { mkdirs() }
             val now = System.currentTimeMillis()
-            dir.listFiles()?.filter { now - it.lastModified() > KEEP_MS }?.forEach { it.delete() }
+            dir.listFiles()?.filter { now - it.lastModified() > KEEP_MS }?.forEach { it.deleteRecursively() }
             // Its own folder per share, so the name the target app shows is the plain one.
             val file = File(File(dir, now.toString()).apply { mkdirs() }, name)
             file.outputStream().use { png(bitmap).compress(Bitmap.CompressFormat.PNG, 100, it) }

@@ -301,7 +301,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   (`LyricsShareDialog`) grows a share card out of it over a fading scrim while the options slide
   up: album art, title and artist at the top, the chosen lines (up to six) on the blurred artwork
   (or the artwork's colour), the app's icon and name at the bottom; alignment and square / tall
-  shape. The card is recorded into a `GraphicsLayer` and exported as a PNG: Share through
+  shape. The card is recorded into a `GraphicsLayer` at 1080 px wide (drawn from it scaled down)
+  and exported as a PNG: Share through
   `ShareFileProvider` (`cache/shared/`, never exported, a read grant per intent), Save to
   Pictures/Hocket (MediaStore, Android 10+) or to a picked document before that. Closing runs the
   motion back into the line; reduced motion makes it appear and go at once.

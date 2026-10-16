@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -43,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,7 +55,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -72,15 +77,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.window.Dialog
@@ -98,14 +107,18 @@ import app.hocket.ui.components.ChoiceRow
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.player.artworkSeed
 import app.hocket.ui.theme.Motion
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** Lines a card can hold: past this it stops reading as a quote. */
 internal const val MAX_SHARED_LINES = 6
 
-/** A long-press on lyric [line]; [source] is where that line sits on screen (the card grows out of it). */
+/**
+ * A long-press on lyric [line]. [source] says where that line sits on screen now (null once it has
+ * scrolled away): the card grows out of it, and goes back to wherever it is on close.
+ */
 @Immutable
-internal data class LyricsShareRequest(val line: Int, val source: Rect?)
+internal class LyricsShareRequest(val line: Int, val source: () -> Rect?)
 
 internal enum class CardBackground { Artwork, Colour }
 internal enum class CardAlign { Start, Centre }
@@ -136,6 +149,9 @@ internal fun toggleSharedLine(selected: Set<Int>, index: Int): Set<Int> = when {
     else -> selected
 }
 
+/** The exported card's width in pixels, whatever its size on screen. */
+private const val EXPORT_WIDTH_PX = 1080f
+
 /**
  * The lyrics share screen, from a long-press on a lyric line: a card (album art, title and artist at
  * the top, the chosen lines, the app's icon and name at the bottom, over the player's blurred
@@ -149,10 +165,14 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val progress = remember { Animatable(0f) }
+    // Where the card grows from and shrinks back to: the held line, re-read on close (the lyrics
+    // keep scrolling under the dialog while the song plays).
+    var from by remember { mutableStateOf(request.source()) }
     var closing by remember { mutableStateOf(false) }
     val close: () -> Unit = {
         if (!closing) {
             closing = true
+            request.source()?.let { from = it }
             scope.launch { progress.animateTo(0f, if (reducedMotion) snap() else Motion.mode); onDismiss() }
         }
     }
@@ -160,29 +180,35 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
     var style by remember { mutableStateOf(LyricsCardStyle()) }
     var target by remember { mutableStateOf<Rect?>(null) }
     var busy by remember { mutableStateOf(false) }
-    val layer = rememberGraphicsLayer()
+    // The card's recording; created in the dialog's window, which draws it.
+    val layerRef = remember { arrayOfNulls<GraphicsLayer>(1) }
     val name = remember(track.title) { ShareImages.fileName(track.title) }
     val failed = stringResource(R.string.lyrics_share_failed)
     val saved = stringResource(R.string.lyrics_share_saved)
+    val savedDocument = stringResource(R.string.lyrics_share_saved_document)
     val chooserTitle = stringResource(R.string.lyrics_share)
+    fun toast(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
     // Before Android 10 the image goes to a document the user picks (MediaStore needs a permission).
     var pending by remember { mutableStateOf<Bitmap?>(null) }
     val createDocument = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
         val bitmap = pending
         pending = null
-        if (uri != null && bitmap != null) scope.launch {
-            Toast.makeText(context, if (ShareImages.writeTo(context, uri, bitmap)) saved else failed, Toast.LENGTH_SHORT).show()
-        }
+        if (uri != null && bitmap != null) scope.launch { toast(if (ShareImages.writeTo(context, uri, bitmap)) savedDocument else failed) }
     }
 
     fun withImage(block: suspend (Bitmap) -> Unit) {
-        if (busy) return
+        val layer = layerRef[0]
+        if (busy || layer == null) return
         busy = true
         scope.launch {
             try {
-                val bitmap = runCatching { capture(layer) }.getOrNull()
-                if (bitmap == null) Toast.makeText(context, failed, Toast.LENGTH_SHORT).show() else block(bitmap)
+                block(layer.toImageBitmap().asAndroidBitmap())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // No image, no room to write it, or no app to take it.
+                toast(failed)
             } finally { busy = false }
         }
     }
@@ -190,86 +216,93 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         // The window's own dim would snap in; the scrim below fades with the card instead.
         val dialogView = LocalView.current
-        LaunchedEffect(dialogView) { (dialogView.parent as? DialogWindowProvider)?.window?.setDimAmount(0f) }
+        SideEffect { (dialogView.parent as? DialogWindowProvider)?.window?.setDimAmount(0f) }
+        val layer = rememberGraphicsLayer()
+        SideEffect { layerRef[0] = layer }
         // Grow once the card's place is known, so the first frame starts at the line.
         LaunchedEffect(target != null) {
             if (target != null && !closing) progress.animateTo(1f, if (reducedMotion) snap() else Motion.mode)
         }
-        val p = progress.value
+        // The progress is read in the layers only: the motion redraws, it does not recompose.
+        val shown = Modifier.graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) }
         Box(Modifier.fillMaxSize().testTag("lyrics.share")) {
             Box(
                 Modifier.fillMaxSize()
-                    .graphicsLayer { alpha = p.coerceIn(0f, 1f) }
+                    .then(shown)
                     .background(Color.Black.copy(alpha = 0.72f))
                     // A tap outside closes; not an accessibility node (Close and back do the same).
                     .pointerInput(Unit) { detectTapGestures { close() } },
             )
-            Column(Modifier.fillMaxSize().statusBarsPadding()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp).graphicsLayer { alpha = p.coerceIn(0f, 1f) }, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = close, modifier = Modifier.testTag("lyrics.share.close")) {
-                        Icon(HocketIcons.Filled.Close, stringResource(R.string.lyrics_share_close), tint = Color.White)
-                    }
-                    Text(stringResource(R.string.lyrics_share), style = MaterialTheme.typography.titleLarge, color = Color.White, modifier = Modifier.semantics { heading() })
-                }
-                val ratio by animateFloatAsState(style.shape.ratio, if (reducedMotion) snap() else Motion.mode, label = "cardRatio")
-                Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
-                    val view = LocalView.current
-                    Box(Modifier.aspectRatio(ratio).onGloballyPositioned { target = screenBounds(view, it) }) {
-                        val lines = doc.lines.filterIndexed { i, _ -> i in selected }
-                        LyricsCard(
-                            track, lines, style, layer,
-                            Modifier.fillMaxSize().graphicsLayer {
-                                val from = request.source
-                                val to = target
-                                // From the held line (its centre, about its width) to the card's place.
-                                if (from != null && to != null && to.width > 0f) {
-                                    val start = (from.width / to.width).coerceIn(0.3f, 1f)
-                                    val s = lerp(start, 1f, p)
-                                    scaleX = s; scaleY = s
-                                    translationX = lerp(from.center.x - to.center.x, 0f, p)
-                                    translationY = lerp(from.center.y - to.center.y, 0f, p)
-                                }
-                                // Visible quickly, so it reads as the line lifting off, not a fade.
-                                alpha = (p * 2.5f).coerceIn(0f, 1f)
-                            },
-                        )
-                    }
-                }
-                ShareOptions(
-                    doc, selected, style,
-                    onToggle = { selected = toggleSharedLine(selected, it) },
-                    onStyle = { style = it },
-                    busy = busy,
-                    onSave = {
-                        withImage { bitmap ->
-                            if (ShareImages.canSaveToPictures) {
-                                Toast.makeText(context, if (ShareImages.saveToPictures(context, bitmap, name)) saved else failed, Toast.LENGTH_SHORT).show()
-                            } else {
-                                pending = bitmap
-                                createDocument.launch(name)
-                            }
+            BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
+                val optionsMax = maxHeight * 0.6f
+                Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp).then(shown).consumeTaps(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = close, modifier = Modifier.testTag("lyrics.share.close")) {
+                            Icon(HocketIcons.Filled.Close, stringResource(R.string.lyrics_share_close), tint = Color.White)
                         }
-                    },
-                    onShare = { withImage { ShareImages.share(context, it, name, chooserTitle) } },
-                    initialLine = request.line,
-                    modifier = Modifier.graphicsLayer {
-                        // Slides up from below as the card grows.
-                        translationY = (1f - p) * size.height
-                        alpha = p.coerceIn(0f, 1f)
-                    },
-                )
+                        Text(stringResource(R.string.lyrics_share), style = MaterialTheme.typography.titleLarge, color = Color.White, modifier = Modifier.semantics { heading() })
+                    }
+                    val ratio by animateFloatAsState(style.shape.ratio, if (reducedMotion) snap() else Motion.mode, label = "cardRatio")
+                    Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
+                        val view = LocalView.current
+                        val lines = remember(doc, selected) { doc.lines.filterIndexed { i, _ -> i in selected } }
+                        Box(Modifier.aspectRatio(ratio).onGloballyPositioned { target = screenBounds(view, it) }.consumeTaps()) {
+                            LyricsCard(
+                                track, lines, style, layer,
+                                Modifier.fillMaxSize().graphicsLayer {
+                                    val p = progress.value
+                                    val start = from
+                                    val to = target
+                                    // From the held line (its centre, as tall as the line) to the card's place.
+                                    if (start != null && to != null && to.width > 0f && to.height > 0f) {
+                                        val s = lerp(minOf(start.width / to.width, start.height / to.height).coerceIn(0.1f, 1f), 1f, p)
+                                        scaleX = s; scaleY = s
+                                        translationX = lerp(start.center.x - to.center.x, 0f, p)
+                                        translationY = lerp(start.center.y - to.center.y, 0f, p)
+                                    }
+                                    // Visible quickly, so it reads as the line lifting off, not a fade.
+                                    alpha = (p * 2.5f).coerceIn(0f, 1f)
+                                },
+                            )
+                        }
+                    }
+                    ShareOptions(
+                        doc, selected, style,
+                        onToggle = { selected = toggleSharedLine(selected, it) },
+                        onStyle = { style = it },
+                        busy = busy,
+                        onSave = {
+                            withImage { bitmap ->
+                                if (ShareImages.canSaveToPictures) {
+                                    toast(if (ShareImages.saveToPictures(context, bitmap, name)) saved else failed)
+                                } else {
+                                    pending = bitmap
+                                    createDocument.launch(name)
+                                }
+                            }
+                        },
+                        onShare = { withImage { ShareImages.share(context, it, name, chooserTitle) } },
+                        initialLine = request.line,
+                        modifier = Modifier.heightIn(max = optionsMax).graphicsLayer {
+                            // Slides up from below as the card grows.
+                            val p = progress.value
+                            translationY = (1f - p) * size.height
+                            alpha = p.coerceIn(0f, 1f)
+                        },
+                    )
+                }
             }
         }
     }
 }
 
-/** The card as last drawn, as a bitmap (it is recorded into [layer] on every draw). */
-private suspend fun capture(layer: GraphicsLayer): Bitmap = layer.toImageBitmap().asAndroidBitmap()
+/** Takes taps without doing anything, so they do not reach the scrim (which closes). */
+private fun Modifier.consumeTaps(): Modifier = pointerInput(Unit) { detectTapGestures { } }
 
 /**
  * The shareable card. Every size is relative to the card's width (a 320 dp reference), so the
- * exported image looks the same at any card size and ignores the font scale. Drawn into [layer]
- * as well as on screen, which is what Save and Share export.
+ * exported image looks the same at any card size and ignores the font scale. Also recorded into
+ * [layer] at [EXPORT_WIDTH_PX] wide (and drawn from it, scaled down): what Save and Share export.
  */
 @Composable
 internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: LyricsCardStyle, layer: GraphicsLayer?, modifier: Modifier = Modifier) {
@@ -278,13 +311,17 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
         modifier
             .let { m ->
                 if (layer == null) m else m.drawWithContent {
-                    layer.record { this@drawWithContent.drawContent() }
-                    drawLayer(layer)
+                    val k = (EXPORT_WIDTH_PX / size.width).coerceAtLeast(1f)
+                    layer.record(size = IntSize(kotlin.math.ceil(size.width * k).toInt(), kotlin.math.ceil(size.height * k).toInt())) {
+                        scale(k, k, pivot = Offset.Zero) { this@drawWithContent.drawContent() }
+                    }
+                    scale(1f / k, 1f / k, pivot = Offset.Zero) { drawLayer(layer) }
                 }
             }
             .clip(RoundedCornerShape(percent = 7))
-            .semantics { contentDescription = cardLabel }
-            .testTag("lyrics.share.card"),
+            .testTag("lyrics.share.card")
+            // One node: the lines once, not the description and then each line again.
+            .clearAndSetSemantics { contentDescription = cardLabel },
     ) {
         val unit = maxWidth / 320.dp
         val density = LocalDensity.current
@@ -294,18 +331,38 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
         when (style.background) {
             CardBackground.Artwork -> {
                 Box(Modifier.matchParentSize().background(Color.Black))
-                LyricsBackground(track.coverArt, animated = false, visible = false, modifier = Modifier.matchParentSize())
+                LyricsBackground(track.coverArt, animated = false, visible = false, modifier = Modifier.matchParentSize(), tag = "lyrics.share.background")
             }
             CardBackground.Colour -> {
                 val seed = artworkSeed(track.coverArt).value ?: Color.DarkGray
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to seed, 1f to lerp(seed, Color.Black, 0.55f))))
-                // The same floor the lyrics scrim keeps for white text over a bright colour.
-                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = LyricsContrast.MIN_SCRIM)))
+                // The lyrics scrim's rule: enough black for white text over the brightest part (the top).
+                val scrim = remember(seed) { LyricsContrast.scrimAlpha(seed) }
+                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = scrim)))
             }
         }
 
         val centred = style.align == CardAlign.Centre
         val textAlign = if (centred) TextAlign.Center else TextAlign.Start
+        // The lines at the largest size (up to 1x) that fits between the header and the footer.
+        val measurer = rememberTextMeasurer()
+        val widthPx = constraints.maxWidth - with(density) { d(48.dp).roundToPx() }
+        val roomPx = constraints.maxHeight - with(density) { d(48.dp + 52.dp + 22.dp + 32.dp).roundToPx() }
+        fun lineStyle(line: LyricLine, fit: Float): TextStyle {
+            val base = if (line.background) 18.dp else 26.dp
+            return TextStyle(fontSize = textSize(base * fit), lineHeight = textSize(base * fit * 1.2f), fontWeight = if (line.background) FontWeight.Medium else FontWeight.Bold, textAlign = textAlign)
+        }
+        val fit = remember(lines, widthPx, roomPx, textAlign, unit) {
+            if (widthPx <= 0 || roomPx <= 0) return@remember 0.4f
+            val gap = with(density) { d(8.dp).roundToPx() }
+            var f = 1f
+            while (f > 0.4f) {
+                val height = lines.sumOf { measurer.measure(it.text, lineStyle(it, f), constraints = Constraints(maxWidth = widthPx)).size.height } + gap * (lines.size - 1)
+                if (height <= roomPx) break
+                f -= 0.05f
+            }
+            f
+        }
         Column(Modifier.matchParentSize().padding(d(24.dp)), horizontalAlignment = if (centred) Alignment.CenterHorizontally else Alignment.Start) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Artwork(track.coverArt, ArtworkSizes.GRID, null, Modifier.size(d(52.dp)), RoundedCornerShape(d(10.dp)))
@@ -315,22 +372,13 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
                     track.artist?.let { Text(it, style = TextStyle(fontSize = textSize(14.dp), lineHeight = textSize(18.dp)), color = LyricsContrast.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
-            // The lines, shrinking as there is more to fit.
-            val chars = lines.sumOf { it.text.length }.coerceAtLeast(1)
-            val fit = kotlin.math.sqrt(90f / chars.coerceAtLeast(90)).coerceIn(0.6f, 1f) * if (style.shape == CardShape.Tall) 1.1f else 1f
             Column(
                 Modifier.weight(1f).fillMaxWidth().padding(vertical = d(16.dp)),
                 verticalArrangement = Arrangement.spacedBy(d(8.dp), Alignment.CenterVertically),
                 horizontalAlignment = if (centred) Alignment.CenterHorizontally else Alignment.Start,
             ) {
                 for (line in lines) {
-                    val base = if (line.background) 18.dp else 26.dp
-                    Text(
-                        line.text,
-                        style = TextStyle(fontSize = textSize(base * fit), lineHeight = textSize(base * fit * 1.2f), fontWeight = if (line.background) FontWeight.Medium else FontWeight.Bold, textAlign = textAlign),
-                        color = if (line.background) LyricsContrast.secondary else Color.White,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Text(line.text, style = lineStyle(line, fit), color = if (line.background) LyricsContrast.secondary else Color.White, modifier = Modifier.fillMaxWidth())
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -365,7 +413,7 @@ private fun ShareOptions(
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-        Column(Modifier.navigationBarsPadding().padding(top = 16.dp, bottom = 12.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(top = 16.dp, bottom = 12.dp)) {
             Text(stringResource(R.string.lyrics_share_lines, MAX_SHARED_LINES), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             val pickable = remember(doc) { doc.lines.withIndex().filter { it.value.text.isNotBlank() } }
             val start = remember(doc) { (pickable.indexOfFirst { it.index == initialLine } - 1).coerceAtLeast(0) }

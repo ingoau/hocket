@@ -30,7 +30,7 @@ const SYMBOLS = {
   Cast: "cast", Category: "category", Check: "check", CheckCircle: "check_circle", ChevronRight: "chevron_right",
   ClearAll: "clear_all", Close: "close", CloudOff: "cloud_off", Computer: "computer", Delete: "delete", Devices: "devices",
   Download: "download", DownloadDone: "download_done", DownloadForOffline: "download_for_offline", DragHandle: "drag_handle",
-  ErrorOutline: "error:outline", Favorite: "favorite", FavoriteBorder: "favorite:outline", FilterAlt: "filter_alt", FormatAlignCenter: "format_align_center", FormatAlignLeft: "format_align_left",
+  ErrorOutline: "error:outline", Favorite: "favorite", FavoriteBorder: "favorite:outline", FilterAlt: "filter_alt",
   GraphicEq: "graphic_eq", History: "history", Home: "home", Info: "info", KeyboardArrowDown: "keyboard_arrow_down",
   LibraryMusic: "library_music", Logout: "logout", Lyrics: "lyrics", MoreVert: "more_vert", MusicNote: "music_note",
   NetworkCheck: "network_check", OfflineBolt: "offline_bolt", Palette: "palette", Pause: "pause", Person: "person",
@@ -49,7 +49,7 @@ const GROUPS = [
   { path: ["Filled"], fill: true, mirror: false, names: [
     "AccountCircle", "Add", "Album", "AllInclusive", "ArrowDropDown", "BarChart", "BatterySaver", "Bedtime", "Cancel", "Cast",
     "Category", "Check", "CheckCircle", "ChevronRight", "ClearAll", "Close", "Computer", "Delete", "Devices", "Download",
-    "DownloadDone", "DownloadForOffline", "DragHandle", "ErrorOutline", "Favorite", "FavoriteBorder", "FilterAlt", "FormatAlignCenter", "FormatAlignLeft", "GraphicEq",
+    "DownloadDone", "DownloadForOffline", "DragHandle", "ErrorOutline", "Favorite", "FavoriteBorder", "FilterAlt", "GraphicEq",
     "History", "Home", "Info", "KeyboardArrowDown", "LibraryMusic", "Lyrics", "MoreVert", "MusicNote", "NetworkCheck", "Palette",
     "Pause", "Person", "PhoneAndroid", "PlayArrow", "PlaylistAdd", "PlaylistAddCheck", "PlaylistPlay", "PlaylistRemove",
     "PushPin", "QueueMusic", "Refresh", "Remove", "RemoveCircleOutline", "Repeat", "RepeatOne", "RestartAlt", "Save", "Search",
