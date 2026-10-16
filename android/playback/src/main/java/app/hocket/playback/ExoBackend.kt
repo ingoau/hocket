@@ -27,6 +27,7 @@ import app.hocket.core.api.BackendReportPlayingInner
 import app.hocket.core.api.BackendReportPositionInner
 import app.hocket.core.api.BackendReportPreBufferReadyInner
 import app.hocket.core.api.BackendReportReadyInner
+import app.hocket.core.api.BackendReportSystemVolumeInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource as CoreMediaSource
@@ -36,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * The external `PlaybackBackend`: turns [BackendCommand]s from the core into ExoPlayer calls and
@@ -58,8 +60,12 @@ import kotlin.math.pow
  *   OS/HTTP cache makes it start fast, which is the point of the pre-buffer.
  * - `gain_db` is applied as `player.volume = 10^(gain/20) * masterVolume`, clamped to 1.0. Media3 has
  *   no gain stage, so positive gain is an approximation (it cannot amplify) and ReplayGain-style
- *   attenuation is exact. `masterVolume` is already an amplitude gain: the core maps the volume
- *   slider onto a dB scale before sending it.
+ *   attenuation is exact. `masterVolume` (`SetVolume`) is an amplitude gain: only the sleep fade
+ *   once the core has the system volume below, else the user volume on a dB scale too.
+ * - The phone's volume is the system music volume, with no second volume in the app: the player's
+ *   device volume (the music stream) is reported as `SystemVolume` at start and on every change
+ *   (keys, the system panel, another app, a headset), and `SetSystemVolume` sets it. A device whose
+ *   volume is fixed reports nothing, and the core keeps its own volume instead.
  * - Audio focus and becoming-noisy are handled by ExoPlayer; focus loss is reported as
  *   `AudioFocusLost` (transient when Media3 reports a suppression reason instead of a pause: ExoPlayer
  *   then resumes by itself when focus returns and reports `Playing`).
@@ -148,6 +154,7 @@ class ExoBackend(
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build())
         .setMediaSourceFactory(mediaSourceFactory())
+        .setDeviceVolumeControlEnabled(true)
         .build()
 
     private var preBufferPlayer: ExoPlayer? = null
@@ -231,6 +238,8 @@ class ExoBackend(
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) = effects.onSessionIdChanged(audioSessionId)
 
+            override fun onDeviceVolumeChanged(volume: Int, muted: Boolean) = reportSystemVolume()
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
             }
@@ -259,6 +268,8 @@ class ExoBackend(
                 scheduleRecovery(key, delayMs)
             }
         })
+        // The core mirrors the music volume from here on.
+        reportSystemVolume()
     }
 
     private fun scheduleRecovery(key: String, delayMs: Long) {
@@ -349,6 +360,14 @@ class ExoBackend(
                 masterVolume = command.data.volume.coerceIn(0.0, 1.0)
                 applyGain(currentGainDb)
             }
+            is BackendCommand.SetSystemVolume -> {
+                val info = player.deviceInfo
+                if (info.maxVolume > info.minVolume) {
+                    val steps = info.minVolume + (command.data.volume.coerceIn(0.0, 1.0) * (info.maxVolume - info.minVolume)).roundToInt()
+                    if (steps != player.deviceVolume) player.setDeviceVolume(steps, 0)
+                    if (command.data.muted != player.isDeviceMuted) player.setDeviceMuted(command.data.muted, 0)
+                }
+            }
             is BackendCommand.PreBuffer -> {
                 val p = preBufferPlayer ?: ExoPlayer.Builder(context)
                     .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
@@ -419,6 +438,15 @@ class ExoBackend(
                 delay(POSITION_INTERVAL_MS)
             }
         }
+    }
+
+    /** The music stream's volume to the core; nothing on a device whose volume is fixed. */
+    private fun reportSystemVolume() {
+        val info = player.deviceInfo
+        val range = info.maxVolume - info.minVolume
+        if (range <= 0) return
+        val volume = ((player.deviceVolume - info.minVolume).toDouble() / range).coerceIn(0.0, 1.0)
+        report(BackendReport.SystemVolume(BackendReportSystemVolumeInner(volume, player.isDeviceMuted)))
     }
 
     private fun stopPositionLoop() {

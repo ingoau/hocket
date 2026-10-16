@@ -157,8 +157,9 @@ the one core for the process through `CoreHost`:
   the URI with its own identity) but only serves this app and packages the session accepted in
   `onConnect`.
 - Remote output: while another Connect device plays, `CoreSessionPlayer` reports
-  `DeviceInfo(PLAYBACK_TYPE_REMOTE, routingControllerId = "hocket-connect")` (fixed volume: Connect
-  volume is per device) and `ConnectRouteProvider` (a `MediaRoute2ProviderService`, API 30+) keeps a
+  `DeviceInfo(PLAYBACK_TYPE_REMOTE, routingControllerId = "hocket-connect")` with that device's
+  volume as the session's device volume (20 steps; fixed until it reports one), so the volume keys
+  and the system volume panel drive it, and `ConnectRouteProvider` (a `MediaRoute2ProviderService`, API 30+) keeps a
   routing session with that id, named after the playing device. SystemUI pairs the two and shows the
   device on the media controls' output chip; the other devices are routes in the system output
   switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds

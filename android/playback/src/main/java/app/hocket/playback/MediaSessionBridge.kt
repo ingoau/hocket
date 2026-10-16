@@ -265,8 +265,8 @@ class MediaSessionBridge(
     }
 
     /** Push a new state to the player and refresh the custom layout. Main thread. */
-    fun apply(state: MediaSessionState, clockOffsetMs: Double, remote: Boolean = player.isRemote) {
-        player.apply(state, clockOffsetMs, remote)
+    fun apply(state: MediaSessionState, clockOffsetMs: Double, remote: Boolean = player.isRemote, remoteVolume: Boolean = false) {
+        player.apply(state, clockOffsetMs, remote, remoteVolume)
         session.setMediaButtonPreferences(buttons(state))
     }
 

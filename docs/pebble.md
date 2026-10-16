@@ -63,7 +63,7 @@ Identical to the reference above, in both modes, with these differences:
 - **Touch gestures replace the system's swipe-to-button mapping** on Now Playing (the app opts out of touch navigation on this window and handles touch itself). Defaults: swipe **up** = Queue, swipe **left** = Library, swipe **right** = Back, swipe **down** = nothing, **press and hold** = Actions menu. All configurable (Settings).
 - **Nothing playing** shows a **Resume** option (the last queue) instead of a dead end.
 - **Star rating replaces the cassette.** Five stars (filled up to the rating; black-and-white watches draw only the filled ones, so unrated shows none) sit under the progress bar, left-aligned at the text margin (inside the circle on round). The volume icon still flashes in that spot for 2 s after a volume change. There is no paused-cassette icon (the play/pause icon shows the state) and no cassette slide on skip. With album art the title scrolls on its own line over the foot of the cover.
-- **Volume: open.** Pending the Connect volume migration. The reference controls are kept; for now they drive the phone's music volume (as the official Pebble app does), through one placeholder in `PebbleBridge` (`changeVolume`).
+- **Volume drives the device playing.** The reference controls are kept; a press is a 5 % step of the playing device's volume (the phone's music volume when the phone plays or nothing does), routed by the core like every volume control (`PebbleBridge.changeVolume`).
 - The official app's three preferences (volume controls, progress bar, album art) are watch prefs a third-party app can't read, so Hocket has its own copies (Settings) with the same defaults, except **album art on** by default (Hocket already has the covers cached).
 
 
@@ -187,4 +187,3 @@ Testing: `HOCKET_DEMO=1 pebble build` gives the emulator sample state for screen
 
 ## Open  
 
-- **Volume:** what the volume controls drive (phone volume, or the playing Hocket device's volume). Waiting on the Connect volume migration. Today: the phone's music volume, via the placeholder in `PebbleBridge.changeVolume` / `volumePercent`.

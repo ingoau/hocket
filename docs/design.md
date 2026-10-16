@@ -134,6 +134,16 @@ The session document owns queue, context, history, shuffle, repeat and snapshots
 Position is never broadcast on a timer. Send `(position, takenAt, rate, isPlaying)` and let receivers extrapolate, with clock offset estimated from the minimum round-trip sample. The lyric renderers consume this same extrapolated position, so lyrics stay correct when audio is playing elsewhere.
 
 
+### Volume
+
+The volume control always controls the speaker that's playing.
+
+- **Each device owns its own volume** (level and mute). The playing device's rides on its transport stamps, so every other device's control shows it, labelled with its name on desktop ("Volume – Pixel 8") and in the phone's Connect sheet. Moving any control while another device plays sends that device a `SetVolume`; when nobody plays, a control sets its own device's volume, ready for next time.
+- **Handoff keeps each device's level.** Moving from headphones on the phone to the desk speaker plays at the level last used on the speaker. Mute remembers the level from before it, per device.
+- **On the phone the volume is the system music volume**, with no second volume inside the app: the keys, the system slider and the in-app slider are one thing, and changing it any other way (another app, a headset) shows on every other device. While another device plays, the phone's volume keys and the volume slider in its system media controls drive that device, and the system volume panel names it. The Pebble's volume buttons drive whichever device is playing.
+- **On desktop the slider is the app's own volume**, separate from the computer's, on a dB scale (−50 dB to 0, tapering to silence) so equal steps sound equal.
+
+
 ### Discovery and tiers
 
 > Figure: Any client can perform the coordinator role, so the hosted server is a headless build of code that already ships in the desktop app. mDNS covers the LAN; the remote case is a typed URL, with the last-known address tried first.

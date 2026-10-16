@@ -399,7 +399,7 @@ class CoreClient(
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())
-        fun emptyMediaSession() = MediaSessionState(null, false, PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, emptyList(), true)
+        fun emptyMediaSession() = MediaSessionState(null, false, PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, false, emptyList(), true)
         fun defaultAudioSettings() = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, emptyList(), null), true, null, false)
     }
 }

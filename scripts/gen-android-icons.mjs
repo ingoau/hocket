@@ -40,7 +40,7 @@ const SYMBOLS = {
   RepeatOne: "repeat_one", RestartAlt: "restart_alt", Save: "save", Search: "search", SelectAll: "select_all",
   Settings: "settings", SettingsBackupRestore: "settings_backup_restore", Shuffle: "shuffle", SkipNext: "skip_next",
   SkipPrevious: "skip_previous", Sort: "sort", Speaker: "speaker", Star: "star", StarOutline: "star:outline", Stop: "stop",
-  Sync: "sync", Tune: "tune", Undo: "undo", Visibility: "visibility", VisibilityOff: "visibility_off", VolumeUp: "volume_up",
+  Sync: "sync", Tune: "tune", Undo: "undo", Visibility: "visibility", VisibilityOff: "visibility_off", VolumeOff: "volume_off", VolumeUp: "volume_up",
   Watch: "watch",
 };
 
@@ -54,7 +54,7 @@ const GROUPS = [
     "Pause", "Person", "PhoneAndroid", "PlayArrow", "PlaylistAdd", "PlaylistAddCheck", "PlaylistPlay", "PlaylistRemove",
     "PushPin", "QueueMusic", "Refresh", "Remove", "RemoveCircleOutline", "Repeat", "RepeatOne", "RestartAlt", "Save", "Search",
     "SelectAll", "Settings", "SettingsBackupRestore", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
-    "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeUp", "Watch",
+    "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeOff", "VolumeUp", "Watch",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",

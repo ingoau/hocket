@@ -33,8 +33,9 @@ import kotlinx.coroutines.launch
  *   some other way (the picker, the other device), released when it comes back or stops.
  * - Picking a device in the output switcher is a `HandoffTo` it; picking this phone (the session
  *   released) is a `HandoffTo` this device. The core decides everything; this only translates.
- * - Volume is fixed: Connect volume is per device and the core does not forward it, so the switcher
- *   offers no slider for a remote device rather than one that moves nothing.
+ * - Volume: the playing device's, once it reports one ([ConnectRoutes.State.remoteVolume]), in
+ *   [ConnectRoutes.VOLUME_STEPS] steps; the system's slider for the session sets it through the core.
+ *   Fixed for the others (and an older device that doesn't report its volume).
  */
 @RequiresApi(Build.VERSION_CODES.R)
 class ConnectRouteProvider : MediaRoute2ProviderService() {
@@ -105,7 +106,7 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
     private fun route(device: DeviceInfo): MediaRoute2Info = MediaRoute2Info.Builder(device.id, device.name)
         .addFeature(ConnectRoutes.FEATURE)
         .addFeature(MediaRoute2Info.FEATURE_REMOTE_PLAYBACK)
-        .setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_FIXED)
+        .apply { volumeFor(device.id)?.let { setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_VARIABLE).setVolumeMax(ConnectRoutes.VOLUME_STEPS).setVolume(it) } ?: setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_FIXED) }
         .setConnectionState(if (device.id == state.remote?.id) MediaRoute2Info.CONNECTION_STATE_CONNECTED else MediaRoute2Info.CONNECTION_STATE_DISCONNECTED)
         .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) setType(routeType(device.platform)) }
         .build()
@@ -114,8 +115,24 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
         .setName(device.name)
         .addSelectedRoute(device.id)
         .apply { state.devices.filter { it.id != device.id }.forEach { addTransferableRoute(it.id) } }
-        .setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_FIXED)
+        .apply { volumeFor(device.id)?.let { setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_VARIABLE).setVolumeMax(ConnectRoutes.VOLUME_STEPS).setVolume(it) } ?: setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_FIXED) }
         .build()
+
+    /** [deviceId]'s volume in steps (0 while muted) when it plays and has reported it; null otherwise. */
+    private fun volumeFor(deviceId: String): Int? {
+        if (state.remote?.id != deviceId) return null
+        val volume = state.remoteVolume ?: return null
+        return if (state.remoteMuted) 0 else ConnectRoutes.steps(volume)
+    }
+
+    /** The system's slider moved: the playing device's volume, through the core (which unmutes). */
+    private fun setVolume(requestId: Long, deviceId: String?, steps: Int) {
+        if (deviceId == null || volumeFor(deviceId) == null) {
+            notifyRequestFailed(requestId, REASON_INVALID_COMMAND)
+            return
+        }
+        dispatch(Commands.setVolume(ConnectRoutes.level(steps)))
+    }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private fun routeType(platform: Platform): Int = when (platform) {
@@ -173,10 +190,10 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
         notifyRequestFailed(requestId, REASON_INVALID_COMMAND)
 
     override fun onSetRouteVolume(requestId: Long, routeId: String, volume: Int) =
-        notifyRequestFailed(requestId, REASON_INVALID_COMMAND)
+        setVolume(requestId, routeId, volume)
 
     override fun onSetSessionVolume(requestId: Long, sessionId: String, volume: Int) =
-        notifyRequestFailed(requestId, REASON_INVALID_COMMAND)
+        setVolume(requestId, sessionRoute.takeIf { sessionId == ConnectRoutes.SESSION_ID }, volume)
 }
 
 /**

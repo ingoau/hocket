@@ -39,9 +39,12 @@ import android.util.Log
  * (the view has not caught up yet) the playlist is that one item.
  *
  * While another device plays ([remote]), the player reports remote playback
- * ([DeviceInfo.PLAYBACK_TYPE_REMOTE], fixed volume) with [ConnectRoutes.SESSION_ID] as its routing
- * controller id, so the system pairs the session with [ConnectRouteProvider]'s routing session and
- * shows that device as the output. The controls keep working: the core forwards them.
+ * ([DeviceInfo.PLAYBACK_TYPE_REMOTE]) with [ConnectRoutes.SESSION_ID] as its routing controller id,
+ * so the system pairs the session with [ConnectRouteProvider]'s routing session and shows that
+ * device as the output. The controls keep working: the core forwards them. Once that device has
+ * reported its volume ([remoteVolume]) the session's device volume is that device's, in
+ * [ConnectRoutes.VOLUME_STEPS] steps: the phone's volume keys and the system volume panel drive it.
+ * While this phone plays, its volume is the system music volume itself (the core mirrors it).
  */
 class CoreSessionPlayer(
     looper: Looper,
@@ -62,6 +65,13 @@ class CoreSessionPlayer(
 
         private val REMOTE_DEVICE: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
             .setRoutingControllerId(ConnectRoutes.SESSION_ID)
+            .build()
+
+        /** The playing device's volume can be set from here: the session offers device volume. */
+        private val REMOTE_DEVICE_WITH_VOLUME: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
+            .setRoutingControllerId(ConnectRoutes.SESSION_ID)
+            .setMinVolume(0)
+            .setMaxVolume(ConnectRoutes.VOLUME_STEPS)
             .build()
 
         /**
@@ -94,9 +104,10 @@ class CoreSessionPlayer(
         companion object { val EMPTY = QueueTimeline(emptyList(), 0) }
     }
 
-    private var current: MediaSessionState = MediaSessionState(null, false, app.hocket.core.api.PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, emptyList(), true)
+    private var current: MediaSessionState = MediaSessionState(null, false, app.hocket.core.api.PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, false, emptyList(), true)
     private var clockOffsetMs = 0.0
     private var remote = false
+    private var remoteVolume = false
     private var queue: QueueView? = null
     private var timeline = QueueTimeline.EMPTY
 
@@ -107,10 +118,11 @@ class CoreSessionPlayer(
     }
 
     /** Apply a new state from the core and notify controllers. Main thread. */
-    fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs, remote: Boolean = this.remote) {
+    fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs, remote: Boolean = this.remote, remoteVolume: Boolean = this.remoteVolume) {
         current = state
         this.clockOffsetMs = clockOffsetMs
         this.remote = remote
+        this.remoteVolume = remote && remoteVolume
         invalidateState()
     }
 
@@ -133,6 +145,10 @@ class CoreSessionPlayer(
             add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM); add(Player.COMMAND_GET_METADATA); add(Player.COMMAND_GET_TIMELINE)
             add(Player.COMMAND_GET_VOLUME); add(Player.COMMAND_SET_VOLUME); add(Player.COMMAND_GET_AUDIO_ATTRIBUTES)
             add(Player.COMMAND_SET_REPEAT_MODE); add(Player.COMMAND_SET_SHUFFLE_MODE)
+            if (remoteVolume) {
+                add(Player.COMMAND_GET_DEVICE_VOLUME)
+                add(Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS); add(Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS)
+            }
             if (MediaSessionAction.Next in s.actions) { add(Player.COMMAND_SEEK_TO_NEXT); add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) }
             if (MediaSessionAction.Previous in s.actions) { add(Player.COMMAND_SEEK_TO_PREVIOUS); add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) }
             if (MediaSessionAction.Seek in s.actions) { add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM); add(Player.COMMAND_SEEK_BACK); add(Player.COMMAND_SEEK_FORWARD) }
@@ -149,7 +165,8 @@ class CoreSessionPlayer(
             .setVolume(s.volume.toFloat())
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(30_000)
-            .setDeviceInfo(if (remote) REMOTE_DEVICE else DeviceInfo.UNKNOWN)
+            .setDeviceInfo(if (remoteVolume) REMOTE_DEVICE_WITH_VOLUME else if (remote) REMOTE_DEVICE else DeviceInfo.UNKNOWN)
+            .apply { if (remoteVolume) setDeviceVolume(ConnectRoutes.steps(s.volume)).setIsDeviceMuted(s.muted == true) }
         if (meta != null) {
             val mm = MediaMetadata.Builder()
                 .setTitle(meta.title)
@@ -223,6 +240,28 @@ class CoreSessionPlayer(
 
     override fun handleSetVolume(volume: Float, volumeOperationType: Int): ListenableFuture<*> {
         dispatch(Commands.setVolume(volume.toDouble()))
+        return Futures.immediateVoidFuture()
+    }
+
+    // The playing device's volume (only offered while another device plays and reports it).
+    override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int): ListenableFuture<*> {
+        dispatch(Commands.setVolume(ConnectRoutes.level(deviceVolume)))
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleIncreaseDeviceVolume(flags: Int): ListenableFuture<*> {
+        val from = if (current.muted == true) 0 else ConnectRoutes.steps(current.volume)
+        dispatch(Commands.setVolume(ConnectRoutes.level(from + 1)))
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> {
+        dispatch(Commands.setVolume(ConnectRoutes.level(ConnectRoutes.steps(current.volume) - 1)))
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleSetDeviceMuted(muted: Boolean, flags: Int): ListenableFuture<*> {
+        dispatch(Commands.setMuted(muted))
         return Futures.immediateVoidFuture()
     }
 

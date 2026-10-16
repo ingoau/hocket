@@ -79,7 +79,10 @@ class FakeCore(
     private var mode = QueueMode.Apple
     private var revision = 0u
     private var stamp = PositionStamp(0u, now(), 1.0, false)
-    private var volume = 1.0
+    /** Each device's own volume and mute; the control drives the device playing (as the core). */
+    private val volumes = mutableMapOf<String, Pair<Double, Boolean>>()
+    private fun volumeTarget(): String = transportOwner ?: deviceId
+    private fun volumeOf(id: String): Pair<Double, Boolean> = volumes[id] ?: ((if (id == deviceId) 1.0 else 0.6) to false)
     private var buffering = false
     private var transportOwner: DeviceId? = if (leaseHeld) deviceId else null
     private var epoch = 1u
@@ -254,7 +257,11 @@ class FakeCore(
     private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, mode, cursor.toUInt(), current,
         history.toList(), insertions.toList(), shuffle, repeat, autoplay, transport(), savedQueues.toList(), null)
 
-    private fun transport() = TransportState(TransportLease(transportOwner, epoch, now() + 20_000), stamp, buffering, playedMs.toUInt(), volume)
+    private fun transport(): TransportState {
+        val target = volumeTarget()
+        val (level, muted) = volumeOf(target)
+        return TransportState(TransportLease(transportOwner, epoch, now() + 20_000), stamp, buffering, playedMs.toUInt(), level, muted, target)
+    }
 
     private fun entry(item: QueueItem): QueueEntry? = library.track(item.trackId)?.let { QueueEntry(item, it.toSummary()) }
 
@@ -291,7 +298,7 @@ class FakeCore(
         val t = current?.let { library.track(it.trackId) }
         return MediaSessionState(
             metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating) },
-            isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle != null, repeat = repeat, volume = volume,
+            isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle != null, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
             actions = orderedMediaActions(), ownsTransport = transportOwner == deviceId,
         )
     }
@@ -620,7 +627,8 @@ class FakeCore(
             Command.Previous -> { previous(); emitQueue(); emitTransport() }
             is Command.SeekTo -> { startPlayback(c.data.position_ms.toLong(), stamp.isPlaying); emitTransport() }
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
-            is Command.SetVolume -> { volume = c.data.volume.coerceIn(0.0, 1.0); emitTransport() }
+            is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
+            is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
 
             is Command.PlayContext -> {
                 val a = c.data.args
