@@ -741,7 +741,19 @@ impl Actor {
                 if !current(&key, self) {
                     return;
                 }
+                if self.playback.buffering == buffering {
+                    return;
+                }
+                // A stall freezes the position where it stopped; resuming
+                // re-anchors it at now and tells the room, which otherwise
+                // keeps counting through the stall and ends up ahead.
+                let now = self.now();
+                self.playback.position_ms = self.playback.position_now(now);
+                self.playback.position_at = now;
                 self.playback.buffering = buffering;
+                if !buffering {
+                    self.stamp();
+                }
                 self.emit_transport();
             }
             BackendReport::Position { key, position_ms } => {

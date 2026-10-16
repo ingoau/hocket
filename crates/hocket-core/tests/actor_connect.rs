@@ -136,6 +136,54 @@ async fn queue_is_shared_and_handoff_moves_transport_with_position() {
     assert_eq!(subs.len(), 1, "one scrobble across the handoff: {subs:?}");
 }
 
+/// A stall mid-track (the owner's backend runs dry and buffers) freezes the
+/// owner's position, and resuming tells the room: other devices must not
+/// keep counting through the stall and stay ahead until the next pause.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 10_000.0).await;
+    let key = a.queue().await.current.unwrap().item.key;
+    a.run(Command::BackendReport {
+        report: BackendReport::Buffering {
+            key: key.clone(),
+            buffering: true,
+        },
+    })
+    .await;
+    let frozen = a.transport().await.position.position_ms;
+    assert!(frozen >= 9_000, "{frozen}");
+    // Five seconds with no audio. No ticks: the scripted backend knows
+    // nothing of the stall and would report its own (moving) position.
+    a.clock.advance(5_000.0);
+    assert_eq!(
+        a.transport().await.position.position_ms,
+        frozen,
+        "a stalled play does not advance"
+    );
+    a.run(Command::BackendReport {
+        report: BackendReport::Buffering {
+            key,
+            buffering: false,
+        },
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 500.0).await;
+    let seen = b.transport().await.position.position_ms;
+    assert!(
+        seen >= frozen && seen < frozen + 1_500,
+        "b resumed from the stall point, not 5 s ahead: {seen} (stalled at {frozen})"
+    );
+}
+
 /// The Subsonic `time` of a scrobble is the play's ORIGINAL start, not when
 /// the submitting device resumed it: whichever device ends up submitting a
 /// play sends the same timestamp, so duplicates (a device judging alone
