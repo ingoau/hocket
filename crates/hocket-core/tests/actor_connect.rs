@@ -182,6 +182,53 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
         seen >= frozen && seen < frozen + 1_500,
         "b resumed from the stall point, not 5 s ahead: {seen} (stalled at {frozen})"
     );
+
+    // Android's order out of a stall is Ready before Buffering(false): the
+    // position still counts on from the resume, not from before the stall.
+    let key = a.queue().await.current.unwrap().item.key;
+    a.run(Command::BackendReport {
+        report: BackendReport::Buffering {
+            key: key.clone(),
+            buffering: true,
+        },
+    })
+    .await;
+    let frozen = a.transport().await.position.position_ms;
+    a.clock.advance(3_000.0);
+    a.run(Command::BackendReport {
+        report: BackendReport::Ready {
+            key: key.clone(),
+            duration_ms: None,
+        },
+    })
+    .await;
+    let t = a.transport().await;
+    assert!(!t.buffering);
+    assert_eq!(
+        t.position.position_ms, frozen,
+        "no jump by the stall's length"
+    );
+
+    // A seek ends a stall (the native engine clears it without a report).
+    a.run(Command::BackendReport {
+        report: BackendReport::Buffering {
+            key,
+            buffering: true,
+        },
+    })
+    .await;
+    a.run(Command::SeekTo {
+        position_ms: 20_000,
+    })
+    .await;
+    a.clock.advance(1_000.0);
+    let t = a.transport().await;
+    assert!(!t.buffering);
+    assert!(
+        t.position.position_ms >= 20_900,
+        "{}",
+        t.position.position_ms
+    );
 }
 
 /// The Subsonic `time` of a scrobble is the play's ORIGINAL start, not when

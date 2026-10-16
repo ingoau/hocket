@@ -611,9 +611,10 @@ pub struct Engine {
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
-    /// Joined a remote room while playing here: the room only has whatever
-    /// stamp it kept from before, so re-send ours once it grants the lease.
-    restamp_on_grant: bool,
+    /// Switched rooms while playing here: the room only has whatever stamp
+    /// it kept from before, so re-send ours once it grants the lease. Holds
+    /// whether that grant comes from our own room (`true`) or a remote one.
+    restamp_on_grant: Option<bool>,
     remote_transport: TransportState,
     /// The last stamp another device sent (for resume offers when its lease lapses).
     last_remote_stamp: Option<LastStamp>,
@@ -759,7 +760,7 @@ impl Engine {
             detached: false,
             held_remote_epoch: None,
             stamp: None,
-            restamp_on_grant: false,
+            restamp_on_grant: None,
             remote_transport: TransportState::default(),
             last_remote_stamp: None,
             pending_take: None,
@@ -1203,6 +1204,7 @@ impl Engine {
                 }
             }
             Input::ReleaseTransport => {
+                self.restamp_on_grant = None;
                 if let Some(h) = self.held.take() {
                     self.upstream_send(Msg::LeaseRelease { epoch: h.epoch });
                     self.detached = false;
@@ -1852,6 +1854,9 @@ impl Engine {
             self.held_from_remote = false;
         }
         self.offset.reset();
+        self.rebase_stamp();
+        // Our own room heard nothing while we followed the remote.
+        self.restamp_on_grant = self.held.is_some().then_some(true);
         self.devices.clear();
         self.emit_devices();
         if self.picker.is_some() {
@@ -2742,14 +2747,8 @@ impl Engine {
             self.pings_in_burst = 0;
             self.last_ping_at = 0.0;
             self.send_ping();
-            // Our stamp was taken on the clock we followed until now: move it
-            // onto this room's, so re-sending it means the same moment.
-            let offset = self.offset_ms();
-            if let Some(s) = &mut self.stamp {
-                s.position.taken_at += offset - s.offset;
-                s.offset = offset;
-            }
-            self.restamp_on_grant = self.held.is_some();
+            self.rebase_stamp();
+            self.restamp_on_grant = self.held.is_some().then_some(false);
             // Say goodbye to anyone we were serving: they'll re-elect.
             let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
@@ -3309,11 +3308,11 @@ impl Engine {
                 self.held_remote_epoch = Some(lease.epoch);
                 self.detached = false;
             }
-            if !from_loopback
-                && std::mem::take(&mut self.restamp_on_grant)
-                && self.pending_take.is_none()
-            {
-                self.resend_stamp(lease.epoch);
+            if self.restamp_on_grant == Some(from_loopback) {
+                self.restamp_on_grant = None;
+                if self.pending_take.is_none() {
+                    self.resend_stamp(lease.epoch);
+                }
             }
             if let Some(t) = self.pending_take.take() {
                 self.mark_shared(t.started_at);
@@ -3366,6 +3365,16 @@ impl Engine {
         }
     }
 
+    /// Move our stamp onto the clock we follow now, so it keeps meaning the
+    /// same moment after a room switch.
+    fn rebase_stamp(&mut self) {
+        let offset = self.offset_ms();
+        if let Some(s) = &mut self.stamp {
+            s.position.taken_at += offset - s.offset;
+            s.offset = offset;
+        }
+    }
+
     /// Tell the room where our play is now. Stamps only go out on change,
     /// so a room we (re)joined while playing would otherwise keep the one
     /// from before we left until the next play/pause/seek/track change.
@@ -3386,7 +3395,7 @@ impl Engine {
     }
 
     fn lose_lease(&mut self) {
-        self.restamp_on_grant = false;
+        self.restamp_on_grant = None;
         if self.held.take().is_some() {
             self.detached = false;
             self.held_remote_epoch = None;
@@ -3621,6 +3630,7 @@ impl Engine {
         });
         // Release locally right away: the room moves the lease atomically.
         self.held = None;
+        self.restamp_on_grant = None;
         self.detached = false;
         self.held_remote_epoch = None;
         self.out.push(Output::ReleaseTransport);
@@ -5413,6 +5423,15 @@ mod tests {
         assert!(!wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::TransportStamp { .. })));
+
+        // Dropping back to our own room: the stamp returns to our clock and
+        // our room (silent while we followed the remote) hears it again.
+        clock.0.store(21_000, Ordering::SeqCst);
+        e.handle(Input::Disconnected { peer: "up2".into() });
+        assert_eq!(e.transport().position.taken_at, 15_000.0);
+        let last = e.room.replica().last_stamp.clone().unwrap();
+        assert_eq!(last.key.as_deref(), Some("k2"));
+        assert_eq!(last.position.taken_at, 15_000.0);
     }
 
     #[test]
