@@ -35,12 +35,14 @@ Where it lives (the geometry is the same in each, and changes go to all of them)
 | --- | --- | --- |
 | Voice 1 | `#E4DFFF` | Notes 1 and 3 |
 | Voice 2 | `#8F80F5` | Notes 2 and 4 |
-| Tile, top | `#2A2447` | Icon gradient |
-| Tile, bottom | `#1B1730` | Icon gradient; ink of the word mark on light grounds |
-| Launcher background | `#221D3A` | Android adaptive icon (one colour, so the midpoint of the tile) |
-| Word mark on dark | `#ECE9FF` | The word mark on dark grounds |
+| Tile | `#221D3A` | The tile wherever it is one flat colour: the macOS icon's fill (`icon.icon`, which adds its own gradient), the Android launcher, splash and shortcut backgrounds |
+| Tile gradient, top | `#2A2447` | Flat icons drawn with a gradient (`icon.svg`, `brand.ts`, `gen-app-icons.mjs`) |
+| Tile gradient, bottom | `#1B1730` | As above |
+| Shortcut glyph | `#D7CCFF` | Android launcher shortcut icons, on the tile |
 
-The two voices are the only colour in the brand. The word mark is always one colour.
+The gradient stops sit either side of `#221D3A`, so a flat tile and a gradient one read as the same colour.
+
+The word mark adds two inks, chosen with the word mark rather than taken from existing assets: `#ECE9FF` on dark grounds and `#1B1730` (the gradient's bottom stop) on light ones. It's always one colour. The voices colour the mark and nothing else.
 
 
 ## The word mark  
