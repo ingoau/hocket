@@ -221,7 +221,9 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
 
     fun withImage(block: suspend (Bitmap) -> Unit) {
         val layer = layerRef[0]
-        if (busy || layer == null) return
+        // Only once settled: in flight the card's copy of the held line is hidden (its flying text
+        // stands in for it), so the recording would come out without it.
+        if (busy || layer == null || closing || progress.isRunning) return
         busy = true
         scope.launch {
             try {
