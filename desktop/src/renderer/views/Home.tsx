@@ -9,7 +9,7 @@ import { openContextMenu, openItemsMenu, openItemsMenuFromButton } from "../comp
 import { Tile, TileList } from "../components/Tile";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
-import { BrandTile } from "../components/BrandTile";
+import { BrandMark } from "../components/BrandMark";
 import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
@@ -85,7 +85,7 @@ export function Home() {
       <div className="home-layout">
         <div className="home-main">
           <div className="view-header">
-            <h1 className="brand-lockup"><BrandTile /><span aria-hidden="true">hocket</span><span className="sr-only">{t("home.title")}</span></h1>
+            <h1 className="brand-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("home.title")}</span></h1>
             {sync && !sync.finished ? <span className="badge">{t("sync.syncing", { phase: sync.phase })}</span> : null}
             <div className="actions">
               <button type="button" className={`btn ${customising ? "primary" : "tonal"}`} aria-pressed={customising} onClick={() => setCustomising((c) => !c)} data-testid="home-customise"><Icon name="tune" size={14} /> {t("home.customise")}</button>

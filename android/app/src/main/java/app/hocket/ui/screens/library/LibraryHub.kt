@@ -24,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
@@ -126,8 +127,8 @@ fun LibraryScreen(nav: NavHostController) {
                 title = { Text(stringResource(R.string.nav_library), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                 actions = {
                     // No "Pinned" heading (the pins speak for themselves): editing them lives up here.
-                    if (!pins.isNullOrEmpty()) TextButton(onClick = { editing = !editing }, modifier = Modifier.testTag("library.pins.edit")) {
-                        Text(stringResource(if (editing) R.string.library_pins_done else R.string.library_pins_edit))
+                    if (!pins.isNullOrEmpty()) IconButton(onClick = { editing = !editing }, modifier = Modifier.testTag("library.pins.edit")) {
+                        Icon(if (editing) HocketIcons.Filled.Check else HocketIcons.Filled.Edit, stringResource(if (editing) R.string.library_pins_done else R.string.library_pins_edit))
                     }
                     JobsIndicator(onClick = { jobs = true }); AccountButton()
                 },

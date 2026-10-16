@@ -401,11 +401,14 @@ button.m3-switch { border: 0; padding: 0; background: none; }
   font-display: block;
 }
 .view-header h1.brand-type, .view-header h1.brand-lockup { font-family: "Unbounded", var(--font-ui); font-weight: 500; letter-spacing: -0.03em; }
-/* Home's header: the app tile, then "hocket" lowercase in the word mark's ink, at the Library title's
-   size (tile 1.15em, gap 0.3em). */
-.view-header h1.brand-lockup { display: inline-flex; align-items: center; gap: 0.3em; color: #1B1730; }
-.brand-lockup .brand-tile { width: 1.15em; height: 1.15em; flex: 0 0 auto; }
-:root[data-theme="dark"] .view-header h1.brand-lockup { color: #ECE9FF; }
+/* Home's header: the bare wave, then "hocket" lowercase in the word mark's ink, at the Library title's
+   size (wave 0.8em tall, gap 0.3em). On light grounds the wave is one colour, the ink; on dark it
+   keeps its two voices. */
+.view-header h1.brand-lockup { --brand-voice-1: #1B1730; --brand-voice-2: #1B1730; display: inline-flex; align-items: center; gap: 0.3em; color: #1B1730; }
+:root[data-theme="dark"] .view-header h1.brand-lockup { --brand-voice-1: #E4DFFF; --brand-voice-2: #8F80F5; color: #ECE9FF; }
+.brand-lockup .brand-mark { height: 0.8em; width: calc(0.8em * 80 / 43.2); flex: 0 0 auto; }
+.brand-mark .v1 { stroke: var(--brand-voice-1); }
+.brand-mark .v2 { stroke: var(--brand-voice-2); }
 .lib-recent-head { display: flex; align-items: baseline; justify-content: space-between; margin-right: var(--page-title-inset); }
 @media (max-width: 900px) {
   .lib-browse { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 3; }

@@ -26,8 +26,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -55,13 +53,6 @@ object Brand {
     /** The two voices: notes 1 and 3, then 2 and 4. */
     internal val voice1 = Color(0xFFE4DFFF)
     internal val voice2 = Color(0xFF8F80F5)
-
-    /** The tile's gradient, top to bottom. */
-    internal val tileTop = Color(0xFF2A2447)
-    internal val tileBottom = Color(0xFF1B1730)
-
-    /** The tile's corner radius as a fraction of its side. */
-    internal const val TILE_CORNER = 0.2245f
 
     /** Unbounded at every weight its axis has (200–900). */
     val unbounded = FontFamily(
@@ -130,23 +121,6 @@ fun Lockup(fontSize: Dp, color: Color = Brand.inkOnDark, modifier: Modifier = Mo
     }
 }
 
-/** The app icon: the Crescendo wave in its two voices on the rounded, gradient tile, [size] square. */
-@Composable
-fun AppTile(size: Dp, modifier: Modifier = Modifier) {
-    val paths = remember { Brand.notes.map { PathParser().parsePathString(it).toPath() } }
-    Canvas(modifier.size(size)) {
-        val side = this.size.minDimension
-        drawRoundRect(
-            brush = Brush.verticalGradient(listOf(Brand.tileTop, Brand.tileBottom)),
-            cornerRadius = CornerRadius(side * Brand.TILE_CORNER),
-        )
-        val k = side / 100f
-        scale(k, k, pivot = Offset.Zero) {
-            paths.forEachIndexed { i, p -> drawPath(p, if (i % 2 == 0) Brand.voice1 else Brand.voice2, style = Stroke(width = Brand.STROKE, cap = StrokeCap.Round)) }
-        }
-    }
-}
-
 /** The word mark's ink for the current theme's ground. */
 @Composable
 fun brandInk(): Color = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) Brand.inkOnDark else Brand.inkOnLight
@@ -161,24 +135,41 @@ fun brandTitleStyle(): TextStyle = LocalTextStyle.current.merge(
 )
 
 /**
- * The lockup as a page header (Home): the app tile, then "hocket" in the word mark, at the size of
- * the surrounding title style (docs/brand.md: tile 1.15× the type size, gap 0.3×). It reads as the
- * app's name, as one heading.
+ * The app's name as a page header (Home): the bare Crescendo wave, then "hocket" in the word mark,
+ * at the size of the surrounding title style (the wave as tall as the type's x-height and a little
+ * more, the gap 0.3 of the type size). On dark grounds the wave keeps its two voices; on light ones,
+ * where the pale voice would vanish, it's one colour, the word mark's ink. It reads as one heading.
  */
 @Composable
 fun HeaderLockup(modifier: Modifier = Modifier) {
     val style = brandTitleStyle()
     val name = stringResource(R.string.app_name)
     val type = with(LocalDensity.current) { style.fontSize.toDp() }
+    val ink = brandInk()
+    val dark = ink == Brand.inkOnDark
     Row(modifier.semantics(mergeDescendants = true) { contentDescription = name; heading() }, verticalAlignment = Alignment.CenterVertically) {
-        AppTile(size = type * 1.15f)
+        VoicedMark(height = type * 0.8f, voices = if (dark) listOf(Brand.voice1, Brand.voice2) else listOf(ink, ink))
         Spacer(Modifier.width(type * 0.3f))
         Text(
             "hocket",
-            color = brandInk(),
+            color = ink,
             maxLines = 1,
             style = style.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)),
             modifier = Modifier.clearAndSetSemantics {},
         )
+    }
+}
+
+/** The bare wave [height] tall, notes 1 and 3 in the first of [voices], 2 and 4 in the second. */
+@Composable
+private fun VoicedMark(height: Dp, voices: List<Color>, modifier: Modifier = Modifier) {
+    val paths = remember { Brand.notes.map { PathParser().parsePathString(it).toPath() } }
+    Canvas(modifier.size(width = height * (Brand.WAVE_WIDTH / Brand.WAVE_HEIGHT), height = height)) {
+        val k = size.height / Brand.WAVE_HEIGHT
+        scale(k, k, pivot = Offset.Zero) {
+            translate(-Brand.WAVE_LEFT, -Brand.WAVE_TOP) {
+                paths.forEachIndexed { i, p -> drawPath(p, voices[i % 2], style = Stroke(width = Brand.STROKE, cap = StrokeCap.Round)) }
+            }
+        }
     }
 }

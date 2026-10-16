@@ -811,8 +811,8 @@
     <string name="kind_filter">Filter</string>
     <string name="kind_saved_queue">Saved queue</string>
     <!-- Library pins (library.pins) -->
-    <string name="library_pins_edit">Edit</string>
-    <string name="library_pins_done">Done</string>
+    <string name="library_pins_edit">Edit pins</string>
+    <string name="library_pins_done">Done editing pins</string>
     <string name="library_recently_added">Recently added</string>
     <string name="library_newest_first">Newest first</string>
     <string name="library_pin_empty">Pin albums, artists, playlists, songs, genres or filters from their menus to keep them here.</string>
