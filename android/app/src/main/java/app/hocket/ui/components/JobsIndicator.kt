@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -78,8 +77,7 @@ fun JobsSheet(onDismiss: () -> Unit) {
         Column(Modifier.navigationBarsPadding().semantics { paneTitle = title }) {
             server?.let {
                 SyncRow(it, lastSyncJob, sync)
-                // Problems bring their own divider.
-                if (others.isNotEmpty()) HorizontalDivider(Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+                if (others.isNotEmpty() || problems.isNotEmpty()) Spacer(Modifier.height(8.dp))
             }
             if (server == null && others.isEmpty() && problems.isEmpty()) {
                 EmptyState(stringResource(R.string.empty_jobs_title), stringResource(R.string.empty_jobs_body))
@@ -88,8 +86,8 @@ fun JobsSheet(onDismiss: () -> Unit) {
                 items(others, key = { it.id }) { job -> JobRow(job) }
                 if (problems.isNotEmpty()) {
                     item {
-                        HorizontalDivider()
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // The heading separates the section; no rule needed.
+                        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = if (others.isEmpty()) 0.dp else 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(stringResource(R.string.problems_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                             TextButton(onClick = { client.dispatch(app.hocket.core.api.Command.DismissAllProblems) }) { Text(stringResource(R.string.problems_dismiss_all)) }
                         }
