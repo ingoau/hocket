@@ -51,6 +51,7 @@ pub const TEXTS: &[SettingText] = &[
     t("pebble.actions", "Watch actions", "Which actions the watch's actions menu shows, and in what order."),
     t("pebble.library", "Watch library", "Which sections the watch's library shows, and in what order."),
     t("pebble.menuTimeoutSeconds", "Menu timeout", "Seconds without a button press before the buttons-only menu returns to Now Playing. 0 turns it off."),
+    t("pebble.closeWhenPausedMinutes", "Close when paused", "Minutes with the music paused before the watchapp closes itself. 0 keeps it open."),
     t("pebble.showVolumeControls", "Volume controls", "Select opens volume controls while playing, and holding up or down changes the volume, as in the watch's own music app."),
     t("pebble.showProgressBar", "Progress bar", "Always show the track's progress. Off, flick your wrist to see it."),
     t("pebble.showAlbumArt", "Album art", "Show the cover behind Now Playing on colour watches that can."),

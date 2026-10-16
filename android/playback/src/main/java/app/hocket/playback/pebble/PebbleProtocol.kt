@@ -159,9 +159,15 @@ object PebbleProtocol {
         val menu: List<String> = DEFAULT_MENU,
         val actions: List<String> = DEFAULT_ACTIONS,
         val library: List<String> = LIBRARY_SECTIONS,
+        /** Minutes paused before the watchapp closes itself; 0 = never. */
+        val closeWhenPausedMinutes: Int = 0,
     )
 
-    /** `[1][flags][5 gestures][timeout][n][menu…][n][actions…]` (`prv_parse_settings` in main.c). */
+    /**
+     * `[1][flags][5 gestures][timeout][n][menu…][n][actions…][close when paused, minutes]`
+     * (`prv_parse_settings` in main.c). The trailing byte is optional to the watch, so older
+     * watchapps still read the rest.
+     */
     fun encodeSettings(s: WatchSettings): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(1)
@@ -179,6 +185,7 @@ object PebbleProtocol {
             out.write(codes.size)
             codes.forEach(out::write)
         }
+        out.write(s.closeWhenPausedMinutes.coerceIn(0, 255))
         return out.toByteArray()
     }
 

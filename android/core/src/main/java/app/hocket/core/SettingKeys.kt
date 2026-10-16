@@ -49,6 +49,7 @@ object SettingKeys {
     const val PEBBLE_ACTIONS = "pebble.actions"
     const val PEBBLE_LIBRARY = "pebble.library"
     const val PEBBLE_MENU_TIMEOUT_SECONDS = "pebble.menuTimeoutSeconds"
+    const val PEBBLE_CLOSE_WHEN_PAUSED_MINUTES = "pebble.closeWhenPausedMinutes"
     const val PEBBLE_SHOW_VOLUME_CONTROLS = "pebble.showVolumeControls"
     const val PEBBLE_SHOW_PROGRESS_BAR = "pebble.showProgressBar"
     const val PEBBLE_SHOW_ALBUM_ART = "pebble.showAlbumArt"

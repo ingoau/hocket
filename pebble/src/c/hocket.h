@@ -116,6 +116,7 @@ typedef struct {
   bool show_album_art;
   uint8_t gestures[GestureCount];
   uint8_t menu_timeout_s;
+  uint8_t close_when_paused_min;  // 0 = never
   uint8_t menu_count;
   uint8_t menu[MAX_MENU_ITEMS];
   uint8_t actions_count;

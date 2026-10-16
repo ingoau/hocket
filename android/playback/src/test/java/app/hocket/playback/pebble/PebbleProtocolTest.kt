@@ -21,7 +21,9 @@ class PebbleProtocolTest {
     @Test
     fun settingsBlobMatchesTheWatchLayout() {
         val blob = PebbleProtocol.encodeSettings(PebbleProtocol.WatchSettings(gestures = listOf("queue", "lyrics", "library", "back", "actions"), menu = listOf("queue", "lyrics"), actions = listOf("love")))
-        assertArrayEquals(byteArrayOf(1, 28, 1, 5, 2, 4, 3, 5, 2, 1, 15, 1, 3), blob)
+        assertArrayEquals(byteArrayOf(1, 28, 1, 5, 2, 4, 3, 5, 2, 1, 15, 1, 3, 0), blob)
+        val closing = PebbleProtocol.encodeSettings(PebbleProtocol.WatchSettings(closeWhenPausedMinutes = 10))
+        assertEquals(10, closing.last().toInt())
     }
 
     @Test

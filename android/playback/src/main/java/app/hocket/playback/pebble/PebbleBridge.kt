@@ -525,6 +525,7 @@ class PebbleBridge(
             menuTimeoutSeconds = settings[SettingKeys.PEBBLE_MENU_TIMEOUT_SECONDS]?.trim()?.toIntOrNull() ?: defaults.menuTimeoutSeconds,
             menu = stringList(SettingKeys.PEBBLE_MENU).ifEmpty { PebbleProtocol.DEFAULT_MENU },
             actions = stringList(SettingKeys.PEBBLE_ACTIONS).ifEmpty { PebbleProtocol.DEFAULT_ACTIONS },
+            closeWhenPausedMinutes = settings[SettingKeys.PEBBLE_CLOSE_WHEN_PAUSED_MINUTES]?.trim()?.toIntOrNull() ?: defaults.closeWhenPausedMinutes,
         )
         return mapOf(Key.TYPE to u8(Type.SETTINGS), Key.SETTINGS to PebbleDictionaryItem.Bytes(PebbleProtocol.encodeSettings(s)))
     }
