@@ -130,6 +130,8 @@ impl Actor {
             name,
             capabilities: ServerCapabilities::default(),
             last_sync: None,
+            last_sync_tracks: None,
+            last_sync_duration: None,
             reachable: false,
         };
         // Verify first: a new server is only persisted, announced and synced
@@ -168,6 +170,8 @@ impl Actor {
             name: "Test server".into(),
             capabilities: preset.api.capabilities(),
             last_sync: None,
+            last_sync_tracks: None,
+            last_sync_duration: None,
             reachable: true,
         };
         let credential = wire_credential(&preset.url, &username, &preset.password);
@@ -285,6 +289,10 @@ impl Actor {
             return;
         }
         self.unload();
+        // Its syncs (and their problems) must not read as the next server's.
+        if let Err(e) = self.jobs.forget_kind(JobKind::LibrarySync) {
+            self.log("warn", format!("forget sync jobs: {e}"));
+        }
         self.engine = None;
         self.scope = None;
         self.last_doc = None;

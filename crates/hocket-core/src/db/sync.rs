@@ -86,6 +86,11 @@ pub struct SyncCursor {
     pub last_scan_count: Option<f64>,
     /// Newest album `created` we have seen (incremental stop condition).
     pub newest_album_created: Option<f64>,
+    /// Tracks in the mirror when the last run finished.
+    pub last_track_count: Option<u32>,
+    /// How long the last finished run took (ms). A run resumed after an interruption counts
+    /// from the resume, so time the app spent closed is never included.
+    pub last_duration_ms: Option<f64>,
 }
 
 impl Default for SyncCursor {
@@ -102,6 +107,8 @@ impl Default for SyncCursor {
             last_scan: None,
             last_scan_count: None,
             newest_album_created: None,
+            last_track_count: None,
+            last_duration_ms: None,
         }
     }
 }
@@ -396,13 +403,15 @@ impl LibrarySync {
         }
         c.newest_album_created = self.newest_album_created()?;
         c.offset = 0;
+        let tracks = self.db.track_count(self.server_id(), &None)?;
+        c.last_track_count = Some(tracks);
+        c.last_duration_ms = Some((finished_at - now).max(0.0));
         self.save_cursor(&c)?;
         self.db
             .set_server_last_sync(self.server_id(), finished_at)?;
         // A finished sync has covered the whole library: report it as complete, not the
         // reset cursor offset (which read "0 of N" in the job list).
-        let done = total_tracks.unwrap_or(stats.tracks as u32);
-        self.report(obs, &c, done, total_tracks, true);
+        self.report(obs, &c, tracks, Some(tracks), true);
         Ok(stats)
     }
 
@@ -847,6 +856,16 @@ mod tests {
         );
         let c = sync.cursor().unwrap();
         assert!(!c.in_progress() && c.has_completed_once());
+        assert_eq!(
+            c.last_track_count,
+            Some(12),
+            "library size at the end of the run"
+        );
+        assert!(c.last_duration_ms.is_some_and(|d| d >= 0.0));
+        assert_eq!(
+            (p.last().unwrap().done, p.last().unwrap().total),
+            (12, Some(12))
+        );
         assert!(
             db.servers().unwrap().is_empty(),
             "sync doesn't create server rows"

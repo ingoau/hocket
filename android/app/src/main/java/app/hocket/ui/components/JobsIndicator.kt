@@ -1,9 +1,8 @@
 package app.hocket.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,16 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -30,10 +29,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.Commands
@@ -155,13 +155,14 @@ private fun JobRow(job: Job) {
 
 /**
  * The server's sync at a glance: the last result, how long ago, and how many tracks in how long
- * (or the live phase while one runs), with a Sync / Cancel button. Replaces a row per past run.
+ * (or the live phase while one runs), with a Sync / Resume / Cancel button. Replaces a row per run.
  */
 @Composable
 private fun SyncCard(server: ServerInfo, job: Job?, progress: SyncProgress?) {
     val client = LocalCoreClient.current
     val active = job?.takeIf { it.state == JobState.Running || it.state == JobState.Queued || it.state == JobState.Paused }
-    val running = active != null
+    // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
+    val unsuccessful = job?.takeIf { (it.state == JobState.Failed || it.state == JobState.Cancelled) && it.updatedAt > (server.lastSync ?: 0.0) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = MaterialTheme.shapes.large,
@@ -172,45 +173,66 @@ private fun SyncCard(server: ServerInfo, job: Job?, progress: SyncProgress?) {
                 Icon(HocketIcons.Filled.Sync, null)
                 Spacer(Modifier.size(12.dp))
                 Text(server.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                if (active != null && active.cancellable) TextButton(onClick = { client.dispatch(Commands.cancelJob(active.id)) }) {
-                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.error)
-                } else if (!running) OutlinedButton(onClick = { client.dispatch(Commands.syncLibrary(server.id, full = false)) }) {
-                    Text(stringResource(R.string.sync_action))
+                when {
+                    active == null -> OutlinedButton(onClick = { client.dispatch(Commands.syncLibrary(server.id, full = false)) }) { Text(stringResource(R.string.sync_action)) }
+                    active.state == JobState.Paused -> TextButton(onClick = { client.dispatch(Commands.resumeJob(active.id)) }) { Text(stringResource(R.string.jobs_resume)) }
+                    active.cancellable -> TextButton(onClick = { client.dispatch(Commands.cancelJob(active.id)) }) {
+                        Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
-            if (running) {
-                val p = progress?.takeIf { !it.finished && it.serverId == server.id }
-                val total = p?.total
-                val phase = p?.let { stringResource(R.string.sync_phase, it.phase) } ?: stringResource(R.string.jobs_state_queued)
-                val count = if (p != null && total != null) stringResource(R.string.dot_separator) + stringResource(R.string.sync_progress, p.done.toInt(), total.toInt()) else ""
-                Text("$phase$count", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (p != null && total != null && total > 0u) LinearWavyProgressIndicator(progress = { p.done.toFloat() / total.toFloat() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-                else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+            if (active != null) {
+                SyncProgressRow(active, progress?.takeIf { !it.finished && it.serverId == server.id })
             } else {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    when (job?.state) {
-                        JobState.Done -> SyncChip(stringResource(R.string.sync_successful))
-                        JobState.Failed -> SyncChip(stringResource(R.string.sync_failed), MaterialTheme.colorScheme.error)
-                        JobState.Cancelled -> SyncChip(stringResource(R.string.jobs_state_cancelled))
-                        else -> {}
-                    }
                     val last = server.lastSync
-                    if (last == null) SyncChip(stringResource(R.string.settings_never_synced))
-                    else if (System.currentTimeMillis() - last < 60_000) SyncChip(stringResource(R.string.sync_just_now))
-                    else SyncChip(stringResource(R.string.sync_ago, formatAgo(last)))
-                    // The job is submitted when the sync starts and lastSync stamped when it finishes.
-                    job?.takeIf { it.state == JobState.Done }?.let { done ->
-                        val tracks = (done.total ?: done.done).toInt()
-                        val took = last?.let { it - done.createdAt }?.takeIf { it >= 0.0 }
-                        SyncChip(
-                            if (took != null) stringResource(R.string.sync_tracks_in, tracks, formatElapsed(took.toLong()))
-                            else stringResource(R.string.sync_tracks, tracks),
-                        )
+                    when {
+                        unsuccessful != null -> {
+                            val state = if (unsuccessful.state == JobState.Failed) R.string.sync_failed else R.string.jobs_state_cancelled
+                            SyncChip(stringResource(state), if (unsuccessful.state == JobState.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                            SyncChip(agoText(unsuccessful.updatedAt))
+                            if (last != null) SyncChip(stringResource(R.string.settings_last_sync, formatAgo(last)))
+                        }
+                        last != null -> {
+                            SyncChip(stringResource(R.string.sync_successful))
+                            SyncChip(agoText(last))
+                            server.lastSyncTracks?.let { tracks ->
+                                val n = tracks.toInt()
+                                val took = server.lastSyncDuration
+                                SyncChip(
+                                    if (took != null) pluralStringResource(R.plurals.sync_tracks_in, n, n, formatElapsed(took.toLong()))
+                                    else pluralStringResource(R.plurals.sync_tracks, n, n),
+                                )
+                            }
+                        }
+                        else -> SyncChip(stringResource(R.string.settings_never_synced))
                     }
                 }
             }
         }
+    }
+}
+
+/** What a running, queued or paused sync is doing, with a bar (determinate only while counting tracks). */
+@Composable
+private fun SyncProgressRow(job: Job, progress: SyncProgress?) {
+    val paused = job.state == JobState.Paused
+    val total = progress?.total?.takeIf { it > 0u }
+    val label = when {
+        paused -> stringResource(R.string.jobs_state_paused)
+        progress != null -> stringResource(R.string.sync_phase, progress.phase)
+        else -> stringResource(R.string.jobs_state_queued)
+    }
+    val count = if (progress != null && total != null) stringResource(R.string.dot_separator) + stringResource(R.string.sync_progress, progress.done.toInt(), total.toInt()) else ""
+    Text("$label$count", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // Other phases report against the track total too (albums by album offset), so only tracks get a fraction.
+    val fraction = if (progress != null && total != null && progress.phase == "tracks") (progress.done.toFloat() / total.toFloat()).coerceIn(0f, 1f) else null
+    val bar = Modifier.fillMaxWidth().padding(top = 8.dp)
+    when {
+        paused -> LinearProgressIndicator(progress = { fraction ?: 0f }, modifier = bar)
+        fraction != null -> LinearWavyProgressIndicator(progress = { fraction }, modifier = bar)
+        else -> LinearWavyProgressIndicator(modifier = bar)
     }
 }
 
@@ -221,9 +243,18 @@ private fun SyncChip(text: String, color: Color = MaterialTheme.colorScheme.onSu
     }
 }
 
-/** "40 s", "3 min 5 s" for how long a sync took. */
+/** "Just now" / "5m ago" (formatAgo alone would give "now ago"). */
+@Composable
+private fun agoText(epochMs: Double): String =
+    if (System.currentTimeMillis() - epochMs < 60_000) stringResource(R.string.sync_just_now) else stringResource(R.string.sync_ago, formatAgo(epochMs))
+
+/** "40 s", "3 min 5 s", "1 h 12 min" for how long a sync took. */
 @Composable
 private fun formatElapsed(ms: Long): String {
-    val s = (ms / 1000).coerceAtLeast(1)
-    return if (s < 60) stringResource(R.string.sync_seconds, s.toInt()) else stringResource(R.string.sync_minutes_seconds, (s / 60).toInt(), (s % 60).toInt())
+    val s = ((ms + 500) / 1000).coerceAtLeast(1)
+    return when {
+        s < 60 -> stringResource(R.string.sync_seconds, s.toInt())
+        s < 3600 -> stringResource(R.string.sync_minutes_seconds, (s / 60).toInt(), (s % 60).toInt())
+        else -> stringResource(R.string.duration_hours_minutes, (s / 3600).toInt(), ((s % 3600) / 60).toInt())
+    }
 }

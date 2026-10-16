@@ -282,6 +282,9 @@ export class FakeCore implements CoreHandle {
       case "removeServer":
         this.servers = this.servers.filter((s) => s.id !== cmd.data.server_id);
         this.lib = undefined;
+        // Like the core: its syncs must not read as the next server's.
+        this.jobs = this.jobs.filter((j) => j.kind !== "librarySync");
+        this.emitJobs();
         this.emit({ type: "serversChanged", data: { servers: this.servers } });
         this.persistServer(undefined);
         return;
@@ -817,7 +820,10 @@ export class FakeCore implements CoreHandle {
         if (this.started) this.afterServerReady();
       });
     } else {
+      // Last synced an hour ago, in 40 s.
       server.lastSync = Date.now() - 3_600_000;
+      server.lastSyncTracks = this.lib?.tracks.length;
+      server.lastSyncDuration = 40_000;
     }
   }
 
@@ -833,7 +839,7 @@ export class FakeCore implements CoreHandle {
     const server = this.servers[0];
     if (!server || !this.lib) return;
     const total = this.lib.tracks.length;
-    const job: Job = { id: newId("job"), kind: "librarySync", label: full ? `Full library sync · ${server.name}` : `Library refresh · ${server.name}`, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), cancellable: true };
+    const job: Job = { id: newId("job"), kind: "librarySync", label: full ? `Full library sync · ${server.name}` : `Library refresh · ${server.name}`, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const phases = ["artists", "albums", "tracks", "playlists"];
@@ -845,12 +851,16 @@ export class FakeCore implements CoreHandle {
         return;
       }
       job.done = Math.min(total, job.done + Math.ceil(total / 12));
+      job.updatedAt = Date.now();
       phaseIdx = Math.min(phases.length - 1, Math.floor((job.done / total) * phases.length));
       this.emit({ type: "syncProgress", data: { progress: { serverId: server.id, phase: phases[phaseIdx] ?? "tracks", done: job.done, total, readyTables: phases.slice(0, phaseIdx), finished: false } } });
       this.emitJobs();
       if (job.done >= total) {
         job.state = "done";
+        job.updatedAt = Date.now();
         server.lastSync = Date.now();
+        server.lastSyncTracks = total;
+        server.lastSyncDuration = server.lastSync - job.createdAt;
         this.emit({ type: "syncProgress", data: { progress: { serverId: server.id, phase: "done", done: total, total, readyTables: phases, finished: true } } });
         this.emit({ type: "serversChanged", data: { servers: this.servers } });
         this.emit({ type: "libraryChanged", data: { server_id: server.id, tables: [], ids: [] } });
@@ -1511,7 +1521,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private runBulkJob(kind: Job["kind"], label: string, total: number): void {
-    const job: Job = { id: newId("job"), kind, label, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), cancellable: true };
+    const job: Job = { id: newId("job"), kind, label, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const step = () => {
@@ -1521,16 +1531,19 @@ export class FakeCore implements CoreHandle {
         return;
       }
       job.done = Math.min(total, job.done + Math.max(1, Math.ceil(total / 10)));
+      job.updatedAt = Date.now();
       if (job.done >= total) {
         // One in ~3 bulk jobs finishes with a couple of problems, so the
         // "finished with problems" state is exercised.
         if (total > 40 && hash32(job.id) % 3 === 0) {
           job.failed = 2;
           job.state = "failed";
+          job.updatedAt = Date.now();
           this.problems.push({ id: newId("prb"), jobId: job.id, summary: `${label}: 2 items couldn't be saved`, detail: "Server returned 503 for setRating; the outbox will retry", createdAt: Date.now(), retryable: true });
           this.emitProblems();
         } else {
           job.state = "done";
+          job.updatedAt = Date.now();
         }
       }
       this.emitJobs();
@@ -1625,7 +1638,7 @@ export class FakeCore implements CoreHandle {
     const pin: Pin = { target, label, coverArt: this.lib.tracksById.get(ids[0] ?? "")?.coverArt, trackCount: ids.length, downloadedCount: 0, bytes: 0, createdAt: Date.now(), transcoded: transcode };
     this.pins.push(pin);
     this.emit({ type: "pinsChanged", data: { pins: this.pins } });
-    const job: Job = { id: newId("job"), kind: "download", label: `Download ${label}`, state: "running", done: 0, total: ids.length, failed: 0, createdAt: Date.now(), cancellable: true };
+    const job: Job = { id: newId("job"), kind: "download", label: `Download ${label}`, state: "running", done: 0, total: ids.length, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const step = () => {
@@ -1646,6 +1659,7 @@ export class FakeCore implements CoreHandle {
       }
       if (job.done >= ids.length) {
         job.state = "done";
+        job.updatedAt = Date.now();
         this.libraryChanged("tracks", ids);
       }
       this.emitJobs();
@@ -2207,6 +2221,7 @@ export class FakeCore implements CoreHandle {
     const j = this.jobs.find((x) => x.id === id);
     if (j) {
       f(j);
+      j.updatedAt = Date.now();
       this.emitJobs();
     }
   }

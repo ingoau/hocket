@@ -1207,6 +1207,12 @@ impl Actor {
             Some(s) => {
                 let mut info = s.info.clone();
                 info.reachable = s.api.is_some() && s.info.reachable;
+                if let Ok(Some(c)) = self.db.saved_state_get::<crate::db::sync::SyncCursor>(
+                    &crate::db::sync::SyncCursor::key(&info.id),
+                ) {
+                    info.last_sync_tracks = c.last_track_count;
+                    info.last_sync_duration = c.last_duration_ms;
+                }
                 vec![info]
             }
             None => vec![],

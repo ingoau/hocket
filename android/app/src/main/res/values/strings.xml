@@ -386,8 +386,6 @@
     <string name="sync_failed">Failed</string>
     <string name="sync_just_now">Just now</string>
     <string name="sync_ago">%1$s ago</string>
-    <string name="sync_tracks">%1$d tracks</string>
-    <string name="sync_tracks_in">%1$d tracks in %2$s</string>
     <string name="sync_seconds">%1$d s</string>
     <string name="sync_minutes_seconds">%1$d min %2$d s</string>
 
@@ -591,6 +589,14 @@
     <string name="year_and_count">%1$d · %2$d tracks</string>
     <!-- Quoted: aapt trims unquoted leading/trailing spaces, which glued summaries together ("On·10"). -->
     <string name="dot_separator">" · "</string>
+    <plurals name="sync_tracks">
+        <item quantity="one">%1$d track</item>
+        <item quantity="other">%1$d tracks</item>
+    </plurals>
+    <plurals name="sync_tracks_in">
+        <item quantity="one">%1$d track in %2$s</item>
+        <item quantity="other">%1$d tracks in %2$s</item>
+    </plurals>
     <plurals name="a11y_stars">
         <item quantity="one">%1$d star</item>
         <item quantity="other">%1$d stars</item>

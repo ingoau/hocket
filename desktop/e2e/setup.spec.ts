@@ -16,7 +16,7 @@ test.describe("first run", () => {
     // Library sync shows up as activity, not a blocking screen.
     await page.getByTestId("jobs-button").click();
     await expect(page.getByTestId("jobs-popover")).toBeVisible();
-    await expect(page.getByTestId("job-row").first()).toBeVisible();
+    await expect(page.getByTestId("sync-summary").first()).toBeVisible();
   });
 
   test("a wrong password surfaces as an inline error", async ({ hocket }) => {
