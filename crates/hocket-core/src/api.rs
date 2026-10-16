@@ -347,9 +347,6 @@ pub struct ServerInfo {
     /// Tracks in the library after the last completed sync.
     #[serde(default)]
     pub last_sync_tracks: Option<u32>,
-    /// How long the last completed sync run took (ms).
-    #[serde(default)]
-    pub last_sync_duration: Option<f64>,
     pub reachable: bool,
 }
 

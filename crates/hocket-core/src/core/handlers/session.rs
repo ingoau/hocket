@@ -1211,7 +1211,6 @@ impl Actor {
                     &crate::db::sync::SyncCursor::key(&info.id),
                 ) {
                     info.last_sync_tracks = c.last_track_count;
-                    info.last_sync_duration = c.last_duration_ms;
                 }
                 vec![info]
             }

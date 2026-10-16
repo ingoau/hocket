@@ -11,10 +11,12 @@ import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Job
 import app.hocket.core.api.JobKind
 import app.hocket.core.api.JobState
+import app.hocket.core.api.Problem
 import app.hocket.core.api.SyncProgress
 import app.hocket.ui.components.JobsSheet
 import org.junit.Rule
@@ -99,13 +101,62 @@ class JobsSheetScreenshotTest {
         core.fake.stageSync(jobs = listOf(syncJob(JobState.Failed, 900u, now - 7_300_000.0, updatedAt = now - 7_200_000.0)))
         compose.waitForIdle()
         compose.onNodeWithText("Synced 1h ago").assertExists()
-        compose.onNodeWithText("Sync failed 2h ago").assertDoesNotExist()
+        compose.onNodeWithText("Sync failed", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun aQueuedRetryIgnoresTheFailedRunsProgress() {
+        val core = show()
+        // The failed run's last progress never reported finished; the retry hasn't started yet.
+        core.fake.stageSync(
+            jobs = listOf(syncJob(JobState.Queued, 0u, now - 1_000.0)),
+            progress = SyncProgress("fake-server", "tracks", 900u, 4357u, listOf("artists", "albums"), false),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithText("Waiting to sync").assertExists()
+        compose.onNodeWithText("900 of 4357").assertDoesNotExist()
+    }
+
+    @Test
+    fun onlyTheTracksPhaseShowsACount() {
+        val core = show()
+        core.fake.stageSync(
+            jobs = listOf(syncJob(JobState.Running, 120u, now - 5_000.0)),
+            progress = SyncProgress("fake-server", "albums", 120u, 4357u, listOf("artists"), false),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithText("Syncing albums").assertExists()
+        compose.onNodeWithText("music.example.net").assertExists()
+        compose.onNodeWithText("120 of 4357").assertDoesNotExist()
+    }
+
+    @Test
+    fun cancelledAfterTheLastGoodSync() {
+        val core = show()
+        core.fake.stageSync(jobs = listOf(syncJob(JobState.Cancelled, 900u, now - 400_000.0, updatedAt = now - 300_000.0)))
+        compose.waitForIdle()
+        compose.onNodeWithText("Sync cancelled 5m ago").assertExists()
+        compose.onNodeWithContentDescription("Sync library now").assertExists()
+    }
+
+    @Test
+    fun retryOnTheRowAnswersTheFailuresProblem() {
+        val core = show()
+        val failed = syncJob(JobState.Failed, 900u, now - 400_000.0, updatedAt = now - 300_000.0)
+        core.fake.stageSync(jobs = listOf(failed))
+        core.fake.stageProblems(listOf(Problem("p-sync", failed.id, "Library sync failed", null, now - 300_000.0, true)))
+        compose.waitForIdle()
+        compose.onNodeWithText("Library sync failed").assertExists()
+        compose.onNodeWithText("Retry").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Library sync failed").assertDoesNotExist()
+        compose.onNodeWithText("Sync failed", substring = true).assertDoesNotExist()
     }
 
     @Test
     fun neverSynced() {
         val core = show()
-        core.fake.stageSync(jobs = emptyList(), servers = core.client.servers.value.map { it.copy(lastSync = null, lastSyncTracks = null, lastSyncDuration = null) })
+        core.fake.stageSync(jobs = emptyList(), servers = core.client.servers.value.map { it.copy(lastSync = null, lastSyncTracks = null) })
         compose.waitForIdle()
         compose.onNodeWithText("Not synced yet").assertExists()
         shot("android-dark-activity-never-synced")

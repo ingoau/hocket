@@ -187,7 +187,7 @@ function JobsIndicator() {
       {popover.value ? (
         <div {...popover.exitProps} className={`popover ${popover.motion}`} role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
           {servers.map((server) => <SyncRow key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} />)}
-          {!servers.length && !others.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
+          {!servers.length && !others.length && !problems.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
           {others.length ? <div className="section-title">{t("jobs.jobsHeading")}</div> : null}
           {others.slice(0, 20).map((j: Job) => (
             <div key={j.id} className="item" data-testid="job-row">
@@ -232,7 +232,9 @@ function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefin
   const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
-  const live = sync && !sync.finished && sync.serverId === server.id ? sync : undefined;
+  // A failed or cancelled run never reports finished, so its last progress lingers: only a job that
+  // is running (or paused, for its count) owns it, and a queued one hasn't started yet.
+  const live = sync && !sync.finished && sync.serverId === server.id && (active?.state === "running" || active?.state === "paused") ? sync : undefined;
   const total = live?.total || undefined;
   // Other phases report against the track total too (albums by album offset), so only tracks get a fraction.
   const fraction = live && total && live.phase === "tracks" ? Math.min(1, Math.max(0, live.done / total)) : undefined;
@@ -244,8 +246,10 @@ function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefin
     : server.lastSync ? t("sync.syncedWhen", { when: fmtRelative(server.lastSync) })
     : t("sync.never");
   const tracks = server.lastSyncTracks;
-  const supporting = active && live && total ? t("jobs.progress", { done: live.done, total })
-    : !active && tracks != null ? t(tracks === 1 ? "sync.serverTrack" : "sync.serverTracks", { server: server.name, count: tracks })
+  // Only tracks get a count (other phases report against the track total too), and after a failure
+  // the last good run's size would read as the failed run's.
+  const supporting = active && live && total && live.phase === "tracks" ? t("jobs.progress", { done: live.done, total })
+    : !active && !unsuccessful && tracks != null ? t(tracks === 1 ? "sync.serverTrack" : "sync.serverTracks", { server: server.name, count: tracks })
     : server.name;
   const dispatch = bridge().dispatch;
   return (

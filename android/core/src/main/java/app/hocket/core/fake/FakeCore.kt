@@ -201,9 +201,9 @@ class FakeCore(
             playHistory += PlayHistoryEntry(t.toSummary(), now() - i * 3_600_000.0 * 5, t.durationMs, true, if (i % 3 == 0) "laptop" else deviceId)
         }
         if (startWithServer) {
-            // Last synced an hour ago, in 40 s.
+            // Last synced an hour ago.
             servers += ServerInfo("fake-server", "https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
-                lastSyncTracks = library.tracks.size.toUInt(), lastSyncDuration = 40_000.0, reachable = true)
+                lastSyncTracks = library.tracks.size.toUInt(), reachable = true)
             if (startPlaying) {
                 val album = library.albums[5]
                 setContext(QueueContext(serverId, ContextKind.Album(ContextKindAlbumInner(album.id)), album.name, SortOrder.Default), library.albumTracks(album.id).map { it.id }, 2, false)
@@ -250,6 +250,11 @@ class FakeCore(
             progress?.let { syncProgress = it; emit(Event.SyncProgress(EventSyncProgressInner(it))) }
             servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.ServersChanged(EventServersChangedInner(it))) }
         }
+    }
+
+    /** Test helper: replace the problems list, announced as the core would. */
+    fun stageProblems(list: List<Problem>) {
+        scope.launch { problems.clear(); problems += list; emitProblems() }
     }
 
     /** Test helper: apply a command and wait for it. */
@@ -788,7 +793,12 @@ class FakeCore(
             is Command.SetStorageWarnThreshold -> { warnThreshold = c.data.bytes; emitPins() }
 
             is Command.CancelJob -> updateJob(c.data.id) { it.copy(state = JobState.Cancelled) }
-            is Command.RetryJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running, failed = 0u) }; progressJob(c.data.id) }
+            // Like the core: the retry answers the job's problems.
+            is Command.RetryJob -> {
+                updateJob(c.data.id) { it.copy(state = JobState.Running, failed = 0u) }
+                if (problems.removeAll { it.jobId == c.data.id }) emitProblems()
+                progressJob(c.data.id)
+            }
             is Command.PauseJob -> updateJob(c.data.id) { it.copy(state = JobState.Paused) }
             is Command.ResumeJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running) }; progressJob(c.data.id) }
             is Command.RetryProblem -> { problems.removeAll { it.id == c.data.id }; emitProblems(); toast("Retrying") }
@@ -1130,7 +1140,7 @@ class FakeCore(
                 if (jobs[i].kind == JobKind.LibrarySync) {
                     syncProgress = SyncProgress(serverId, if (done < total / 2u) "tracks" else "albums", done, total, if (done > total / 3u) listOf("artists", "albums") else listOf("artists"), done >= total)
                     emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total, lastSyncDuration = now() - j.createdAt); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
+                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
                 }
                 if (done >= total) return@launch
             }
@@ -1163,7 +1173,7 @@ class FakeCore(
             updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }
             syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks"))
             emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt(), lastSyncDuration = 0.0); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))) }
+            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))) }
         }
     }
 

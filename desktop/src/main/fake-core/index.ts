@@ -820,10 +820,9 @@ export class FakeCore implements CoreHandle {
         if (this.started) this.afterServerReady();
       });
     } else {
-      // Last synced an hour ago, in 40 s.
+      // Last synced an hour ago.
       server.lastSync = Date.now() - 3_600_000;
       server.lastSyncTracks = this.lib?.tracks.length;
-      server.lastSyncDuration = 40_000;
     }
   }
 
@@ -860,7 +859,6 @@ export class FakeCore implements CoreHandle {
         job.updatedAt = Date.now();
         server.lastSync = Date.now();
         server.lastSyncTracks = total;
-        server.lastSyncDuration = server.lastSync - job.createdAt;
         this.emit({ type: "syncProgress", data: { progress: { serverId: server.id, phase: "done", done: total, total, readyTables: phases, finished: true } } });
         this.emit({ type: "serversChanged", data: { servers: this.servers } });
         this.emit({ type: "libraryChanged", data: { server_id: server.id, tables: [], ids: [] } });

@@ -361,7 +361,6 @@
     <string name="downloads_remove_confirm">Remove “%1$s” from this device? The files are deleted.</string>
 
     <!-- Jobs / problems -->
-    <string name="jobs_title">Activity</string>
     <string name="jobs_indicator_a11y">Activity: %1$d running</string>
     <string name="jobs_indicator_problems_a11y">Activity: finished with problems</string>
     <string name="jobs_running">Running</string>

@@ -28,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.hocket.R
@@ -73,8 +72,7 @@ fun JobsSheet(onDismiss: () -> Unit) {
     val lastSyncJob = jobs.filter { it.kind == JobKind.LibrarySync }.maxByOrNull { it.createdAt }
     val others = jobs.filter { it.kind != JobKind.LibrarySync }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        val title = stringResource(R.string.jobs_title)
-        Column(Modifier.navigationBarsPadding().semantics { paneTitle = title }) {
+        Column(Modifier.navigationBarsPadding()) {
             server?.let {
                 SyncRow(it, lastSyncJob, sync)
                 if (others.isNotEmpty() || problems.isNotEmpty()) Spacer(Modifier.height(8.dp))
@@ -162,7 +160,9 @@ private fun SyncRow(server: ServerInfo, job: Job?, progress: SyncProgress?) {
     val active = job?.takeIf { it.state == JobState.Running || it.state == JobState.Queued || it.state == JobState.Paused }
     // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
     val unsuccessful = job?.takeIf { (it.state == JobState.Failed || it.state == JobState.Cancelled) && it.updatedAt > (server.lastSync ?: 0.0) }
-    val live = progress?.takeIf { !it.finished && it.serverId == server.id }
+    // A failed or cancelled run never reports finished, so its last progress lingers: only a job
+    // that is running (or paused, for its count) owns it, and a queued one hasn't started yet.
+    val live = progress?.takeIf { !it.finished && it.serverId == server.id && (active?.state == JobState.Running || active?.state == JobState.Paused) }
     val total = live?.total?.takeIf { it > 0u }
     val last = server.lastSync
     val error = MaterialTheme.colorScheme.error
@@ -177,13 +177,15 @@ private fun SyncRow(server: ServerInfo, job: Job?, progress: SyncProgress?) {
     }
     val tracks = server.lastSyncTracks?.toInt()
     val supporting = when {
-        active != null && live != null && total != null -> stringResource(R.string.sync_progress, live.done.toInt(), total.toInt())
-        active == null && tracks != null -> pluralStringResource(R.plurals.sync_server_tracks, tracks, server.name, tracks)
+        // Other phases report against the track total too, so only tracks get a count.
+        active != null && live != null && total != null && live.phase == "tracks" -> stringResource(R.string.sync_progress, live.done.toInt(), total.toInt())
+        // After a failure the last good run's size would read as the failed run's.
+        active == null && unsuccessful == null && tracks != null -> pluralStringResource(R.plurals.sync_server_tracks, tracks, server.name, tracks)
         else -> server.name
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Row(Modifier.heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Column(Modifier.weight(1f).padding(vertical = 8.dp).semantics(mergeDescendants = true) {}) {
                 Text(headline, style = MaterialTheme.typography.titleMedium, color = if (unsuccessful?.state == JobState.Failed) error else MaterialTheme.colorScheme.onSurface)
                 Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

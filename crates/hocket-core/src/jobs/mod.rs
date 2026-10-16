@@ -432,7 +432,8 @@ impl JobQueue {
     }
 
     /// Re-queue a finished job: failed items go back to pending (a job without
-    /// items simply runs again from its cursor).
+    /// items simply runs again from its cursor). The problems it raised are
+    /// dismissed: the retry answers them, and a fresh failure files a new one.
     pub fn retry(&self, id: &str) -> DbResult<bool> {
         let now = self.inner.clock.now_ms();
         let changed = self.inner.db.with_tx(|tx| {
@@ -443,12 +444,14 @@ impl JobQueue {
             if n > 0 {
                 tx.execute("UPDATE job_items SET state = 'pending', error = NULL WHERE job_id = ?1 AND state IN ('failed','cancelled')", [id])?;
                 tx.execute("UPDATE jobs SET done = (SELECT count(*) FROM job_items WHERE job_id = ?1 AND state = 'done') WHERE id = ?1", [id])?;
+                tx.execute("UPDATE problems SET dismissed = 1 WHERE job_id = ?1 AND dismissed = 0", [id])?;
             }
             Ok(n > 0)
         })?;
         if changed {
             self.inner.notify.notify_one();
             self.emit_jobs();
+            self.emit_problems();
         }
         Ok(changed)
     }
@@ -1307,6 +1310,22 @@ mod tests {
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!((j.done, j.total, j.state), (2, Some(2), JobState::Done));
+    }
+
+    #[tokio::test]
+    async fn retrying_a_job_dismisses_its_problems() {
+        let q = queue();
+        let id = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync"))
+            .unwrap();
+        q.cancel(&id).unwrap();
+        q.add_problem(Some(&id), "sync failed", None, None).unwrap();
+        assert_eq!(q.problems().unwrap().len(), 1);
+        assert!(q.retry(&id).unwrap());
+        assert!(
+            q.problems().unwrap().is_empty(),
+            "the retry answers the problem"
+        );
     }
 
     #[tokio::test]

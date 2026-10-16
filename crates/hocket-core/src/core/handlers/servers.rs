@@ -131,7 +131,6 @@ impl Actor {
             capabilities: ServerCapabilities::default(),
             last_sync: None,
             last_sync_tracks: None,
-            last_sync_duration: None,
             reachable: false,
         };
         // Verify first: a new server is only persisted, announced and synced
@@ -171,7 +170,6 @@ impl Actor {
             capabilities: preset.api.capabilities(),
             last_sync: None,
             last_sync_tracks: None,
-            last_sync_duration: None,
             reachable: true,
         };
         let credential = wire_credential(&preset.url, &username, &preset.password);

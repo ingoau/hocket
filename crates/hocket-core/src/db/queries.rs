@@ -985,7 +985,6 @@ impl Db {
                     capabilities: serde_json::from_str(&caps).unwrap_or_default(),
                     last_sync: r.get(4)?,
                     last_sync_tracks: None,
-                    last_sync_duration: None,
                     reachable: false,
                 })
             })?;
