@@ -21,6 +21,8 @@ async function populate(page: Page): Promise<void> {
   await showSideView(page, "lyrics");
   // The first syllable line is active from 1.5 s.
   await expect(page.locator('[data-testid="lyrics-sr-list"] li[aria-current="true"]')).toHaveCount(1, { timeout: 10_000 });
+  // Repeat the showcase so the scans (which outlast it at the fake's timescale) keep seeing it.
+  await page.evaluate(() => window.hocket.dispatch({ type: "setRepeat", data: { mode: "one" } }));
 }
 
 test.describe("axe: no violations anywhere", () => {
