@@ -227,7 +227,8 @@ fn state_from_name(s: &str) -> JobState {
     }
 }
 
-const JOB_COLUMNS: &str = "id, kind, label, state, done, total, failed, created_at, cancellable";
+const JOB_COLUMNS: &str =
+    "id, kind, label, state, done, total, failed, created_at, cancellable, updated_at";
 
 fn job_from_row(r: &rusqlite::Row) -> rusqlite::Result<Job> {
     let kind: String = r.get(1)?;
@@ -242,6 +243,7 @@ fn job_from_row(r: &rusqlite::Row) -> rusqlite::Result<Job> {
         failed: r.get::<_, i64>(6)?.max(0) as u32,
         created_at: r.get(7)?,
         cancellable: r.get::<_, i64>(8)? != 0,
+        updated_at: r.get(9)?,
     })
 }
 
@@ -430,7 +432,8 @@ impl JobQueue {
     }
 
     /// Re-queue a finished job: failed items go back to pending (a job without
-    /// items simply runs again from its cursor).
+    /// items simply runs again from its cursor). The problems it raised are
+    /// dismissed: the retry answers them, and a fresh failure files a new one.
     pub fn retry(&self, id: &str) -> DbResult<bool> {
         let now = self.inner.clock.now_ms();
         let changed = self.inner.db.with_tx(|tx| {
@@ -441,12 +444,14 @@ impl JobQueue {
             if n > 0 {
                 tx.execute("UPDATE job_items SET state = 'pending', error = NULL WHERE job_id = ?1 AND state IN ('failed','cancelled')", [id])?;
                 tx.execute("UPDATE jobs SET done = (SELECT count(*) FROM job_items WHERE job_id = ?1 AND state = 'done') WHERE id = ?1", [id])?;
+                tx.execute("UPDATE problems SET dismissed = 1 WHERE job_id = ?1 AND dismissed = 0", [id])?;
             }
             Ok(n > 0)
         })?;
         if changed {
             self.inner.notify.notify_one();
             self.emit_jobs();
+            self.emit_problems();
         }
         Ok(changed)
     }
@@ -775,6 +780,41 @@ impl JobQueue {
         self.emit_jobs();
         self.inner.finished.notify_waiters();
         self.inner.notify.notify_one();
+    }
+
+    /// Cancel and delete every job of `kind`, with the problems they raised (a removed server's
+    /// syncs, which would otherwise show as the next server's). Returns the number removed.
+    pub fn forget_kind(&self, kind: JobKind) -> DbResult<usize> {
+        let name = kind_name(kind);
+        let ids: Vec<String> = self.inner.db.with_conn(|c| {
+            let mut st = c.prepare("SELECT id FROM jobs WHERE kind = ?1")?;
+            let ids = st
+                .query_map([name], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+            Ok(ids)
+        })?;
+        for id in &ids {
+            if let Some(r) = self.inner.running.lock().get(id) {
+                r.cancel.cancel();
+                let _ = r.pause.send(false);
+            }
+        }
+        let n = self.inner.db.with_tx(|tx| {
+            tx.execute(
+                "DELETE FROM problems WHERE job_id IN (SELECT id FROM jobs WHERE kind = ?1)",
+                [name],
+            )?;
+            tx.execute(
+                "DELETE FROM job_items WHERE job_id IN (SELECT id FROM jobs WHERE kind = ?1)",
+                [name],
+            )?;
+            Ok(tx.execute("DELETE FROM jobs WHERE kind = ?1", [name])?)
+        })?;
+        if n > 0 {
+            self.emit_jobs();
+            self.emit_problems();
+        }
+        Ok(n)
     }
 
     /// Delete terminal jobs (`done`/`cancelled`/`failed`) older than the
@@ -1270,6 +1310,43 @@ mod tests {
         q.run_until_idle().await.unwrap();
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!((j.done, j.total, j.state), (2, Some(2), JobState::Done));
+    }
+
+    #[tokio::test]
+    async fn retrying_a_job_dismisses_its_problems() {
+        let q = queue();
+        let id = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync"))
+            .unwrap();
+        q.cancel(&id).unwrap();
+        q.add_problem(Some(&id), "sync failed", None, None).unwrap();
+        assert_eq!(q.problems().unwrap().len(), 1);
+        assert!(q.retry(&id).unwrap());
+        assert!(
+            q.problems().unwrap().is_empty(),
+            "the retry answers the problem"
+        );
+    }
+
+    #[tokio::test]
+    async fn forget_kind_drops_its_jobs_and_their_problems() {
+        let q = queue();
+        q.register(JobKind::BulkRating, 1, item_runner(0));
+        let sync = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "sync"))
+            .unwrap();
+        let other = q
+            .submit(JobSpec::new(JobKind::BulkRating, "rate").items(vec!["a".into()]))
+            .unwrap();
+        q.add_problem(Some(&sync), "sync failed", None, None)
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.forget_kind(JobKind::LibrarySync).unwrap(), 1);
+        assert!(q.job(&sync).unwrap().is_none());
+        assert!(q.problems().unwrap().is_empty());
+        let j = q.job(&other).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Done);
+        assert!(j.updated_at >= j.created_at);
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Job, SearchResults } from "@core/api";
+import type { Job, SearchResults, ServerInfo, SyncProgress } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -161,6 +161,9 @@ function JobsIndicator() {
   const jobs = useApp((s) => s.jobs);
   const problems = useApp((s) => s.problems);
   const sync = useApp((s) => s.syncProgress);
+  const servers = useApp((s) => s.servers);
+  // Library syncs are summarised per server (last result only), not listed one row per run.
+  const others = jobs.filter((j) => j.kind !== "librarySync");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -183,10 +186,10 @@ function JobsIndicator() {
       </button>
       {popover.value ? (
         <div {...popover.exitProps} className={`popover ${popover.motion}`} role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
-          <div className="section-title">{t("jobs.jobsHeading")}</div>
-          {!jobs.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
-          {sync && !sync.finished ? <div className="item muted small">{t("sync.syncing", { phase: sync.phase })}</div> : null}
-          {jobs.slice(0, 20).map((j: Job) => (
+          {servers.map((server) => <SyncRow key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} />)}
+          {!servers.length && !others.length && !problems.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
+          {others.length ? <div className="section-title">{t("jobs.jobsHeading")}</div> : null}
+          {others.slice(0, 20).map((j: Job) => (
             <div key={j.id} className="item" data-testid="job-row">
               <div className="row">
                 <span className="grow truncate">{j.label}</span>
@@ -220,6 +223,49 @@ function JobsIndicator() {
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
+function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
+  const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
+  // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
+  const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
+  // A failed or cancelled run never reports finished, so its last progress lingers: only a job that
+  // is running (or paused, for its count) owns it, and a queued one hasn't started yet.
+  const live = sync && !sync.finished && sync.serverId === server.id && (active?.state === "running" || active?.state === "paused") ? sync : undefined;
+  const total = live?.total || undefined;
+  // Other phases report against the track total too (albums by album offset), so only tracks get a fraction.
+  const fraction = live && total && live.phase === "tracks" ? Math.min(1, Math.max(0, live.done / total)) : undefined;
+  const failed = unsuccessful?.state === "failed";
+  const headline = active?.state === "paused" ? t("sync.paused")
+    : active && live ? t("sync.phase", { phase: live.phase })
+    : active ? t("sync.waiting")
+    : unsuccessful ? t(failed ? "sync.failedWhen" : "sync.cancelledWhen", { when: fmtRelative(unsuccessful.updatedAt) })
+    : server.lastSync ? t("sync.syncedWhen", { when: fmtRelative(server.lastSync) })
+    : t("sync.never");
+  const tracks = server.lastSyncTracks;
+  // Only tracks get a count (other phases report against the track total too), and after a failure
+  // the last good run's size would read as the failed run's.
+  const supporting = active && live && total && live.phase === "tracks" ? t("jobs.progress", { done: live.done, total })
+    : !active && !unsuccessful && tracks != null ? t(tracks === 1 ? "sync.serverTrack" : "sync.serverTracks", { server: server.name, count: tracks })
+    : server.name;
+  const dispatch = bridge().dispatch;
+  return (
+    <div className="item" data-testid="sync-summary">
+      <div className="row">
+        <div className="grow" style={{ minWidth: 0 }}>
+          <div className="truncate" style={{ fontWeight: 600, color: failed ? "var(--warn)" : undefined }}>{headline}</div>
+          <div className="small muted truncate">{supporting}</div>
+        </div>
+        {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
+          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
+          : active.state === "paused" ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
+          : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
+          : null}
+      </div>
+      {active ? <div className="progress"><div style={{ width: fraction != null ? `${fraction * 100}%` : active.state === "paused" ? "0%" : "30%" }} /></div> : null}
     </div>
   );
 }

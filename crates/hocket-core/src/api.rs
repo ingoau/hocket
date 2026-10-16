@@ -344,6 +344,9 @@ pub struct ServerInfo {
     pub name: String,
     pub capabilities: ServerCapabilities,
     pub last_sync: Option<EpochMs>,
+    /// Tracks in the library after the last completed sync.
+    #[serde(default)]
+    pub last_sync_tracks: Option<u32>,
     pub reachable: bool,
 }
 
@@ -1075,6 +1078,8 @@ pub struct Job {
     pub total: Option<u32>,
     pub failed: u32,
     pub created_at: EpochMs,
+    /// Last state or progress change; for a finished job, when it finished.
+    pub updated_at: EpochMs,
     pub cancellable: bool,
 }
 

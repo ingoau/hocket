@@ -71,6 +71,16 @@ const STRINGS = {
   "job.state.cancelled": "Cancelled",
   "sync.syncing": "Syncing library: {phase}",
   "sync.done": "Library up to date",
+  "sync.now": "Sync library now",
+  "sync.phase": "Syncing {phase}",
+  "sync.syncedWhen": "Synced {when}",
+  "sync.failedWhen": "Sync failed {when}",
+  "sync.cancelledWhen": "Sync cancelled {when}",
+  "sync.never": "Not synced yet",
+  "sync.waiting": "Waiting to sync",
+  "sync.paused": "Sync paused",
+  "sync.serverTrack": "{server} · {count} track",
+  "sync.serverTracks": "{server} · {count} tracks",
 
   // Player bar
   "player.nothingPlaying": "Nothing playing",

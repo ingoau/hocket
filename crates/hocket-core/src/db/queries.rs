@@ -984,6 +984,7 @@ impl Db {
                     name: r.get(3)?,
                     capabilities: serde_json::from_str(&caps).unwrap_or_default(),
                     last_sync: r.get(4)?,
+                    last_sync_tracks: None,
                     reachable: false,
                 })
             })?;
@@ -1920,6 +1921,7 @@ mod tests {
             },
             last_sync: None,
             reachable: true,
+            ..Default::default()
         };
         db.upsert_server(&info, 1.0).unwrap();
         db.set_server_last_sync("s", 42.0).unwrap();

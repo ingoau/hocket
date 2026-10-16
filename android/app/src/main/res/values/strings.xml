@@ -361,7 +361,6 @@
     <string name="downloads_remove_confirm">Remove “%1$s” from this device? The files are deleted.</string>
 
     <!-- Jobs / problems -->
-    <string name="jobs_title">Activity</string>
     <string name="jobs_indicator_a11y">Activity: %1$d running</string>
     <string name="jobs_indicator_problems_a11y">Activity: finished with problems</string>
     <string name="jobs_running">Running</string>
@@ -381,6 +380,14 @@
     <string name="problems_none">No problems</string>
     <string name="sync_phase">Syncing %1$s</string>
     <string name="sync_progress">%1$d of %2$d</string>
+    <string name="sync_just_now">just now</string>
+    <string name="sync_ago">%1$s ago</string>
+    <string name="sync_synced_when">Synced %1$s</string>
+    <string name="sync_failed_when">Sync failed %1$s</string>
+    <string name="sync_cancelled_when">Sync cancelled %1$s</string>
+    <string name="sync_not_synced">Not synced yet</string>
+    <string name="sync_waiting">Waiting to sync</string>
+    <string name="sync_paused">Sync paused</string>
 
     <!-- Filters -->
     <string name="filters_title">Filters</string>
@@ -582,6 +589,10 @@
     <string name="year_and_count">%1$d · %2$d tracks</string>
     <!-- Quoted: aapt trims unquoted leading/trailing spaces, which glued summaries together ("On·10"). -->
     <string name="dot_separator">" · "</string>
+    <plurals name="sync_server_tracks">
+        <item quantity="one">%1$s · %2$d track</item>
+        <item quantity="other">%1$s · %2$d tracks</item>
+    </plurals>
     <plurals name="a11y_stars">
         <item quantity="one">%1$d star</item>
         <item quantity="other">%1$d stars</item>

@@ -86,6 +86,8 @@ pub struct SyncCursor {
     pub last_scan_count: Option<f64>,
     /// Newest album `created` we have seen (incremental stop condition).
     pub newest_album_created: Option<f64>,
+    /// Tracks in the mirror when the last run finished.
+    pub last_track_count: Option<u32>,
 }
 
 impl Default for SyncCursor {
@@ -102,6 +104,7 @@ impl Default for SyncCursor {
             last_scan: None,
             last_scan_count: None,
             newest_album_created: None,
+            last_track_count: None,
         }
     }
 }
@@ -396,10 +399,14 @@ impl LibrarySync {
         }
         c.newest_album_created = self.newest_album_created()?;
         c.offset = 0;
+        let tracks = self.db.track_count(self.server_id(), &None)?;
+        c.last_track_count = Some(tracks);
         self.save_cursor(&c)?;
         self.db
             .set_server_last_sync(self.server_id(), finished_at)?;
-        self.report(obs, &c, c.offset, total_tracks, true);
+        // A finished sync has covered the whole library: report it as complete, not the
+        // reset cursor offset (which read "0 of N" in the job list).
+        self.report(obs, &c, tracks, Some(tracks), true);
         Ok(stats)
     }
 
@@ -844,6 +851,15 @@ mod tests {
         );
         let c = sync.cursor().unwrap();
         assert!(!c.in_progress() && c.has_completed_once());
+        assert_eq!(
+            c.last_track_count,
+            Some(12),
+            "library size at the end of the run"
+        );
+        assert_eq!(
+            (p.last().unwrap().done, p.last().unwrap().total),
+            (12, Some(12))
+        );
         assert!(
             db.servers().unwrap().is_empty(),
             "sync doesn't create server rows"
@@ -1009,6 +1025,7 @@ mod tests {
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!(j.state, api::JobState::Done);
         assert_eq!(j.total, Some(12));
+        assert_eq!(j.done, 12, "a finished sync reads as complete, not 0 of N");
         assert_eq!(db.track_count("srv", &None).unwrap(), 12);
 
         s.set_offline(true);

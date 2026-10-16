@@ -196,12 +196,14 @@ class FakeCore(
         pins += Pin(PinTarget.Playlist(PinTargetPlaylistInner("pl0")), "Late night", library.playlist("pl0")?.coverArt, 18u, 18u, 4.1e8, now() - 5 * 86_400_000.0, false)
         pins += Pin(PinTarget.Album(PinTargetAlbumInner("al3")), library.album("al3")?.name ?: "Album", "al3", 9u, 6u, 2.2e8, now() - 3_600_000.0, false)
         problems += Problem("p1", "job-sync-old", "Couldn't fetch artwork for 3 albums", "HTTP 502 from the server while fetching cover art.", now() - 900_000.0, true)
-        jobs += Job("job-sync-old", JobKind.ArtworkPrefetch, "Artwork prefetch", JobState.Failed, 412u, 415u, 3u, now() - 1_200_000.0, false)
+        jobs += Job("job-sync-old", JobKind.ArtworkPrefetch, "Artwork prefetch", JobState.Failed, 412u, 415u, 3u, now() - 1_200_000.0, now() - 1_150_000.0, false)
         library.tracks.filter { it.playCount > 0u }.take(40).forEachIndexed { i, t ->
             playHistory += PlayHistoryEntry(t.toSummary(), now() - i * 3_600_000.0 * 5, t.durationMs, true, if (i % 3 == 0) "laptop" else deviceId)
         }
         if (startWithServer) {
-            servers += ServerInfo("fake-server", "https://music.example.net", "ada", "music.example.net", capabilities(), now() - 3_600_000.0, true)
+            // Last synced an hour ago.
+            servers += ServerInfo("fake-server", "https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
+                lastSyncTracks = library.tracks.size.toUInt(), reachable = true)
             if (startPlaying) {
                 val album = library.albums[5]
                 setContext(QueueContext(serverId, ContextKind.Album(ContextKindAlbumInner(album.id)), album.name, SortOrder.Default), library.albumTracks(album.id).map { it.id }, 2, false)
@@ -239,6 +241,20 @@ class FakeCore(
             emit(Event.LyricsChanged(EventLyricsChangedInner(trackId, lyricsFor(trackId))))
         }
         return lyrics
+    }
+
+    /** Test helper: replace the jobs, sync progress and/or servers, announced as the core would. */
+    fun stageSync(jobs: List<Job>? = null, progress: SyncProgress? = null, servers: List<ServerInfo>? = null) {
+        scope.launch {
+            jobs?.let { this@FakeCore.jobs.clear(); this@FakeCore.jobs += it; emitJobs() }
+            progress?.let { syncProgress = it; emit(Event.SyncProgress(EventSyncProgressInner(it))) }
+            servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.ServersChanged(EventServersChangedInner(it))) }
+        }
+    }
+
+    /** Test helper: replace the problems list, announced as the core would. */
+    fun stageProblems(list: List<Problem>) {
+        scope.launch { problems.clear(); problems += list; emitProblems() }
     }
 
     /** Test helper: apply a command and wait for it. */
@@ -606,7 +622,7 @@ class FakeCore(
             is Command.SetBatterySaver -> if (batterySaver != c.data.enabled) { batterySaver = c.data.enabled; emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(batterySaver))) }
 
             is Command.AddServer -> addServer(c.data)
-            is Command.RemoveServer -> { servers.clear(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }
+            is Command.RemoveServer -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }
             is Command.ProbeServer -> emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
             is Command.SyncLibrary -> startSync(c.data.full)
             is Command.SetTranscodingProfile -> {
@@ -777,7 +793,12 @@ class FakeCore(
             is Command.SetStorageWarnThreshold -> { warnThreshold = c.data.bytes; emitPins() }
 
             is Command.CancelJob -> updateJob(c.data.id) { it.copy(state = JobState.Cancelled) }
-            is Command.RetryJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running, failed = 0u) }; progressJob(c.data.id) }
+            // Like the core: the retry answers the job's problems.
+            is Command.RetryJob -> {
+                updateJob(c.data.id) { it.copy(state = JobState.Running, failed = 0u) }
+                if (problems.removeAll { it.jobId == c.data.id }) emitProblems()
+                progressJob(c.data.id)
+            }
             is Command.PauseJob -> updateJob(c.data.id) { it.copy(state = JobState.Paused) }
             is Command.ResumeJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running) }; progressJob(c.data.id) }
             is Command.RetryProblem -> { problems.removeAll { it.id == c.data.id }; emitProblems(); toast("Retrying") }
@@ -1091,7 +1112,7 @@ class FakeCore(
 
     private fun startJob(kind: JobKind, label: String, total: Int): JobId {
         val id = newId("job")
-        jobs.add(0, Job(id, kind, label, JobState.Running, 0u, total.toUInt(), 0u, now(), true))
+        jobs.add(0, Job(id, kind, label, JobState.Running, 0u, total.toUInt(), 0u, now(), now(), true))
         emitJobs()
         progressJob(id)
         return id
@@ -1099,7 +1120,7 @@ class FakeCore(
 
     private fun updateJob(id: JobId, f: (Job) -> Job) {
         val i = jobs.indexOfFirst { it.id == id }
-        if (i >= 0) { jobs[i] = f(jobs[i]); emitJobs() }
+        if (i >= 0) { jobs[i] = f(jobs[i]).copy(updatedAt = now()); emitJobs() }
     }
 
     private fun progressJob(id: JobId) {
@@ -1114,12 +1135,12 @@ class FakeCore(
                 val total = j.total ?: 100u
                 val step = (total.toInt() / 12).coerceAtLeast(1).toUInt()
                 val done = (j.done + step).coerceAtMost(total)
-                jobs[i] = if (done >= total) j.copy(done = total, state = if (j.failed > 0u) JobState.Failed else JobState.Done) else j.copy(done = done)
+                jobs[i] = if (done >= total) j.copy(done = total, state = if (j.failed > 0u) JobState.Failed else JobState.Done, updatedAt = now()) else j.copy(done = done, updatedAt = now())
                 emitJobs()
                 if (jobs[i].kind == JobKind.LibrarySync) {
                     syncProgress = SyncProgress(serverId, if (done < total / 2u) "tracks" else "albums", done, total, if (done > total / 3u) listOf("artists", "albums") else listOf("artists"), done >= total)
                     emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now()); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
+                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
                 }
                 if (done >= total) return@launch
             }
@@ -1130,13 +1151,13 @@ class FakeCore(
         when {
             a.password == "wrong" -> emit(Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", "The server refused the credentials.")))
             a.url.contains("old") -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null, true)
+                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null, reachable = true)
                 emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
                 emit(Event.Error(EventErrorInner(ErrorKind.Server, "Navidrome 0.58.0 is too old", "Hocket needs Navidrome 0.63.0 or newer for synced lyrics and fast library sync.")))
             }
             a.url.contains("down") -> emit(Event.Error(EventErrorInner(ErrorKind.Network, "Couldn't reach ${a.url}", null)))
             else -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null, true)
+                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null, reachable = true)
                 emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
                 startSync(true)
             }
@@ -1148,7 +1169,12 @@ class FakeCore(
         val id = startJob(JobKind.LibrarySync, if (full) "Full library sync" else "Library refresh", total)
         syncProgress = SyncProgress(serverId, "artists", 0u, total.toUInt(), emptyList(), false)
         emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-        if (!timers) { updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }; syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks")); emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!))) }
+        if (!timers) {
+            updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }
+            syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks"))
+            emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
+            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))) }
+        }
     }
 
     /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */

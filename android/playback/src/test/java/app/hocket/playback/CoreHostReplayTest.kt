@@ -56,7 +56,7 @@ class CoreHostReplayTest {
 
     private val url = "https://music.example.net"
     private val caps = ServerCapabilities("0.63.1", true, emptyList(), true, true, true, true, false, true, false, true)
-    private fun server(reachable: Boolean = true, user: String = "alice") = ServerInfo("srv", url, user, "Music", caps, null, reachable)
+    private fun server(reachable: Boolean = true, user: String = "alice") = ServerInfo("srv", url, user, "Music", caps, null, reachable = reachable)
     private val credential = ServerCredential(url, "alice", "secret", null)
     private lateinit var snapshot: Snapshot
     private lateinit var core: ScriptedCore
