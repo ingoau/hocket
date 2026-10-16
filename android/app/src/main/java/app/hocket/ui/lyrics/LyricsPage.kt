@@ -1,7 +1,8 @@
 package app.hocket.ui.lyrics
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -35,6 +37,12 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsPropertyKey
@@ -46,6 +54,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import app.hocket.ui.a11y.LocalReducedMotion
@@ -81,10 +90,12 @@ import app.hocket.ui.icons.HocketIcons
  *
  * Accessibility: the page is one labelled container ("Lyrics"); each line is one item with its text,
  * a "current line" state on the line being sung and a "background vocal" state on sub-voice lines,
- * and "Play from this line" as its click. Nothing is a live region: lines and syllables are never
- * announced as they pass. With reduced motion (animations removed) the sweep becomes a static
+ * "Play from this line" as its click and "Share lyrics" as its long-click. Nothing is a live region:
+ * lines and syllables are never announced as they pass. With reduced motion (animations removed) the sweep becomes a static
  * highlight of the lit line, blur and line scaling are off, the list jumps instead of scrolling
  * smoothly, the fluid background stands still and the position is sampled 4 times a second.
+ *
+ * Holding a line opens the share screen ([LyricsShareDialog]) with that line on a card.
  *
  * [listModifier] applies to the lines only (the full player fades them out at its slot's edges).
  * [embedded] (the full player) also leaves out the tier, source and timing row under the lines: the
@@ -133,11 +144,16 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
             return@Box
         }
         val doc = lyrics ?: return@Box
+        var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
-            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, modifier = Modifier.weight(1f).then(listModifier),
+            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, modifier = Modifier.weight(1f).then(listModifier),
                 padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
             // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
             if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
+        }
+        val track = entry?.track
+        share?.let { request ->
+            if (track != null && track.id == doc.trackId && request.line in doc.lines.indices) LyricsShareDialog(doc, track, request, onDismiss = { share = null })
         }
     }
 }
@@ -262,7 +278,7 @@ internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
 }
 
 @Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
+private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     val listState = rememberLazyListState()
@@ -285,14 +301,14 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, on
             val side = line.agent?.let { sides[it] } ?: 0
             // The core compares `position - offset` against the line start, so seeking to a line's
             // start means `start + offset` in audio time.
-            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } })
+            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) })
         }
         if (cursor.inGap) item { Text(stringResource(R.string.lyrics_instrumental), color = LyricsContrast.active, modifier = Modifier.padding(8.dp)) }
     }
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (androidx.compose.ui.geometry.Rect?) -> Unit) {
     val animatedScale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
     val scale = if (reducedMotion) 1f else animatedScale
     val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
@@ -304,6 +320,13 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     val currentState = stringResource(R.string.lyrics_state_current)
     val backgroundState = stringResource(R.string.lyrics_state_background)
     val seekHere = stringResource(R.string.lyrics_seek_here)
+    val shareLabel = stringResource(R.string.lyrics_share)
+    val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
+    // Where the line was last laid out, for the share card to grow out of (not state: read on hold only).
+    val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val share: (() -> Unit)? = if (line.text.isBlank()) null else ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); onShare(screenBounds(view, coords[0])) })
+    val currentShare by rememberUpdatedState(share)
     val a11yText = listOfNotNull(line.text, line.translation).joinToString(". ")
     val a11yState = listOfNotNull(if (focused) currentState else null, if (line.background) backgroundState else null).joinToString(", ")
     // Syllable sweep from this line's own timing (a background line lit beside its main line sweeps
@@ -318,17 +341,26 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     }
     Column(
         Modifier.fillMaxWidth().padding(vertical = 8.dp)
+            .onGloballyPositioned { coords[0] = it }
             .graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f) }
             // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
             // the halo of text near the sides was cut off (#68).
             .blur(blur, BlurredEdgeTreatment.Unbounded).alpha(alpha)
-            .clickable(enabled = line.startMs != null, onClickLabel = seekHere, onClick = onClick)
+            // Tap seeks, hold shares; unsynced lines have nowhere to seek to, but can still be held.
+            .then(
+                when {
+                    line.startMs != null -> Modifier.combinedClickable(onClickLabel = seekHere, onClick = onClick, onLongClickLabel = shareLabel, onLongClick = share)
+                    share != null -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { currentShare?.invoke() }) }
+                    else -> Modifier
+                },
+            )
             .testTag("lyrics.line.$index")
             // One item per line: its text (and translation), its state; no live region.
             .clearAndSetSemantics {
                 contentDescription = a11yText
                 if (a11yState.isNotEmpty()) stateDescription = a11yState
                 if (line.startMs != null) onClick(seekHere) { onClick(); true }
+                if (share != null) onLongClick(shareLabel) { share(); true }
                 this[LyricsSemantics.Sweep] = sweep
                 this[LyricsSemantics.Voice] = if (line.background) "bg" else "main"
                 this[LyricsSemantics.Lit] = lit

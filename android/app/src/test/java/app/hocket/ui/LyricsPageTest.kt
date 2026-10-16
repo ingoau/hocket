@@ -12,6 +12,11 @@ import app.hocket.core.api.LyricsTier
 import app.hocket.core.lyrics.LyricsCursor
 import app.hocket.ui.lyrics.LyricsPage
 import app.hocket.ui.lyrics.LyricsSemantics
+import app.hocket.ui.lyrics.MAX_SHARED_LINES
+import app.hocket.ui.lyrics.toggleSharedLine
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.performSemanticsAction
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
@@ -252,5 +257,37 @@ class LyricsPageTest {
         at(s[1].startMs.toLong() + 400)
         assertEquals(1f, sweep(main)[0], 0.001f)
         assertEquals(0f, sweep(main)[1], 0.03f)
+    }
+
+    private fun card(): String = compose.onNodeWithTag("lyrics.share.card").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].joinToString()
+
+    @Test
+    fun holdingALineOpensTheShareCardWithItAndMoreLinesCanBeAdded() {
+        val doc = play()
+        val first = doc.lines.indexOfFirst { !it.background && it.text.isNotBlank() }
+        val next = (first + 1 until doc.lines.size).first { doc.lines[it].text.isNotBlank() }
+        compose.onNodeWithTag("lyrics.line.$first").performSemanticsAction(SemanticsActions.OnLongClick)
+        advanceUntil("the share card") { exists("lyrics.share.card") }
+        assertTrue("the held line is on the card", card().contains(doc.lines[first].text))
+        assertFalse(card().contains(doc.lines[next].text))
+        compose.onNodeWithTag("lyrics.share.line.$next").performSemanticsAction(SemanticsActions.OnClick)
+        advanceUntil("the second line on the card") { card().contains(doc.lines[next].text) }
+        // The last line cannot be taken off: a card always has one.
+        compose.onNodeWithTag("lyrics.share.line.$first").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithTag("lyrics.share.line.$next").performSemanticsAction(SemanticsActions.OnClick)
+        advanceUntil("the line removed") { !card().contains(doc.lines[first].text) }
+        assertTrue(card().contains(doc.lines[next].text))
+        compose.onNodeWithTag("lyrics.share.close").performSemanticsAction(SemanticsActions.OnClick)
+        advanceUntil("the share screen to close") { !exists("lyrics.share") }
+    }
+
+    @Test
+    fun sharedLinesStayBetweenOneAndTheCap() {
+        assertEquals(setOf(1), toggleSharedLine(setOf(1), 1))
+        assertEquals(setOf(1, 2), toggleSharedLine(setOf(1), 2))
+        assertEquals(setOf(2), toggleSharedLine(setOf(1, 2), 1))
+        val full = (0 until MAX_SHARED_LINES).toSet()
+        assertEquals(full, toggleSharedLine(full, 99))
+        assertEquals("Hocket - a_b_c.png", app.hocket.share.ShareImages.fileName("a/b:c"))
     }
 }
