@@ -365,11 +365,7 @@ impl Actor {
         };
 
         let core_stream = cfg.audio == AudioMode::Native;
-        let volume: f64 = db
-            .saved_state_get::<f64>("volume")
-            .ok()
-            .flatten()
-            .unwrap_or(1.0);
+        let volume = saved_volume(&db, clock.as_ref());
         let now = clock.now_ms();
         let mut actor = Actor {
             cfg,
@@ -1119,11 +1115,11 @@ impl Actor {
         self.server.as_ref().and_then(|s| s.api.clone())
     }
 
-    /// The gain the backend applies: the volume slider on a dB scale, times
-    /// the sleep timer's fade.
+    /// The gain the backend applies: the volume slider, scaled by the sleep
+    /// timer's fade, on a dB scale (so the fade sounds even too).
     pub(crate) fn effective_volume(&self) -> f64 {
-        let gain = crate::audio::backend::volume_to_gain(self.playback.volume);
-        (gain * self.playback.fade_gain.unwrap_or(1.0)).clamp(0.0, 1.0)
+        let slider = self.playback.volume * self.playback.fade_gain.unwrap_or(1.0);
+        crate::audio::backend::volume_to_gain(slider)
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
@@ -1160,6 +1156,26 @@ impl Actor {
 
 /// Registry customisation lives in the settings document (`shortcuts` and
 /// `actions.order.<surface>`).
+/// Saved-state key for the volume slider position.
+pub(crate) const VOLUME_KEY: &str = "volumeSlider";
+/// Before the slider moved to a dB scale it was saved here as a linear gain.
+const LEGACY_VOLUME_KEY: &str = "volume";
+
+/// The saved volume slider position. A volume saved before the dB scale is
+/// carried over at the same loudness (and re-saved under the new key), so
+/// an upgrade doesn't change how loud playback is.
+fn saved_volume(db: &Db, clock: &dyn Clock) -> f64 {
+    if let Ok(Some(v)) = db.saved_state_get::<f64>(VOLUME_KEY) {
+        return v;
+    }
+    let Ok(Some(gain)) = db.saved_state_get::<f64>(LEGACY_VOLUME_KEY) else {
+        return 1.0;
+    };
+    let v = crate::audio::backend::gain_to_volume(gain);
+    let _ = db.saved_state_set(VOLUME_KEY, &v, clock);
+    v
+}
+
 fn load_registry_customisation(registry: &mut ActionRegistry, settings: &Settings) {
     let mut c = crate::actions::ActionCustomisation::default();
     if let Some(map) = settings.get(keys::SHORTCUTS).as_object() {

@@ -640,9 +640,11 @@ impl Actor {
             self.log("debug", format!("set_volume: {e}"));
         }
         if persist {
-            let _ = self
-                .db
-                .saved_state_set("volume", &volume, self.clock.as_ref());
+            let _ = self.db.saved_state_set(
+                crate::core::actor::VOLUME_KEY,
+                &volume,
+                self.clock.as_ref(),
+            );
         }
         self.emit_transport();
     }

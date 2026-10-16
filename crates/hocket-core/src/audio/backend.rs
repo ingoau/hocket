@@ -173,21 +173,36 @@ pub fn clamp_volume(volume: f64) -> f64 {
 }
 
 /// Loudness range the volume slider spans, in dB.
-const VOLUME_RANGE_DB: f64 = 60.0;
+const VOLUME_RANGE_DB: f64 = 50.0;
 /// Below this slider position the gain tapers linearly to silence.
 const VOLUME_TAPER: f64 = 0.1;
 
+fn db_curve(volume: f64) -> f64 {
+    10f64.powf((volume - 1.0) * VOLUME_RANGE_DB / 20.0)
+}
+
 /// Map a volume slider position (0–1) to an amplitude gain on a log (dB)
 /// scale, so equal slider steps sound like equal changes in loudness: the
-/// slider spans -60 dB to 0 dB, tapering linearly to silence over its
+/// slider spans -50 dB to 0 dB, tapering linearly to silence over its
 /// bottom tenth so 0 is mute.
 pub fn volume_to_gain(volume: f64) -> f64 {
     let v = clamp_volume(volume);
-    let db = |v: f64| 10f64.powf((v - 1.0) * VOLUME_RANGE_DB / 20.0);
     if v >= VOLUME_TAPER {
-        db(v)
+        db_curve(v)
     } else {
-        db(VOLUME_TAPER) * v / VOLUME_TAPER
+        db_curve(VOLUME_TAPER) * v / VOLUME_TAPER
+    }
+}
+
+/// The inverse of [`volume_to_gain`]: the slider position that plays at
+/// `gain`.
+pub fn gain_to_volume(gain: f64) -> f64 {
+    let g = clamp_volume(gain);
+    let floor = db_curve(VOLUME_TAPER);
+    if g >= floor {
+        (1.0 + 20.0 * g.log10() / VOLUME_RANGE_DB).clamp(0.0, 1.0)
+    } else {
+        g / floor * VOLUME_TAPER
     }
 }
 
@@ -219,14 +234,14 @@ mod tests {
         assert_eq!(volume_to_gain(f64::NAN), 1.0);
         assert_eq!(volume_to_gain(2.0), 1.0);
         assert_eq!(volume_to_gain(-1.0), 0.0);
-        // Halfway is -30 dB.
+        // Halfway is -25 dB.
         let half_db = 20.0 * volume_to_gain(0.5).log10();
-        assert!((half_db + 30.0).abs() < 1e-9, "{half_db}");
-        // Each tenth above the taper is a constant 6 dB.
+        assert!((half_db + 25.0).abs() < 1e-9, "{half_db}");
+        // Each tenth above the taper is a constant 5 dB.
         for i in 1..10 {
             let a = volume_to_gain(f64::from(i) / 10.0);
             let b = volume_to_gain(f64::from(i + 1) / 10.0);
-            assert!((20.0 * (b / a).log10() - 6.0).abs() < 1e-9);
+            assert!((20.0 * (b / a).log10() - 5.0).abs() < 1e-9);
         }
     }
 
@@ -238,7 +253,18 @@ mod tests {
             assert!(g > last, "not increasing at {i}");
             last = g;
         }
-        let below = volume_to_gain(VOLUME_TAPER - 1e-12);
-        assert!((below - volume_to_gain(VOLUME_TAPER)).abs() < 1e-9);
+        let below = volume_to_gain(VOLUME_TAPER - 1e-9);
+        let at = volume_to_gain(VOLUME_TAPER);
+        assert!((below - at).abs() / at < 1e-6, "{below} vs {at}");
+    }
+
+    #[test]
+    fn gain_to_volume_inverts_volume_to_gain() {
+        for i in 0..=1000 {
+            let v = f64::from(i) / 1000.0;
+            let back = gain_to_volume(volume_to_gain(v));
+            assert!((back - v).abs() < 1e-9, "{v} -> {back}");
+        }
+        assert_eq!(gain_to_volume(f64::NAN), 1.0);
     }
 }

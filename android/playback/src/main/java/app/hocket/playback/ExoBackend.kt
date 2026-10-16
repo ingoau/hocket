@@ -58,7 +58,8 @@ import kotlin.math.pow
  *   OS/HTTP cache makes it start fast, which is the point of the pre-buffer.
  * - `gain_db` is applied as `player.volume = 10^(gain/20) * masterVolume`, clamped to 1.0. Media3 has
  *   no gain stage, so positive gain is an approximation (it cannot amplify) and ReplayGain-style
- *   attenuation is exact.
+ *   attenuation is exact. `masterVolume` is already an amplitude gain: the core maps the volume
+ *   slider onto a dB scale before sending it.
  * - Audio focus and becoming-noisy are handled by ExoPlayer; focus loss is reported as
  *   `AudioFocusLost` (transient when Media3 reports a suppression reason instead of a pause: ExoPlayer
  *   then resumes by itself when focus returns and reports `Playing`).

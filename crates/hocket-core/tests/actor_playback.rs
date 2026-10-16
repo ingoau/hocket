@@ -649,3 +649,52 @@ async fn play_next_on_several_upcoming_items_moves_each_of_them() {
     t.run_for(500.0).await;
     assert_eq!(ids(&t.queue().await), ["t3", "t1", "t2"]);
 }
+
+async fn snapshot_volume(t: &TestCore) -> f64 {
+    match t.query(Query::Snapshot).await {
+        QueryResult::SnapshotResult(s) => s.transport.volume,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_volume_slider_reaches_the_backend_on_a_db_scale() {
+    let t = TestCore::start("vol", seeded_server(1, 200.0)).await;
+    t.run(Command::SetVolume { volume: 0.5 }).await;
+    // The slider position is what the UI sees; the backend gets the gain.
+    assert_eq!(snapshot_volume(&t).await, 0.5);
+    let want = hocket_core::audio::backend::volume_to_gain(0.5);
+    assert!((t.backend.volume() - want).abs() < 1e-12);
+    // Halfway is -25 dB, not -6 dB.
+    assert!((20.0 * t.backend.volume().log10() + 25.0).abs() < 1e-9);
+
+    // The slider position survives a restart, and so does the gain.
+    let t = t.restart("vol").await;
+    assert_eq!(snapshot_volume(&t).await, 0.5);
+    assert!((t.backend.volume() - want).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn a_volume_saved_as_a_linear_gain_keeps_its_loudness() {
+    let t = TestCore::start("legacy", seeded_server(1, 200.0)).await;
+    t.core.shutdown().await;
+    let db = t.open_db();
+    db.saved_state_delete("volumeSlider").unwrap();
+    db.saved_state_set("volume", &0.25, &hocket_core::util::WallClock)
+        .unwrap();
+    drop(db);
+
+    let t = t.restart("legacy").await;
+    // Same loudness as before the upgrade: a gain of 0.25 (about -12 dB).
+    assert!(
+        (t.backend.volume() - 0.25).abs() < 1e-9,
+        "{}",
+        t.backend.volume()
+    );
+    let slider = snapshot_volume(&t).await;
+    assert!((slider - hocket_core::audio::backend::gain_to_volume(0.25)).abs() < 1e-12);
+    // Migrated once: a later change is saved and read back under the new key.
+    t.run(Command::SetVolume { volume: 0.9 }).await;
+    let t = t.restart("legacy").await;
+    assert_eq!(snapshot_volume(&t).await, 0.9);
+}
