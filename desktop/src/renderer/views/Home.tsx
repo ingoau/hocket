@@ -9,6 +9,7 @@ import { openContextMenu, openItemsMenu, openItemsMenuFromButton } from "../comp
 import { Tile, TileList } from "../components/Tile";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
+import { BrandTile } from "../components/BrandTile";
 import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
@@ -84,7 +85,7 @@ export function Home() {
       <div className="home-layout">
         <div className="home-main">
           <div className="view-header">
-            <h1>{t("home.title")}</h1>
+            <h1 className="brand-lockup"><BrandTile /><span aria-hidden="true">hocket</span><span className="sr-only">{t("home.title")}</span></h1>
             {sync && !sync.finished ? <span className="badge">{t("sync.syncing", { phase: sync.phase })}</span> : null}
             <div className="actions">
               <button type="button" className={`btn ${customising ? "primary" : "tonal"}`} aria-pressed={customising} onClick={() => setCustomising((c) => !c)} data-testid="home-customise"><Icon name="tune" size={14} /> {t("home.customise")}</button>
@@ -119,14 +120,12 @@ function Section({ pref, onEmpty, menu }: { pref: SectionPref; onEmpty: (empty: 
   useEffect(() => onEmpty(empty), [empty]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!data.ready || empty) return null;
   const title = data.title ?? t(`home.section.${id}` as never);
-  const eyebrow = data.eyebrow;
   const headingId = `home-${id}`;
   const items = menu(title);
   return (
     <section className="home-section" aria-labelledby={headingId} data-testid={`home-section-${id}`}>
       <div className="home-section-head" onContextMenu={(e) => openItemsMenu(e, items)}>
         <div className="grow">
-          {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
           <h2 className="section-heading" id={headingId}>{title}</h2>
         </div>
         <button type="button" className="btn icon section-more" aria-label={t("home.sectionOptions", { title })} onClick={(e) => openItemsMenuFromButton(e, items)} data-testid={`home-section-more-${id}`}><Icon name="more" size={18} /></button>
@@ -184,7 +183,6 @@ interface SectionData {
   ready: boolean;
   items: Item[];
   title?: string;
-  eyebrow?: string;
   listening?: { totalMs: number; byWeekday: number[]; onOpen: () => void };
 }
 
@@ -246,19 +244,19 @@ function useSectionData(id: HomeSectionId): SectionData {
 
   switch (id) {
     case "rediscover":
-      return { ready: !!rediscover.data, items: trackItems((rediscover.data?.items ?? []).map(toSummary), t("home.section.rediscover")), eyebrow: t("home.section.rediscover.eyebrow") };
+      return { ready: !!rediscover.data, items: trackItems((rediscover.data?.items ?? []).map(toSummary), t("home.section.rediscover")) };
     case "filters":
       return { ready: true, items: filters.slice(0, SECTION_ITEMS).map(filterItem) };
     case "favouriteArtists":
-      return { ready: !!stats, items: (stats?.topArtists ?? []).slice(0, SECTION_ITEMS).map(artistItem), eyebrow: t("home.section.favouriteArtists.eyebrow") };
+      return { ready: !!stats, items: (stats?.topArtists ?? []).slice(0, SECTION_ITEMS).map(artistItem) };
     case "topGenre":
-      return { ready: !!stats && (!genre || !!genreAlbums.data), items: (genreAlbums.data?.items ?? []).map(albumItem), title: genre, eyebrow: t("home.section.topGenre.eyebrow") };
+      return { ready: !!stats && (!genre || !!genreAlbums.data), items: (genreAlbums.data?.items ?? []).map(albumItem), title: genre ? t("home.section.topGenre.named", { genre }) : undefined };
     case "newInLibrary":
-      return { ready: !!newest.data, items: (newest.data?.items ?? []).map(albumItem), eyebrow: t("home.section.newInLibrary.eyebrow") };
+      return { ready: !!newest.data, items: (newest.data?.items ?? []).map(albumItem) };
     case "moreFromArtist":
-      return { ready: !!stats && (!topArtist || !!artistSongs.data), items: trackItems((artistSongs.data ?? []).map(toSummary), topArtist?.name ?? ""), title: topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : undefined, eyebrow: t("home.section.moreFromArtist.eyebrow") };
+      return { ready: !!stats && (!topArtist || !!artistSongs.data), items: trackItems((artistSongs.data ?? []).map(toSummary), topArtist?.name ?? ""), title: topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : undefined };
     case "onRepeat":
-      return { ready: !!stats, items: (stats?.topAlbums ?? []).slice(0, SECTION_ITEMS).map(albumItem), eyebrow: t("home.section.onRepeat.eyebrow") };
+      return { ready: !!stats, items: (stats?.topAlbums ?? []).slice(0, SECTION_ITEMS).map(albumItem) };
     case "recentlyPlayed":
       return { ready: !!history.data && recentAlbums.ready, items: recentAlbums.albums.map(albumItem) };
     case "recentQueues":

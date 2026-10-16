@@ -283,7 +283,6 @@
 .home-section { margin-bottom: 28px; }
 .home-section-head { display: flex; align-items: flex-end; gap: 8px; margin: 0 0 10px var(--page-title-inset); }
 .home-section-head .section-heading { margin: 0; }
-.home-section-head .eyebrow { font-size: var(--fs-sm); font-weight: 600; color: var(--fg-muted); margin-bottom: 2px; }
 .home-section-head .section-more { opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
 .home-section-head:hover .section-more, .home-section-head:focus-within .section-more { opacity: 1; }
 .home-section .grid { --tile-w: 168px; }
@@ -341,19 +340,78 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .menu .menu-heading { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* ---- Library: browse tiles + Recently added -------------------------------- */
-.lib-browse { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px; }
+/* Browse and the links below it are one connected group: 3px apart, tight corners where tiles meet,
+   large ones only at the group's outer corners (top here, bottom on the links). */
+.lib-browse { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; margin: 8px 0 0; }
 .lib-tile { grid-column: span 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; height: 132px; border: 0; border-radius: var(--shape-xl); padding: 16px; background: var(--surface-tonal); color: var(--fg); text-align: left; transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
 .lib-tile:hover { background: var(--selection); }
 .lib-tile:active { border-radius: var(--shape-lg); }
+.lib-browse .lib-tile { border-radius: 6px; }
+.lib-browse .lib-tile:first-child { border-top-left-radius: 28px; }
+.lib-browse .lib-tile:last-child { border-top-right-radius: 28px; }
+.lib-browse .lib-tile:hover { border-radius: 18px; }
 .lib-tile.wide { grid-column: span 2; background: var(--accent); color: var(--accent-fg); }
 .lib-tile.wide:hover { filter: brightness(1.06); }
-.lib-tile.artists { border-radius: var(--shape-xl) var(--shape-xl) var(--shape-xl) 56px; }
+/* The Albums tile's art: the three most played covers fanned out at its right, the first on top. */
+.lib-tile.wide { position: relative; overflow: hidden; }
+.lib-fan { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 132px; height: 80px; pointer-events: none; }
+.lib-fan .lib-fan-cover { position: absolute; top: 6px; width: 68px; height: 68px; border-radius: 10px; box-shadow: var(--shadow-2); object-fit: cover; }
+.lib-fan .n0 { left: 0; transform: rotate(-8deg); z-index: 3; }
+.lib-fan .n1 { left: 32px; transform: rotate(4deg); z-index: 2; }
+.lib-fan .n2 { left: 64px; transform: rotate(12deg); z-index: 1; }
+@media (max-width: 1100px) { .lib-fan { display: none; } }
 .lib-tile-icon { display: grid; place-items: center; width: 44px; height: 44px; clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }
 .lib-tile.wide .lib-tile-icon { background: rgba(255, 255, 255, 0.18); color: inherit; }
 .lib-tile-label { font-size: var(--fs-lg); font-weight: 700; }
-.lib-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
+/* The links: an M3 Expressive connected group. Tonal tiles 3px apart, large corners at the group's
+   ends and tight ones where tiles meet; each icon sits in its own shape. One row when there's room,
+   a stacked list on a narrow window. */
+.lib-links { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; margin: 3px 0 28px; }
+.lib-link {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; min-height: 92px; padding: 12px 14px; border: 0;
+  border-radius: 6px; background: var(--surface-tonal); color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; text-align: left; cursor: pointer;
+  transition: border-radius var(--dur-spring) var(--spring-fast), background var(--dur-short) var(--ease-emphasized);
+}
+.lib-link:first-child { border-radius: 6px 6px 6px 24px; }
+.lib-link:last-child { border-radius: 6px 6px 24px 6px; }
+.lib-link:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface-tonal)); border-radius: 18px; }
+.lib-link:active { border-radius: 12px; }
+.lib-link:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.lib-link-icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; background: var(--accent-soft); color: var(--accent-text); }
+.lib-link-icon.cookie { clip-path: var(--lib-cookie-9); }
+.lib-link-icon.sunny { clip-path: var(--lib-cookie-12); }
+.lib-link-icon.pill { width: 48px; height: 32px; border-radius: var(--shape-full); }
+.lib-link-icon.circle { border-radius: 50%; }
+.lib-link-icon.squircle { border-radius: 30%; transform: rotate(12deg); }
+.lib-link-icon.squircle > * { transform: rotate(-12deg); }
+.lib-link > .truncate { max-width: 100%; }
+@media (max-width: 760px) {
+  .lib-links { grid-template-columns: minmax(0, 1fr); }
+  .lib-link { flex-direction: row; align-items: center; justify-content: flex-start; min-height: 64px; }
+  .lib-link:first-child { border-radius: 6px; }
+  .lib-link:last-child { border-radius: 6px 6px 24px 24px; }
+}
+@media (prefers-reduced-motion: reduce) { .lib-link { transition: none; } }
+
+/* The word mark's type (docs/brand.md): Unbounded 500, bundled (font-src 'self'), licence beside it. */
+@font-face {
+  font-family: "Unbounded";
+  src: url("../assets/fonts/unbounded.ttf") format("truetype");
+  font-weight: 200 900;
+  font-display: block;
+}
+.view-header h1.brand-type, .view-header h1.brand-lockup { font-family: "Unbounded", var(--font-ui); font-weight: 500; letter-spacing: -0.03em; }
+/* Home's header: the app tile, then "hocket" lowercase in the word mark's ink, at the Library title's
+   size (tile 1.15em, gap 0.3em). */
+.view-header h1.brand-lockup { display: inline-flex; align-items: center; gap: 0.3em; color: #1B1730; }
+.brand-lockup .brand-tile { width: 1.15em; height: 1.15em; flex: 0 0 auto; }
+:root[data-theme="dark"] .view-header h1.brand-lockup { color: #ECE9FF; }
 .lib-recent-head { display: flex; align-items: baseline; justify-content: space-between; margin-right: var(--page-title-inset); }
-@media (max-width: 900px) { .lib-browse { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 3; } }
+@media (max-width: 900px) {
+  .lib-browse { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 3; }
+  .lib-browse .lib-tile:first-child { border-radius: 28px 28px 6px 6px; }
+  .lib-browse .lib-tile:last-child { border-radius: 6px; }
+}
 
 /* ---- Sidebar pins (library.pins) ------------------------------------------- */
 .sidebar .nav-item.pin-item { height: 44px; padding: 0 12px 0 8px; }
@@ -367,6 +425,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .pin-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pin-kind { font-size: var(--fs-xs); color: var(--fg-faint); font-weight: 500; }
 .sidebar-pins-empty { padding: 2px 16px 8px; margin: 0; }
+.sidebar-pins-gap { height: 14px; }
 
 /* The icon rail (below 900 CSS px): pins are their thumbnails alone, as places are their icons. */
 @media (max-width: 900px) {

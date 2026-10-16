@@ -47,11 +47,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import androidx.annotation.StringRes
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.NavItem
 import app.hocket.ui.nav.icon
@@ -89,6 +85,19 @@ import app.hocket.ui.components.TrackRowSkeleton
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.Dp
 import app.hocket.ui.nav.Route
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.toShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
 fun sortLabel(sort: SortOrder): String = when (sort) {
@@ -364,20 +373,42 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     }
 }
 
-/** Links from the Library to the places its lists don't cover: recent queues, downloads, filters, statistics. */
+/**
+ * Links from the Library to the places its lists don't cover: recent queues, downloads, filters,
+ * statistics. An M3 Expressive connected group: four tonal tiles in a 2×2 block, large corners
+ * outside and tight ones where the tiles meet, each with its icon in a shape. [joinedAbove]: the
+ * group carries on from tiles above it (the Library's Browse), so only its bottom corners are large.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-internal fun LibraryLinks(nav: NavHostController) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp).testTag("library.links"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        listOf(NavItem.RecentQueues to Route.SavedQueues, NavItem.Downloads to Route.Downloads, NavItem.Filters to Route.Filters, NavItem.Stats to Route.Stats).forEach { (item, route) ->
-            AssistChip(
-                onClick = { nav.navigate(route) { launchSingleTop = true } },
-                label = { Text(item.label()) },
-                leadingIcon = { Icon(item.icon(false), null, Modifier.size(AssistChipDefaults.IconSize)) },
-                modifier = Modifier.testTag("library.link.${item.id}"),
-            )
+internal fun LibraryLinks(nav: NavHostController, joinedAbove: Boolean = false) {
+    val links = listOf(
+        Triple(NavItem.RecentQueues, Route.SavedQueues, MaterialShapes.Cookie6Sided),
+        Triple(NavItem.Downloads, Route.Downloads, MaterialShapes.Pill),
+        Triple(NavItem.Filters, Route.Filters, MaterialShapes.Clover4Leaf),
+        Triple(NavItem.Stats, Route.Stats, MaterialShapes.Sunny),
+    )
+    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+        links.chunked(2).forEachIndexed { r, row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                row.forEachIndexed { c, (item, route, iconShape) ->
+                    val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == 1, start = c == 0, end = c == 1)
+                    Surface(
+                        onClick = { nav.navigate(route) { launchSingleTop = true } },
+                        shape = shape,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, iconShape.toShape()), contentAlignment = Alignment.Center) {
+                                Icon(item.icon(false), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
         }
     }
 }

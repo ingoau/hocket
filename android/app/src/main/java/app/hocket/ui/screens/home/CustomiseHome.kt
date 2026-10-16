@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -69,7 +70,8 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
             Text(stringResource(R.string.home_customise), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Text(stringResource(R.string.home_customise_sync), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
             Spacer(Modifier.height(8.dp))
-            LazyColumn(Modifier.weight(1f, fill = false)) {
+            val list = rememberLazyListState()
+            LazyColumn(Modifier.weight(1f, fill = false), state = list) {
                 items(known, key = { it.id }) { pref ->
                     val section = pref.section ?: return@items
                     val title = stringResource(section.title)
@@ -101,7 +103,8 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                     }
                 }
             }
-            HorizontalDivider()
+            // The edge between the list and Reset only shows while there's more list under it.
+            if (list.canScrollForward) HorizontalDivider()
             TextButton(onClick = { save(HomeSections.DEFAULT) }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { Text(stringResource(R.string.home_customise_reset)) }
         }
     }
@@ -129,7 +132,6 @@ fun SectionMenuSheet(pref: SectionPref, title: String, onDismiss: () -> Unit, on
         Column(Modifier.navigationBarsPadding()) {
             Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Spacer(Modifier.height(8.dp))
-            HorizontalDivider()
             Item(stringResource(R.string.home_section_move_up), enabled = i > 0, rotateIcon = true, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, -1)); onDismiss() }
             Item(stringResource(R.string.home_section_move_down), enabled = i in 0 until shown.lastIndex, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, 1)); onDismiss() }
             if (section.styles.size > 1) {

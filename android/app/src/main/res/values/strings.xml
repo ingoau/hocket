@@ -788,6 +788,7 @@
     <string name="home_section_more_from_artist">More from an artist you play a lot</string>
     <string name="home_section_more_from_artist_desc">Top songs from the artist you play most lately</string>
     <string name="home_section_more_from_named">More from %1$s</string>
+    <string name="home_section_top_genre_named">More %1$s</string>
     <string name="home_section_on_repeat">On repeat</string>
     <string name="home_section_on_repeat_desc">The albums you play most lately</string>
     <string name="home_section_recently_played">Recently played</string>
@@ -796,12 +797,6 @@
     <string name="home_section_recent_queues_desc">Queues you saved</string>
     <string name="home_section_stats">Your listening</string>
     <string name="home_section_stats_desc">Time listened in the last week</string>
-    <string name="home_eyebrow_rediscover">Loved, not played in three months</string>
-    <string name="home_eyebrow_favourite_artists">Most played this month</string>
-    <string name="home_eyebrow_top_genre">A genre you\'ve been playing</string>
-    <string name="home_eyebrow_more_from_artist">An artist you play a lot</string>
-    <string name="home_eyebrow_new">Recently added</string>
-    <string name="home_eyebrow_on_repeat">Most played this month</string>
     <string name="home_stats_listened">listened in the last 7 days</string>
     <string name="home_stats_open">Open statistics</string>
     <string name="home_stats_hours">%1$d h %2$d min</string>
@@ -816,10 +811,8 @@
     <string name="kind_filter">Filter</string>
     <string name="kind_saved_queue">Saved queue</string>
     <!-- Library pins (library.pins) -->
-    <string name="library_pinned">Pinned</string>
     <string name="library_pins_edit">Edit</string>
     <string name="library_pins_done">Done</string>
-    <string name="library_browse">Browse</string>
     <string name="library_recently_added">Recently added</string>
     <string name="library_newest_first">Newest first</string>
     <string name="library_pin_empty">Pin albums, artists, playlists, songs, genres or filters from their menus to keep them here.</string>

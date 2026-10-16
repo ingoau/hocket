@@ -116,8 +116,8 @@ fun ActionSheet(
             Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp)) }
             Spacer(Modifier.height(8.dp))
-            extraTop?.invoke()
-            HorizontalDivider()
+            // A divider only between the extra controls and the actions; under the title, the gap is enough.
+            extraTop?.let { it(); HorizontalDivider() }
             LazyColumn {
                 // Individual rateN entries collapse into one "Rate" row (the dialog picks the stars).
                 val visible = (actions ?: emptyList()).withoutIdlePins().filter { a -> !(a.id.matches(Regex("rate[0-5]")) && a.id != ActionIds.rate(0)) || a.id == ActionIds.rate(5) }

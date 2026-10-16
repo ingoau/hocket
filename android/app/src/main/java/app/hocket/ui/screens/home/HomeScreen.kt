@@ -38,8 +38,9 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import app.hocket.ui.brand.HeaderLockup
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -106,7 +107,7 @@ private val CellWidth = 150.dp
  * tune button, the button under the sections, or a section's own menu) switches sections on and
  * off, orders them and picks how each is shown.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun HomeScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
@@ -131,7 +132,7 @@ fun HomeScreen(nav: NavHostController) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
-    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
+    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val hiddenLabel = stringResource(R.string.home_section_hidden, "%s")
     val undoLabel = stringResource(R.string.action_undo)
     fun hide(pref: SectionPref, title: String) {
@@ -145,9 +146,9 @@ fun HomeScreen(nav: NavHostController) {
     }
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
-        // No title: the tab already says where you are, and the server is in the account sheet (#29).
+        // The app's lockup as the title, at the Library header's size; the server is in the account sheet (#29).
         topBar = {
-            TopAppBar(title = {}, actions = {
+            MediumFlexibleTopAppBar(title = { HeaderLockup() }, actions = {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()
@@ -179,8 +180,8 @@ fun HomeScreen(nav: NavHostController) {
                     if (empty) return@forEach
                     any = true
                     item(key = "h.${pref.id}", contentType = "sectionHeader") {
-                        val (title, eyebrow) = sectionTitle(section, content)
-                        HomeSectionHeader(title, eyebrow, Modifier.animateItem().testTag("home.section.${pref.id}"), moreTag = "home.section.${pref.id}.more", onMenu = { sectionMenu = pref })
+                        val title = sectionTitle(section, content)
+                        HomeSectionHeader(title, Modifier.animateItem().testTag("home.section.${pref.id}"), moreTag = "home.section.${pref.id}.more", onMenu = { sectionMenu = pref })
                     }
                     item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
                         Box(Modifier.animateItem()) {
@@ -210,7 +211,7 @@ fun HomeScreen(nav: NavHostController) {
     sectionMenu?.let { pref ->
         val section = pref.section
         if (section != null) {
-            val title = feed?.get(section)?.let { sectionTitle(section, it).first } ?: stringResource(section.title)
+            val title = feed?.get(section)?.let { sectionTitle(section, it) } ?: stringResource(section.title)
             SectionMenuSheet(pref, title, onDismiss = { sectionMenu = null }, onHide = { hide(pref, title) }, onCustomise = { customising = true })
         }
     }
@@ -229,22 +230,18 @@ class HomeSheets {
     var filter by mutableStateOf<Filter?>(null)
 }
 
-/** A section's title and the line above it: the topic where the section has one ("Indie rock"). */
+/** A section's title: its topic where it has one ("More from Theo Lund", "More Indie rock"). */
 @Composable
-private fun sectionTitle(section: HomeSection, content: SectionContent): Pair<String, String?> = when (section) {
-    HomeSection.TopGenre -> (content.title ?: stringResource(section.title)) to stringResource(R.string.home_eyebrow_top_genre)
-    HomeSection.MoreFromArtist -> (content.title?.let { stringResource(R.string.home_section_more_from_named, it) } ?: stringResource(section.title)) to stringResource(R.string.home_eyebrow_more_from_artist)
-    HomeSection.Rediscover -> stringResource(section.title) to stringResource(R.string.home_eyebrow_rediscover)
-    HomeSection.FavouriteArtists -> stringResource(section.title) to stringResource(R.string.home_eyebrow_favourite_artists)
-    HomeSection.NewInLibrary -> stringResource(section.title) to stringResource(R.string.home_eyebrow_new)
-    HomeSection.OnRepeat -> stringResource(section.title) to stringResource(R.string.home_eyebrow_on_repeat)
-    else -> stringResource(section.title) to null
+private fun sectionTitle(section: HomeSection, content: SectionContent): String = when (section) {
+    HomeSection.TopGenre -> content.title?.let { stringResource(R.string.home_section_top_genre_named, it) } ?: stringResource(section.title)
+    HomeSection.MoreFromArtist -> content.title?.let { stringResource(R.string.home_section_more_from_named, it) } ?: stringResource(section.title)
+    else -> stringResource(section.title)
 }
 
-/** A section's header: the topic (and the line above it), long-press or the menu button for its options. */
+/** A section's header: its title, long-press or the menu button for its options. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HomeSectionHeader(title: String, eyebrow: String?, modifier: Modifier = Modifier, moreTag: String? = null, onMenu: () -> Unit) {
+private fun HomeSectionHeader(title: String, modifier: Modifier = Modifier, moreTag: String? = null, onMenu: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val options = stringResource(R.string.home_section_options, title)
     // Long-press anywhere on the header opens its menu; the menu button is the labelled way in.
@@ -252,12 +249,9 @@ private fun HomeSectionHeader(title: String, eyebrow: String?, modifier: Modifie
         modifier.fillMaxWidth()
             .pointerInput(onMenu) { detectTapGestures(onLongPress = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() }) }
             .heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 16.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.Bottom,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
-            eyebrow?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics { heading() })
         IconButton(onClick = onMenu, modifier = if (moreTag != null) Modifier.testTag(moreTag) else Modifier) { Icon(HocketIcons.Filled.MoreVert, options, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }

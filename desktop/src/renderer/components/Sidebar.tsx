@@ -57,7 +57,9 @@ export function Sidebar() {
             <span>{it.label}</span>
           </a>
         ))}
-        <div className="section-title sidebar-pins-title">{t("library.pinned")}</div>
+        {/* No visible "Pinned" title (the pins' thumbnails say it); a gap, and the name for screen readers. */}
+        <div className="sidebar-pins-gap" role="presentation" />
+        <div className="sr-only">{t("library.pinned")}</div>
         {pins && !pins.length ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
         {(pins ?? []).map((rp) => {
           const active = isPinActive(rp);

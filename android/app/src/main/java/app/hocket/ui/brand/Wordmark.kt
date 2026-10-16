@@ -24,6 +24,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
 import app.hocket.R
@@ -38,6 +48,20 @@ import app.hocket.R
 object Brand {
     /** The word mark's ink on dark grounds. */
     val inkOnDark = Color(0xFFECE9FF)
+
+    /** The word mark's ink on light grounds (the tile gradient's bottom stop). */
+    val inkOnLight = Color(0xFF1B1730)
+
+    /** The two voices: notes 1 and 3, then 2 and 4. */
+    internal val voice1 = Color(0xFFE4DFFF)
+    internal val voice2 = Color(0xFF8F80F5)
+
+    /** The tile's gradient, top to bottom. */
+    internal val tileTop = Color(0xFF2A2447)
+    internal val tileBottom = Color(0xFF1B1730)
+
+    /** The tile's corner radius as a fraction of its side. */
+    internal const val TILE_CORNER = 0.2245f
 
     /** Unbounded at every weight its axis has (200–900). */
     val unbounded = FontFamily(
@@ -102,6 +126,59 @@ fun Lockup(fontSize: Dp, color: Color = Brand.inkOnDark, modifier: Modifier = Mo
                 lineHeight = sp,
                 lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
             ),
+        )
+    }
+}
+
+/** The app icon: the Crescendo wave in its two voices on the rounded, gradient tile, [size] square. */
+@Composable
+fun AppTile(size: Dp, modifier: Modifier = Modifier) {
+    val paths = remember { Brand.notes.map { PathParser().parsePathString(it).toPath() } }
+    Canvas(modifier.size(size)) {
+        val side = this.size.minDimension
+        drawRoundRect(
+            brush = Brush.verticalGradient(listOf(Brand.tileTop, Brand.tileBottom)),
+            cornerRadius = CornerRadius(side * Brand.TILE_CORNER),
+        )
+        val k = side / 100f
+        scale(k, k, pivot = Offset.Zero) {
+            paths.forEachIndexed { i, p -> drawPath(p, if (i % 2 == 0) Brand.voice1 else Brand.voice2, style = Stroke(width = Brand.STROKE, cap = StrokeCap.Round)) }
+        }
+    }
+}
+
+/** The word mark's ink for the current theme's ground. */
+@Composable
+fun brandInk(): Color = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) Brand.inkOnDark else Brand.inkOnLight
+
+/**
+ * A page header set in the word mark's type: Unbounded 500 at the size of the surrounding title
+ * style (so a collapsing top bar resizes it), tracked −0.015em.
+ */
+@Composable
+fun brandTitleStyle(): TextStyle = LocalTextStyle.current.merge(
+    TextStyle(fontFamily = Brand.unbounded, fontWeight = FontWeight.Medium, letterSpacing = (-0.015).em),
+)
+
+/**
+ * The lockup as a page header (Home): the app tile, then "hocket" in the word mark, at the size of
+ * the surrounding title style (docs/brand.md: tile 1.15× the type size, gap 0.3×). It reads as the
+ * app's name, as one heading.
+ */
+@Composable
+fun HeaderLockup(modifier: Modifier = Modifier) {
+    val style = brandTitleStyle()
+    val name = stringResource(R.string.app_name)
+    val type = with(LocalDensity.current) { style.fontSize.toDp() }
+    Row(modifier.semantics(mergeDescendants = true) { contentDescription = name; heading() }, verticalAlignment = Alignment.CenterVertically) {
+        AppTile(size = type * 1.15f)
+        Spacer(Modifier.width(type * 0.3f))
+        Text(
+            "hocket",
+            color = brandInk(),
+            maxLines = 1,
+            style = style.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)),
+            modifier = Modifier.clearAndSetSemantics {},
         )
     }
 }

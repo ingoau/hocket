@@ -130,7 +130,6 @@ fun FilterMenuSheet(filter: Filter, nav: NavHostController, serverId: String, on
             Text(filter.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Text(stringResource(R.string.kind_filter), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(8.dp))
-            HorizontalDivider()
             SheetRow(stringResource(R.string.action_play), HocketIcons.Filled.PlayArrow) { onDismiss(); client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter))) }
             SheetRow(stringResource(R.string.action_shuffle), HocketIcons.Filled.Shuffle) { onDismiss(); client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter), shuffle = true)) }
             SheetRow(stringResource(R.string.filter_edit), HocketIcons.Filled.Tune) { onDismiss(); nav.navigate(Route.FilterBuilder(filter.id)) }
