@@ -152,16 +152,29 @@ fn never_is_always_a_card() {
 }
 
 #[test]
-fn a_face_rules_a_mirror_out_but_not_extending() {
+fn a_face_by_the_edge_rules_a_mirror_out_but_not_extending() {
+    // A close-up reaching into the zone a reflection shows sharply.
     let face = FaceRect {
         x: 0.3,
-        y: 0.2,
+        y: 0.5,
         w: 0.4,
-        h: 0.4,
+        h: 0.45,
     };
-    assert_ne!(
+    let l = soft_texture().layout(ImmersiveArtwork::Automatic, vec![face]);
+    assert_ne!(l.bottom.style, ArtworkStyle::Mirror);
+    // The top edge sees it well clear of it.
+    assert_eq!(l.top.style, ArtworkStyle::Mirror);
+    // A portrait whose chin ends clear of the edge (Halsey's Manic) mirrors: only the neck and
+    // shoulders reflect sharply.
+    let portrait = FaceRect {
+        x: 0.3,
+        y: 0.25,
+        w: 0.4,
+        h: 0.55,
+    };
+    assert_eq!(
         soft_texture()
-            .layout(ImmersiveArtwork::Automatic, vec![face])
+            .layout(ImmersiveArtwork::Automatic, vec![portrait])
             .bottom
             .style,
         ArtworkStyle::Mirror
