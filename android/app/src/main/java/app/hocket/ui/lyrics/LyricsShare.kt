@@ -269,7 +269,7 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
                     ShareOptions(
                         doc, selected, style,
                         onToggle = { selected = toggleSharedLine(selected, it) },
-                        onStyle = { style = it },
+                        onStyle = { change -> style = change(style) },
                         busy = busy,
                         onSave = {
                             withImage { bitmap ->
@@ -300,9 +300,10 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
 private fun Modifier.consumeTaps(): Modifier = pointerInput(Unit) { detectTapGestures { } }
 
 /**
- * The shareable card. Every size is relative to the card's width (a 320 dp reference), so the
- * exported image looks the same at any card size and ignores the font scale. Also recorded into
- * [layer] at [EXPORT_WIDTH_PX] wide (and drawn from it, scaled down): what Save and Share export.
+ * The shareable card. Every size is relative to the card's width (a 320 dp reference, 250 dp when
+ * tall), so the exported image looks the same at any card size and ignores the font scale. Also
+ * recorded into [layer] at [EXPORT_WIDTH_PX] wide (and drawn from it, scaled down): what Save and
+ * Share export.
  */
 @Composable
 internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: LyricsCardStyle, layer: GraphicsLayer?, modifier: Modifier = Modifier) {
@@ -323,7 +324,9 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
             // One node: the lines once, not the description and then each line again.
             .clearAndSetSemantics { contentDescription = cardLabel },
     ) {
-        val unit = maxWidth / 320.dp
+        // The tall card is narrower for its height: sized against a narrower reference, so its
+        // content is not lost in the space (the lines still shrink to fit).
+        val unit = maxWidth / if (style.shape == CardShape.Tall) 250.dp else 320.dp
         val density = LocalDensity.current
         fun textSize(dp: Dp) = with(density) { (dp * unit).toSp() }
         fun d(dp: Dp) = dp * unit
@@ -405,7 +408,7 @@ private fun ShareOptions(
     selected: Set<Int>,
     style: LyricsCardStyle,
     onToggle: (Int) -> Unit,
-    onStyle: (LyricsCardStyle) -> Unit,
+    onStyle: ((LyricsCardStyle) -> LyricsCardStyle) -> Unit,
     busy: Boolean,
     onSave: () -> Unit,
     onShare: () -> Unit,
@@ -440,19 +443,19 @@ private fun ShareOptions(
                 OptionRow(stringResource(R.string.lyrics_share_background)) {
                     ChoiceRow(
                         listOf(CardBackground.Artwork to stringResource(R.string.lyrics_share_background_artwork), CardBackground.Colour to stringResource(R.string.lyrics_share_background_colour)),
-                        isSelected = { it == style.background }, onSelect = { onStyle(style.copy(background = it)) },
+                        isSelected = { it == style.background }, onSelect = { v -> onStyle { it.copy(background = v) } },
                     )
                 }
                 OptionRow(stringResource(R.string.lyrics_share_align)) {
                     ChoiceRow(
                         listOf(CardAlign.Start to stringResource(R.string.lyrics_share_align_start), CardAlign.Centre to stringResource(R.string.lyrics_share_align_centre)),
-                        isSelected = { it == style.align }, onSelect = { onStyle(style.copy(align = it)) },
+                        isSelected = { it == style.align }, onSelect = { v -> onStyle { it.copy(align = v) } },
                     )
                 }
                 OptionRow(stringResource(R.string.lyrics_share_shape)) {
                     ChoiceRow(
                         listOf(CardShape.Square to stringResource(R.string.lyrics_share_shape_square), CardShape.Tall to stringResource(R.string.lyrics_share_shape_tall)),
-                        isSelected = { it == style.shape }, onSelect = { onStyle(style.copy(shape = it)) },
+                        isSelected = { it == style.shape }, onSelect = { v -> onStyle { it.copy(shape = v) } },
                     )
                 }
             }
