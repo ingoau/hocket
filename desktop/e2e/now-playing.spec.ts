@@ -32,6 +32,32 @@ async function handoff(page: Page, to: "remote" | "self"): Promise<void> {
 }
 
 test.describe("now playing", () => {
+  test("the volume control drives the device playing, each with its own level and mute", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const volume = page.getByTestId("volume");
+    const mute = page.getByTestId("mute");
+    await expect(volume).toHaveAttribute("aria-label", "Volume");
+    const own = Number(await volume.inputValue());
+    // Another device plays: the slider is that device's, under its name.
+    await handoff(page, "remote");
+    await expect(volume).toHaveAttribute("aria-label", /^Volume – .+/);
+    await volume.fill("0.3");
+    await expect.poll(async () => Number(await volume.inputValue())).toBe(0.3);
+    // Mute keeps the remote device's level for the unmute.
+    await mute.click();
+    await expect(mute).toHaveAttribute("aria-pressed", "true");
+    await expect(volume).toHaveAttribute("aria-valuetext", "Muted");
+    await mute.click();
+    await expect(mute).toHaveAttribute("aria-pressed", "false");
+    await expect.poll(async () => Number(await volume.inputValue())).toBe(0.3);
+    // Back here: this device's own level, untouched.
+    await handoff(page, "self");
+    await expect(volume).toHaveAttribute("aria-label", "Volume");
+    await expect.poll(async () => Number(await volume.inputValue())).toBe(own);
+  });
+
   test("the side panel opens on the overview and drills into lyrics, the queue and about, with a way back", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

@@ -140,7 +140,9 @@
   position: absolute; right: -6px; bottom: calc(100% + 14px); display: flex; align-items: center; gap: 8px; width: 280px; padding: 10px 18px 10px 10px; border-radius: var(--shape-full);
   background: rgba(20, 20, 24, 0.86); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); box-shadow: var(--shadow-2), var(--shadow); color: #fff; --fg: #fff;
 }
-.np-volume-pop { transform-origin: 90% 100%; }
+.np-volume-pop { transform-origin: 90% 100%; flex-wrap: wrap; row-gap: 2px; }
+/* Another device plays: the popover names it. */
+.np-volume-device { flex-basis: 100%; padding: 2px 8px 0; font-size: 12px; color: rgba(255, 255, 255, 0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .np-volume-pop.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
 .np-volume-pop.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 

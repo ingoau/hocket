@@ -59,7 +59,7 @@ import { extractBrightest } from "../lib/accent";
 import { scrimAlpha } from "../lib/contrast";
 import { SK } from "@shared/settings-keys";
 import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
-import { volumeValueText } from "../lib/a11y";
+import { useVolumeControl } from "../lib/volume";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 
 type Pane = Exclude<NowPlayingMode, "art">;
@@ -499,16 +499,12 @@ function ImmersiveContinuation({ img, edge, orientation, controls, split = false
  * over a native range input, so keys and assistive tech work as usual.
  */
 function NpVolume({ open, setOpen }: { open: boolean; setOpen: (open: boolean) => void }) {
-  const volume = useApp((s) => s.transport.volume);
-  const [muted, setMuted] = useState<number | undefined>(undefined);
+  const v = useVolumeControl();
+  const silent = v.muted || v.shown === 0;
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const pop = usePresence(open || undefined, popRef);
-  const set = (v: number) => bridge().dispatch({ type: "setVolume", data: { volume: v } });
-  const toggle = () => {
-    if (muted !== undefined) { set(muted); setMuted(undefined); } else { setMuted(volume); set(0); }
-  };
   useEffect(() => {
     if (!open) return;
     wrap.current?.querySelector<HTMLInputElement>('input[type="range"]')?.focus({ preventScroll: true });
@@ -516,22 +512,14 @@ function NpVolume({ open, setOpen }: { open: boolean; setOpen: (open: boolean) =
     window.addEventListener("mousedown", down, true);
     return () => window.removeEventListener("mousedown", down, true);
   }, [open, setOpen]);
-  // Arrows move 5 %, Page keys 20 %, like the player bar's.
-  const onKey = (e: React.KeyboardEvent) => {
-    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : e.key === "PageUp" ? 0.2 : e.key === "PageDown" ? -0.2 : 0;
-    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setMuted(undefined);
-    set(Math.round(Math.max(0, Math.min(1, volume + step)) * 100) / 100);
-  };
   return (
     <div ref={wrap} className="np-volume-wrap" onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
-      <button ref={button} type="button" className={`np-mode ${open ? "on" : ""}`} aria-expanded={open} aria-haspopup="dialog" aria-label={t("nowPlaying.volume")} title={t("nowPlaying.volume")} onClick={() => setOpen(!open)} data-testid="fs-pill-volume"><Icon name={volume === 0 ? "mute" : "volume"} size={22} /></button>
+      <button ref={button} type="button" className={`np-mode ${open ? "on" : ""}`} aria-expanded={open} aria-haspopup="dialog" aria-label={v.label} title={v.label} onClick={() => setOpen(!open)} data-testid="fs-pill-volume"><Icon name={silent ? "mute" : "volume"} size={22} /></button>
       {pop.value ? (
-        <div {...pop.exitProps} className={`np-volume-pop ${pop.motion}`} role="dialog" aria-label={t("nowPlaying.volume")} data-testid="fs-volume-popover">
-          <button type="button" className="np-icon-btn sm" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="fs-mute"><Icon name={volume === 0 ? "mute" : "volume"} size={20} /></button>
-          <Slider min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(v) => { setMuted(undefined); set(v); }} onWheel={(e) => set(Math.max(0, Math.min(1, Math.round((volume - Math.sign(e.deltaY) * 0.05) * 100) / 100)))} data-testid="fs-volume" />
+        <div {...pop.exitProps} className={`np-volume-pop ${pop.motion}`} role="dialog" aria-label={v.label} data-testid="fs-volume-popover">
+          {v.device ? <span className="np-volume-device" data-testid="fs-volume-device">{v.device}</span> : null}
+          <button type="button" className="np-icon-btn sm" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute} data-testid="fs-mute"><Icon name={silent ? "mute" : "volume"} size={20} /></button>
+          <Slider min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="fs-volume" />
         </div>
       ) : null}
     </div>

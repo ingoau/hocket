@@ -54,7 +54,7 @@ export interface CoreState {
 
 export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, history: [], current: undefined, playingNext: [], upcoming: [], shuffle: false, repeat: "off", autoplay: false, mode: "apple", totalUpcoming: 0 };
 
-export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 1 };
+export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 1, muted: false, volumeDevice: undefined };
 
 export const initialCoreState: CoreState = {
   ready: false,
@@ -72,7 +72,7 @@ export const initialCoreState: CoreState = {
   settings: {},
   audio: { replayGain: "off", replayGainPreampDb: 0, normalisation: false, eq: { enabled: false, preampDb: 0, bands: [], preset: undefined }, gapless: true, outputDevice: undefined, exclusive: false },
   outputDevices: [],
-  mediaSession: { metadata: undefined, isPlaying: false, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, shuffle: false, repeat: "off", volume: 1, actions: [], ownsTransport: false },
+  mediaSession: { metadata: undefined, isPlaying: false, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, shuffle: false, repeat: "off", volume: 1, muted: false, actions: [], ownsTransport: false },
   resumeOffer: undefined,
   sleepTimer: undefined,
   network: undefined,

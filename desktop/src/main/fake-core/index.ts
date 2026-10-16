@@ -124,7 +124,9 @@ export class FakeCore implements CoreHandle {
   private lib: FakeLibrary | undefined;
   private servers: ServerInfo[] = [];
   private session: SessionState = { order: [], cursor: 0, history: [], insertions: [], repeat: "off", autoplay: true, mode: "apple", revision: 1 };
-  private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8 };
+  private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8, muted: false, volumeDevice: undefined };
+  /** Each device's own volume (Connect: the control drives the device playing). */
+  private volumes = new Map<string, { volume: number; muted: boolean }>();
   private savedQueues: SavedQueue[] = [];
   private savedQueueCap = 10;
   private undoStack: UndoRecord[] = [];
@@ -318,7 +320,11 @@ export class FakeCore implements CoreHandle {
         this.seek(this.positionNow() + cmd.data.delta_ms);
         return;
       case "setVolume":
-        this.transport.volume = Math.max(0, Math.min(1, cmd.data.volume));
+        this.volumes.set(this.volumeTarget(), { volume: Math.max(0, Math.min(1, cmd.data.volume)), muted: false });
+        this.emitTransport();
+        return;
+      case "setMuted":
+        this.volumes.set(this.volumeTarget(), { ...this.volumeOf(this.volumeTarget()), muted: cmd.data.muted });
         this.emitTransport();
         return;
       case "playContext":
@@ -1979,6 +1985,7 @@ export class FakeCore implements CoreHandle {
       shuffle: !!this.session.shuffle,
       repeat: this.session.repeat,
       volume: this.transport.volume,
+      muted: this.transport.muted,
       actions,
       ownsTransport: this.transport.lease.owner === this.config.deviceId,
     };
@@ -2159,7 +2166,19 @@ export class FakeCore implements CoreHandle {
     this.emitMediaSession();
   }
 
+  /** The device the volume control drives: the one playing, else this one. */
+  private volumeTarget(): string {
+    return this.transport.lease.owner ?? this.config.deviceId;
+  }
+
+  private volumeOf(id: string): { volume: number; muted: boolean } {
+    return this.volumes.get(id) ?? { volume: id === this.config.deviceId ? 0.8 : 0.6, muted: false };
+  }
+
   private emitTransport(): void {
+    const target = this.volumeTarget();
+    const v = this.volumeOf(target);
+    this.transport = { ...this.transport, volume: v.volume, muted: v.muted, volumeDevice: target };
     this.emit({ type: "transportChanged", data: { transport: this.transport } });
     this.emitMediaSession();
   }
