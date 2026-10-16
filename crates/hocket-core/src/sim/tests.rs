@@ -976,6 +976,18 @@ fn random_scenarios_lan_then_coordinator_with_a_hostile_peer() {
     });
 }
 
+/// Seed 860326 (from the proptest): a device reaches a play's scrobble
+/// point while cut off, loses the play, takes it back unscrobbled and
+/// reaches the point again before the first verdict had come. Both reaches
+/// used to be asked on rejoin as separate queries, and both were allowed.
+#[test]
+fn a_play_reached_twice_by_one_device_scrobbles_once() {
+    let mut cfg = WorldConfig::new(860326);
+    cfg.devices = 4;
+    let w = World::run_random(cfg, 39);
+    w.assert_ok();
+}
+
 /// Debug aid: `HOCKET_SIM_SEED=<n> [HOCKET_SIM_LAN=1 | HOCKET_SIM_LAN_THEN_COORDINATOR=1] [HOCKET_SIM_HOSTILE=1] [HOCKET_SIM_ACTIONS=<n>] cargo test ... random_single_seed -- --nocapture`.
 /// The batches use 40 actions for coordinator seeds and 30 for LAN ones (60 for batch 3).
 #[test]

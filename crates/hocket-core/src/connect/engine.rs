@@ -3692,6 +3692,30 @@ impl Engine {
             });
             return;
         }
+        let shared = self.is_shared(started_at);
+        // Already waiting for this play's verdict: a play that left this
+        // device and came back can reach its threshold here again. A second
+        // wait would be asked as a second query, and the room answers each
+        // of our own queries "not a duplicate" (a retry after a lost answer
+        // must be allowed), so the play would be submitted twice. The one
+        // verdict settles every reach of it: it carries the first reach's
+        // `startedAt`, which a play taken back keeps (the stamp's, unchanged).
+        if let Some(d) = self
+            .deferred_scrobbles
+            .iter_mut()
+            .find(|d| same(&d.track_id, d.started_at))
+        {
+            d.shared |= shared;
+            return;
+        }
+        if let Some(q) = self
+            .scrobble_queries
+            .values_mut()
+            .find(|q| same(&q.track_id, q.started_at))
+        {
+            q.shared |= shared;
+            return;
+        }
         let now = self.now_local_ms();
         // A play that ORIGINATED here and never moved is ours alone to judge
         // (today's rules). A play another device held too is *shared*: it
@@ -3702,7 +3726,6 @@ impl Engine {
             // Asked again after a restart: the wait goes on where it was.
             since = self.restored_waits.remove(i).2;
         }
-        let shared = self.is_shared(started_at);
         if self.may_ask(shared) {
             self.query_scrobble(track_id, started_at, since, shared);
         } else {
@@ -5154,6 +5177,71 @@ mod tests {
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::Scrobble { allowed: true, .. })));
+    }
+
+    /// A play that left this device and came back reaches its threshold
+    /// here again while its first verdict is still pending. The room answers
+    /// each of our own queries "not a duplicate", so a second wait would be
+    /// submitted twice (sim seed 860326).
+    #[test]
+    fn reaching_a_pending_play_again_waits_for_the_one_verdict() {
+        let (mut e, clock) = engine("a");
+        let queries = |outs: &[Output]| {
+            wire_outs(outs)
+                .iter()
+                .filter(|(_, m)| matches!(m, Msg::ScrobbleDedupeQuery { .. }))
+                .count()
+        };
+        let reach = |e: &mut Engine| {
+            e.handle(Input::ScrobbleReached {
+                track_id: "t".into(),
+                started_at: 1.0,
+            })
+        };
+        attach(&mut e, None, vec![]);
+        assert_eq!(queries(&reach(&mut e)), 1);
+        // again while the query is out
+        let outs = reach(&mut e);
+        assert_eq!(queries(&outs), 0);
+        assert!(scrobble_verdicts(&outs).is_empty());
+        // again while cut off, the query now deferred
+        e.handle(Input::Disconnected { peer: "up".into() });
+        let outs = reach(&mut e);
+        assert!(scrobble_verdicts(&outs).is_empty());
+        // judged alone after the grace: once
+        clock.0.store(10_000 + 700_000, Ordering::SeqCst);
+        let outs = e.handle(Input::Tick);
+        assert_eq!(scrobble_verdicts(&outs), vec![true]);
+        let outs = reach(&mut e);
+        assert_eq!(scrobble_verdicts(&outs), vec![false]);
+    }
+
+    /// The second reach finds the play shared (it came back from another
+    /// device): the wait it joins becomes a shared one, with the longer
+    /// grace, counted from the first wait.
+    #[test]
+    fn reaching_a_pending_play_again_once_shared_makes_its_wait_shared() {
+        let (mut e, clock) = engine("a");
+        attach(&mut e, None, vec![]);
+        e.handle(Input::Disconnected { peer: "up".into() });
+        let reach = |e: &mut Engine| {
+            e.handle(Input::ScrobbleReached {
+                track_id: "t".into(),
+                started_at: 5_000.0,
+            })
+        };
+        assert!(scrobble_verdicts(&reach(&mut e)).is_empty());
+        e.mark_shared(5_000.0);
+        assert!(scrobble_verdicts(&reach(&mut e)).is_empty());
+        let awaiting: Vec<Option<EpochMs>> = e
+            .known_scrobbled()
+            .iter()
+            .map(|k| k.awaiting_since)
+            .collect();
+        assert_eq!(awaiting, vec![Some(10_000.0)]);
+        // the plain grace no longer settles it
+        clock.0.store(10_000 + 700_000, Ordering::SeqCst);
+        assert!(scrobble_verdicts(&e.handle(Input::Tick)).is_empty());
     }
 
     #[test]
