@@ -381,6 +381,15 @@
     <string name="problems_none">No problems</string>
     <string name="sync_phase">Syncing %1$s</string>
     <string name="sync_progress">%1$d of %2$d</string>
+    <string name="sync_action">Sync</string>
+    <string name="sync_successful">Successful</string>
+    <string name="sync_failed">Failed</string>
+    <string name="sync_just_now">Just now</string>
+    <string name="sync_ago">%1$s ago</string>
+    <string name="sync_tracks">%1$d tracks</string>
+    <string name="sync_tracks_in">%1$d tracks in %2$s</string>
+    <string name="sync_seconds">%1$d s</string>
+    <string name="sync_minutes_seconds">%1$d min %2$d s</string>
 
     <!-- Filters -->
     <string name="filters_title">Filters</string>

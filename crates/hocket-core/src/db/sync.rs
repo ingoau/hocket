@@ -399,7 +399,10 @@ impl LibrarySync {
         self.save_cursor(&c)?;
         self.db
             .set_server_last_sync(self.server_id(), finished_at)?;
-        self.report(obs, &c, c.offset, total_tracks, true);
+        // A finished sync has covered the whole library: report it as complete, not the
+        // reset cursor offset (which read "0 of N" in the job list).
+        let done = total_tracks.unwrap_or(stats.tracks as u32);
+        self.report(obs, &c, done, total_tracks, true);
         Ok(stats)
     }
 
@@ -1009,6 +1012,7 @@ mod tests {
         let j = q.job(&id).unwrap().unwrap();
         assert_eq!(j.state, api::JobState::Done);
         assert_eq!(j.total, Some(12));
+        assert_eq!(j.done, 12, "a finished sync reads as complete, not 0 of N");
         assert_eq!(db.track_count("srv", &None).unwrap(), 12);
 
         s.set_offline(true);

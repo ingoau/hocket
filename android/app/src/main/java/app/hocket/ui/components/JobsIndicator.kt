@@ -1,6 +1,8 @@
 package app.hocket.ui.components
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +20,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,11 +33,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.api.Job
+import app.hocket.core.api.JobKind
 import app.hocket.core.api.JobState
+import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.SyncProgress
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
@@ -64,24 +72,19 @@ fun JobsSheet(onDismiss: () -> Unit) {
     val jobs by client.jobs.collectAsStateWithLifecycleCompat()
     val problems by client.problems.collectAsStateWithLifecycleCompat()
     val sync by client.syncProgress.collectAsStateWithLifecycleCompat()
+    val server by client.server.collectAsStateWithLifecycleCompat()
+    // Library syncs are summarised by the sync card (last result only), not listed one row per run.
+    val lastSyncJob = jobs.filter { it.kind == JobKind.LibrarySync }.maxByOrNull { it.createdAt }
+    val others = jobs.filter { it.kind != JobKind.LibrarySync }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.navigationBarsPadding()) {
             Text(stringResource(R.string.jobs_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-            sync?.takeIf { !it.finished }?.let { s ->
-                Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ContainedLoadingIndicator(modifier = Modifier.size(40.dp))
-                    Spacer(Modifier.size(12.dp))
-                    Column {
-                        Text(stringResource(R.string.sync_phase, s.phase), style = MaterialTheme.typography.bodyLarge)
-                        s.total?.let { Text(stringResource(R.string.sync_progress, s.done.toInt(), it.toInt()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    }
-                }
-            }
-            if (jobs.isEmpty() && problems.isEmpty()) {
+            server?.let { SyncCard(it, lastSyncJob, sync) }
+            if (server == null && others.isEmpty() && problems.isEmpty()) {
                 EmptyState(stringResource(R.string.empty_jobs_title), stringResource(R.string.empty_jobs_body))
             }
             LazyColumn {
-                items(jobs, key = { it.id }) { job -> JobRow(job) }
+                items(others, key = { it.id }) { job -> JobRow(job) }
                 if (problems.isNotEmpty()) {
                     item {
                         HorizontalDivider()
@@ -148,4 +151,79 @@ private fun JobRow(job: Job) {
             else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         }
     }
+}
+
+/**
+ * The server's sync at a glance: the last result, how long ago, and how many tracks in how long
+ * (or the live phase while one runs), with a Sync / Cancel button. Replaces a row per past run.
+ */
+@Composable
+private fun SyncCard(server: ServerInfo, job: Job?, progress: SyncProgress?) {
+    val client = LocalCoreClient.current
+    val active = job?.takeIf { it.state == JobState.Running || it.state == JobState.Queued || it.state == JobState.Paused }
+    val running = active != null
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(HocketIcons.Filled.Sync, null)
+                Spacer(Modifier.size(12.dp))
+                Text(server.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                if (active != null && active.cancellable) TextButton(onClick = { client.dispatch(Commands.cancelJob(active.id)) }) {
+                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.error)
+                } else if (!running) OutlinedButton(onClick = { client.dispatch(Commands.syncLibrary(server.id, full = false)) }) {
+                    Text(stringResource(R.string.sync_action))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (running) {
+                val p = progress?.takeIf { !it.finished && it.serverId == server.id }
+                val total = p?.total
+                val phase = p?.let { stringResource(R.string.sync_phase, it.phase) } ?: stringResource(R.string.jobs_state_queued)
+                val count = if (p != null && total != null) stringResource(R.string.dot_separator) + stringResource(R.string.sync_progress, p.done.toInt(), total.toInt()) else ""
+                Text("$phase$count", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (p != null && total != null && total > 0u) LinearWavyProgressIndicator(progress = { p.done.toFloat() / total.toFloat() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+            } else {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when (job?.state) {
+                        JobState.Done -> SyncChip(stringResource(R.string.sync_successful))
+                        JobState.Failed -> SyncChip(stringResource(R.string.sync_failed), MaterialTheme.colorScheme.error)
+                        JobState.Cancelled -> SyncChip(stringResource(R.string.jobs_state_cancelled))
+                        else -> {}
+                    }
+                    val last = server.lastSync
+                    if (last == null) SyncChip(stringResource(R.string.settings_never_synced))
+                    else if (System.currentTimeMillis() - last < 60_000) SyncChip(stringResource(R.string.sync_just_now))
+                    else SyncChip(stringResource(R.string.sync_ago, formatAgo(last)))
+                    // The job is submitted when the sync starts and lastSync stamped when it finishes.
+                    job?.takeIf { it.state == JobState.Done }?.let { done ->
+                        val tracks = (done.total ?: done.done).toInt()
+                        val took = last?.let { it - done.createdAt }?.takeIf { it >= 0.0 }
+                        SyncChip(
+                            if (took != null) stringResource(R.string.sync_tracks_in, tracks, formatElapsed(took.toLong()))
+                            else stringResource(R.string.sync_tracks, tracks),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncChip(text: String, color: Color = MaterialTheme.colorScheme.onSurface) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = MaterialTheme.shapes.small) {
+        Text(text, style = MaterialTheme.typography.labelLarge, color = color, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+    }
+}
+
+/** "40 s", "3 min 5 s" for how long a sync took. */
+@Composable
+private fun formatElapsed(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(1)
+    return if (s < 60) stringResource(R.string.sync_seconds, s.toInt()) else stringResource(R.string.sync_minutes_seconds, (s / 60).toInt(), (s % 60).toInt())
 }
