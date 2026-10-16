@@ -14,8 +14,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -25,8 +26,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -36,8 +40,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
@@ -54,7 +61,10 @@ import app.hocket.ui.icons.HocketIcons
 fun CustomiseHomeSheet(onDismiss: () -> Unit) {
     val client = LocalCoreClient.current
     val settings by client.settings.collectAsStateWithLifecycle()
+    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
+    // "More from Theo Lund" rather than the generic title, once the artist is known (as on Home).
+    val topArtist by produceState<String?>(null, libraryGen) { value = moreFromArtist(client)?.name }
     // Sections this build doesn't know stay in the list (a newer device's), unlisted here.
     val known = prefs.filter { it.section != null }
     fun save(next: List<SectionPref>) = HomeSections.save(client, next)
@@ -71,13 +81,13 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
             LazyColumn(Modifier.weight(1f, fill = false)) {
                 items(known, key = { it.id }) { pref ->
                     val section = pref.section ?: return@items
-                    val title = stringResource(section.title)
+                    val title = topArtist?.takeIf { section == HomeSection.MoreFromArtist }?.let { stringResource(R.string.home_section_more_from_named, it) } ?: stringResource(section.title)
                     val i = known.indexOf(pref)
                     Column(Modifier.animateItem().fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 8.dp, bottom = 8.dp).testTag("home.customise.${pref.id}")) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(title, style = MaterialTheme.typography.bodyLarge, color = if (pref.on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(stringResource(section.description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(title, style = MaterialTheme.typography.bodyLarge, color = if (pref.on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(stringResource(section.description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             IconButton(onClick = { moveKnown(pref.id, -1) }, enabled = i > 0) {
                                 Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_up_named, title), Modifier.rotate(180f))
@@ -91,11 +101,7 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                                 modifier = Modifier.semantics { contentDescription = showLabel }.testTag("home.customise.${pref.id}.switch"))
                         }
                         if (pref.on && section.styles.size > 1) {
-                            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                section.styles.forEach { st ->
-                                    FilterChip(selected = pref.resolvedStyle == st, onClick = { save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }, label = { Text(stringResource(st.label)) })
-                                }
-                            }
+                            StyleButtonGroup(section.styles, pref.resolvedStyle, Modifier.padding(top = 4.dp, end = 12.dp)) { st -> save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }
                         }
                     }
                 }
@@ -131,15 +137,38 @@ fun SectionMenuSheet(pref: SectionPref, title: String, onDismiss: () -> Unit, on
             Item(stringResource(R.string.home_section_move_down), enabled = i in 0 until shown.lastIndex, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, 1)); onDismiss() }
             if (section.styles.size > 1) {
                 Text(stringResource(R.string.home_section_show_as), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 12.dp))
-                Row(Modifier.padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    section.styles.forEach { st ->
-                        FilterChip(selected = current.resolvedStyle == st, onClick = { HomeSections.save(client, HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }, label = { Text(stringResource(st.label)) })
-                    }
+                StyleButtonGroup(section.styles, current.resolvedStyle, Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) { st ->
+                    HomeSections.save(client, HomeSections.update(prefs, pref.id) { it.copy(style = st.id) })
                 }
             }
             Item(stringResource(R.string.home_section_hide), icon = HocketIcons.Filled.VisibilityOff) { onDismiss(); onHide() }
             Item(stringResource(R.string.home_customise), icon = HocketIcons.Filled.Tune) { onDismiss(); onCustomise() }
             Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * Row / Grid / List as a connected button group: one choice, the chosen one filled. Each button is
+ * a radio button to accessibility services, so they announce "selected" rather than "checked".
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StyleButtonGroup(styles: List<SectionStyle>, selected: SectionStyle, modifier: Modifier = Modifier, onSelect: (SectionStyle) -> Unit) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+        styles.forEachIndexed { i, st ->
+            ToggleButton(
+                checked = st == selected,
+                onCheckedChange = { onSelect(st) },
+                shapes = when (i) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    styles.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+                // The unchecked fill a step up from the sheet's, so the group still reads as one control in the dark theme.
+                colors = ToggleButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+            ) { Text(stringResource(st.label), maxLines = 1, softWrap = false) }
         }
     }
 }

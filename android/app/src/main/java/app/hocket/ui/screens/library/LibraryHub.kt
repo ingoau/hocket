@@ -77,6 +77,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.AlbumCard
 import app.hocket.ui.components.AlbumCardSkeleton
 import app.hocket.ui.components.Artwork
+import app.hocket.ui.components.IconArt
 import app.hocket.ui.components.JobsIndicator
 import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.ShimmerHost
@@ -241,10 +242,8 @@ private fun PinCard(pin: ResolvedPin, editing: Boolean, modifier: Modifier, shap
 internal fun PinArt(pin: ResolvedPin, modifier: Modifier) {
     val shape = pinShape(pin.kind)
     when (pin.kind) {
-        PinKind.Genre, PinKind.Filter -> Box(modifier.background(if (pin.kind == PinKind.Genre) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.secondaryContainer, shape), contentAlignment = Alignment.Center) {
-            Icon(if (pin.kind == PinKind.Genre) HocketIcons.Filled.Category else HocketIcons.Filled.FilterAlt, null, Modifier.size(22.dp),
-                tint = if (pin.kind == PinKind.Genre) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSecondaryContainer)
-        }
+        PinKind.Genre -> IconArt(HocketIcons.Filled.Category, shape, modifier, iconSize = 22.dp, accent = MaterialTheme.colorScheme.tertiary)
+        PinKind.Filter -> IconArt(HocketIcons.Filled.FilterAlt, shape, modifier, iconSize = 22.dp)
         else -> Artwork(pin.coverArt, ArtworkSizes.THUMB, null, modifier, shape)
     }
 }

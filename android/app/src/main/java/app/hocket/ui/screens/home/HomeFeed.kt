@@ -42,6 +42,16 @@ private val REDISCOVER: FilterNode = FilterNode.All(listOf(
     FilterNode.Rule(FilterRule(FilterField.LastPlayed, FilterOp.NotInTheLast, FilterValue.Days(90u))),
 ))
 
+/** Listening stats for favourites: the last month's, or the year's when the month has no plays. */
+private suspend fun favouriteStats(client: CoreClient): ListeningStats? {
+    val month = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
+    if (month != null && month.totalPlays != 0u) return month
+    return (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: month
+}
+
+/** The artist "More from …" is about (the most played lately), or null with no plays. */
+suspend fun moreFromArtist(client: CoreClient): Artist? = favouriteStats(client)?.topArtists?.firstOrNull()
+
 /**
  * Loads the sections in [shown] (only those: a hidden section costs nothing). Listening stats are
  * read once and shared; a month with no plays falls back to the year, so a quiet month still has
@@ -49,11 +59,7 @@ private val REDISCOVER: FilterNode = FilterNode.All(listOf(
  */
 suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSection>): Map<HomeSection, SectionContent> {
     val needsStats = shown.any { it == HomeSection.FavouriteArtists || it == HomeSection.TopGenre || it == HomeSection.MoreFromArtist || it == HomeSection.OnRepeat }
-    var stats: ListeningStats? = null
-    if (needsStats) {
-        stats = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
-        if (stats == null || stats.totalPlays == 0u) stats = (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: stats
-    }
+    val stats = if (needsStats) favouriteStats(client) else null
     val out = LinkedHashMap<HomeSection, SectionContent>()
     for (section in shown) {
         val content: SectionContent? = when (section) {

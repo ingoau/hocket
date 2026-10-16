@@ -83,7 +83,8 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.EmptyState
-import app.hocket.ui.components.GridCellText
+import app.hocket.ui.components.GridTitleStyle
+import app.hocket.ui.components.IconArt
 import app.hocket.ui.components.JobsIndicator
 import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.ShimmerHost
@@ -369,6 +370,13 @@ private fun coverOf(item: HomeItem): String? = when (item) {
     is HomeItem.FilterItem -> null
 }
 
+/** The icon drawn in place of artwork for what has none: filters, and queues without a cover. */
+private fun iconOf(item: HomeItem): androidx.compose.ui.graphics.vector.ImageVector? = when {
+    item is HomeItem.FilterItem -> HocketIcons.Filled.FilterAlt
+    item is HomeItem.QueueItem && item.queue.coverArt == null -> HocketIcons.AutoMirrored.Filled.QueueMusic
+    else -> null
+}
+
 /** The menu as a screen-reader action, so nobody needs the long-press. */
 @Composable
 private fun menuAction(item: HomeItem, actions: HomeItemActions): List<CustomAccessibilityAction> {
@@ -392,18 +400,14 @@ private fun HomeCell(item: HomeItem, actions: HomeItemActions, modifier: Modifie
             .testTag("home.item"),
         horizontalAlignment = if (round) Alignment.CenterHorizontally else Alignment.Start,
     ) {
-        if (item is HomeItem.FilterItem) {
-            Box(Modifier.fillMaxWidth().aspectRatio(1f).background(MaterialTheme.colorScheme.secondaryContainer, shape), contentAlignment = Alignment.Center) {
-                Icon(HocketIcons.Filled.FilterAlt, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
-            }
-        } else {
-            Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f), shape)
-        }
+        val icon = iconOf(item)
+        if (icon != null) IconArt(icon, shape, Modifier.fillMaxWidth().aspectRatio(1f), iconSize = 40.dp)
+        else Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f), shape)
         Spacer(Modifier.height(8.dp))
-        if (round) {
-            Text(text.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            Text(text.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-        } else GridCellText(text.title, text.subtitle)
+        // One line each, so the subtitle sits right under the title and every cell's caption is as tall.
+        val align = if (round) TextAlign.Center else TextAlign.Start
+        Text(text.title, style = GridTitleStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = align)
+        Text(text.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = align)
     }
 }
 
@@ -422,11 +426,9 @@ private fun HomeListRow(item: HomeItem, actions: HomeItemActions) {
             .heightIn(min = 64.dp).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (item is HomeItem.FilterItem) {
-            Box(Modifier.size(48.dp).background(MaterialTheme.colorScheme.secondaryContainer, shape), contentAlignment = Alignment.Center) {
-                Icon(HocketIcons.Filled.FilterAlt, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
-            }
-        } else Artwork(coverOf(item), ArtworkSizes.THUMB, null, Modifier.size(48.dp), shape)
+        val icon = iconOf(item)
+        if (icon != null) IconArt(icon, shape, Modifier.size(48.dp))
+        else Artwork(coverOf(item), ArtworkSizes.THUMB, null, Modifier.size(48.dp), shape)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(text.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
