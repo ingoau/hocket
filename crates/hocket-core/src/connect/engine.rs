@@ -5424,14 +5424,34 @@ mod tests {
             .iter()
             .any(|(_, m)| matches!(m, Msg::TransportStamp { .. })));
 
+        // A pause while on the remote: only the remote room hears of it.
+        clock.0.store(20_500, Ordering::SeqCst);
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 5_500,
+                taken_at: 20_500.0,
+                rate: 1.0,
+                is_playing: false,
+            },
+            played_ms: 5_500,
+            started_at: 15_000.0,
+            scrobbled: false,
+        });
+        let last = e.room.replica().last_stamp.clone().unwrap();
+        assert!(last.position.is_playing, "the own room kept the play");
+
         // Dropping back to our own room: the stamp returns to our clock and
         // our room (silent while we followed the remote) hears it again.
         clock.0.store(21_000, Ordering::SeqCst);
         e.handle(Input::Disconnected { peer: "up2".into() });
-        assert_eq!(e.transport().position.taken_at, 15_000.0);
+        assert_eq!(e.transport().position.taken_at, 20_500.0);
         let last = e.room.replica().last_stamp.clone().unwrap();
         assert_eq!(last.key.as_deref(), Some("k2"));
-        assert_eq!(last.position.taken_at, 15_000.0);
+        assert!(!last.position.is_playing, "{last:?}");
+        assert_eq!(last.position.position_ms, 5_500);
+        assert_eq!(last.position.taken_at, 20_500.0);
     }
 
     #[test]
