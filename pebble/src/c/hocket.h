@@ -162,6 +162,8 @@ void open_menu_item(MenuItemId id, bool from_menu);
 const char *menu_item_label(MenuItemId id, char *buf, size_t n);
 void pop_to_now_playing(void);
 void show_notice(const char *text);
+// The user did something: restarts the close-when-paused countdown if it is running.
+void idle_activity(void);
 
 // Touch: each window registers a hold handler; a hold on the screen calls the top window's.
 typedef void (*HoldHandler)(void *ctx);

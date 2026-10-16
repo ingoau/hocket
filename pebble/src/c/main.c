@@ -28,7 +28,6 @@ static int s_out_head, s_out_count;
 static bool s_out_busy;
 
 static void prv_pump(void);
-static void prv_idle_activity(void);
 
 static void prv_enqueue(const OutMsg *msg) {
   if (msg->type == MsgListReq || msg->type == MsgArtReq) {
@@ -108,7 +107,7 @@ static void prv_outbox_failed(DictionaryIterator *iter, AppMessageResult reason,
 }
 
 void send_cmd(Cmd cmd, int32_t arg, const char *path, const char *item) {
-  prv_idle_activity();
+  idle_activity();
   OutMsg m = {.type = MsgCmd, .cmd = cmd, .arg = arg};
   if (path) strncpy(m.path, path, sizeof(m.path) - 1);
   if (item) strncpy(m.item, item, sizeof(m.item) - 1);
@@ -116,7 +115,6 @@ void send_cmd(Cmd cmd, int32_t arg, const char *path, const char *item) {
 }
 
 void send_list_request(uint16_t req_id, const char *path, uint16_t offset) {
-  prv_idle_activity();
   OutMsg m = {.type = MsgListReq, .req_id = req_id, .offset = offset};
   strncpy(m.path, path, sizeof(m.path) - 1);
   prv_enqueue(&m);
@@ -183,8 +181,9 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
 }
 
 // -- Close when paused ------------------------------------------------------------------------------
-// Paused (or nothing playing) for close_when_paused_min minutes closes the app. Playing stops the
-// countdown; pressing something that reaches the phone (a command, a list page) restarts it.
+// Paused, nothing playing, or the phone gone for close_when_paused_min minutes closes the app.
+// Playing stops the countdown; a command or opening a list or lyrics restarts it (not the lists'
+// automatic retries, which would otherwise keep it open while the phone is away).
 
 static AppTimer *s_idle_timer;
 
@@ -194,7 +193,8 @@ static void prv_idle_fired(void *context) {
 }
 
 static void prv_idle_update(void) {
-  const bool counting = g_settings.close_when_paused_min && !(g_now.flags & NowPlaying);
+  const bool playing = (g_now.flags & NowPlaying) && connection_service_peek_pebble_app_connection();
+  const bool counting = g_settings.close_when_paused_min && !playing;
   if (!counting) {
     if (s_idle_timer) app_timer_cancel(s_idle_timer);
     s_idle_timer = NULL;
@@ -203,7 +203,7 @@ static void prv_idle_update(void) {
   }
 }
 
-static void prv_idle_activity(void) {
+void idle_activity(void) {
   if (s_idle_timer) app_timer_reschedule(s_idle_timer, (uint32_t)g_settings.close_when_paused_min * 60 * 1000);
 }
 
@@ -385,6 +385,7 @@ static void prv_inbox(DictionaryIterator *iter, void *context) {
 
 static void prv_connection(bool connected) {
   if (connected) prv_send_hello();
+  prv_idle_update();
 }
 
 // -- Touch -----------------------------------------------------------------------------------------
