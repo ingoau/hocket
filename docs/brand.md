@@ -17,13 +17,14 @@ Four notes on a 100-unit tile, one continuous wave, the voices alternating 1, 2,
 
 - **Stroke** 12, round caps, no fill. Each note overlaps the one before it, so the caps hide the hand-offs.
 - **Extent** x 10–90, y 28.4–71.6, caps included.
-- **The tile** is a rounded square, corner radius 22.45% of its side (185 on Apple's 824 px body), with a vertical gradient.
-- **Never** redraw the wave by eye, recolour one note, add a third voice, or set the wave on a background lighter than the voices without swapping to the light-ground colours below.
+- **The tile** is a rounded square, corner radius 22.45% of its side (185 on Apple's 824 px body), in the tile colour (see Colour). Platforms that mask their own icon shape (Android) use the colour alone.
+- **Never** redraw the wave by eye, recolour one note, or add a third voice. The bare wave only goes on dark grounds; the pale voice disappears on light ones, so on a light ground use the tile.
 
 Where it lives (the geometry is the same in each, and changes go to all of them):
 
 - `desktop/build/icon.svg` — the flat master on Apple's grid.
-- `desktop/build/icon.icon/` — the shipped macOS icon (Icon Composer); `desktop/scripts/gen-app-icons.mjs` renders the note layers, `.ico` and Linux PNGs from it.
+- `desktop/build/icon.icon/` — the shipped macOS icon, edited in Icon Composer.
+- `desktop/scripts/gen-app-icons.mjs` — renders `icon.icon`'s note layers, the Windows `.ico` and the Linux PNGs; the output is committed.
 - `desktop/src/main/brand.ts` — rasterised at runtime for the tray and the dev-build dock icon.
 - `android/app/src/main/res/drawable/ic_launcher_foreground.xml` — the adaptive icon's foreground and monochrome layer.
 
@@ -51,7 +52,7 @@ The word mark adds two inks, chosen with the word mark rather than taken from ex
 **Unbounded**, weight 500, lowercase: `hocket`.
 
 - **Tracking** −0.03em at display sizes, −0.015em at 24 px and under.
-- **Case** always lowercase in the word mark, including at the start of a sentence-like layout. In running text the name is still written *Hocket*.
+- **Case** always lowercase in the word mark. In running text the name is still written *Hocket*.
 - **Colour** one colour: `#ECE9FF` on dark, `#1B1730` on light. Never the voice colours, never split by letter or syllable; the mark carries the colour.
 - **No effects** — no gradients, outlines, shadows, or baseline shifts.
 - **Why Unbounded:** its wide, round letters match the mark's heavy stroke and the tile's rounded corners, and it sits with the Material 3 Expressive shapes in the app. It's wide, so the lockup needs horizontal room.
@@ -59,16 +60,16 @@ The word mark adds two inks, chosen with the word mark rather than taken from ex
 
 
 ## The lockup  
-*Status: decided*
+*Status: open*
 
-The app icon (the tile, not the bare wave) to the left of the word mark, centred vertically on the x-height.
+The app icon (the tile, not the bare wave) to the left of the word mark, centred vertically on the line. The proportions below come from the lockup mockups and haven't been tested in the apps yet.
 
 - **Icon size** 1.15× the word mark's font size.
 - **Gap** 0.3× the font size between the tile and the first letter.
 - **Clear space** at least half the icon's height on every side.
 - **Minimum size** 18 px font size (about a 21 px icon). Below that, use the icon alone.
-- **On a dark ground** the tile still shows; keep the ground darker than `#1B1730` or lighter than mid-grey so its edge reads.
-- The icon alone is fine anywhere. The word mark alone is fine where the icon is already on screen (the setup hero beside the M3 shapes, an About dialog under the icon).
+- **Ground** the tile's edge has to read: on dark, use a ground darker than `#1B1730`; any light ground works.
+- The icon alone is fine anywhere. The word mark alone is fine where the icon is already nearby, such as an About dialog with the icon above the name.
 
 
 ## Not done yet
