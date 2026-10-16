@@ -239,7 +239,7 @@ fn edge(
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
         _ if face_count == 0 && columns_ok() => (ArtworkStyle::Extend, "extend:columns"),
         ImmersiveArtwork::Always => (ArtworkStyle::Extend, "extend:always"),
-        ImmersiveArtwork::Automatic if face_count > 0 => (ArtworkStyle::Card, "card:faces"),
+        ImmersiveArtwork::Automatic if reflected_faces > 0 => (ArtworkStyle::Card, "card:faces"),
         ImmersiveArtwork::Automatic if marks >= MARKS_MAX => (ArtworkStyle::Card, "card:marks"),
         ImmersiveArtwork::Automatic => (ArtworkStyle::Card, "card:busy"),
     };

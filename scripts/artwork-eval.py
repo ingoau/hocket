@@ -8,7 +8,9 @@ and draws what the phone's full player would look like for each, for tuning by e
 
 Writes <out>/layouts.jsonl (one per cover: file, faces, layout) and <out>/sheet-NN.jpg contact
 sheets grouped by the style chosen. Faces come from OpenCV's frontal Haar cascade, standing in for
-Android's FaceDetector (also frontal-only).
+Android's FaceDetector (also frontal-only). A face only rules a mirror out when its box reaches
+the edge's reflection zone, so results hang a little on the detector: Haar's box, like Android's,
+ends around the mouth, YuNet's takes in the chin.
 """
 import json, os, subprocess, sys
 import numpy as np

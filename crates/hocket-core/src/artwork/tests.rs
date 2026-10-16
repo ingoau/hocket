@@ -74,6 +74,22 @@ fn soft_texture() -> Canvas {
     c
 }
 
+/// [`soft_texture`] turned a quarter: its right and left edges are the soft texture's bottom and top.
+fn soft_texture_turned() -> Canvas {
+    let mut c = Canvas::new(S, S, [0; 3]);
+    for y in 0..S {
+        for x in 0..S {
+            let v = ((y as f32 / 9.0).sin() * (x as f32 / 11.0).cos() * 0.5 + 0.5) * 120.0;
+            c.set(
+                x,
+                y,
+                [20 + v as u8, 40 + (v * 0.6) as u8, 50 + (v * 0.8) as u8],
+            );
+        }
+    }
+    c
+}
+
 /// Deterministic high-contrast noise: a busy cover.
 fn noise() -> Canvas {
     let mut c = Canvas::new(S, S, [0; 3]);
@@ -164,6 +180,21 @@ fn a_face_by_the_edge_rules_a_mirror_out_but_not_extending() {
     assert_ne!(l.bottom.style, ArtworkStyle::Mirror);
     // The top edge sees it well clear of it.
     assert_eq!(l.top.style, ArtworkStyle::Mirror);
+    // On the right of the cover, by that edge: the right is ruled out, the left still mirrors.
+    let right = FaceRect {
+        x: 0.55,
+        y: 0.3,
+        w: 0.4,
+        h: 0.45,
+    };
+    let l = soft_texture_turned().layout(ImmersiveArtwork::Automatic, vec![right]);
+    assert_ne!(l.right.style, ArtworkStyle::Mirror);
+    assert_eq!(l.left.style, ArtworkStyle::Mirror);
+    // And mirrored, the other way round.
+    let left = FaceRect { x: 0.05, ..right };
+    let l = soft_texture_turned().layout(ImmersiveArtwork::Automatic, vec![left]);
+    assert_eq!(l.right.style, ArtworkStyle::Mirror);
+    assert_ne!(l.left.style, ArtworkStyle::Mirror);
     // A portrait whose chin ends clear of the edge (Halsey's Manic) mirrors: only the neck and
     // shoulders reflect sharply.
     let portrait = FaceRect {
