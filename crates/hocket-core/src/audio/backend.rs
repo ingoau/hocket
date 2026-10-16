@@ -69,6 +69,12 @@ pub trait PlaybackBackend: Send + Sync {
     /// sends the slider position through [`volume_to_gain`] first.
     fn set_volume(&self, volume: f64) -> Result<(), BackendError>;
 
+    /// Set the platform's own media volume: slider position 0–1 and mute.
+    /// Only called on a backend that reported `BackendReport::SystemVolume`.
+    fn set_system_volume(&self, _volume: f64, _muted: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("system volume"))
+    }
+
     /// Handoff pre-buffering: fetch and decode the first seconds at
     /// `position_ms` without opening the output. Reports `PreBufferReady`.
     /// A later `load` of the same key at (about) the same position reuses it.

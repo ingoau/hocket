@@ -513,6 +513,13 @@ impl PlaybackBackend for RecordingBackend {
     fn set_volume(&self, volume: f64) -> Result<(), crate::audio::backend::BackendError> {
         self.inner.set_volume(volume)
     }
+    fn set_system_volume(
+        &self,
+        volume: f64,
+        muted: bool,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_system_volume(volume, muted)
+    }
     fn pre_buffer(
         &self,
         source: MediaSource,

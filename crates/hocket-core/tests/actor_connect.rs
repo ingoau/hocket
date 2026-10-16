@@ -404,3 +404,114 @@ async fn a_lan_peer_with_a_different_password_never_pairs() {
     assert_eq!(a.snapshot().await.devices.len(), 2, "a and c pair");
     assert_eq!(b.snapshot().await.devices.len(), 1, "b still alone");
 }
+
+async fn play_on(owner: &TestCore, other: &TestCore) {
+    owner
+        .run(Command::PlayTracks {
+            server_id: owner.server_id.clone(),
+            track_ids: vec!["t0".into(), "t1".into()],
+            start_index: 0,
+            label: "Sel".into(),
+            shuffle: false,
+        })
+        .await;
+    TestCore::run_all_for(&[owner, other], 2_000.0).await;
+    assert!(owner.backend.is_playing());
+}
+
+fn gain(v: f64) -> f64 {
+    hocket_core::audio::backend::volume_to_gain(v)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_volume_control_drives_the_device_playing() {
+    let (a, b) = pair().await;
+    // Nobody plays: each device's control sets its own volume.
+    a.run(Command::SetVolume { volume: 0.8 }).await;
+    b.run(Command::SetVolume { volume: 0.3 }).await;
+    let tb = b.snapshot().await.transport;
+    assert_eq!(tb.volume, 0.3);
+    assert_eq!(tb.volume_device.as_deref(), Some(b.device_id.as_str()));
+
+    play_on(&a, &b).await;
+    // b's control now shows and drives a's volume.
+    let tb = b.snapshot().await.transport;
+    assert_eq!(tb.volume_device.as_deref(), Some(a.device_id.as_str()));
+    assert_eq!(tb.volume, 0.8);
+    assert_eq!(b.snapshot().await.media_session.volume, 0.8);
+    b.run(Command::SetVolume { volume: 0.5 }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.snapshot().await.transport.volume, 0.5);
+    assert!((a.backend.volume() - gain(0.5)).abs() < 1e-12);
+    assert!(
+        (b.backend.volume() - gain(0.3)).abs() < 1e-12,
+        "b's own volume is untouched"
+    );
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(b.snapshot().await.transport.volume, 0.5, "a's stamp agrees");
+
+    // Mute from b mutes a and keeps a's level for the unmute.
+    b.run(Command::SetMuted { muted: true }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.backend.volume(), 0.0);
+    let ta = a.snapshot().await.transport;
+    assert!(ta.muted);
+    assert_eq!(ta.volume, 0.5);
+    b.run(Command::SetMuted { muted: false }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!((a.backend.volume() - gain(0.5)).abs() < 1e-12);
+
+    // A change on a itself shows up on b.
+    a.run(Command::SetVolume { volume: 0.9 }).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(b.snapshot().await.transport.volume, 0.9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handoff_plays_at_the_new_devices_own_volume() {
+    let (a, b) = pair().await;
+    a.run(Command::SetVolume { volume: 0.2 }).await;
+    b.run(Command::SetVolume { volume: 0.7 }).await;
+    play_on(&a, &b).await;
+    a.run(Command::HandoffTo {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    assert!((b.backend.volume() - gain(0.7)).abs() < 1e-12);
+    let ta = a.snapshot().await.transport;
+    assert_eq!(ta.volume_device.as_deref(), Some(b.device_id.as_str()));
+    assert_eq!(ta.volume, 0.7);
+    assert!((a.backend.volume() - gain(0.2)).abs() < 1e-12);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_system_volume_is_mirrored_and_driven_remotely() {
+    let (a, b) = pair().await;
+    // a is a phone: the platform owns its volume.
+    a.backend.use_system_volume(0.6, false);
+    a.core.settle().await;
+    assert_eq!(a.snapshot().await.transport.volume, 0.6);
+    assert_eq!(
+        a.backend.volume(),
+        1.0,
+        "no hidden second volume in the player"
+    );
+    play_on(&a, &b).await;
+    assert_eq!(b.snapshot().await.transport.volume, 0.6);
+
+    // The hardware keys on the phone show up on the other device.
+    a.backend.change_system_volume(0.4, false);
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(b.snapshot().await.transport.volume, 0.4);
+
+    // The other device's control sets the phone's system volume.
+    b.run(Command::SetVolume { volume: 0.9 }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.backend.system_volume(), Some((0.9, false)));
+    assert_eq!(a.backend.volume(), 1.0);
+    b.run(Command::SetMuted { muted: true }).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.backend.system_volume(), Some((0.9, true)));
+}

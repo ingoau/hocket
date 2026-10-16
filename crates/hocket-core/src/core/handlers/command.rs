@@ -55,7 +55,8 @@ impl Actor {
             Command::SeekBy { delta_ms } => {
                 self.transport_command(TransportCommand::SeekBy { delta_ms })
             }
-            Command::SetVolume { volume } => self.set_volume(volume, true),
+            Command::SetVolume { volume } => self.volume_command(Some(volume), false),
+            Command::SetMuted { muted } => self.volume_command(None, muted),
 
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),

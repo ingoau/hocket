@@ -100,7 +100,8 @@ impl ExternalBackend {
                 | BackendReport::Ended { key }
                 | BackendReport::Error { key, .. } => !st.retired.contains(key),
                 BackendReport::AudioFocusLost { .. }
-                | BackendReport::OutputDevicesChanged { .. } => true,
+                | BackendReport::OutputDevicesChanged { .. }
+                | BackendReport::SystemVolume { .. } => true,
             }
         };
         if forward {
@@ -207,6 +208,13 @@ impl PlaybackBackend for ExternalBackend {
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
         self.send(BackendCommand::SetVolume {
             volume: clamp_volume(volume),
+        })
+    }
+
+    fn set_system_volume(&self, volume: f64, muted: bool) -> Result<(), BackendError> {
+        self.send(BackendCommand::SetSystemVolume {
+            volume: clamp_volume(volume),
+            muted,
         })
     }
 

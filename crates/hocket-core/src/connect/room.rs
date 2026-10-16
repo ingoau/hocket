@@ -1015,6 +1015,7 @@ impl Room {
                 started_at,
                 scrobbled,
                 epoch,
+                volume,
                 ..
             } => {
                 if let Err(LeaseError::Fenced { current } | LeaseError::Held { current }) =
@@ -1034,7 +1035,7 @@ impl Room {
                     scrobbled,
                 };
                 // Write cadence: track change and play/pause persist; a seek only updates memory.
-                let persist = match &prev {
+                let mut persist = match &prev {
                     Some(p) => {
                         p.key != key
                             || p.position.is_playing != position.is_playing
@@ -1043,6 +1044,20 @@ impl Room {
                     None => true,
                 };
                 self.replica.set_stamp(stamp, now);
+                // The owner's volume rides along so a device joining later
+                // can show it; a change is persisted like a play/pause.
+                if let Some(v) = volume {
+                    let t = &mut self.replica.document.transport;
+                    let changed = t.volume != v.volume
+                        || t.muted != v.muted
+                        || t.volume_device.as_deref() != Some(device_id.as_str());
+                    if changed {
+                        t.volume = v.volume;
+                        t.muted = v.muted;
+                        t.volume_device = Some(device_id.clone());
+                        persist = true;
+                    }
+                }
                 if persist {
                     self.dirty = true;
                 }
@@ -1054,6 +1069,7 @@ impl Room {
                     started_at,
                     scrobbled,
                     epoch,
+                    volume,
                 };
                 self.broadcast(relay, Some(peer));
             }
@@ -1771,6 +1787,7 @@ mod tests {
                 started_at: 0.0,
                 scrobbled: false,
                 epoch: 1,
+                volume: None,
             }),
         ));
         assert!(matches!(
@@ -1823,6 +1840,7 @@ mod tests {
                 started_at: 0.0,
                 scrobbled: false,
                 epoch: 1,
+                volume: None,
             })
         };
         let outs = r.handle(RoomInput::Message("p1".into(), stamp(0, true)));

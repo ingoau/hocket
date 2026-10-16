@@ -28,7 +28,7 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms,
+    AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
     PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
     SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
 };
@@ -289,9 +289,19 @@ pub enum TransportCommand {
     Pause,
     TogglePlay,
     Stop,
-    SeekTo { position_ms: Ms },
-    SeekBy { delta_ms: i32 },
-    SetVolume { volume: f64 },
+    SeekTo {
+        position_ms: Ms,
+    },
+    SeekBy {
+        delta_ms: i32,
+    },
+    /// Set the owner's volume. `muted` is absent from older peers (set the
+    /// level, which also unmutes); a mute toggle sends the level it knows.
+    SetVolume {
+        volume: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        muted: Option<bool>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +645,10 @@ pub enum Msg {
         started_at: EpochMs,
         scrobbled: bool,
         epoch: u32,
+        /// The owner's volume, so the other devices' volume controls can
+        /// show it. Absent from older peers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        volume: Option<DeviceVolume>,
     },
     /// → room, relayed to the owner: a non-owner's remote control.
     TransportRequest {

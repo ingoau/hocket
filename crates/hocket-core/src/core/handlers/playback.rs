@@ -11,6 +11,9 @@ use crate::core::actor::{
     MEDIA_SESSION_ART_SMALL,
 };
 use crate::core::state::{pending_scrobbles_key, PendingScrobble};
+
+/// How long a volume sent to another device wins over its stamps.
+const REMOTE_VOLUME_HOLD_MS: f64 = 1500.0;
 use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
@@ -449,7 +452,9 @@ impl Actor {
                     self.engine_input(Input::ClaimTransport { takeover: false });
                 }
             }
-            (TransportCommand::SetVolume { volume }, _) => self.set_volume(*volume, false),
+            (TransportCommand::SetVolume { volume, muted }, true) => {
+                self.set_local_volume(*volume, muted.unwrap_or(false))
+            }
             (_, true) => {}
             (_, false) => self.engine_input(Input::TransportRequest(cmd)),
         }
@@ -494,7 +499,9 @@ impl Actor {
                 };
                 self.seek_to(pos as Ms);
             }
-            TransportCommand::SetVolume { volume } => self.set_volume(volume, false),
+            TransportCommand::SetVolume { volume, muted } => {
+                self.set_local_volume(volume, muted.unwrap_or(false))
+            }
         }
     }
 
@@ -633,20 +640,127 @@ impl Actor {
         self.emit_transport();
     }
 
-    pub(crate) fn set_volume(&mut self, volume: f64, persist: bool) {
+    /// The device the volume control drives when it isn't this one: the
+    /// device that holds transport. `None` when this device plays or nobody
+    /// does (the control then sets this device's own volume).
+    pub(crate) fn volume_target(&self) -> Option<DeviceId> {
+        let engine = self.engine.as_ref()?;
+        if engine.owns_transport() {
+            return None;
+        }
+        engine
+            .lease()
+            .owner
+            .clone()
+            .filter(|o| *o != self.cfg.device_id)
+    }
+
+    /// What the volume control shows: the device it drives and its volume.
+    /// The device is `None` while one that doesn't report its volume (an
+    /// older version) plays.
+    pub(crate) fn volume_control(&self) -> (Option<DeviceId>, DeviceVolume) {
+        let Some(owner) = self.volume_target() else {
+            let own = DeviceVolume {
+                volume: self.playback.volume,
+                muted: self.playback.muted,
+            };
+            return (Some(self.cfg.device_id.clone()), own);
+        };
+        if let Some((device, v, at)) = &self.playback.remote_volume_hold {
+            if *device == owner && self.now() - at < REMOTE_VOLUME_HOLD_MS {
+                return (Some(owner), *v);
+            }
+        }
+        match self.engine.as_ref().map(|e| e.transport()) {
+            Some(t) if t.volume_device.as_ref() == Some(&owner) => (
+                Some(owner),
+                DeviceVolume {
+                    volume: t.volume,
+                    muted: t.muted,
+                },
+            ),
+            _ => (None, DeviceVolume::default()),
+        }
+    }
+
+    /// The volume control moved (UI, keys, media session, a watch): set the
+    /// volume of the device playing, or this one when nobody is. `volume`
+    /// `None` keeps the level (a mute toggle); setting a level unmutes.
+    pub(crate) fn volume_command(&mut self, volume: Option<f64>, muted: bool) {
+        let Some(owner) = self.volume_target() else {
+            let level = volume.unwrap_or(self.playback.volume);
+            self.set_local_volume(level, muted);
+            return;
+        };
+        let (device, known) = self.volume_control();
+        let Some(level) = volume.or(device.is_some().then_some(known.volume)) else {
+            // A mute toggle for a device whose level we don't know: sending
+            // a made-up level would change it.
+            return;
+        };
+        let level = crate::audio::backend::clamp_volume(level);
+        let now = self.now();
+        self.playback.remote_volume_hold = Some((
+            owner,
+            DeviceVolume {
+                volume: level,
+                muted,
+            },
+            now,
+        ));
+        self.engine_input(Input::TransportRequest(TransportCommand::SetVolume {
+            volume: level,
+            muted: Some(muted),
+        }));
+        self.emit_transport();
+    }
+
+    /// Set this device's own volume (its UI while nobody else plays, or a
+    /// remote control while it plays), persist it and tell the others.
+    pub(crate) fn set_local_volume(&mut self, volume: f64, muted: bool) {
         let volume = crate::audio::backend::clamp_volume(volume);
         self.playback.volume = volume;
-        if let Err(e) = self.backend.set_volume(self.effective_volume()) {
-            self.log("debug", format!("set_volume: {e}"));
+        self.playback.muted = muted;
+        if self.playback.system_volume {
+            // The platform keeps it; its report comes back as a SystemVolume.
+            if let Err(e) = self.backend.set_system_volume(volume, muted) {
+                self.log("debug", format!("set_system_volume: {e}"));
+            }
+        } else {
+            if let Err(e) = self.backend.set_volume(self.effective_volume()) {
+                self.log("debug", format!("set_volume: {e}"));
+            }
+            let clock = self.clock.clone();
+            let _ =
+                self.db
+                    .saved_state_set(crate::core::actor::VOLUME_KEY, &volume, clock.as_ref());
+            let _ = self
+                .db
+                .saved_state_set(crate::core::actor::MUTED_KEY, &muted, clock.as_ref());
         }
-        if persist {
-            let _ = self.db.saved_state_set(
-                crate::core::actor::VOLUME_KEY,
-                &volume,
-                self.clock.as_ref(),
-            );
-        }
+        self.stamp();
         self.emit_transport();
+    }
+
+    /// The platform's own volume changed (Android's music stream): mirror it
+    /// and tell the others. From the first report on, the platform owns this
+    /// device's volume and the in-player gain carries only the sleep fade.
+    fn on_system_volume(&mut self, volume: f64, muted: bool) {
+        let volume = crate::audio::backend::clamp_volume(volume);
+        let first = !self.playback.system_volume;
+        let changed = first || volume != self.playback.volume || muted != self.playback.muted;
+        self.playback.system_volume = true;
+        self.playback.volume = volume;
+        self.playback.muted = muted;
+        if first {
+            if let Err(e) = self.backend.set_volume(self.effective_volume()) {
+                self.log("debug", format!("set_volume: {e}"));
+            }
+        }
+        if changed {
+            self.stamp();
+            self.emit_transport();
+        }
     }
 
     /// Send a transport stamp: only ever from here, only on change.
@@ -668,6 +782,10 @@ impl Actor {
             played_ms: self.scrobbler.played_ms(),
             started_at: p.started_at,
             scrobbled: p.scrobbled,
+            volume: Some(DeviceVolume {
+                volume: p.volume,
+                muted: p.muted,
+            }),
         };
         self.engine_input(input);
     }
@@ -692,6 +810,7 @@ impl Actor {
             }
         }
         match report {
+            BackendReport::SystemVolume { volume, muted } => self.on_system_volume(volume, muted),
             BackendReport::Ready { key, duration_ms } => {
                 if !current(&key, self) {
                     return;

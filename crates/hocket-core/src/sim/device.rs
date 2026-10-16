@@ -580,6 +580,7 @@ impl SimDevice {
             played_ms: p.played_ms,
             started_at: p.started_at,
             scrobbled: p.scrobbled,
+            volume: None,
         };
         self.queued.push(input);
     }

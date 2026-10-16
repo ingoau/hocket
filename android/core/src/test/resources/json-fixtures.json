@@ -133,6 +133,24 @@
       }
     }
   },
+  "command.backendReport.systemVolume": {
+    "type": "backendReport",
+    "data": {
+      "report": {
+        "type": "systemVolume",
+        "data": {
+          "volume": 0.4,
+          "muted": true
+        }
+      }
+    }
+  },
+  "command.setMuted": {
+    "type": "setMuted",
+    "data": {
+      "muted": true
+    }
+  },
   "command.mediaSessionCommand": {
     "type": "mediaSessionCommand",
     "data": {
@@ -655,6 +673,41 @@
       }
     }
   },
+  "event.backend.setSystemVolume": {
+    "type": "backend",
+    "data": {
+      "command": {
+        "type": "setSystemVolume",
+        "data": {
+          "volume": 0.5,
+          "muted": false
+        }
+      }
+    }
+  },
+  "event.transportChanged": {
+    "type": "transportChanged",
+    "data": {
+      "transport": {
+        "lease": {
+          "owner": null,
+          "epoch": 0,
+          "expiresAt": 0.0
+        },
+        "position": {
+          "positionMs": 0,
+          "takenAt": 0.0,
+          "rate": 0.0,
+          "isPlaying": false
+        },
+        "buffering": false,
+        "playedMs": 0,
+        "volume": 0.7,
+        "muted": true,
+        "volumeDevice": "pixel"
+      }
+    }
+  },
   "event.backend.play": {
     "type": "backend",
     "data": {
@@ -687,6 +740,7 @@
         "shuffle": false,
         "repeat": "off",
         "volume": 1.0,
+        "muted": false,
         "actions": [
           "play",
           "love",
@@ -829,7 +883,9 @@
           },
           "buffering": false,
           "playedMs": 0,
-          "volume": 0.0
+          "volume": 0.0,
+          "muted": false,
+          "volumeDevice": null
         },
         "savedQueues": []
       }

@@ -46,6 +46,10 @@ pub enum ScriptedCall {
     SetVolume {
         volume: f64,
     },
+    SetSystemVolume {
+        volume: f64,
+        muted: bool,
+    },
     PreBuffer {
         key: QueueKey,
         position_ms: u32,
@@ -95,6 +99,8 @@ struct State {
     pending_pre_buffer: bool,
     last_position_report_ms: f64,
     volume: f64,
+    /// A platform media volume, as on Android (see `use_system_volume`).
+    system_volume: Option<(f64, bool)>,
     gapless: bool,
     device: Option<String>,
     failing: HashSet<QueueKey>,
@@ -202,6 +208,22 @@ impl ScriptedBackend {
 
     pub fn volume(&self) -> f64 {
         self.state.lock().volume
+    }
+
+    /// Act like a platform that owns the media volume (Android): report it
+    /// now, and again whenever it changes.
+    pub fn use_system_volume(&self, volume: f64, muted: bool) {
+        self.state.lock().system_volume = Some((volume, muted));
+        self.emit(BackendReport::SystemVolume { volume, muted });
+    }
+
+    /// The platform media volume changed outside the app (hardware keys).
+    pub fn change_system_volume(&self, volume: f64, muted: bool) {
+        self.use_system_volume(volume, muted);
+    }
+
+    pub fn system_volume(&self) -> Option<(f64, bool)> {
+        self.state.lock().system_volume
     }
 
     /// Advance the virtual playback to the clock's current time, emitting
@@ -480,6 +502,21 @@ impl PlaybackBackend for ScriptedBackend {
         let volume = clamp_volume(volume);
         st.log.push(ScriptedCall::SetVolume { volume });
         st.volume = volume;
+        Ok(())
+    }
+
+    fn set_system_volume(&self, volume: f64, muted: bool) -> Result<(), BackendError> {
+        let volume = clamp_volume(volume);
+        {
+            let mut st = self.state.lock();
+            st.log.push(ScriptedCall::SetSystemVolume { volume, muted });
+            if st.system_volume.is_none() {
+                return Err(BackendError::Unsupported("system volume"));
+            }
+            st.system_volume = Some((volume, muted));
+        }
+        // The platform echoes its own change, as Android's broadcast does.
+        self.emit(BackendReport::SystemVolume { volume, muted });
         Ok(())
     }
 

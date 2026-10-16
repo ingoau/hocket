@@ -366,6 +366,11 @@ impl Actor {
 
         let core_stream = cfg.audio == AudioMode::Native;
         let volume = saved_volume(&db, clock.as_ref());
+        let muted = db
+            .saved_state_get::<bool>(MUTED_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or(false);
         let now = clock.now_ms();
         let mut actor = Actor {
             cfg,
@@ -422,6 +427,7 @@ impl Actor {
             outbox_entries: HashMap::new(),
             playback: Playback {
                 volume,
+                muted,
                 ..Default::default()
             },
             network: None,
@@ -1116,10 +1122,19 @@ impl Actor {
     }
 
     /// The gain the backend applies: the volume slider, scaled by the sleep
-    /// timer's fade, on a dB scale (so the fade sounds even too).
+    /// timer's fade, on a dB scale (so the fade sounds even too). With a
+    /// system volume the platform applies the volume and mute itself and the
+    /// gain carries only the fade.
     pub(crate) fn effective_volume(&self) -> f64 {
-        let slider = self.playback.volume * self.playback.fade_gain.unwrap_or(1.0);
-        crate::audio::backend::volume_to_gain(slider)
+        use crate::audio::backend::volume_to_gain;
+        let fade = self.playback.fade_gain.unwrap_or(1.0);
+        if self.playback.system_volume {
+            volume_to_gain(fade)
+        } else if self.playback.muted {
+            0.0
+        } else {
+            volume_to_gain(self.playback.volume * fade)
+        }
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
@@ -1158,6 +1173,8 @@ impl Actor {
 /// `actions.order.<surface>`).
 /// Saved-state key for the volume slider position.
 pub(crate) const VOLUME_KEY: &str = "volumeSlider";
+/// Saved-state key for this device's mute.
+pub(crate) const MUTED_KEY: &str = "volumeMuted";
 /// Before the slider moved to a dB scale it was saved here as a linear gain.
 const LEGACY_VOLUME_KEY: &str = "volume";
 

@@ -150,6 +150,16 @@ mod tests {
             }),
         );
         push(
+            "command.backendReport.systemVolume",
+            json!(Command::BackendReport {
+                report: BackendReport::SystemVolume {
+                    volume: 0.4,
+                    muted: true
+                }
+            }),
+        );
+        push("command.setMuted", json!(Command::SetMuted { muted: true }));
+        push(
             "command.mediaSessionCommand",
             json!(Command::MediaSessionCommand {
                 action: MediaSessionAction::Seek,
@@ -419,6 +429,26 @@ mod tests {
             }),
         );
         push(
+            "event.backend.setSystemVolume",
+            json!(Event::Backend {
+                command: BackendCommand::SetSystemVolume {
+                    volume: 0.5,
+                    muted: false
+                }
+            }),
+        );
+        push(
+            "event.transportChanged",
+            json!(Event::TransportChanged {
+                transport: TransportState {
+                    volume: 0.7,
+                    muted: true,
+                    volume_device: Some("pixel".into()),
+                    ..Default::default()
+                }
+            }),
+        );
+        push(
             "event.backend.play",
             json!(Event::Backend {
                 command: BackendCommand::Play
@@ -448,6 +478,7 @@ mod tests {
                     shuffle: false,
                     repeat: RepeatMode::Off,
                     volume: 1.0,
+                    muted: false,
                     actions: vec![
                         MediaSessionAction::Play,
                         MediaSessionAction::Love,

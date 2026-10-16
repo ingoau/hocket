@@ -1067,7 +1067,10 @@ impl Actor {
             t.position.position_ms = if duration > 0 { pos.min(duration) } else { pos };
             t.position.taken_at = e.now_session_ms();
         }
-        t.volume = self.playback.volume;
+        let (device, v) = self.volume_control();
+        t.volume = v.volume;
+        t.muted = v.muted;
+        t.volume_device = device;
         t
     }
 
@@ -1119,7 +1122,7 @@ impl Actor {
             has_cleared_selection: self.undo.has_cleared_selection(),
             text_field_focused: false,
             saved_queue_count: doc.map(|d| d.saved_queues.len() as u32).unwrap_or(0),
-            volume: self.playback.volume,
+            volume: self.volume_control().1.volume,
         }
     }
 

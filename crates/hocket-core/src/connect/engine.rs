@@ -27,8 +27,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms,
-    PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState,
+    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
     TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
@@ -260,6 +260,8 @@ pub enum Input {
         played_ms: Ms,
         started_at: EpochMs,
         scrobbled: bool,
+        /// This device's volume, for the other devices' volume controls.
+        volume: Option<DeviceVolume>,
     },
     /// The user wants to play here (nobody owns, or a deliberate takeover).
     ClaimTransport {
@@ -505,6 +507,7 @@ struct CurrentStamp {
     played_ms: Ms,
     started_at: EpochMs,
     scrobbled: bool,
+    volume: Option<DeviceVolume>,
 }
 
 #[derive(Debug, Clone)]
@@ -1006,12 +1009,15 @@ impl Engine {
     /// session clock.
     pub fn transport(&self) -> TransportState {
         if let (Some(_), Some(s)) = (&self.held, &self.stamp) {
+            let volume = s.volume.unwrap_or_default();
             TransportState {
                 lease: self.lease.clone(),
                 position: s.position.clone(),
                 buffering: false,
                 played_ms: s.played_ms,
-                volume: self.remote_transport.volume,
+                volume: volume.volume,
+                muted: volume.muted,
+                volume_device: s.volume.map(|_| self.cfg.device.id.clone()),
             }
         } else {
             let mut t = self.remote_transport.clone();
@@ -1190,7 +1196,16 @@ impl Engine {
                 played_ms,
                 started_at,
                 scrobbled,
-            } => self.on_local_stamp(key, track_id, position, played_ms, started_at, scrobbled),
+                volume,
+            } => self.on_local_stamp(CurrentStamp {
+                key,
+                track_id,
+                position,
+                played_ms,
+                started_at,
+                scrobbled,
+                volume,
+            }),
             Input::ClaimTransport { takeover } => {
                 if self.held.is_none() || takeover {
                     self.claim(None, takeover);
@@ -2345,10 +2360,16 @@ impl Engine {
                 played_ms,
                 started_at,
                 scrobbled,
+                volume,
                 ..
             } => {
                 if device_id == self.cfg.device.id {
                     return;
+                }
+                if let Some(v) = volume {
+                    self.remote_transport.volume = v.volume;
+                    self.remote_transport.muted = v.muted;
+                    self.remote_transport.volume_device = Some(device_id.clone());
                 }
                 // Another device holds this play: should it ever come to us
                 // (handoff, resume, a takeover of a loaded play) it is shared.
@@ -2533,6 +2554,7 @@ impl Engine {
                     played_ms,
                     started_at,
                     scrobbled,
+                    volume: None,
                 });
                 self.out.push(Output::TakeTransport {
                     key,
@@ -3308,6 +3330,7 @@ impl Engine {
                     played_ms: t.played_ms,
                     started_at: t.started_at,
                     scrobbled: t.scrobbled,
+                    volume: None,
                 });
                 self.out.push(Output::TakeTransport {
                     key: t.key,
@@ -3356,25 +3379,28 @@ impl Engine {
         self.emit_lease();
     }
 
-    fn on_local_stamp(
-        &mut self,
-        key: Option<QueueKey>,
-        track_id: Option<TrackId>,
-        position: PositionStamp,
-        played_ms: Ms,
-        started_at: EpochMs,
-        scrobbled: bool,
-    ) {
+    /// `stamp.position.taken_at` is local time here.
+    fn on_local_stamp(&mut self, stamp: CurrentStamp) {
+        let CurrentStamp {
+            key,
+            track_id,
+            position,
+            played_ms,
+            started_at,
+            scrobbled,
+            volume,
+        } = stamp;
         let mut p = position;
         p.taken_at += self.offset_ms();
         let key_changed = self.stamp.as_ref().map(|s| s.key != key).unwrap_or(true);
         self.stamp = Some(CurrentStamp {
             key: key.clone(),
-            track_id: track_id.clone(),
+            track_id,
             position: p.clone(),
             played_ms,
             started_at,
             scrobbled,
+            volume,
         });
         let Some(h) = &self.held else {
             self.log(
@@ -3393,6 +3419,7 @@ impl Engine {
             started_at,
             scrobbled,
             epoch,
+            volume,
         });
         if key_changed && self.picker.is_some() {
             self.reprepare_picker();
@@ -4748,6 +4775,7 @@ mod tests {
             played_ms: 1000,
             started_at: 5.0,
             scrobbled: false,
+            volume: None,
         });
         let outs = a.handle(Input::WireIn {
             peer: "up".into(),
@@ -4808,6 +4836,7 @@ mod tests {
                 started_at: 7.0,
                 scrobbled: false,
                 epoch: 1,
+                volume: None,
             }),
         });
         // a minute on: the lease b knows "expired" 40 s ago
@@ -4945,6 +4974,7 @@ mod tests {
             played_ms: 1000,
             started_at: 5.0,
             scrobbled: false,
+            volume: None,
         });
         let outs = src.handle(Input::OpenPicker);
         let w = wire_outs(&outs);
@@ -6095,6 +6125,7 @@ mod tests {
                 started_at,
                 scrobbled: true,
                 epoch: 1,
+                volume: None,
             })
         };
         e.handle(Input::WireIn {
@@ -6534,6 +6565,7 @@ mod tests {
             played_ms: 1000,
             started_at: 6_000.0,
             scrobbled: false,
+            volume: None,
         });
         src.handle(Input::OpenPicker);
         let outs = src.handle(Input::HandoffTo {
@@ -6568,6 +6600,7 @@ mod tests {
                 started_at: 8_000.0,
                 scrobbled: false,
                 epoch: 1,
+                volume: None,
             }),
         });
         alone_defers_shared_but_not_origin(&mut e, 8_000.0);
@@ -6593,6 +6626,7 @@ mod tests {
             played_ms: 0,
             started_at: 10_000.0,
             scrobbled: false,
+            volume: None,
         });
         assert_eq!(reach(&mut e, "t", 10_000.0), vec![true]);
     }
