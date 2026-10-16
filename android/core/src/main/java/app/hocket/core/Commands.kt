@@ -10,6 +10,7 @@ object Commands {
     fun seekTo(positionMs: Long) = Command.SeekTo(CommandSeekToInner(positionMs.coerceAtLeast(0).toUInt()))
     fun seekBy(deltaMs: Int) = Command.SeekBy(CommandSeekByInner(deltaMs))
     fun setVolume(volume: Double) = Command.SetVolume(CommandSetVolumeInner(volume))
+    fun setMuted(muted: Boolean) = Command.SetMuted(CommandSetMutedInner(muted))
     fun setNetworkState(state: NetworkState) = Command.SetNetworkState(CommandSetNetworkStateInner(state))
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
     fun setBatterySaver(enabled: Boolean) = Command.SetBatterySaver(CommandSetBatterySaverInner(enabled))

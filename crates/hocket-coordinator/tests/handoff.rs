@@ -269,6 +269,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
         played_ms: 30_000,
         started_at,
         scrobbled: false,
+        volume: None,
     })
     .await;
 
@@ -308,6 +309,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
         played_ms: 5_000,
         started_at: a.engine.now_session_ms(),
         scrobbled: false,
+        volume: None,
     })
     .await;
 

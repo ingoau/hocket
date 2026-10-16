@@ -2,6 +2,7 @@ package app.hocket.ui.player
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LoadingIndicator
@@ -20,6 +22,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -33,12 +36,14 @@ import app.hocket.core.api.ConnectionTier
 import app.hocket.core.api.Platform
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.LabelledSlider
 import app.hocket.ui.components.formatAgo
 import app.hocket.ui.icons.HocketIcons
 
 /**
  * The Connect picker. Opening it makes targets pre-buffer (the "ready" state); playback keeps going
- * here until a target is picked (design: handoff).
+ * here until a target is picked (design: handoff). On top, the volume of the device playing (this
+ * phone's own volume, its music volume, while it plays or nobody does).
  */
 @Composable
 fun HandoffSheet(onDismiss: () -> Unit) {
@@ -61,6 +66,7 @@ fun HandoffSheet(onDismiss: () -> Unit) {
             }
             Text(conn, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(8.dp))
+            VolumeRow()
             devices.firstOrNull { it.isSelf }?.let { self ->
                 ListItem(headlineContent = { Text(stringResource(R.string.handoff_this_device)) }, supportingContent = { if (self.playing) Text(stringResource(R.string.handoff_playing)) },
                     leadingContent = { Icon(HocketIcons.Filled.PhoneAndroid, null) }, trailingContent = { if (self.playing) Icon(HocketIcons.Filled.VolumeUp, null, tint = MaterialTheme.colorScheme.primary) },
@@ -82,5 +88,45 @@ fun HandoffSheet(onDismiss: () -> Unit) {
             }
             Text(stringResource(R.string.handoff_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
         }
+    }
+}
+
+/**
+ * The volume control: the device playing (named while that is another device), or this phone when
+ * nothing plays elsewhere. The core routes the change; each device keeps its own level and mute.
+ */
+@Composable
+private fun VolumeRow() {
+    val client = LocalCoreClient.current
+    val transport by client.transport.collectAsStateWithLifecycle()
+    val devices by client.devices.collectAsStateWithLifecycle()
+    val remote = devices.firstOrNull { it.id == transport.lease.owner && !it.isSelf }
+    val unknown = remote != null && transport.volumeDevice != remote.id
+    val muted = transport.muted == true
+    val shown = if (muted || unknown) 0f else transport.volume.toFloat().coerceIn(0f, 1f)
+    val label = if (remote != null) stringResource(R.string.handoff_volume_on, remote.name) else stringResource(R.string.player_volume)
+    val percent = "${(shown * 100).toInt()}%"
+    val state = if (muted) stringResource(R.string.volume_muted) else percent
+    Column(Modifier.padding(horizontal = 24.dp).testTag("handoff.volume")) {
+        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = { client.dispatch(Commands.setMuted(!muted)) },
+                enabled = !unknown,
+                modifier = Modifier.testTag("handoff.volume.mute"),
+            ) {
+                Icon(if (muted || shown == 0f) HocketIcons.Filled.VolumeOff else HocketIcons.Filled.VolumeUp,
+                    stringResource(if (muted) R.string.volume_unmute else R.string.volume_mute))
+            }
+            LabelledSlider(
+                value = shown,
+                onValueChange = { client.dispatch(Commands.setVolume(it.toDouble())) },
+                label = label,
+                valueText = state,
+                enabled = !unknown,
+                modifier = Modifier.weight(1f).testTag("handoff.volume.slider"),
+            )
+        }
+        if (unknown) Text(stringResource(R.string.volume_unknown, remote.name), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

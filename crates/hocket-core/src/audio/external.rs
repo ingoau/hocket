@@ -16,8 +16,9 @@
 //!   and the platform applies it (Media3: `setVolume(10^(gain_db/20))` on the
 //!   item or a `ReplayGainAudioProcessor`; EQ through `android.media.audiofx`
 //!   with the same band table). The value is absolute per item, not a delta.
-//! - **Volume** — `SetVolume` is the user volume, distinct from `gain_db`.
-//!   The platform multiplies them.
+//! - **Volume** — `SetVolume` is the user volume as an amplitude gain (the
+//!   core has already mapped the slider onto a dB scale), distinct from
+//!   `gain_db`. The platform multiplies them.
 //! - **Output device** — the platform owns routing on Android;
 //!   [`PlaybackBackend::set_output_device`] returns
 //!   [`BackendError::Unsupported`] and [`PlaybackBackend::output_devices`] is
@@ -99,7 +100,8 @@ impl ExternalBackend {
                 | BackendReport::Ended { key }
                 | BackendReport::Error { key, .. } => !st.retired.contains(key),
                 BackendReport::AudioFocusLost { .. }
-                | BackendReport::OutputDevicesChanged { .. } => true,
+                | BackendReport::OutputDevicesChanged { .. }
+                | BackendReport::SystemVolume { .. } => true,
             }
         };
         if forward {
@@ -206,6 +208,13 @@ impl PlaybackBackend for ExternalBackend {
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
         self.send(BackendCommand::SetVolume {
             volume: clamp_volume(volume),
+        })
+    }
+
+    fn set_system_volume(&self, volume: f64, muted: bool) -> Result<(), BackendError> {
+        self.send(BackendCommand::SetSystemVolume {
+            volume: clamp_volume(volume),
+            muted,
         })
     }
 

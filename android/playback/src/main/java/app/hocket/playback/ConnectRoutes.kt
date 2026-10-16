@@ -3,6 +3,8 @@ package app.hocket.playback
 import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.MediaSessionState
 import app.hocket.core.api.Platform
+import app.hocket.core.api.TransportState
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +27,15 @@ object ConnectRoutes {
     /** Route feature the app asks MediaRouter2 to discover; only [ConnectRouteProvider] offers it. */
     const val FEATURE = "app.hocket.feature.CONNECT"
 
+    /** Volume steps of a remote device in the system controls: 5 % a press, like the core's volume up. */
+    const val VOLUME_STEPS = 20
+
+    /** A 0–1 volume as system volume steps. */
+    fun steps(volume: Double): Int = (volume.coerceIn(0.0, 1.0) * VOLUME_STEPS).roundToInt()
+
+    /** System volume steps as a 0–1 volume. */
+    fun level(steps: Int): Double = steps.coerceIn(0, VOLUME_STEPS).toDouble() / VOLUME_STEPS
+
     data class State(
         /** Other Hocket devices in the session room that can play (never this one). */
         val devices: List<DeviceInfo> = emptyList(),
@@ -32,6 +43,9 @@ object ConnectRoutes {
         val remote: DeviceInfo? = null,
         /** This device's Connect id, once the core has reported the room. */
         val selfId: String? = null,
+        /** [remote]'s volume (0–1) once it has reported one; null otherwise (an older version). */
+        val remoteVolume: Double? = null,
+        val remoteMuted: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State())
@@ -39,6 +53,7 @@ object ConnectRoutes {
 
     private var devices: List<DeviceInfo> = emptyList()
     private var owner: String? = null
+    private var transport: TransportState? = null
     private var session: MediaSessionState? = null
 
     /** Main thread. */
@@ -53,6 +68,12 @@ object ConnectRoutes {
         publish()
     }
 
+    /** Main thread. The transport: its lease owner and the volume of the device the control drives. */
+    fun onTransport(transport: TransportState) {
+        this.transport = transport
+        onOwner(transport.lease.owner)
+    }
+
     /** Main thread. */
     fun onMediaSession(state: MediaSessionState) {
         session = state
@@ -63,17 +84,22 @@ object ConnectRoutes {
     fun clear() {
         devices = emptyList()
         owner = null
+        transport = null
         session = null
         publish()
     }
 
     private fun publish() {
         val s = session
+        val remote = if (s == null) null else remotePlayback(s, devices, owner)
+        val t = transport?.takeIf { remote != null && it.volumeDevice == remote.id }
         _state.value = State(
             // A coordinator is a relay, never somewhere to play.
             devices = devices.filter { !it.isSelf && it.platform != Platform.Coordinator },
-            remote = if (s == null) null else remotePlayback(s, devices, owner),
+            remote = remote,
             selfId = devices.firstOrNull { it.isSelf }?.id,
+            remoteVolume = t?.volume,
+            remoteMuted = t?.muted == true,
         )
     }
 

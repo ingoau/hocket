@@ -15,7 +15,8 @@ import { usePosition } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
-import { seekKeyTarget, seekValueText, volumeValueText } from "../lib/a11y";
+import { seekKeyTarget, seekValueText } from "../lib/a11y";
+import { useVolumeControl } from "../lib/volume";
 import { NARROW, useMediaQuery } from "../lib/media";
 import { openContextMenu, openMenuFromButton } from "./ContextMenu";
 import { Artwork } from "./Artwork";
@@ -171,26 +172,14 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   );
 }
 
+/** The volume of the device playing (this one, or the one holding transport). */
 function Volume() {
-  const volume = useApp((s) => s.transport.volume);
-  const [muted, setMuted] = useState<number | undefined>(undefined);
-  const set = (v: number) => bridge().dispatch({ type: "setVolume", data: { volume: v } });
-  const toggle = () => {
-    if (muted !== undefined) { set(muted); setMuted(undefined); } else { setMuted(volume); set(0); }
-  };
-  // Arrows move 5 %, Page keys 20 %; the native 1 % step stays for the pointer.
-  const onKey = (e: React.KeyboardEvent) => {
-    const step = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : e.key === "PageUp" ? 0.2 : e.key === "PageDown" ? -0.2 : 0;
-    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setMuted(undefined);
-    set(Math.round(Math.max(0, Math.min(1, volume + step)) * 100) / 100);
-  };
+  const v = useVolumeControl();
+  const silent = v.muted || v.shown === 0;
   return (
-    <div className="volume">
-      <button type="button" className="btn icon" aria-label={t("player.mute")} aria-pressed={volume === 0} title={volume === 0 ? t("a11y.unmute") : t("player.mute")} onClick={toggle} data-testid="mute"><Icon name={volume === 0 ? "mute" : "volume"} size={20} /></button>
-      <Slider size="sm" min={0} max={1} step={0.01} value={volume} aria-label={t("player.volume")} aria-valuetext={volumeValueText(volume)} onKeyDown={onKey} onChange={(v) => { setMuted(undefined); set(v); }} onWheel={(e) => set(Math.max(0, Math.min(1, volume - Math.sign(e.deltaY) * 0.05)))} data-testid="volume" />
+    <div className="volume" title={v.label}>
+      <button type="button" className="btn icon" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute} data-testid="mute"><Icon name={silent ? "mute" : "volume"} size={20} /></button>
+      <Slider size="sm" min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="volume" />
     </div>
   );
 }

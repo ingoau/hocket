@@ -381,12 +381,19 @@ fn seek_backward(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Comma
 pub const VOLUME_STEP: f64 = 0.05;
 
 fn volume_up(_: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    if s.volume_unknown {
+        return vec![];
+    }
     vec![Command::SetVolume {
         volume: (s.volume + VOLUME_STEP).clamp(0.0, 1.0),
     }]
 }
 
 fn volume_down(_: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    // Down while muted stays muted rather than unmuting a step below.
+    if s.volume_unknown || s.volume == 0.0 {
+        return vec![];
+    }
     vec![Command::SetVolume {
         volume: (s.volume - VOLUME_STEP).clamp(0.0, 1.0),
     }]

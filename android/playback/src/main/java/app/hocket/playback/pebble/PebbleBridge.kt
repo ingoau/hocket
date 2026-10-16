@@ -1,7 +1,6 @@
 package app.hocket.playback.pebble
 
 import android.content.Context
-import android.media.AudioManager
 import android.util.Log
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
@@ -35,6 +34,7 @@ import io.rebble.pebblekit2.client.DefaultPebbleSender
 import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 import java.util.UUID
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -64,6 +64,8 @@ class PebbleBridge(
         private const val SEARCH_LIMIT = 10
         private const val RECENT_LIMIT = 50
         private const val TEXT_MAX = 95
+        /** One volume button press, as the core's volume up/down. */
+        private const val VOLUME_STEP = 0.05
         /** Played tracks before the current one: fewer than a page, so the first page holds it. */
         private const val QUEUE_HISTORY = 8
         /** Page size when a held playlist row asks for all of its tracks. */
@@ -80,6 +82,8 @@ class PebbleBridge(
     /** The watchapp is open on a watch: state is pushed only then. */
     private var open = false
     private var session: MediaSessionState? = null
+    /** The playing device has reported its volume (an older one doesn't): a step has a base. */
+    private var volumeKnown = true
     private var clockOffsetMs = 0.0
     private var queue: QueueView? = null
     private var devices: List<DeviceInfo> = emptyList()
@@ -96,6 +100,7 @@ class PebbleBridge(
             is Event.MediaSession -> onSession(event.data.state)
             is Event.QueueChanged -> { queue = event.data.queue; pushNowSoon() }
             is Event.DevicesChanged -> devices = event.data.devices
+            is Event.TransportChanged -> volumeKnown = event.data.transport.volumeDevice != null
             is Event.ResumeOfferChanged -> { resumeOffer = event.data.offer; pushNowSoon() }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.SettingChanged -> {
@@ -114,6 +119,7 @@ class PebbleBridge(
         queue = snapshot.queue
         devices = snapshot.devices
         resumeOffer = snapshot.resumeOffer
+        volumeKnown = snapshot.transport.volumeDevice != null
         snapshot.settings.forEach { settings[it.key] = it.value }
         settingsLoaded = true
         if (open) scope.launch { send(settingsMessage()) }
@@ -247,20 +253,21 @@ class PebbleBridge(
     }
 
     /**
-     * VOLUME (open question, docs/pebble.md): what the watch's volume controls drive is undecided
-     * until the Connect volume migration. Until then they change the phone's music volume, as the
-     * official Pebble app does. Every volume press goes through here and [volumePercent].
+     * The watch's volume buttons drive the device playing, like every volume control: the core
+     * routes the change (this phone's own volume is its music volume). 5 % a press, from silence
+     * when muted (a press unmutes).
      */
     private fun changeVolume(up: Boolean) {
-        val audio = context.getSystemService(AudioManager::class.java) ?: return
-        audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
+        val s = session?.takeIf { volumeKnown } ?: return
+        if (!up && s.muted == true) return
+        val from = if (s.muted == true) 0.0 else s.volume
+        dispatch(Commands.setVolume((from + if (up) VOLUME_STEP else -VOLUME_STEP).coerceIn(0.0, 1.0)))
     }
 
-    /** The level [changeVolume] changes, 0..100. */
+    /** The level [changeVolume] changes, 0..100 (255 = unknown). */
     private fun volumePercent(): Int {
-        val audio = context.getSystemService(AudioManager::class.java) ?: return 255
-        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).takeIf { it > 0 } ?: return 255
-        return audio.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+        val s = session?.takeIf { volumeKnown } ?: return 255
+        return if (s.muted == true) 0 else (s.volume.coerceIn(0.0, 1.0) * 100).roundToInt()
     }
 
     /** Selecting a row that is not browsable: play it, jump to it, or hand off to it. */

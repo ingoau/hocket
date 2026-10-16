@@ -549,7 +549,27 @@ pub struct TransportState {
     /// Accumulated played time of the current item; travels with handoff so a
     /// takeover 90 s in doesn't eat the scrobble.
     pub played_ms: Ms,
+    /// The volume slider position (0–1) of the device the volume control
+    /// drives: the device playing, or this one when nobody is.
     pub volume: f64,
+    /// That device is muted; `volume` is the level it goes back to.
+    #[serde(default)]
+    pub muted: bool,
+    /// The device `volume` and `muted` belong to. `None` while another
+    /// device plays and hasn't reported its volume yet (an older version):
+    /// the control has nothing to show.
+    #[serde(default)]
+    pub volume_device: Option<DeviceId>,
+}
+
+/// A device's volume, as it travels with its transport stamps.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceVolume {
+    /// Slider position 0–1.
+    pub volume: f64,
+    pub muted: bool,
 }
 
 #[typeshare]
@@ -1249,8 +1269,17 @@ pub enum BackendCommand {
     Seek {
         position_ms: Ms,
     },
+    /// The in-player gain (0–1, amplitude). With a system volume this is
+    /// only the sleep fade; otherwise it also carries the user volume.
     SetVolume {
         volume: f64,
+    },
+    /// Set the platform's own media volume (Android's music stream): the
+    /// slider position 0–1 and mute. Sent only to a backend that reports
+    /// [`BackendReport::SystemVolume`].
+    SetSystemVolume {
+        volume: f64,
+        muted: bool,
     },
     /// Handoff pre-buffering: fetch but don't play; discarded on timeout.
     PreBuffer {
@@ -1311,6 +1340,15 @@ pub enum BackendReport {
     OutputDevicesChanged {
         devices: Vec<OutputDevice>,
     },
+    /// The platform's media volume (0–1) or mute changed, by whatever means
+    /// (hardware keys, another app, a headset). A backend that sends this
+    /// owns the device's volume: the core mirrors it instead of applying
+    /// its own gain, and drives it with [`BackendCommand::SetSystemVolume`].
+    /// Sent once at start and on every change.
+    SystemVolume {
+        volume: f64,
+        muted: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,7 +1395,11 @@ pub struct MediaSessionState {
     pub position: PositionStamp,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    /// The volume of the device the volume control drives (see
+    /// [`TransportState::volume`]).
     pub volume: f64,
+    #[serde(default)]
+    pub muted: bool,
     pub actions: Vec<MediaSessionAction>,
     /// Whether this device owns transport. Remote controls still work when it
     /// doesn't; they are forwarded to the playing device.
@@ -1722,8 +1764,15 @@ pub enum Command {
     SeekBy {
         delta_ms: i32,
     },
+    /// Set the volume of the device playing (this one when nobody is), and
+    /// unmute it.
     SetVolume {
         volume: f64,
+    },
+    /// Mute or unmute the device playing (this one when nobody is). Each
+    /// device remembers its own level across a mute.
+    SetMuted {
+        muted: bool,
     },
 
     // -- queue ------------------------------------------------------------

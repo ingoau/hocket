@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.semantics
@@ -73,11 +74,13 @@ fun LabelledSlider(
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
     showTicks: Boolean = true,
+    enabled: Boolean = true,
 ) {
     androidx.compose.foundation.layout.Box(
         modifier.heightIn(min = 48.dp).clearAndSetSemantics {
             contentDescription = label
             stateDescription = valueText
+            if (!enabled) disabled()
             progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(valueRange), valueRange, steps)
             setProgress(label) { target ->
                 var v = target.coerceIn(valueRange)
@@ -92,6 +95,6 @@ fun LabelledSlider(
         },
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
-        androidx.compose.material3.Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = if (showTicks) steps else 0, onValueChangeFinished = onValueChangeFinished, modifier = Modifier.fillMaxWidth())
+        androidx.compose.material3.Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = if (showTicks) steps else 0, onValueChangeFinished = onValueChangeFinished, enabled = enabled, modifier = Modifier.fillMaxWidth())
     }
 }

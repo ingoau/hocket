@@ -15,7 +15,7 @@
 //! | set       | true                   | when `ends_at` is reached, keep playing until the track that is playing *then* ends, then stop |
 //!
 //! With [`SleepTimerMachine::set_fade`] enabled the machine asks for a
-//! linear volume fade over the last [`FADE_MS`] before a timed stop, and
+//! volume fade (linear in slider position, so even in loudness) over the last [`FADE_MS`] before a timed stop, and
 //! restores the volume when it fires or is cancelled (so a cancelled timer
 //! never leaves the volume half way down). End-of-track stops don't fade:
 //! the track's own ending is the fade.

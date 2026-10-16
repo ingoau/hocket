@@ -75,6 +75,26 @@ class ExoBackendTest {
     private fun reports() = dispatched.filterIsInstance<Command.BackendReport>().map { it.data.report }
 
     @Test
+    fun theMusicVolumeIsReportedAndSetAsTheSystemVolume() {
+        // ExoPlayer reads the stream's volume off the main thread: wait for its first report.
+        val deadline = System.currentTimeMillis() + 5_000
+        while (reports().none { it is BackendReport.SystemVolume } && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(10)
+        }
+        assertTrue("reported at start", reports().any { it is BackendReport.SystemVolume })
+        val max = backend.player.deviceInfo.maxVolume
+        backend.handle(BackendCommand.SetSystemVolume(app.hocket.core.api.BackendCommandSetSystemVolumeInner(1.0, false)))
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(max, backend.player.deviceVolume)
+        val last = reports().filterIsInstance<BackendReport.SystemVolume>().last()
+        assertEquals(1.0, last.data.volume, 1e-9)
+        backend.handle(BackendCommand.SetSystemVolume(app.hocket.core.api.BackendCommandSetSystemVolumeInner(1.0, true)))
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(backend.player.isDeviceMuted)
+    }
+
+    @Test
     fun autoTransitionEndsThePlayedItemBeforeTheTransition() {
         backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
         // Stand-in for ExoPlayer's own advance: the follow-up becomes current, then the AUTO callback.

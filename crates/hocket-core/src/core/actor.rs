@@ -365,11 +365,12 @@ impl Actor {
         };
 
         let core_stream = cfg.audio == AudioMode::Native;
-        let volume: f64 = db
-            .saved_state_get::<f64>("volume")
+        let volume = saved_volume(&db, clock.as_ref());
+        let muted = db
+            .saved_state_get::<bool>(MUTED_KEY)
             .ok()
             .flatten()
-            .unwrap_or(1.0);
+            .unwrap_or(false);
         let now = clock.now_ms();
         let mut actor = Actor {
             cfg,
@@ -426,6 +427,7 @@ impl Actor {
             outbox_entries: HashMap::new(),
             playback: Playback {
                 volume,
+                muted,
                 ..Default::default()
             },
             network: None,
@@ -863,6 +865,7 @@ impl Actor {
         }
         self.prefetch_tick(now);
         self.playback_tick(now);
+        self.remote_volume_tick(now);
         self.prime_next();
         self.cache_tick(now);
         // Sleep timer.
@@ -1119,8 +1122,20 @@ impl Actor {
         self.server.as_ref().and_then(|s| s.api.clone())
     }
 
+    /// The gain the backend applies: the volume slider, scaled by the sleep
+    /// timer's fade, on a dB scale (so the fade sounds even too). With a
+    /// system volume the platform applies the volume and mute itself and the
+    /// gain carries only the fade.
     pub(crate) fn effective_volume(&self) -> f64 {
-        (self.playback.volume * self.playback.fade_gain.unwrap_or(1.0)).clamp(0.0, 1.0)
+        use crate::audio::backend::volume_to_gain;
+        let fade = self.playback.fade_gain.unwrap_or(1.0);
+        if self.playback.system_volume {
+            volume_to_gain(fade)
+        } else if self.playback.muted {
+            0.0
+        } else {
+            volume_to_gain(self.playback.volume * fade)
+        }
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
@@ -1157,6 +1172,28 @@ impl Actor {
 
 /// Registry customisation lives in the settings document (`shortcuts` and
 /// `actions.order.<surface>`).
+/// Saved-state key for the volume slider position.
+pub(crate) const VOLUME_KEY: &str = "volumeSlider";
+/// Saved-state key for this device's mute.
+pub(crate) const MUTED_KEY: &str = "volumeMuted";
+/// Before the slider moved to a dB scale it was saved here as a linear gain.
+const LEGACY_VOLUME_KEY: &str = "volume";
+
+/// The saved volume slider position. A volume saved before the dB scale is
+/// carried over at the same loudness (and re-saved under the new key), so
+/// an upgrade doesn't change how loud playback is.
+fn saved_volume(db: &Db, clock: &dyn Clock) -> f64 {
+    if let Ok(Some(v)) = db.saved_state_get::<f64>(VOLUME_KEY) {
+        return v;
+    }
+    let Ok(Some(gain)) = db.saved_state_get::<f64>(LEGACY_VOLUME_KEY) else {
+        return 1.0;
+    };
+    let v = crate::audio::backend::gain_to_volume(gain);
+    let _ = db.saved_state_set(VOLUME_KEY, &v, clock);
+    v
+}
+
 fn load_registry_customisation(registry: &mut ActionRegistry, settings: &Settings) {
     let mut c = crate::actions::ActionCustomisation::default();
     if let Some(map) = settings.get(keys::SHORTCUTS).as_object() {

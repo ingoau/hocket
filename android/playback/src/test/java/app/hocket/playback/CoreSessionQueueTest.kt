@@ -46,7 +46,7 @@ class CoreSessionQueueTest {
 
     private fun state(trackId: String) = MediaSessionState(
         MediaSessionMetadata("Track now", "Artist", "Album", 200_000u, null, trackId, false, 0u), true,
-        PositionStamp(0u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0,
+        PositionStamp(0u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0, false,
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek), true,
     )
 

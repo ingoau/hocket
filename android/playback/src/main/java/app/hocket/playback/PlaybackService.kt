@@ -137,9 +137,10 @@ class PlaybackService : MediaLibraryService() {
                 applySession(bridge.player.state)
             }
             is Event.TransportChanged -> {
-                val wasRemote = ConnectRoutes.state.value.remote
-                ConnectRoutes.onOwner(event.data.transport.lease.owner)
-                if (ConnectRoutes.state.value.remote != wasRemote) applySession(bridge.player.state)
+                val was = ConnectRoutes.state.value
+                ConnectRoutes.onTransport(event.data.transport)
+                val now = ConnectRoutes.state.value
+                if (now.remote != was.remote || now.remoteVolume != was.remoteVolume) applySession(bridge.player.state)
             }
             is Event.QueueChanged -> bridge.applyQueue(event.data.queue)
             is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
@@ -161,7 +162,7 @@ class PlaybackService : MediaLibraryService() {
         serverId = snapshot.servers.firstOrNull()?.id
         bridge.applyQueue(snapshot.queue)
         ConnectRoutes.onDevices(snapshot.devices)
-        ConnectRoutes.onOwner(snapshot.transport.lease.owner)
+        ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)
         battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
         bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
@@ -170,8 +171,9 @@ class PlaybackService : MediaLibraryService() {
     /** Session state to the bridge, remote when another Connect device plays it. */
     private fun applySession(state: app.hocket.core.api.MediaSessionState) {
         ConnectRoutes.onMediaSession(state)
-        val remote = ConnectRoutes.state.value.remote
-        bridge.apply(state, clockOffsetMs, remote = remote != null)
+        val routes = ConnectRoutes.state.value
+        val remote = routes.remote
+        bridge.apply(state, clockOffsetMs, remote = remote != null, remoteVolume = routes.remoteVolume != null)
         NowPlayingWidget.update(this, WidgetState.of(state, remote?.name))
     }
 

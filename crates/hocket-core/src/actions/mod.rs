@@ -127,8 +127,12 @@ pub struct StateView {
     /// Ctrl+Z belongs to the field.
     pub text_field_focused: bool,
     pub saved_queue_count: u32,
-    /// User volume 0.0–1.0 (for the relative volume actions).
+    /// Volume 0.0–1.0 of the device the volume control drives (0 while
+    /// muted), for the relative volume actions.
     pub volume: f64,
+    /// Another device plays and hasn't reported its volume: a relative step
+    /// would have nothing to step from.
+    pub volume_unknown: bool,
 }
 
 /// Resolves what handlers need from the mirror. The actor implements it;

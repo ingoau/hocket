@@ -157,6 +157,7 @@ pub fn derive_media_session_state(
         } else {
             1.0
         },
+        muted: transport.muted,
         actions,
         owns_transport,
     }

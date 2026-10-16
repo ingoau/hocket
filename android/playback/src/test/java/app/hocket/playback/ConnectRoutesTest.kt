@@ -12,9 +12,15 @@ import app.hocket.core.api.MediaSessionState
 import app.hocket.core.api.Platform
 import app.hocket.core.api.PositionStamp
 import app.hocket.core.api.RepeatMode
+import app.hocket.core.api.TransportLease
+import app.hocket.core.api.TransportState
+import app.hocket.core.api.Command
+import androidx.media3.common.Player
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
@@ -26,7 +32,7 @@ import org.robolectric.annotation.Config
 class ConnectRoutesTest {
     private fun state(owns: Boolean, loaded: Boolean = true) = MediaSessionState(
         if (loaded) MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", false, 0u) else null, true,
-        PositionStamp(1000u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0,
+        PositionStamp(1000u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0, false,
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause), owns,
     )
 
@@ -85,5 +91,47 @@ class ConnectRoutesTest {
         } finally {
             bridge.release()
         }
+    }
+
+    private fun transport(owner: String?, volume: Double, volumeDevice: String?, muted: Boolean = false) =
+        TransportState(TransportLease(owner, 1u, 0.0), PositionStamp(0u, 0.0, 1.0, true), false, 0u, volume, muted, volumeDevice)
+
+    @Test
+    fun theRemoteVolumeIsKnownOnlyOnceThePlayingDeviceReportsIt() {
+        ConnectRoutes.onDevices(listOf(phone, laptop))
+        ConnectRoutes.onMediaSession(state(owns = false))
+        // An older device playing: the transport carries no volume of its.
+        ConnectRoutes.onTransport(transport("laptop", 0.0, null))
+        assertEquals(laptop, ConnectRoutes.state.value.remote)
+        assertNull(ConnectRoutes.state.value.remoteVolume)
+        ConnectRoutes.onTransport(transport("laptop", 0.4, "laptop", muted = true))
+        assertEquals(0.4, ConnectRoutes.state.value.remoteVolume!!, 0.0)
+        assertTrue(ConnectRoutes.state.value.remoteMuted)
+        // This phone plays: no remote volume (its own is the music volume).
+        ConnectRoutes.onMediaSession(state(owns = true))
+        ConnectRoutes.onTransport(transport("phone", 0.7, "phone"))
+        assertNull(ConnectRoutes.state.value.remoteVolume)
+    }
+
+    @Test
+    fun theSessionDrivesTheRemoteDevicesVolume() {
+        val sent = mutableListOf<Command>()
+        val player = CoreSessionPlayer(Looper.getMainLooper(), { sent += it })
+        player.apply(state(owns = false).copy(volume = 0.5), 0.0, remote = true, remoteVolume = true)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(ConnectRoutes.VOLUME_STEPS, player.deviceInfo.maxVolume)
+        assertEquals(10, player.deviceVolume)
+        assertTrue(player.isCommandAvailable(Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS))
+        player.increaseDeviceVolume(0)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0.55, (sent.last() as Command.SetVolume).data.volume, 1e-9)
+        player.setDeviceMuted(true, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue((sent.last() as Command.SetMuted).data.muted)
+        // Without a reported volume the remote session's volume is fixed.
+        player.apply(state(owns = false), 0.0, remote = true, remoteVolume = false)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(player.isCommandAvailable(Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS))
+        assertEquals(PlayerDeviceInfo.PLAYBACK_TYPE_REMOTE, player.deviceInfo.playbackType)
     }
 }

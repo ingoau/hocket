@@ -258,6 +258,11 @@
 
     <!-- Connect / handoff -->
     <string name="handoff_title">Play on</string>
+    <string name="handoff_volume_on">Volume – %1$s</string>
+    <string name="volume_mute">Mute</string>
+    <string name="volume_unmute">Unmute</string>
+    <string name="volume_muted">Muted</string>
+    <string name="volume_unknown">%1$s\'s volume isn\'t available here yet</string>
     <string name="handoff_this_device">This device</string>
     <string name="handoff_ready">Ready</string>
     <string name="handoff_preparing">Preparing…</string>
@@ -714,7 +719,7 @@
     <string name="pebble_seconds">%1$d s</string>
     <string name="pebble_now_playing">Now Playing</string>
     <string name="pebble_volume_controls">Volume controls</string>
-    <string name="pebble_volume_controls_body">Select opens volume controls while playing, and holding up or down changes the volume. For now this is the phone\'s volume.</string>
+    <string name="pebble_volume_controls_body">Select opens volume controls while playing, and holding up or down changes the volume of the device playing.</string>
     <string name="pebble_progress_bar">Progress bar</string>
     <string name="pebble_progress_bar_body">Always show the track\'s progress. Off, flick your wrist to see it.</string>
     <string name="pebble_album_art">Album art</string>

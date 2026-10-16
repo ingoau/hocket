@@ -75,7 +75,18 @@ pub(crate) struct Playback {
     pub loaded: bool,
     /// Position to land on the next time this key is loaded (undo, restore).
     pub restore_position: Option<(QueueKey, Ms)>,
+    /// This device's volume slider position (0–1).
     pub volume: f64,
+    /// This device is muted; `volume` is the level it goes back to.
+    pub muted: bool,
+    /// The platform owns this device's volume (Android's music stream): it
+    /// reports changes with `BackendReport::SystemVolume` and is driven with
+    /// `set_system_volume`; the in-player gain carries only the sleep fade.
+    pub system_volume: bool,
+    /// A volume just sent to the device playing elsewhere, shown until its
+    /// stamps catch up (so a dragged slider doesn't jump back): the device,
+    /// the volume and when it was sent (local clock).
+    pub remote_volume_hold: Option<(DeviceId, DeviceVolume, f64)>,
     /// Sleep-timer fade multiplier applied on top of the user volume.
     pub fade_gain: Option<f64>,
     /// Waiting for a gapless `TransitionedToNext` for this doc key.
