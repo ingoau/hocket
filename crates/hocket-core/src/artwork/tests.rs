@@ -219,10 +219,10 @@ fn a_face_by_the_edge_rules_a_mirror_out_but_not_extending() {
             .style,
         ArtworkStyle::Extend
     );
-    // Tiny faces (a crowd far away) are ignored.
+    // Tiny faces (a crowd far away) are ignored, even by the edge.
     let tiny = FaceRect {
         x: 0.5,
-        y: 0.5,
+        y: 0.9,
         w: 0.06,
         h: 0.06,
     };
@@ -249,6 +249,20 @@ fn columns_that_hold_their_colour_extend_column_by_column() {
     let l = c.auto();
     assert_eq!(l.bottom.style, ArtworkStyle::Extend, "{:?}", l.bottom);
     assert_eq!(l.bottom.reason, "extend:columns");
+    // A face anywhere, even one clear of the reflection zone, rules column extension out; the
+    // caption, not the face, is what rules the mirror out.
+    let far = FaceRect {
+        x: 0.3,
+        y: 0.1,
+        w: 0.4,
+        h: 0.45,
+    };
+    let with_face = c.layout(ImmersiveArtwork::Automatic, vec![far]);
+    assert_eq!(
+        with_face.bottom.reason, "card:marks",
+        "{:?}",
+        with_face.bottom
+    );
     let first = l.bottom.edge_colors[0];
     let last = *l.bottom.edge_colors.last().unwrap();
     assert!(
