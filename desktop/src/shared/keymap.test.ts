@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { NAV_VIEWS, canonicalActionId, sidebarPlaces } from "./keymap";
 
 describe("sidebar places", () => {
-  it("maps the phone's Library place to Albums, its nearest place here", () => {
-    expect(NAV_VIEWS.navigateLibrary).toBe("albums");
+  it("maps the Library place to the Library page", () => {
+    expect(NAV_VIEWS.navigateLibrary).toBe("library");
     expect(canonicalActionId("navigateLibrary")).toBe("navigateLibrary");
   });
 
@@ -13,7 +13,8 @@ describe("sidebar places", () => {
     expect(places.map((p) => [p.id, p.view])).toEqual([
       ["navigateHome", "home"],
       ["findInList", undefined],
-      ["navigateLibrary", "albums"],
+      ["navigateLibrary", "library"],
+      ["navigateAlbums", "albums"],
       ["navigateTracks", "songs"],
     ]);
   });

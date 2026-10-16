@@ -37,6 +37,10 @@ object SettingKeys {
     const val ACTIONS_ORDER_SIDEBAR = "actions.order.sidebar"
     const val ACTIONS_ORDER_MEDIA_SESSION = "actions.order.mediaSession"
     const val NAV_MOBILE_BAR = "nav.mobileBar"
+    /** Home's sections, `[{"id", "on", "style"}]` in order; [] = the default (`HomeSections`). */
+    const val HOME_SECTIONS = "home.sections"
+    /** What's pinned to the top of the Library, `[{"kind", "id", "tap"}]` in order. */
+    const val LIBRARY_PINS = "library.pins"
     /** The Pebble watchapp (`docs/pebble.md`); all device-local. */
     const val PEBBLE_TOUCH_NAVIGATION = "pebble.touchNavigation"
     const val PEBBLE_BUTTONS_ONLY = "pebble.buttonsOnly"
@@ -110,6 +114,8 @@ object ActionIds {
     const val UNPIN = "unpin"
     const val GO_TO_ALBUM = "goToAlbum" // ui-handled
     const val GO_TO_ARTIST = "goToArtist" // ui-handled
+    const val PIN_TO_LIBRARY = "pinToLibrary"
+    const val UNPIN_FROM_LIBRARY = "unpinFromLibrary"
     const val DELETE_PLAYLIST = "deletePlaylist"
     const val SLEEP_TIMER = "sleepTimer" // ui-handled
     const val HANDOFF = "handoff"
@@ -125,7 +131,7 @@ object ActionIds {
 
     /** The registry's default context-menu order (surface `contextMenu`). */
     val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, ADD_TO_PLAYLIST, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
-        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
+        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
 }

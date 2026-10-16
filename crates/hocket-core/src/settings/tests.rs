@@ -783,3 +783,54 @@ fn swipe_actions_are_registry_actions_for_their_rows() {
         .set_json(keys::SWIPE_QUEUE_START_TO_END, "\"none\"", 1.0)
         .is_ok());
 }
+
+/// Home's sections and the Library's pins are synced lists the validators keep well formed:
+/// unknown section ids pass (a newer device may add sections), unknown pin kinds and bad tap
+/// choices don't, nor does pinning the same thing twice.
+#[test]
+fn home_sections_and_library_pins_validate() {
+    let store = MemoryStore::default();
+    let mut s = Settings::load(&store).unwrap();
+    let ok = |s: &mut Settings, k: &str, v: &str| s.set_json(k, v, 1.0).is_ok();
+    assert!(ok(&mut s, keys::HOME_SECTIONS, "[]"));
+    assert!(ok(
+        &mut s,
+        keys::HOME_SECTIONS,
+        r#"[{"id":"rediscover","on":true,"style":"row"},{"id":"fromTheFuture","on":false}]"#
+    ));
+    assert!(!ok(&mut s, keys::HOME_SECTIONS, r#"[{"id":"rediscover"}]"#));
+    assert!(!ok(&mut s, keys::HOME_SECTIONS, r#"[{"on":true}]"#));
+    assert!(!ok(&mut s, keys::HOME_SECTIONS, r#"{"id":"x"}"#));
+
+    assert!(ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"album","id":"a1","tap":"shuffle"},{"kind":"genre","id":"Folk"}]"#
+    ));
+    assert!(!ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"station","id":"s"}]"#
+    ));
+    assert!(!ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"album","id":""}]"#
+    ));
+    assert!(!ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"album","id":"a","tap":"rate"}]"#
+    ));
+    assert!(!ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"album","id":"a"},{"kind":"album","id":"a"}]"#
+    ));
+    // The same id as different kinds is two pins.
+    assert!(ok(
+        &mut s,
+        keys::LIBRARY_PINS,
+        r#"[{"kind":"album","id":"x"},{"kind":"playlist","id":"x"}]"#
+    ));
+}

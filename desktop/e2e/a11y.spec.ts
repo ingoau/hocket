@@ -2,14 +2,14 @@
 // both themes, against the FakeCore (which serves syllable lyrics). Zero
 // violations of any impact; see a11y-helpers.ts for the (empty) exemptions.
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, showSideView, test } from "./fixtures";
+import { completeSetup, expect, showSideView, test, openPlace } from "./fixtures";
 import { expectNoViolations, playShowcase, serverId, setTheme } from "./a11y-helpers";
 
 const THEMES = ["light", "dark"] as const;
 
 /** Something in every panel: an album queue with the syllable-lyrics track current, and a saved queue in Recent. Leaves the side panel on the lyrics. */
 async function populate(page: Page): Promise<void> {
-  await page.getByTestId("nav-albums").click();
+  await openPlace(page, "albums");
   await page.getByTestId("grid-tile").nth(1).dblclick();
   await page.getByTestId("album-play").click();
   await showSideView(page, "queue");
@@ -45,13 +45,14 @@ test.describe("axe: no violations anywhere", () => {
     await populate(page);
     for (const theme of THEMES) {
       await setTheme(page, theme);
-      for (const view of ["home", "albums", "artists", "songs", "playlists", "genres", "downloads", "filters", "stats"]) {
-        await page.getByTestId(`nav-${view}`).click();
+      for (const view of ["home", "library", "albums", "artists", "songs", "playlists", "genres", "downloads", "filters", "stats"] as const) {
+        if (view === "home" || view === "library") await page.getByTestId(`nav-${view}`).click();
+        else await openPlace(page, view);
         await expect(page.getByTestId(`view-${view}`)).toBeVisible();
         await page.waitForTimeout(250);
         await expectNoViolations(page, `${theme} ${view}`);
       }
-      await page.getByTestId("nav-albums").click();
+      await openPlace(page, "albums");
       await page.getByTestId("grid-tile").first().dblclick();
       await expect(page.getByTestId("view-album")).toBeVisible();
       await expect(page.getByTestId("track-row").first()).toBeVisible();
@@ -60,16 +61,16 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("view-artist")).toBeVisible();
       await page.waitForTimeout(250);
       await expectNoViolations(page, `${theme} artist detail`);
-      await page.getByTestId("nav-playlists").click();
+      await openPlace(page, "playlists");
       await page.getByTestId("grid-tile").first().dblclick();
       await expect(page.getByTestId("view-playlist")).toBeVisible();
       await page.waitForTimeout(250);
       await expectNoViolations(page, `${theme} playlist detail`);
-      await page.getByTestId("nav-genres").click();
+      await openPlace(page, "genres");
       await page.getByTestId("genre-tile").first().click();
       await expect(page.getByTestId("view-albums")).toBeVisible();
       await expectNoViolations(page, `${theme} genre detail`);
-      await page.getByTestId("nav-filters").click();
+      await openPlace(page, "filters");
       await page.getByTestId("new-filter").click();
       await expect(page.getByTestId("view-filter-builder")).toBeVisible();
       await expect(page.getByTestId("filter-count")).toContainText(/\d/);
@@ -183,7 +184,7 @@ test.describe("axe: no violations anywhere", () => {
       await expectNoViolations(page, `${theme} jobs popover`);
       await page.getByTestId("jobs-button").click();
       // Context menu on a track row.
-      await page.getByTestId("nav-songs").click();
+      await openPlace(page, "songs");
       const row = page.getByTestId("track-row").first();
       await row.click({ button: "right" });
       await expect(page.getByTestId("context-menu")).toBeVisible();
@@ -196,7 +197,7 @@ test.describe("axe: no violations anywhere", () => {
       // Gone, exit animation included: its "New playlist…" row would match the button below.
       await expect(page.getByTestId("dialog-addToPlaylist")).toHaveCount(0);
       // Prompt dialog (new playlist), confirmation dialog (remove server), sleep timer, Connect, track info.
-      await page.getByTestId("nav-playlists").click();
+      await openPlace(page, "playlists");
       await page.getByRole("button", { name: "New playlist" }).click();
       await expect(page.getByTestId("dialog-prompt")).toBeVisible();
       await expectNoViolations(page, `${theme} prompt dialog`);
@@ -218,7 +219,7 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("dialog-sleepTimer")).toBeVisible();
       await expectNoViolations(page, `${theme} sleep timer dialog`);
       await page.keyboard.press("Escape");
-      await page.getByTestId("nav-songs").click();
+      await openPlace(page, "songs");
       await page.getByTestId("track-row").first().click({ button: "right" });
       await page.locator('[data-testid="context-menu"] [data-action="ui.info"]').click();
       await expect(page.getByTestId("dialog-trackInfo")).toBeVisible();

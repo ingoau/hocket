@@ -1,4 +1,4 @@
-import { completeSetup, expect, playFirstAlbum, test } from "./fixtures";
+import { completeSetup, expect, playFirstAlbum, test, openPlace } from "./fixtures";
 
 test.describe("keyboard", () => {
   test("space toggles play, Q toggles the queue, shortcuts stay out of text fields", async ({ hocket }) => {
@@ -35,7 +35,7 @@ test.describe("keyboard", () => {
   test("list keyboard navigation and select-all as a predicate", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     // The table is an ARIA grid with a roving tab stop on its rows.
     const table = page.getByTestId("songs-table");
     await expect(table).toHaveAttribute("role", "grid");

@@ -162,6 +162,8 @@ class FakeCore(
         def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_SIDEBAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.NAV_MOBILE_BAR, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.HOME_SECTIONS, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.LIBRARY_PINS, "[]", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
@@ -1247,6 +1249,11 @@ class FakeCore(
             id == ActionIds.REPEAT -> handle(Command.MediaSessionCommand(CommandMediaSessionCommandInner(MediaSessionAction.Repeat, null)))
             id == ActionIds.AUTOPLAY -> handle(Command.SetAutoplay(CommandSetAutoplayInner(!autoplay)))
             id == ActionIds.HANDOFF -> handle(Command.OpenHandoffPicker)
+            id == ActionIds.PIN_TO_LIBRARY || id == ActionIds.UNPIN_FROM_LIBRARY -> libraryPinOf(target)?.let { (kind, pid) ->
+                val others = libraryPins().filterNot { it.kind == kind && it.id == pid }
+                val next = if (id == ActionIds.PIN_TO_LIBRARY) others + LibraryPinEntry(kind, pid, if (kind == "track") "play" else "open") else others
+                setSetting(SettingKeys.LIBRARY_PINS, kotlinx.serialization.json.JsonArray(next.map { it.toJson() }).toString())
+            }
             else -> emit(Event.Error(EventErrorInner(ErrorKind.Internal, "unknown action '$actionId'", null)))
         }
     }
@@ -1266,6 +1273,29 @@ class FakeCore(
         else -> id
     }
 
+    /** One `library.pins` entry, as the core's `LibraryPin`. */
+    private data class LibraryPinEntry(val kind: String, val id: String, val tap: String) {
+        fun toJson() = kotlinx.serialization.json.JsonObject(mapOf("kind" to kotlinx.serialization.json.JsonPrimitive(kind), "id" to kotlinx.serialization.json.JsonPrimitive(id), "tap" to kotlinx.serialization.json.JsonPrimitive(tap)))
+    }
+
+    private fun libraryPins(): List<LibraryPinEntry> = runCatching {
+        (kotlinx.serialization.json.Json.parseToJsonElement(settings[SettingKeys.LIBRARY_PINS]?.value ?: "[]") as kotlinx.serialization.json.JsonArray).mapNotNull { e ->
+            val o = e as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            val kind = (o["kind"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@mapNotNull null
+            val id = (o["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@mapNotNull null
+            LibraryPinEntry(kind, id, (o["tap"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "open")
+        }
+    }.getOrDefault(emptyList())
+
+    /** The single album, artist, playlist or song a target names, as a pin kind and id. */
+    private fun libraryPinOf(target: ActionTarget): Pair<String, String>? = when (target) {
+        is ActionTarget.Albums -> target.data.ids.singleOrNull()?.let { "album" to it }
+        is ActionTarget.Artists -> target.data.ids.singleOrNull()?.let { "artist" to it }
+        is ActionTarget.Playlists -> target.data.ids.singleOrNull()?.let { "playlist" to it }
+        is ActionTarget.Tracks -> target.data.ids.singleOrNull()?.let { "track" to it }
+        else -> null
+    }
+
     private fun actionsFor(surface: String, target: ActionTarget): List<ActionDescriptor> {
         fun d(id: String, label: String, icon: String, category: String, undoable: Boolean = true, destructive: Boolean = false, enabled: Boolean = true) =
             ActionDescriptor(id, label, icon, category, enabled, null, undoable, destructive)
@@ -1278,7 +1308,13 @@ class FakeCore(
             d(ActionIds.rate(2), "Rate 2", "star", "library"), d(ActionIds.rate(1), "Rate 1", "star", "library"), d(ActionIds.rate(0), "Clear rating", "star_outline", "library"),
             d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false), d(ActionIds.UNPIN, "Remove download", "download_done", "offline", undoable = false, destructive = true),
         )
-        val base: List<ActionDescriptor> = when (target) {
+        val pin = libraryPinOf(target)
+        val pinned = pin != null && libraryPins().any { it.kind == pin.first && it.id == pin.second }
+        val pins = if (target is ActionTarget.Tracks || target is ActionTarget.Albums || target is ActionTarget.Artists || target is ActionTarget.Playlists) listOf(
+            d(ActionIds.PIN_TO_LIBRARY, "Pin to Library", "push_pin", "library", undoable = false, enabled = pin != null && !pinned),
+            d(ActionIds.UNPIN_FROM_LIBRARY, "Unpin from Library", "keep_off", "library", undoable = false, enabled = pinned),
+        ) else emptyList()
+        val base: List<ActionDescriptor> = pins + when (target) {
             is ActionTarget.Tracks -> library + listOf(d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.Albums -> library + listOf(d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.Artists -> library

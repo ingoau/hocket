@@ -252,6 +252,72 @@ fn download(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
         .collect()
 }
 
+/// The single thing a target names, as a `library.pins` kind and id.
+fn library_pin_of(t: &ActionTarget) -> Option<(&'static str, &str)> {
+    match t {
+        ActionTarget::Albums { .. } => single_id(t).map(|id| ("album", id)),
+        ActionTarget::Artists { .. } => single_id(t).map(|id| ("artist", id)),
+        ActionTarget::Playlists { .. } => single_id(t).map(|id| ("playlist", id)),
+        ActionTarget::Tracks { .. } => single_id(t).map(|id| ("track", id)),
+        _ => None,
+    }
+}
+
+fn is_library_pinned(t: &ActionTarget, s: &StateView) -> Option<bool> {
+    let (kind, id) = library_pin_of(t)?;
+    Some(s.library_pins.iter().any(|p| p.kind == kind && p.id == id))
+}
+
+fn can_pin_to_library(t: &ActionTarget, s: &StateView) -> bool {
+    is_library_pinned(t, s) == Some(false)
+        && s.library_pins.len() < crate::settings::registry::LIBRARY_PINS_MAX
+}
+
+fn can_unpin_from_library(t: &ActionTarget, s: &StateView) -> bool {
+    is_library_pinned(t, s) == Some(true)
+}
+
+fn set_library_pins(pins: Vec<super::LibraryPin>) -> Vec<Command> {
+    vec![Command::SetSetting {
+        key: crate::settings::registry::keys::LIBRARY_PINS.into(),
+        value: serde_json::to_string(&pins).unwrap_or_else(|_| "[]".into()),
+    }]
+}
+
+fn pin_to_library(t: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    let Some((kind, id)) = library_pin_of(t) else {
+        return vec![];
+    };
+    if !can_pin_to_library(t, s) {
+        return vec![];
+    }
+    let mut pins = s.library_pins.clone();
+    // A song plays when tapped; everything else opens.
+    let tap = if kind == "track" { "play" } else { "open" };
+    pins.push(super::LibraryPin {
+        kind: kind.into(),
+        id: id.into(),
+        tap: tap.into(),
+    });
+    set_library_pins(pins)
+}
+
+fn unpin_from_library(t: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    let Some((kind, id)) = library_pin_of(t) else {
+        return vec![];
+    };
+    if !can_unpin_from_library(t, s) {
+        return vec![];
+    }
+    let pins = s
+        .library_pins
+        .iter()
+        .filter(|p| !(p.kind == kind && p.id == id))
+        .cloned()
+        .collect();
+    set_library_pins(pins)
+}
+
 fn unpin(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     pin_targets(t, s, r)
         .into_iter()
@@ -458,6 +524,12 @@ const PINNABLE: &[TargetKind] = &[
     TargetKind::Albums,
     TargetKind::Playlists,
     TargetKind::QueueItems,
+];
+const LIBRARY_PINNABLE: &[TargetKind] = &[
+    TargetKind::Tracks,
+    TargetKind::Albums,
+    TargetKind::Artists,
+    TargetKind::Playlists,
 ];
 const TRACKISH: &[TargetKind] = &[
     TargetKind::Global,
@@ -908,6 +980,24 @@ static ALL: &[ActionDef] = &[
         destructive = true
     ),
     action!(
+        "pinToLibrary",
+        "Pin to Library",
+        "push_pin",
+        Library,
+        LIBRARY_PINNABLE,
+        can_pin_to_library,
+        pin_to_library
+    ),
+    action!(
+        "unpinFromLibrary",
+        "Unpin from Library",
+        "keep_off",
+        Library,
+        LIBRARY_PINNABLE,
+        can_unpin_from_library,
+        unpin_from_library
+    ),
+    action!(
         "goToAlbum",
         "Go to album",
         "album",
@@ -1269,6 +1359,8 @@ const CONTEXT_MENU: &[&str] = &[
     "unpin",
     "goToAlbum",
     "goToArtist",
+    "pinToLibrary",
+    "unpinFromLibrary",
     "removeFromQueue",
     "removeFromPlaylist",
     "restoreSavedQueue",
@@ -1279,19 +1371,8 @@ const CONTEXT_MENU: &[&str] = &[
     "deletePlaylist",
 ];
 
-const SIDEBAR: &[&str] = &[
-    "navigateHome",
-    "navigateTracks",
-    "navigateAlbums",
-    "navigateArtists",
-    "navigatePlaylists",
-    "navigateGenres",
-    "navigateRecent",
-    "navigateFilters",
-    "navigateDownloads",
-    "navigateStats",
-    "navigateSettings",
-];
+// The Library's own lists (albums, artists, ...) open from its page; the sidebar lists the pins.
+const SIDEBAR: &[&str] = &["navigateHome", "navigateLibrary"];
 
 const MEDIA_SESSION: &[&str] = &[
     "previous",

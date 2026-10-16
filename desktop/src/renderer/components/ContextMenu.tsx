@@ -8,7 +8,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ActionDescriptor, ActionTarget } from "@core/api";
 import { formatChord, parseChord } from "../store/shortcuts";
 import { fetchActions } from "../store/queries";
-import { useApp } from "../store/app";
+import { useApp, type MenuItem } from "../store/app";
 import { executeAction, type ActionContext } from "../store/actions";
 import { Icon, hasIcon } from "./Icon";
 import { handOnFocus } from "../lib/focus";
@@ -18,23 +18,38 @@ import { usePresence } from "../lib/presence";
 let returnFocus: HTMLElement | null = null;
 let openedByKeyboard = false;
 
+/** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
+const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
+
 /** Open the menu for a target at the pointer. Call from an onContextMenu handler. */
-export async function openContextMenu(e: { clientX: number; clientY: number; preventDefault(): void }, target: ActionTarget, context?: ActionContext): Promise<void> {
+export async function openContextMenu(e: { clientX: number; clientY: number; preventDefault(): void }, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): Promise<void> {
   e.preventDefault();
   const keyboard = openedByKeyboard;
   openedByKeyboard = false;
   const active = document.activeElement;
   returnFocus = active instanceof HTMLElement && active !== document.body ? active : null;
-  const actions = await fetchActions("contextMenu", target);
-  if (!actions.length) return;
-  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, context, keyboard });
+  const actions = target.type === "none" ? [] : (await fetchActions("contextMenu", target)).filter((a) => !(LIBRARY_PIN_IDS.has(a.id) && !a.enabled));
+  if (!actions.length && !items?.length) return;
+  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, items, context, keyboard });
+}
+
+/** A menu of renderer-run items only (things the registry has no target for: genres, filters, Home sections). */
+export function openItemsMenu(e: { clientX: number; clientY: number; preventDefault(): void }, items: MenuItem[]): void {
+  void openContextMenu(e, { type: "none" }, undefined, items);
+}
+
+/** As [openItemsMenu], under a "More" button. */
+export function openItemsMenuFromButton(e: React.MouseEvent<HTMLElement>, items: MenuItem[]): void {
+  const r = e.currentTarget.getBoundingClientRect();
+  openedByKeyboard = e.detail === 0;
+  openItemsMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, items);
 }
 
 /** A "More" button's menu: under the button, first item active when opened from the keyboard. */
-export function openMenuFromButton(e: React.MouseEvent<HTMLElement>, target: ActionTarget, context?: ActionContext): void {
+export function openMenuFromButton(e: React.MouseEvent<HTMLElement>, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): void {
   const r = e.currentTarget.getBoundingClientRect();
   openedByKeyboard = e.detail === 0;
-  void openContextMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, target, context);
+  void openContextMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, target, context, items);
 }
 
 /**
@@ -54,6 +69,10 @@ export function openContextMenuFromKeyboard(): boolean {
   return handled;
 }
 
+type Row =
+  | { kind: "action"; action: ActionDescriptor; id: string; label: string; enabled: boolean; category: string }
+  | { kind: "item"; item: MenuItem; id: string; label: string; enabled: boolean; category: string };
+
 export function ContextMenu() {
   const live = useApp((s) => s.contextMenu);
   const close = useApp((s) => s.closeContextMenu);
@@ -65,7 +84,12 @@ export function ContextMenu() {
   const { value: menu, motion, exitProps } = usePresence(live, ref);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [active, setActive] = useState(-1);
-  const actions = menu?.actions ?? [];
+  // The renderer's own items first, then the registry's actions; both run from the same keyboard model.
+  const rows: Row[] = [
+    ...(menu?.items ?? []).map((m): Row => ({ kind: "item", item: m, id: m.id, label: m.label, enabled: m.enabled && !m.heading, category: "items" })),
+    ...(menu?.actions ?? []).map((a): Row => ({ kind: "action", action: a, id: a.id, label: a.label, enabled: a.enabled, category: a.category })),
+  ];
+  const actions = rows;
 
   useLayoutEffect(() => {
     if (!live || !ref.current) return;
@@ -75,7 +99,7 @@ export function ContextMenu() {
     const y = Math.min(live.y, window.innerHeight - r.height - 6);
     setPos({ x: Math.max(4, x), y: Math.max(4, y) });
     // Keyboard-opened menus start on the first enabled item, like native menus.
-    setActive(live.keyboard ? live.actions.findIndex((a) => a.enabled) : -1);
+    setActive(live.keyboard ? [...(live.items ?? []).map((m) => m.enabled && !m.heading), ...live.actions.map((a) => a.enabled)].findIndex(Boolean) : -1);
     ref.current.focus();
   }, [live]);
 
@@ -112,11 +136,12 @@ export function ContextMenu() {
   }, [live, close]);
 
   if (!menu) return null;
-  const run = (a: ActionDescriptor) => {
-    if (!a.enabled) return;
+  const run = (r: Row) => {
+    if (!r.enabled) return;
     handOnFocus(returnFocus);
     close();
-    void executeAction(a.id, menu.target, menu.context);
+    if (r.kind === "item") r.item.run();
+    else void executeAction(r.action.id, menu.target, menu.context);
   };
   const enabledIdx = actions.map((a, i) => (a.enabled ? i : -1)).filter((i) => i >= 0);
   const onKey = (e: React.KeyboardEvent) => {
@@ -150,31 +175,45 @@ export function ContextMenu() {
     }
   };
   const chordFor = (id: string) => {
-    const s = shortcuts.find((x) => x.actionId === id)?.shortcut ?? actions.find((a) => a.id === id)?.defaultShortcut;
+    const s = shortcuts.find((x) => x.actionId === id)?.shortcut ?? menu.actions.find((a) => a.id === id)?.defaultShortcut;
     const c = s ? parseChord(s) : undefined;
     return c ? formatChord(c, platform) : undefined;
   };
   let lastCategory: string | undefined;
   return (
     <div {...exitProps} className={`menu ${motion}`} role="menu" aria-activedescendant={active >= 0 ? `cm-item-${active}` : undefined} tabIndex={-1} style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} data-testid="context-menu">
-      {actions.map((a, i) => {
-        const sep = lastCategory !== undefined && lastCategory !== a.category;
-        lastCategory = a.category;
-        const chord = chordFor(a.id);
+      {actions.map((r, i) => {
+        const item = r.kind === "item" ? r.item : undefined;
+        const sep = (lastCategory !== undefined && lastCategory !== r.category) || (!!item?.heading && i > 0);
+        lastCategory = r.category;
+        if (item?.heading) {
+          return (
+            <Fragment key={`h-${r.id}`}>
+              {sep ? <div className="sep" role="separator" /> : null}
+              <div className="menu-heading" role="presentation">{item.label}</div>
+            </Fragment>
+          );
+        }
+        const chord = r.kind === "action" ? chordFor(r.id) : undefined;
+        const icon = r.kind === "action" ? r.action.icon : r.item.icon;
+        const destructive = r.kind === "action" ? r.action.destructive : !!r.item.destructive;
+        const radio = item?.checked !== undefined;
         return (
-          <Fragment key={a.id}>
+          <Fragment key={`${r.kind}-${r.id}`}>
             {sep ? <div className="sep" role="separator" /> : null}
             <div
               id={`cm-item-${i}`}
-              className={`mi ${a.enabled ? "" : "disabled"} ${a.destructive ? "destructive" : ""} ${active === i ? "active" : ""}`}
-              role="menuitem"
-              aria-disabled={!a.enabled || undefined}
+              className={`mi ${r.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === i ? "active" : ""}`}
+              role={radio ? "menuitemradio" : "menuitem"}
+              aria-checked={radio ? !!item?.checked : undefined}
+              aria-disabled={!r.enabled || undefined}
               onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }}
-              onClick={() => run(a)}
-              data-action={a.id}
+              onClick={() => run(r)}
+              data-action={r.id}
             >
-              {hasIcon(a.icon) ? <Icon name={a.icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
-              <span className="grow truncate">{a.label}</span>
+              {hasIcon(icon) ? <Icon name={icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
+              <span className="grow truncate">{r.label}</span>
+              {radio && item?.checked ? <Icon name="check" size={14} /> : null}
               {chord ? <span className="kbd">{chord}</span> : null}
             </div>
           </Fragment>

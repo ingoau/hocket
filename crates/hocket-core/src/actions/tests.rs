@@ -258,7 +258,7 @@ fn surfaces_filter_and_order() {
     assert!(menu.iter().all(|d| d.enabled
         || matches!(
             d.id.as_str(),
-            "removeFromPlaylist" | "goToAlbum" | "goToArtist"
+            "removeFromPlaylist" | "goToAlbum" | "goToArtist" | "pinToLibrary" | "unpinFromLibrary"
         )));
 
     let queue_menu = r.actions_for(
@@ -821,9 +821,8 @@ fn media_session_buttons_follow_customisation() {
     assert_eq!(r.media_session_actions(&StateView::default()), vec![]);
 }
 
-/// The phone's Library place has its own action (it used to borrow
-/// `navigateAlbums`), usable in a synced sidebar order without joining the
-/// default one.
+/// The Library place has its own action (it used to borrow `navigateAlbums`); the desktop's
+/// default sidebar is Home and the Library, with the pins under them.
 #[test]
 fn navigate_library_is_a_navigation_action() {
     let mut r = ActionRegistry::new(Platform::Android);
@@ -831,9 +830,10 @@ fn navigate_library_is_a_navigation_action() {
     assert_eq!((d.label, d.icon), ("Library", "library_music"));
     assert!(d.ui_handled);
     assert_eq!(d.category, defs::Category::Navigation);
-    assert!(!r
-        .default_order(Surface::Sidebar)
-        .contains(&"navigateLibrary".to_string()));
+    assert_eq!(
+        r.default_order(Surface::Sidebar),
+        vec!["navigateHome".to_string(), "navigateLibrary".to_string()]
+    );
     let palette = r.actions_for(Surface::Palette, &ActionTarget::None, &state());
     assert!(palette
         .iter()
@@ -845,4 +845,88 @@ fn navigate_library_is_a_navigation_action() {
     let sidebar = r.actions_for(Surface::Sidebar, &ActionTarget::None, &state());
     let ids: Vec<&str> = sidebar.iter().map(|a| a.id.as_str()).collect();
     assert_eq!(ids, ["navigateHome", "findInList", "navigateLibrary"]);
+}
+
+fn pinned(pins: &[(&str, &str)]) -> StateView {
+    StateView {
+        library_pins: pins
+            .iter()
+            .map(|(k, id)| super::LibraryPin {
+                kind: k.to_string(),
+                id: id.to_string(),
+                tap: "open".into(),
+            })
+            .collect(),
+        ..state()
+    }
+}
+
+fn pins_written(cmds: &[Command]) -> Vec<super::LibraryPin> {
+    match cmds {
+        [Command::SetSetting { key, value }] => {
+            assert_eq!(key, "library.pins");
+            serde_json::from_str(value).unwrap()
+        }
+        other => panic!("expected one SetSetting, got {other:?}"),
+    }
+}
+
+/// Pin to Library offers itself for one album, artist, playlist or song that isn't
+/// pinned yet, and appends it; Unpin from Library offers itself only for a pinned one and takes
+/// out just that pin, keeping the others' order and tap choices.
+#[test]
+fn library_pins_toggle_through_the_setting() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    let album = ActionTarget::Albums {
+        ids: vec!["al1".into()],
+    };
+    let s = pinned(&[("playlist", "pl1")]);
+    let menu = r.actions_for(Surface::ContextMenu, &album, &s);
+    assert!(menu.iter().any(|d| d.id == "pinToLibrary" && d.enabled));
+    assert!(menu
+        .iter()
+        .any(|d| d.id == "unpinFromLibrary" && !d.enabled));
+    let pins = pins_written(&r.commands("pinToLibrary", &album, &s, &NoResolver).unwrap());
+    assert_eq!(
+        pins.iter()
+            .map(|p| (p.kind.as_str(), p.id.as_str(), p.tap.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("playlist", "pl1", "open"), ("album", "al1", "open")]
+    );
+
+    // A song plays when tapped.
+    let song = pins_written(
+        &r.commands("pinToLibrary", &tracks(&["t1"]), &s, &NoResolver)
+            .unwrap(),
+    );
+    assert_eq!(song[1].tap, "play");
+
+    // Two albums at once: neither.
+    let two = ActionTarget::Albums {
+        ids: vec!["a".into(), "b".into()],
+    };
+    assert!(r.commands("pinToLibrary", &two, &s, &NoResolver).is_err());
+
+    let mut s2 = pinned(&[("playlist", "pl1"), ("album", "al1"), ("genre", "Folk")]);
+    s2.library_pins[2].tap = "shuffle".into();
+    assert!(r
+        .commands("pinToLibrary", &album, &s2, &NoResolver)
+        .is_err());
+    let left = pins_written(
+        &r.commands("unpinFromLibrary", &album, &s2, &NoResolver)
+            .unwrap(),
+    );
+    assert_eq!(
+        left.iter()
+            .map(|p| (p.kind.as_str(), p.tap.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("playlist", "open"), ("genre", "shuffle")]
+    );
+
+    // Saved queues have their own "Pin queue" (kept from trimming); no second pin there.
+    let saved = ActionTarget::SavedQueue { id: "q1".into() };
+    assert!(!r
+        .actions_for(Surface::ContextMenu, &saved, &s)
+        .iter()
+        .any(|d| d.id == "pinToLibrary"));
 }

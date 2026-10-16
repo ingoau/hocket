@@ -273,3 +273,93 @@
   .setup .setup-title { font-size: 22px; }
   .setup-card { padding: 20px; }
 }
+
+/* ---- Home: customisable sections (home.sections) -------------------------
+   Each section is a header naming its topic (with the line above it) over a
+   row, grid or list; the header's menu (right-click or the ⋯ that shows on
+   hover/focus) moves, restyles or hides it. Customise opens a side panel. */
+.page-home .home-layout { display: flex; min-height: 0; flex: 1; }
+.page-home .home-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.home-section { margin-bottom: 28px; }
+.home-section-head { display: flex; align-items: flex-end; gap: 8px; margin: 0 0 10px var(--page-title-inset); }
+.home-section-head .section-heading { margin: 0; }
+.home-section-head .eyebrow { font-size: var(--fs-sm); font-weight: 600; color: var(--fg-muted); margin-bottom: 2px; }
+.home-section-head .section-more { opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
+.home-section-head:hover .section-more, .home-section-head:focus-within .section-more { opacity: 1; }
+.home-section .grid { --tile-w: 168px; }
+.home-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); column-gap: 16px; }
+.home-list-row { display: flex; align-items: center; gap: 4px; border-radius: var(--shape-md); padding: 0 4px 0 6px; }
+.home-list-row:hover { background: var(--bg-hover); }
+.home-list-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; height: 60px; border: 0; background: none; padding: 0; text-align: left; }
+.home-list-main .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }
+.home-list-main .text { display: flex; flex-direction: column; min-width: 0; }
+.home-list-main .t1, .home-list-main .t2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-list-main .t1 { font-weight: 600; }
+.home-list-main .t2 { color: var(--fg-muted); font-size: var(--fs-sm); }
+.home-icon-art { display: grid; place-items: center; clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }
+.home-list-main .home-icon-art { width: 44px; height: 44px; flex: 0 0 auto; }
+.tile .art.home-icon-art { aspect-ratio: 1; width: 100%; }
+.listen-tile { display: flex; align-items: center; gap: 28px; width: 100%; max-width: 640px; border: 0; border-radius: var(--shape-xl); background: var(--surface-tonal); padding: 20px 24px; text-align: left; color: var(--fg); }
+.listen-tile:hover { background: var(--selection); }
+.listen-text { display: flex; flex-direction: column; gap: 2px; }
+.listen-time { font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.listen-link { color: var(--accent-text); font-weight: 600; margin-top: 6px; }
+.listen-bars { flex: 1; display: flex; align-items: flex-end; gap: 8px; height: 56px; }
+.listen-bars > span { flex: 1; border-radius: 6px; background: var(--accent-soft); }
+.listen-bars > span:last-child { background: var(--accent-text); }
+.home-footer { display: flex; justify-content: center; padding: 8px 0 24px; }
+.btn.outlined { background: transparent; border-color: var(--border-strong); border-radius: var(--shape-full); height: var(--btn-h); padding: 0 18px 0 14px; font-weight: 600; }
+.btn.text { background: transparent; border-color: transparent; color: var(--accent-text); font-weight: 600; }
+
+.customise-panel { width: 360px; flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 20px 12px 20px 16px; border-left: 1px solid var(--border); overflow: auto; animation: panel-in var(--dur-spring) var(--spring-fast); }
+@keyframes panel-in { from { transform: translateX(16px); } to { transform: none; } }
+.customise-head { display: flex; align-items: center; gap: 8px; }
+.customise-head .card-title { margin: 0; }
+.customise-note { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+.customise-list { display: flex; flex-direction: column; gap: 4px; }
+.customise-row { border-radius: var(--shape-lg); padding: 8px 8px 8px 4px; display: flex; flex-direction: column; gap: 8px; transition: background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized); }
+.customise-row.on { background: var(--surface-tonal); }
+.customise-row.dragging { opacity: 0.45; }
+.customise-row.drop-target { box-shadow: inset 0 2px 0 var(--accent-text); }
+.customise-line { display: flex; align-items: center; gap: 6px; }
+.customise-line .grip { color: var(--fg-faint); cursor: grab; display: grid; place-items: center; width: 22px; }
+.customise-text { display: flex; flex-direction: column; min-width: 0; }
+.customise-text .t1 { font-weight: 600; }
+.customise-row:not(.on) .customise-text .t1 { color: var(--fg-muted); }
+.customise-text .t2 { font-size: var(--fs-sm); color: var(--fg-faint); }
+.customise-styles { display: flex; gap: 6px; padding-left: 28px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--shape-full); border: 1px solid var(--border-strong); background: transparent; color: var(--fg); font-size: var(--fs-sm); font-weight: 600; transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
+.chip:hover { background: var(--bg-hover); }
+.chip.selected { background: var(--selection); border-color: transparent; border-radius: var(--shape-sm); color: var(--accent-text); }
+button.m3-switch { border: 0; padding: 0; background: none; }
+
+/* Menu headings (a pin's "When clicked", a section's "Show as"). */
+.menu .menu-heading { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ---- Library: browse tiles + Recently added -------------------------------- */
+.lib-browse { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px; }
+.lib-tile { grid-column: span 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; height: 132px; border: 0; border-radius: var(--shape-xl); padding: 16px; background: var(--surface-tonal); color: var(--fg); text-align: left; transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
+.lib-tile:hover { background: var(--selection); }
+.lib-tile:active { border-radius: var(--shape-lg); }
+.lib-tile.wide { grid-column: span 2; background: var(--accent); color: var(--accent-fg); }
+.lib-tile.wide:hover { filter: brightness(1.06); }
+.lib-tile.artists { border-radius: var(--shape-xl) var(--shape-xl) var(--shape-xl) 56px; }
+.lib-tile-icon { display: grid; place-items: center; width: 44px; height: 44px; clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }
+.lib-tile.wide .lib-tile-icon { background: rgba(255, 255, 255, 0.18); color: inherit; }
+.lib-tile-label { font-size: var(--fs-lg); font-weight: 700; }
+.lib-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
+.lib-recent-head { display: flex; align-items: baseline; justify-content: space-between; margin-right: var(--page-title-inset); }
+@media (max-width: 900px) { .lib-browse { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 3; } }
+
+/* ---- Sidebar pins (library.pins) ------------------------------------------- */
+.sidebar .nav-item.pin-item { height: 44px; padding: 0 12px 0 8px; }
+.pin-thumb { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; }
+.pin-thumb .art { width: 28px; height: 28px; border-radius: 6px; box-shadow: none; }
+.pin-thumb.playlist .art { border-radius: 10px; }
+.pin-thumb.artist .art { border-radius: 50%; clip-path: none; }
+.pin-thumb.icon-thumb { clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }
+.pin-thumb.icon-thumb.genre { background: color-mix(in srgb, var(--accent-tint) 30%, transparent); }
+.pin-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.pin-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-kind { font-size: var(--fs-xs); color: var(--fg-faint); font-weight: 500; }
+.sidebar-pins-empty { padding: 2px 16px 8px; margin: 0; }

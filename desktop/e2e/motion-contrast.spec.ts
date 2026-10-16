@@ -2,11 +2,11 @@
 // the fullscreen fluid background (measured from the rendered pixels) and over
 // artwork-tinted surfaces, forced colours, and reflow at 200% zoom.
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, showSideView, test } from "./fixtures";
+import { completeSetup, expect, showSideView, test, openPlace } from "./fixtures";
 import { expectNoViolations, playShowcase, serverId, setTheme, setZoom } from "./a11y-helpers";
 
 async function playAlbum(page: Page, nth = 0): Promise<void> {
-  await page.getByTestId("nav-albums").click();
+  await openPlace(page, "albums");
   await page.getByTestId("grid-tile").nth(nth).dblclick();
   await page.getByTestId("album-play").click();
   await showSideView(page, "queue");
@@ -241,8 +241,8 @@ test.describe("motion, contrast and zoom", () => {
     await page.getByTestId("shuffle").click();
     await expect(page.getByTestId("shuffle")).toHaveAttribute("aria-pressed", "true");
     expect(await page.getByTestId("shuffle").evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
-    // Current nav item.
-    expect(await page.getByTestId("nav-albums").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
+    // Current nav item (Albums is a place in the Library).
+    expect(await page.getByTestId("nav-library").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
     // Fullscreen: no artwork background behind system-coloured text, plain lyrics.
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");
@@ -309,19 +309,20 @@ test.describe("motion, contrast and zoom", () => {
     await playShowcase(page);
     await setZoom(app, 2);
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(900);
-    for (const view of ["home", "albums", "songs", "playlists", "genres", "downloads", "filters", "stats"]) {
-      await page.getByTestId(`nav-${view}`).click();
+    for (const view of ["home", "library", "albums", "songs", "playlists", "genres", "downloads", "filters", "stats"] as const) {
+      if (view === "home" || view === "library") await page.getByTestId(`nav-${view}`).click();
+      else await openPlace(page, view);
       await expect(page.getByTestId(`view-${view}`)).toBeVisible();
       await check(`200% ${view}`);
     }
     // The sidebar is an icon rail whose items keep their names.
-    await expect(page.getByTestId("nav-albums")).toHaveAccessibleName("Albums");
+    await expect(page.getByTestId("nav-library")).toHaveAccessibleName("Library");
     expect((await page.getByTestId("sidebar").boundingBox())!.width).toBeLessThan(60);
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     await page.getByTestId("grid-tile").first().dblclick();
     await expect(page.getByTestId("view-album")).toBeVisible();
     await check("200% album detail");
-    await page.getByTestId("nav-filters").click();
+    await openPlace(page, "filters");
     await page.getByTestId("new-filter").click();
     await check("200% filter builder");
     await page.getByTestId("nav-settings").click();
@@ -348,7 +349,7 @@ test.describe("motion, contrast and zoom", () => {
     await page.getByTestId("palette-input").fill("s");
     await check("200% palette");
     await page.keyboard.press("Escape");
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     await page.getByTestId("track-row").first().click({ button: "right" });
     await expect(page.getByTestId("context-menu")).toBeVisible();
     await check("200% context menu");

@@ -1,5 +1,7 @@
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { openItemsMenu } from "../components/ContextMenu";
+import { genreMenuItems } from "../lib/pin-menus";
 import { useQuery } from "../store/queries";
 import { EmptyState } from "../components/EmptyState";
 import { TileList } from "../components/Tile";
@@ -15,7 +17,7 @@ export function Genres() {
         {!loading && !data?.length ? <EmptyState message={t("genres.empty")} icon="genre" /> : null}
         <TileList label={t("genres.title")} className="grid genre-grid">
           {(data ?? []).map((g) => (
-            <li key={g.name}>
+            <li key={g.name} onContextMenu={(e) => openItemsMenu(e, genreMenuItems(g.name, serverId))}>
               <button type="button" className="genre-tile" data-roving onClick={() => navigate({ view: "genre", id: g.name })} data-testid="genre-tile" style={{ "--genre-hue": genreHue(g.name) } as React.CSSProperties}>
                 <span className="genre-name">{g.name}</span>
                 <span className="genre-count small muted">{t("genres.count", { albums: g.albumCount, songs: g.songCount })}</span>

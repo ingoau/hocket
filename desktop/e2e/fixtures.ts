@@ -85,9 +85,19 @@ export async function completeSetup(page: Page): Promise<void> {
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 
+/** A place in the Library, reached as a user would: the sidebar's Library, then its tile or link. */
+export type Place = "albums" | "artists" | "playlists" | "songs" | "genres" | "filters" | "queues" | "offline" | "downloads" | "stats";
+
+/** Opens `place` from the Library page (the sidebar lists Home and Library, plus pins). */
+export async function openPlace(page: Page, place: Place): Promise<void> {
+  await page.getByTestId("nav-library").click();
+  await expect(page.getByTestId("view-library")).toBeVisible();
+  await page.getByTestId(`library-${place}`).click();
+}
+
 /** Plays the first album and shows the queue in the side panel (its overview is the default view). */
 export async function playFirstAlbum(page: Page): Promise<void> {
-  await page.getByTestId("nav-albums").click();
+  await openPlace(page, "albums");
   const tile = page.getByTestId("grid-tile").first();
   await expect(tile).toBeVisible();
   await tile.dblclick();

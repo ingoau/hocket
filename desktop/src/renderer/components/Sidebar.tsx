@@ -3,21 +3,22 @@ import { t } from "@shared/strings";
 import { NAV_VIEWS, sidebarPlaces } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { useApp, type ViewName } from "../store/app";
-import { useActions, useQuery } from "../store/queries";
+import { useActions } from "../store/queries";
 import { openContextMenu } from "./ContextMenu";
 import { Icon } from "./Icon";
-import { filterName } from "../lib/filters";
-import { AVAILABLE_OFFLINE_FILTER_ID } from "@shared/constants";
+import { openItemsMenu } from "./ContextMenu";
+import { Artwork } from "./Artwork";
+import { useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
+import { pinMenuItems } from "../lib/pin-menus";
+import { pinTap } from "../lib/library-pins";
 
 export function Sidebar() {
   const route = useApp((s) => s.route);
   const navigate = useApp((s) => s.navigate);
-  const serverId = useApp((s) => s.servers[0]?.id);
-  const filters = useApp((s) => s.filters);
+  const pins = useResolvedPins();
   const panels = useApp((s) => s.panels);
   const setPanels = useApp((s) => s.setPanels);
   const navActions = useActions("sidebar", { type: "none" });
-  const { data: playlists } = useQuery(() => (serverId ? { type: "playlists", data: { server_id: serverId } } : null), "playlists", [serverId]);
   const [dragging, setDragging] = useState(false);
   const startX = useRef(0);
   const startW = useRef(0);
@@ -34,11 +35,17 @@ export function Sidebar() {
     };
   }, [dragging, setPanels]);
 
-  const fallback = ["navigateHome", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateTracks", "navigateGenres", "navigateDownloads", "navigateFilters", "navigateStats"];
+  const fallback = ["navigateHome", "navigateLibrary"];
   const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
   const items = sidebarPlaces(navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
     .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
-  const isActive = (v: ViewName | undefined) => !!v && ((route.view === v && !(v === "downloads" && route.param === "offline")) || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
+  const libraryViews: ViewName[] = ["library", "albums", "artists", "playlists", "songs", "genres", "filters", "downloads", "stats"];
+  const pinnedOpen = (pins ?? []).some((rp) => isPinActive(rp));
+  const isActive = (v: ViewName | undefined) => !!v && ((route.view === v && !(v === "downloads" && route.param === "offline")) || (v === "library" && !pinnedOpen && (libraryViews.includes(route.view) || ["album", "artist", "playlist", "genre", "filter"].includes(route.view)) && !items.some((it) => it.view === route.view)) || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
+  function isPinActive(rp: ResolvedPin): boolean {
+    const view = rp.kind === "track" ? undefined : rp.kind;
+    return !!view && route.view === view && route.id === rp.pin.id;
+  }
 
   return (
     <nav className="sidebar" aria-label={t("nav.library")} data-testid="sidebar">
@@ -50,26 +57,33 @@ export function Sidebar() {
             <span>{it.label}</span>
           </a>
         ))}
-        {filters.length ? <div className="section-title">{t("nav.savedFilters")}</div> : null}
-        {filters.map((f) => {
-          // "Available offline" opens its track list (Downloads → Available offline), not the builder.
-          const offline = f.id === AVAILABLE_OFFLINE_FILTER_ID;
-          const active = offline ? route.view === "downloads" && route.param === "offline" : route.view === "filter" && route.id === f.id;
-          const name = filterName(f);
+        <div className="section-title sidebar-pins-title">{t("library.pinned")}</div>
+        {pins && !pins.length ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
+        {(pins ?? []).map((rp) => {
+          const active = isPinActive(rp);
+          const tap = pinTap(rp.pin);
+          const hint = tap === "play" ? t("library.pinPlays") : tap === "shuffle" ? t("library.pinShuffles") : t("library.pinOpens");
           return (
-            <a key={f.id} href="#" className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={name} onClick={(e) => { e.preventDefault(); navigate(offline ? { view: "downloads", param: "offline" } : { view: "filter", id: f.id }); }} data-testid={offline ? "nav-available-offline" : undefined}>
-              <Icon name={offline ? "cached" : "filter"} size={18} filled={active} />
-              <span>{name}</span>
+            <a
+              key={`${rp.pin.kind}:${rp.pin.id}`}
+              href="#"
+              className={`nav-item pin-item ${active ? "active" : ""}`}
+              aria-current={active ? "page" : undefined}
+              title={`${rp.title} · ${t(`library.kind.${rp.kind}` as never)} · ${hint}`}
+              onClick={(e) => { e.preventDefault(); performPin(rp); }}
+              onContextMenu={(e) => {
+                const items = pinMenuItems(rp.pin, rp.title, !rp.target);
+                if (rp.target) void openContextMenu(e, rp.target, undefined, items);
+                else openItemsMenu(e, items);
+              }}
+              data-testid="sidebar-pin"
+            >
+              <PinThumb rp={rp} />
+              <span className="pin-text"><span className="pin-title">{rp.title}</span><span className="pin-kind">{t(`library.kind.${rp.kind}` as never)}</span></span>
+              {tap !== "open" && rp.kind !== "track" ? <Icon name={tap} size={14} /> : null}
             </a>
           );
         })}
-        {(playlists ?? []).length ? <div className="section-title">{t("nav.playlistsSection")}</div> : null}
-        {(playlists ?? []).map((p) => (
-          <a key={p.id} href="#" className={`nav-item ${route.view === "playlist" && route.id === p.id ? "active" : ""}`} aria-current={route.view === "playlist" && route.id === p.id ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "playlist", id: p.id }); }} onContextMenu={(e) => void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} title={p.isSmart ? `${p.name} · ${t("playlists.smart")}` : p.name}>
-            <Icon name={p.isSmart ? "filter" : "playlist"} size={18} filled={route.view === "playlist" && route.id === p.id} />
-            <span>{p.name}</span>
-          </a>
-        ))}
       </div>
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">
@@ -83,4 +97,10 @@ export function Sidebar() {
         data-testid="sidebar-resize" />
     </nav>
   );
+}
+
+/** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. */
+function PinThumb({ rp }: { rp: ResolvedPin }) {
+  if (rp.kind === "genre" || rp.kind === "filter") return <span className={`pin-thumb icon-thumb ${rp.kind}`} aria-hidden="true"><Icon name={rp.kind} size={16} /></span>;
+  return <span className={`pin-thumb ${rp.kind}`} aria-hidden="true"><Artwork id={rp.coverArt} size={64} round={rp.kind === "artist"} /></span>;
 }

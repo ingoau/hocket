@@ -73,13 +73,9 @@ export function canonicalActionId(id: string): string {
   return ACTION_ALIASES[id] ?? id;
 }
 
-/**
- * Sidebar navigation ids → renderer views. `navigateLibrary` is the phone's
- * Library place (albums, artists, songs in one screen), which can reach this
- * sidebar through the synced order; its nearest place here is Albums.
- */
+/** Sidebar navigation ids → renderer views (`navigateLibrary` is the Library page, the lists' hub). */
 export const NAV_VIEWS: Record<string, string> = {
-  navigateHome: "home", navigateLibrary: "albums", navigateTracks: "songs", navigateAlbums: "albums", navigateArtists: "artists", navigatePlaylists: "playlists",
+  navigateHome: "home", navigateLibrary: "library", navigateTracks: "songs", navigateAlbums: "albums", navigateArtists: "artists", navigatePlaylists: "playlists",
   navigateGenres: "genres", navigateFilters: "filters", navigateDownloads: "downloads", navigateStats: "stats", navigateSettings: "settings",
 };
 

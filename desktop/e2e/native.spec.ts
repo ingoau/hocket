@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { FakeNavidrome } from "./fake-navidrome";
-import { chooseOption } from "./fixtures";
+import { chooseOption, openPlace } from "./fixtures";
 
 const root = resolve(__dirname, "..");
 const addonBuilt = existsSync(join(root, "native", "index.js"));
@@ -60,7 +60,7 @@ test.describe("real core against a fake Navidrome", () => {
       expect(server.callsTo("getOpenSubsonicExtensions").length).toBeGreaterThan(0);
 
       // Library sync fills Albums.
-      await page.getByTestId("nav-albums").click();
+      await openPlace(page, "albums");
       await expect(page.getByTestId("grid-tile").first()).toBeVisible({ timeout: 60_000 });
       await expect(page.getByTestId("grid-tile")).toHaveCount(8, { timeout: 30_000 });
       expect(server.callsTo("search3").length).toBeGreaterThan(0);
@@ -129,7 +129,7 @@ test.describe("real core against a fake Navidrome", () => {
       await expect(page.getByTestId("app")).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("setup")).toHaveCount(0);
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark", { timeout: 15_000 });
-      await page.getByTestId("nav-albums").click();
+      await openPlace(page, "albums");
       await expect(page.getByTestId("grid-tile").first()).toBeVisible({ timeout: 30_000 });
     } finally {
       await app.close();

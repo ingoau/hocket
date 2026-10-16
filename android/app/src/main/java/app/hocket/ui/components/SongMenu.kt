@@ -156,7 +156,7 @@ internal data class SongMenuRows(val common: List<ActionDescriptor>, val context
  * context-only actions split off so they always sit in the same place, after the common ones.
  */
 internal fun songMenuRows(actions: List<ActionDescriptor>, track: TrackSummary, canNavigate: Boolean): SongMenuRows {
-    val shown = actions.filter { a ->
+    val shown = actions.withoutIdlePins().filter { a ->
         when (a.id) {
             in RATE_IDS -> false
             ActionIds.GO_TO_ALBUM -> canNavigate && track.albumId != null

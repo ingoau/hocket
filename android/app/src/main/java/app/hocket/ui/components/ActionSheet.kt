@@ -84,6 +84,12 @@ fun actionIcon(name: String): ImageVector = when (name) {
     else -> HocketIcons.Filled.Add
 }
 
+/** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
+private val LIBRARY_PIN_IDS = setOf(ActionIds.PIN_TO_LIBRARY, ActionIds.UNPIN_FROM_LIBRARY)
+
+/** The registry's menu actions without the library-pin action that doesn't apply. */
+fun List<ActionDescriptor>.withoutIdlePins(): List<ActionDescriptor> = filterNot { it.id in LIBRARY_PIN_IDS && !it.enabled }
+
 /**
  * The context menu: actions come from `Query.Actions(surface = "contextMenu", target)` with the
  * registry's canonical ids, ordered by the user's customisation, and run through `Command.RunAction`.
@@ -114,7 +120,7 @@ fun ActionSheet(
             HorizontalDivider()
             LazyColumn {
                 // Individual rateN entries collapse into one "Rate" row (the dialog picks the stars).
-                val visible = (actions ?: emptyList()).filter { a -> !(a.id.matches(Regex("rate[0-5]")) && a.id != ActionIds.rate(0)) || a.id == ActionIds.rate(5) }
+                val visible = (actions ?: emptyList()).withoutIdlePins().filter { a -> !(a.id.matches(Regex("rate[0-5]")) && a.id != ActionIds.rate(0)) || a.id == ActionIds.rate(5) }
                 items(visible, key = { it.id }) { a ->
                     val isRateEntry = a.id == ActionIds.rate(5) || a.id == ActionIds.RATE
                     val goAlbum = a.id == ActionIds.GO_TO_ALBUM

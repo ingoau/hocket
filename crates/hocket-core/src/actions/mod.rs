@@ -133,6 +133,35 @@ pub struct StateView {
     /// Another device plays and hasn't reported its volume: a relative step
     /// would have nothing to step from.
     pub volume_unknown: bool,
+    /// What's pinned to the Library (`library.pins`), in order.
+    pub library_pins: Vec<LibraryPin>,
+}
+
+/// One entry of `library.pins`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LibraryPin {
+    pub kind: String,
+    pub id: String,
+    #[serde(default = "LibraryPin::default_tap")]
+    pub tap: String,
+}
+
+impl LibraryPin {
+    fn default_tap() -> String {
+        "open".into()
+    }
+
+    /// The setting's value as pins; entries that don't parse are dropped.
+    pub fn list_from(value: &serde_json::Value) -> Vec<LibraryPin> {
+        value
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Resolves what handlers need from the mirror. The actor implements it;

@@ -40,6 +40,8 @@ pub const TEXTS: &[SettingText] = &[
     t("actions.order.sidebar", "Sidebar items", "Which sections appear in the sidebar, and in what order."),
     t("actions.order.mediaSession", "Media session buttons", "Which actions appear as OS media controls, and in what order."),
     t("nav.mobileBar", "Bottom bar", "Which places appear in the phone's bottom bar, and in what order."),
+    t("home.sections", "Home", "Which sections Home shows, in what order and how."),
+    t("library.pins", "Pinned", "What's pinned to the top of the Library, and what tapping each one does."),
     t("pebble.touchNavigation", "Touch navigation", "Taps on the watch select things: action-bar icons, list rows. Off, touch only does the swipe and press-and-hold gestures."),
     t("pebble.buttonsOnly", "Buttons only", "Use the buttons-only layout on a touchscreen watch: Now Playing first, back opens the menu."),
     t("pebble.gesture.up", "Swipe up", "What swiping up on Now Playing opens."),

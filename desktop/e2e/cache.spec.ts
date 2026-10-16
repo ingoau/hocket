@@ -4,7 +4,7 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { completeSetup, expect, test, chooseOption, showSideView } from "./fixtures";
+import { completeSetup, expect, test, chooseOption, showSideView, openPlace } from "./fixtures";
 import { expectNoViolations, serverId, setTheme } from "./a11y-helpers";
 
 interface Prime { kind: string; id: string; trackId: string; outcome: string }
@@ -16,7 +16,7 @@ async function primes(page: Page): Promise<Prime[]> {
 }
 
 async function openFirstAlbum(page: Page): Promise<string> {
-  await page.getByTestId("nav-albums").click();
+  await openPlace(page, "albums");
   const tile = page.getByTestId("grid-tile").first();
   await expect(tile).toBeVisible();
   const id = (await tile.getAttribute("data-id")) ?? "";
@@ -76,9 +76,9 @@ test.describe("album priming", () => {
     await page.waitForTimeout(2500);
     expect((await primes(page)).filter((p) => p.kind === "album")).toHaveLength(1);
     // A new visit may prime again (the core deduplicates).
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     await page.waitForTimeout(300);
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     await page.getByTestId("grid-tile").first().dblclick();
     await expect(page.getByTestId("view-album")).toBeVisible();
     await expect.poll(async () => (await primes(page)).filter((p) => p.kind === "album").length, { timeout: 5000 }).toBe(2);
@@ -89,7 +89,7 @@ test.describe("album priming", () => {
     await completeSetup(page);
     await openFirstAlbum(page);
     await page.waitForTimeout(1000);
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     await expect(page.getByTestId("view-songs")).toBeVisible();
     await page.waitForTimeout(2500);
     expect((await primes(page)).filter((p) => p.kind === "album")).toEqual([]);
@@ -125,7 +125,7 @@ test.describe("album priming", () => {
   test("a grid scrolling under a resting pointer never primes", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     const tile = page.getByTestId("grid-tile").nth(1);
     await expect(tile).toBeVisible();
     const box = (await tile.locator(".play").boundingBox())!;
@@ -192,15 +192,14 @@ test.describe("cached and downloaded badges", () => {
 });
 
 test.describe("available offline", () => {
-  test("the built-in filter is in the sidebar and opens the Downloads tab listing what plays offline", async ({ hocket }) => {
+  test("the Library links to the Downloads tab listing what plays offline", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
-    const nav = page.getByTestId("nav-available-offline");
-    await expect(nav).toHaveText("Available offline");
-    await nav.click();
+    await page.getByTestId("nav-library").click();
+    await expect(page.getByTestId("library-offline")).toHaveText("Available offline");
+    await openPlace(page, "offline");
     await expect(page.getByTestId("view-downloads")).toBeVisible();
     await expect(page.getByRole("tab", { name: "Available offline" })).toHaveAttribute("aria-selected", "true");
-    await expect(nav).toHaveAttribute("aria-current", "page");
     const table = page.getByTestId("available-offline-table");
     await expect(table.getByTestId("track-row").first()).toBeVisible();
     const count = async () => Number(((await page.getByTestId("available-offline-count").textContent()) ?? "0").replace(/\D/g, ""));

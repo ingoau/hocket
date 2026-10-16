@@ -87,6 +87,13 @@ pub mod keys {
     /// The phone's bottom bar: ordered place ids (the app's own, not action ids), [] = its default.
     /// Synced between phones; separate from the desktop sidebar's `actions.order.sidebar`.
     pub const NAV_MOBILE_BAR: &str = "nav.mobileBar";
+    /// Home's sections: `[{"id", "on", "style"}]` in display order, [] = the platforms' default.
+    /// Ids and styles the reader doesn't know are skipped (a newer device may add some).
+    pub const HOME_SECTIONS: &str = "home.sections";
+    /// What's pinned to the top of the Library (the desktop's sidebar):
+    /// `[{"kind", "id", "tap"}]` in display order. `tap` is what a tap does: `open`, `play` or
+    /// `shuffle` (the last two only for albums, artists and playlists).
+    pub const LIBRARY_PINS: &str = "library.pins";
     pub const SWIPE_QUEUE_START_TO_END: &str = "swipe.queue.startToEnd";
     pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
@@ -227,6 +234,65 @@ fn string_list_valid(v: &Value) -> Result<(), String> {
     } else {
         Err("expected a list of strings".into())
     }
+}
+
+/// Most sections Home can list; generous, so a newer device's additions still fit.
+const HOME_SECTIONS_MAX: usize = 64;
+
+fn home_sections_valid(v: &Value) -> Result<(), String> {
+    let arr = v.as_array().ok_or("expected a list")?;
+    if arr.len() > HOME_SECTIONS_MAX {
+        return Err(format!("at most {HOME_SECTIONS_MAX} sections"));
+    }
+    for s in arr {
+        let o = s.as_object().ok_or("expected a list of sections")?;
+        match o.get("id").and_then(Value::as_str) {
+            Some(id) if !id.is_empty() && id.len() <= 64 => {}
+            _ => return Err("a section needs an id".into()),
+        }
+        if !o.get("on").is_some_and(Value::is_boolean) {
+            return Err("a section needs on: true or false".into());
+        }
+        if o.get("style").is_some_and(|s| !s.is_string()) {
+            return Err("a section's style is text".into());
+        }
+    }
+    Ok(())
+}
+
+/// The kinds of thing that can be pinned to the Library.
+pub const LIBRARY_PIN_KINDS: &[&str] = &["album", "artist", "playlist", "track", "genre", "filter"];
+/// What tapping a pin does.
+pub const LIBRARY_PIN_TAPS: &[&str] = &["open", "play", "shuffle"];
+/// Most pins the Library keeps.
+pub const LIBRARY_PINS_MAX: usize = 200;
+
+fn library_pins_valid(v: &Value) -> Result<(), String> {
+    let arr = v.as_array().ok_or("expected a list")?;
+    if arr.len() > LIBRARY_PINS_MAX {
+        return Err(format!("at most {LIBRARY_PINS_MAX} pins"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for p in arr {
+        let o = p.as_object().ok_or("expected a list of pins")?;
+        let kind = o.get("kind").and_then(Value::as_str).unwrap_or("");
+        if !LIBRARY_PIN_KINDS.contains(&kind) {
+            return Err(format!("unknown pin kind {kind:?}"));
+        }
+        let id = match o.get("id").and_then(Value::as_str) {
+            Some(id) if !id.is_empty() => id,
+            _ => return Err("a pin needs an id".into()),
+        };
+        if let Some(tap) = o.get("tap") {
+            if !tap.as_str().is_some_and(|t| LIBRARY_PIN_TAPS.contains(&t)) {
+                return Err("a pin's tap is open, play or shuffle".into());
+            }
+        }
+        if !seen.insert((kind, id)) {
+            return Err(format!("{kind} {id} is pinned twice"));
+        }
+    }
+    Ok(())
 }
 
 fn shortcuts_valid(v: &Value) -> Result<(), String> {
@@ -508,6 +574,8 @@ pub static REGISTRY: &[SettingDef] = &[
         string_list_valid,
     ),
     json_def(NAV_MOBILE_BAR, Synced, || json!([]), string_list_valid),
+    json_def(HOME_SECTIONS, Synced, || json!([]), home_sections_valid),
+    json_def(LIBRARY_PINS, Synced, || json!([]), library_pins_valid),
     // Swipe actions on song rows. `love` toggles (love / unlove by the row's
     // state); the platform runs the chosen id through `RunAction`.
     def(

@@ -8,6 +8,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
@@ -99,7 +101,8 @@ class LargeFontLayoutTest {
     fun theAlbumHeaderAtFontScaleTwo() {
         start()
         click("navBar.library")
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("library.album").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("library.grid").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
         compose.onAllNodesWithTag("library.album")[0].performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { exists("detail.header") }
         holds("album header")

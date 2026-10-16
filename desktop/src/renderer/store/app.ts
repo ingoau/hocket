@@ -1,6 +1,7 @@
 // The renderer store: core state mirrored from events (reducer.ts) plus view
 // state. Components read slices with `useApp(selector)` and act through
 // `dispatch`/`query` which go straight to the bridge.
+import { useMemo } from "react";
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
 import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
@@ -12,7 +13,7 @@ import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
 import { SK } from "@shared/settings-keys";
 
-export type ViewName = "home" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
+export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
 
 export interface Route {
   view: ViewName;
@@ -36,11 +37,27 @@ export interface PanelState {
   sidebarWidth: number;
 }
 
+/** A menu item the renderer runs itself (a pin's "When clicked" choice, moving a Home section). */
+export interface MenuItem {
+  id: string;
+  label: string;
+  icon: string;
+  enabled: boolean;
+  /** A choice among siblings (radio): shown with a check, announced as checked. */
+  checked?: boolean;
+  destructive?: boolean;
+  /** A heading over a group of items; not selectable. */
+  heading?: boolean;
+  run: () => void;
+}
+
 export interface ContextMenuState {
   x: number;
   y: number;
   target: ActionTarget;
   actions: ActionDescriptor[];
+  /** Renderer-run items shown above the registry's actions (or alone). */
+  items?: MenuItem[];
   /** Extra renderer-only context (e.g. playlist id for "remove from playlist"). */
   context?: { playlistId?: string; indices?: number[]; savedQueueId?: string };
   /** Opened with the context-menu key / Shift+F10: the first item starts active. */
@@ -366,4 +383,20 @@ export function connectStore(): () => void {
 
 export function useSetting<T>(key: string, fallback: T): T {
   return useApp((s) => settingValue(s, key, fallback));
+}
+
+/**
+ * A list or object setting's parsed value. `useSetting` parses on every read, a new value each time,
+ * which only primitives survive; this selects the stored text and parses it once per change.
+ */
+export function useJsonSetting(key: string): unknown {
+  const raw = useApp((s) => s.settings[key]?.value);
+  return useMemo(() => {
+    if (raw === undefined) return undefined;
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return undefined;
+    }
+  }, [raw]);
 }

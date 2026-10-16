@@ -1131,6 +1131,11 @@ impl Actor {
                 }
             },
             volume_unknown: self.volume_control().0.is_none(),
+            library_pins: crate::actions::LibraryPin::list_from(
+                &self
+                    .settings
+                    .get(crate::settings::registry::keys::LIBRARY_PINS),
+            ),
         }
     }
 

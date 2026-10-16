@@ -1,5 +1,6 @@
 import { useApp, type Route } from "../store/app";
 import { Home } from "./Home";
+import { Library } from "./Library";
 import { Albums } from "./Albums";
 import { Artists } from "./Artists";
 import { Playlists } from "./Playlists";
@@ -34,6 +35,8 @@ function RouteView({ route }: { route: Route }) {
   switch (route.view) {
     case "home":
       return <Home />;
+    case "library":
+      return <Library />;
     case "albums":
       return <Albums />;
     case "artists":

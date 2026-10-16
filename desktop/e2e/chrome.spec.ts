@@ -2,7 +2,7 @@
 // the splitter moves it), chrome is not selectable, nothing is underlined or
 // pointer-cursored, the UI font is the 13px system stack, and focus rings
 // appear only for keyboard focus.
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, test, openPlace } from "./fixtures";
 
 test.describe("window chrome", () => {
   test("dragging the sidebar splitter moves the content pane and persists", async ({ hocket }) => {
@@ -36,7 +36,7 @@ test.describe("window chrome", () => {
     const { page } = hocket;
     await completeSetup(page);
     const styleOf = (testId: string, props: string[]) => page.getByTestId(testId).first().evaluate((el, ps) => { const cs = getComputedStyle(el); return Object.fromEntries(ps.map((p) => [p, cs.getPropertyValue(p)])); }, props);
-    const nav = await styleOf("nav-albums", ["text-decoration-line", "cursor", "user-select", "font-size", "font-family"]);
+    const nav = await styleOf("nav-library", ["text-decoration-line", "cursor", "user-select", "font-size", "font-family"]);
     expect(nav["text-decoration-line"]).toBe("none");
     expect(nav.cursor).toBe("default");
     expect(nav["user-select"]).toBe("none");
@@ -66,9 +66,9 @@ test.describe("window chrome", () => {
     expect(glyphs).toEqual([]);
     expect(await page.locator("svg.icon").count()).toBeGreaterThan(10);
     // Mouse click gives no focus ring; Tab does.
-    const albums = page.getByTestId("nav-albums");
-    await albums.click();
-    expect(await albums.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("none");
+    const library = page.getByTestId("nav-library");
+    await library.click();
+    expect(await library.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("none");
     await page.getByTestId("content").click();
     await page.keyboard.press("Tab");
     const focused = await page.evaluate(() => { const el = document.activeElement as HTMLElement | null; return el ? getComputedStyle(el).outlineStyle : "none"; });
@@ -88,7 +88,7 @@ test.describe("window chrome", () => {
       expect(b.y, id).toBeGreaterThanOrEqual(bar.y);
       expect(b.y + b.height, id).toBeLessThanOrEqual(bar.y + bar.height);
     }
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     const tiles = page.getByTestId("grid-tile");
     await expect(tiles.first().locator("img")).toBeVisible();
     // The grid's keyboard cursor is drawn only while the grid has focus.
@@ -152,20 +152,22 @@ test.describe("window chrome", () => {
     await check();
   });
 
-  test("a sidebar place switched off in Settings stays listed and can be switched back on", async ({ hocket }) => {
+  test("a sidebar place switched on in Settings shows, and switched off stays listed to switch back on", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-customisation").click();
     const list = page.getByTestId("order-sidebar");
     const genres = list.getByRole("switch", { name: "Genres" });
-    await expect(genres).toBeChecked();
-    await genres.click();
-    await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toHaveCount(0);
+    // Off by default: the Library holds it.
     await expect(genres).not.toBeChecked();
+    await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toHaveCount(0);
     await genres.click();
     await expect(genres).toBeChecked();
     await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toBeVisible();
+    await genres.click();
+    await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toHaveCount(0);
+    await expect(genres).not.toBeChecked();
   });
 
   test("settings stays pinned below the sidebar list, and a long server row never scrolls the settings page sideways", async ({ hocket }) => {
@@ -194,7 +196,7 @@ test.describe("window chrome", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.setViewportSize({ width: 1400, height: 900 });
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     const row = page.getByTestId("track-row").first();
     await expect(row).toBeVisible();
     await page.waitForTimeout(200);
