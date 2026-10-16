@@ -29,6 +29,17 @@ export interface VolumeControl {
 
 const clamp = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
 
+/**
+ * The level a relative step (keys, wheel) goes to, or `undefined` for none:
+ * up while muted unmutes from silence; down while muted stays muted (setting
+ * a level would unmute at 0 and lose the level the unmute goes back to), as
+ * the core's volume down does.
+ */
+export function volumeStep(level: number, muted: boolean, delta: number): number | undefined {
+  if (muted && delta < 0) return undefined;
+  return clamp((muted ? 0 : level) + delta);
+}
+
 export function useVolumeControl(): VolumeControl {
   const level = useApp((s) => s.transport.volume);
   const muted = useApp((s) => s.transport.muted ?? false);
@@ -37,7 +48,10 @@ export function useVolumeControl(): VolumeControl {
   const unknown = !!remote && device !== remote.id;
   const shown = muted || unknown ? 0 : level;
   const set = (volume: number) => bridge().dispatch({ type: "setVolume", data: { volume: clamp(volume) } });
-  const step = (delta: number) => set((muted ? 0 : level) + delta);
+  const step = (delta: number) => {
+    const to = volumeStep(level, muted, delta);
+    if (to !== undefined) set(to);
+  };
   return {
     shown,
     level,
