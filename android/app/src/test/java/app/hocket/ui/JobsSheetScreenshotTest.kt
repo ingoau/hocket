@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Job
@@ -24,7 +25,7 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
- * The Activity sheet's sync card: one summary per server (last result, age, tracks and duration),
+ * The Activity sheet's sync row (design D): one line per server (latest state, age, library size),
  * not a row per past sync. Asserts each state, and writes PNGs when HOCKET_SCREENSHOT_DIR is set.
  */
 @RunWith(AndroidJUnit4::class)
@@ -46,9 +47,9 @@ class JobsSheetScreenshotTest {
     fun lastSyncSummary() {
         val core = show()
         // The fake last synced an hour ago, in 40 s.
-        compose.onNodeWithText("Successful").assertExists()
-        compose.onNodeWithText("1h ago").assertExists()
-        compose.onNodeWithText("${core.fake.library.tracks.size} tracks in 40 s").assertExists()
+        compose.onNodeWithText("Synced 1h ago").assertExists()
+        compose.onNodeWithText("music.example.net · ${core.fake.library.tracks.size} tracks").assertExists()
+        compose.onNodeWithContentDescription("Sync library now").assertExists()
         compose.onNodeWithText("Library sync").assertDoesNotExist()
         shot("android-dark-activity-sync-summary")
     }
@@ -61,7 +62,8 @@ class JobsSheetScreenshotTest {
             progress = SyncProgress("fake-server", "tracks", 1820u, 4357u, listOf("artists", "albums"), false),
         )
         compose.waitForIdle()
-        compose.onNodeWithText("Syncing tracks · 1820 of 4357").assertExists()
+        compose.onNodeWithText("Syncing tracks").assertExists()
+        compose.onNodeWithText("1820 of 4357").assertExists()
         compose.onNodeWithText("Cancel").assertExists()
         shot("android-dark-activity-sync-running")
     }
@@ -74,7 +76,8 @@ class JobsSheetScreenshotTest {
             progress = SyncProgress("fake-server", "tracks", 1820u, 4357u, listOf("artists", "albums"), false),
         )
         compose.waitForIdle()
-        compose.onNodeWithText("Paused · 1820 of 4357").assertExists()
+        compose.onNodeWithText("Sync paused").assertExists()
+        compose.onNodeWithText("1820 of 4357").assertExists()
         compose.onNodeWithText("Resume").assertExists()
         shot("android-dark-activity-sync-paused")
     }
@@ -85,9 +88,8 @@ class JobsSheetScreenshotTest {
         // Failed five minutes ago; the last successful sync is still the one an hour ago.
         core.fake.stageSync(jobs = listOf(syncJob(JobState.Failed, 900u, now - 400_000.0, updatedAt = now - 300_000.0)))
         compose.waitForIdle()
-        compose.onNodeWithText("Failed").assertExists()
-        compose.onNodeWithText("5m ago").assertExists()
-        compose.onNodeWithText("Last sync 1h ago").assertExists()
+        compose.onNodeWithText("Sync failed 5m ago").assertExists()
+        compose.onNodeWithText("Retry").assertExists()
         shot("android-dark-activity-sync-failed")
     }
 
@@ -96,8 +98,8 @@ class JobsSheetScreenshotTest {
         val core = show()
         core.fake.stageSync(jobs = listOf(syncJob(JobState.Failed, 900u, now - 7_300_000.0, updatedAt = now - 7_200_000.0)))
         compose.waitForIdle()
-        compose.onNodeWithText("Successful").assertExists()
-        compose.onNodeWithText("Failed").assertDoesNotExist()
+        compose.onNodeWithText("Synced 1h ago").assertExists()
+        compose.onNodeWithText("Sync failed 2h ago").assertDoesNotExist()
     }
 
     @Test
@@ -105,16 +107,16 @@ class JobsSheetScreenshotTest {
         val core = show()
         core.fake.stageSync(jobs = emptyList(), servers = core.client.servers.value.map { it.copy(lastSync = null, lastSyncTracks = null, lastSyncDuration = null) })
         compose.waitForIdle()
-        compose.onNodeWithText("Never synced").assertExists()
+        compose.onNodeWithText("Not synced yet").assertExists()
         shot("android-dark-activity-never-synced")
     }
 
     @Test
     fun oneTrackIsSingular() {
         val core = show()
-        core.fake.stageSync(servers = core.client.servers.value.map { it.copy(lastSyncTracks = 1u, lastSyncDuration = 3_700_000.0) })
+        core.fake.stageSync(servers = core.client.servers.value.map { it.copy(lastSyncTracks = 1u) })
         compose.waitForIdle()
-        compose.onNodeWithText("1 track in 1 h 1 min").assertExists()
+        compose.onNodeWithText("music.example.net · 1 track").assertExists()
     }
 
     private fun show(): TestCore {

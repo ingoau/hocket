@@ -186,8 +186,7 @@ function JobsIndicator() {
       </button>
       {popover.value ? (
         <div {...popover.exitProps} className={`popover ${popover.motion}`} role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
-          <div className="section-title">{t("jobs.syncHeading")}</div>
-          {servers.map((server) => <SyncSummary key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} />)}
+          {servers.map((server) => <SyncRow key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} />)}
           {!servers.length && !others.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
           {others.length ? <div className="section-title">{t("jobs.jobsHeading")}</div> : null}
           {others.slice(0, 20).map((j: Job) => (
@@ -228,64 +227,41 @@ function JobsIndicator() {
   );
 }
 
-/** The server's sync at a glance: last result, how long ago, tracks and duration; live progress while one runs. */
-function SyncSummary({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
+/** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
+function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
   const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
-  const progress = sync && !sync.finished && sync.serverId === server.id ? sync : undefined;
+  const live = sync && !sync.finished && sync.serverId === server.id ? sync : undefined;
+  const total = live?.total || undefined;
   // Other phases report against the track total too (albums by album offset), so only tracks get a fraction.
-  const fraction = progress?.total && progress.phase === "tracks" ? Math.min(1, Math.max(0, progress.done / progress.total)) : undefined;
-  const sync1 = () => bridge().dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } });
+  const fraction = live && total && live.phase === "tracks" ? Math.min(1, Math.max(0, live.done / total)) : undefined;
+  const failed = unsuccessful?.state === "failed";
+  const headline = active?.state === "paused" ? t("sync.paused")
+    : active && live ? t("sync.phase", { phase: live.phase })
+    : active ? t("sync.waiting")
+    : unsuccessful ? t(failed ? "sync.failedWhen" : "sync.cancelledWhen", { when: fmtRelative(unsuccessful.updatedAt) })
+    : server.lastSync ? t("sync.syncedWhen", { when: fmtRelative(server.lastSync) })
+    : t("sync.never");
+  const tracks = server.lastSyncTracks;
+  const supporting = active && live && total ? t("jobs.progress", { done: live.done, total })
+    : !active && tracks != null ? t(tracks === 1 ? "sync.serverTrack" : "sync.serverTracks", { server: server.name, count: tracks })
+    : server.name;
+  const dispatch = bridge().dispatch;
   return (
     <div className="item" data-testid="sync-summary">
       <div className="row">
-        <Icon name="cloud" size={16} />
-        <span className="grow truncate">{server.name}</span>
-        {!active ? <button type="button" className="btn sm" data-testid="sync-now" onClick={sync1}>{t("sync.now")}</button>
-          : active.state === "paused" ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
-          : active.cancellable ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
+        <div className="grow" style={{ minWidth: 0 }}>
+          <div className="truncate" style={{ fontWeight: 600, color: failed ? "var(--warn)" : undefined }}>{headline}</div>
+          <div className="small muted truncate">{supporting}</div>
+        </div>
+        {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
+          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
+          : active.state === "paused" ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
+          : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
           : null}
       </div>
-      {active ? (
-        <>
-          <div className="progress"><div style={{ width: fraction != null ? `${fraction * 100}%` : "30%" }} /></div>
-          <div className="small muted">
-            {active.state === "paused" ? t("job.state.paused") : progress ? t("sync.syncing", { phase: progress.phase }) : t("job.state.queued")}
-            {progress?.total ? ` · ${t("jobs.progress", { done: progress.done, total: progress.total })}` : ""}
-          </div>
-        </>
-      ) : (
-        <div className="row small" style={{ flexWrap: "wrap" }}>
-          {unsuccessful ? (
-            <>
-              <span className={`badge ${unsuccessful.state === "failed" ? "warn" : ""}`}>{unsuccessful.state === "failed" ? t("sync.failed") : t("job.state.cancelled")}</span>
-              <span className="badge">{fmtRelative(unsuccessful.updatedAt)}</span>
-              {server.lastSync ? <span className="badge">{t("sync.lastSuccess", { ago: fmtRelative(server.lastSync) })}</span> : null}
-            </>
-          ) : server.lastSync ? (
-            <>
-              <span className="badge ok">{t("sync.successful")}</span>
-              <span className="badge">{fmtRelative(server.lastSync)}</span>
-              {server.lastSyncTracks != null ? (
-                <span className="badge">
-                  {server.lastSyncDuration != null
-                    ? t(server.lastSyncTracks === 1 ? "sync.trackIn" : "sync.tracksIn", { count: server.lastSyncTracks, duration: fmtElapsed(server.lastSyncDuration) })
-                    : t(server.lastSyncTracks === 1 ? "sync.track" : "sync.tracks", { count: server.lastSyncTracks })}
-                </span>
-              ) : null}
-            </>
-          ) : <span className="badge">{t("sync.never")}</span>}
-        </div>
-      )}
+      {active ? <div className="progress"><div style={{ width: fraction != null ? `${fraction * 100}%` : active.state === "paused" ? "0%" : "30%" }} /></div> : null}
     </div>
   );
-}
-
-/** "40 s", "3 min 5 s", "1 h 12 min" for how long a sync took. */
-export function fmtElapsed(ms: number): string {
-  const s = Math.max(1, Math.round(ms / 1000));
-  if (s < 60) return t("sync.seconds", { s });
-  if (s < 3600) return t("sync.minutesSeconds", { m: Math.floor(s / 60), s: s % 60 });
-  return t("sync.hoursMinutes", { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
 }

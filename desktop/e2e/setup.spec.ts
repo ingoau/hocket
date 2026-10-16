@@ -17,6 +17,9 @@ test.describe("first run", () => {
     await page.getByTestId("jobs-button").click();
     await expect(page.getByTestId("jobs-popover")).toBeVisible();
     await expect(page.getByTestId("sync-summary").first()).toBeVisible();
+    // One row per server: the live sync, then when it finished; never a row per run.
+    await expect(page.getByTestId("sync-summary").first()).toContainText("Synced just now", { timeout: 20_000 });
+    await expect(page.getByTestId("job-row")).toHaveCount(0);
   });
 
   test("a wrong password surfaces as an inline error", async ({ hocket }) => {
