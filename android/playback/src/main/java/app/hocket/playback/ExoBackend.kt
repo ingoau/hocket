@@ -240,6 +240,9 @@ class ExoBackend(
 
             override fun onDeviceVolumeChanged(volume: Int, muted: Boolean) = reportSystemVolume()
 
+            // The stream's range arrives here once the player has read it.
+            override fun onDeviceInfoChanged(deviceInfo: androidx.media3.common.DeviceInfo) = reportSystemVolume()
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
             }

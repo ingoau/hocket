@@ -76,6 +76,7 @@ class ExoBackendTest {
 
     @Test
     fun theMusicVolumeIsReportedAndSetAsTheSystemVolume() {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         val first = reports().filterIsInstance<BackendReport.SystemVolume>().firstOrNull()
         assertTrue("reported at start", first != null)
         val max = backend.player.deviceInfo.maxVolume

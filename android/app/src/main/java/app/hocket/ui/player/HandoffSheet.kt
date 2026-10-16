@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -126,7 +127,7 @@ private fun VolumeRow() {
                 value = shown,
                 onValueChange = { client.dispatch(Commands.setVolume(it.toDouble())) },
                 enabled = !unknown,
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = state }.testTag("handoff.volume.slider"),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = label; stateDescription = state }.testTag("handoff.volume.slider"),
             )
         }
         if (unknown) Text(stringResource(R.string.volume_unknown, remote.name), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
