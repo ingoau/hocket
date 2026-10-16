@@ -636,6 +636,9 @@ impl Actor {
         }
         self.playback.position_ms = position_ms;
         self.playback.position_at = self.now();
+        // A seek ends a stall as far as we know (the native engine clears it
+        // silently); a backend still short of data reports buffering again.
+        self.playback.buffering = false;
         if let Err(e) = self.backend.seek(position_ms) {
             self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
         }
@@ -790,6 +793,15 @@ impl Actor {
         }
     }
 
+    /// Enter or leave a stall. The position freezes where playback stopped
+    /// and counts on from the moment it resumes.
+    fn set_buffering(&mut self, buffering: bool) {
+        let now = self.now();
+        self.playback.position_ms = self.playback.position_now(now);
+        self.playback.position_at = now;
+        self.playback.buffering = buffering;
+    }
+
     /// Send a transport stamp: only ever from here, only on change.
     pub(crate) fn stamp(&mut self) {
         if !self.owns_transport() {
@@ -847,7 +859,7 @@ impl Actor {
                         t.duration_ms = d;
                     }
                 }
-                self.playback.buffering = false;
+                self.set_buffering(false);
                 self.playback.load_failures = 0;
                 self.playback.consecutive_skips = 0;
                 self.clear_player_notice();
@@ -889,7 +901,15 @@ impl Actor {
                 if !current(&key, self) {
                     return;
                 }
-                self.playback.buffering = buffering;
+                if self.playback.buffering == buffering {
+                    return;
+                }
+                self.set_buffering(buffering);
+                if !buffering {
+                    // Tell the room, which otherwise keeps counting through
+                    // the stall and ends up ahead.
+                    self.stamp();
+                }
                 self.emit_transport();
             }
             BackendReport::Position { key, position_ms } => {

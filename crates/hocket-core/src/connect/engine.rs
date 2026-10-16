@@ -508,6 +508,8 @@ struct CurrentStamp {
     started_at: EpochMs,
     scrobbled: bool,
     volume: Option<DeviceVolume>,
+    /// The session-clock offset `position.taken_at` was taken with.
+    offset: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -612,6 +614,10 @@ pub struct Engine {
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
+    /// Switched rooms while playing here: the room only has whatever stamp
+    /// it kept from before, so re-send ours once it grants the lease. Holds
+    /// whether that grant comes from our own room (`true`) or a remote one.
+    restamp_on_grant: Option<bool>,
     remote_transport: TransportState,
     /// The last stamp another device sent (for resume offers when its lease lapses).
     last_remote_stamp: Option<LastStamp>,
@@ -757,6 +763,7 @@ impl Engine {
             detached: false,
             held_remote_epoch: None,
             stamp: None,
+            restamp_on_grant: None,
             remote_transport: TransportState::default(),
             last_remote_stamp: None,
             pending_take: None,
@@ -1205,6 +1212,8 @@ impl Engine {
                 started_at,
                 scrobbled,
                 volume,
+                // Local time; `on_local_stamp` moves it onto the session clock.
+                offset: 0.0,
             }),
             Input::ClaimTransport { takeover } => {
                 if self.held.is_none() || takeover {
@@ -1212,6 +1221,7 @@ impl Engine {
                 }
             }
             Input::ReleaseTransport => {
+                self.restamp_on_grant = None;
                 if let Some(h) = self.held.take() {
                     self.upstream_send(Msg::LeaseRelease { epoch: h.epoch });
                     self.detached = false;
@@ -1861,6 +1871,9 @@ impl Engine {
             self.held_from_remote = false;
         }
         self.offset.reset();
+        self.rebase_stamp();
+        // Our own room heard nothing while we followed the remote.
+        self.restamp_on_grant = self.held.is_some().then_some(true);
         self.devices.clear();
         self.emit_devices();
         if self.picker.is_some() {
@@ -2555,6 +2568,7 @@ impl Engine {
                     started_at,
                     scrobbled,
                     volume: None,
+                    offset: self.offset_ms(),
                 });
                 self.out.push(Output::TakeTransport {
                     key,
@@ -2757,6 +2771,8 @@ impl Engine {
             self.pings_in_burst = 0;
             self.last_ping_at = 0.0;
             self.send_ping();
+            self.rebase_stamp();
+            self.restamp_on_grant = self.held.is_some().then_some(false);
             // Say goodbye to anyone we were serving: they'll re-elect.
             let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
@@ -3316,6 +3332,12 @@ impl Engine {
                 self.held_remote_epoch = Some(lease.epoch);
                 self.detached = false;
             }
+            if self.restamp_on_grant == Some(from_loopback) {
+                self.restamp_on_grant = None;
+                if self.pending_take.is_none() {
+                    self.resend_stamp(lease.epoch);
+                }
+            }
             if let Some(t) = self.pending_take.take() {
                 self.mark_shared(t.started_at);
                 self.stamp = Some(CurrentStamp {
@@ -3331,6 +3353,7 @@ impl Engine {
                     started_at: t.started_at,
                     scrobbled: t.scrobbled,
                     volume: None,
+                    offset: self.offset_ms(),
                 });
                 self.out.push(Output::TakeTransport {
                     key: t.key,
@@ -3367,7 +3390,38 @@ impl Engine {
         }
     }
 
+    /// Move our stamp onto the clock we follow now, so it keeps meaning the
+    /// same moment after a room switch.
+    fn rebase_stamp(&mut self) {
+        let offset = self.offset_ms();
+        if let Some(s) = &mut self.stamp {
+            s.position.taken_at += offset - s.offset;
+            s.offset = offset;
+        }
+    }
+
+    /// Tell the room where our play is now. Stamps only go out on change,
+    /// so a room we (re)joined while playing would otherwise keep the one
+    /// from before we left until the next play/pause/seek/track change.
+    fn resend_stamp(&mut self, epoch: u32) {
+        let Some(s) = self.stamp.clone() else {
+            return;
+        };
+        let device_id = self.cfg.device.id.clone();
+        self.upstream_send(Msg::TransportStamp {
+            device_id,
+            key: s.key,
+            position: s.position,
+            played_ms: s.played_ms,
+            started_at: s.started_at,
+            scrobbled: s.scrobbled,
+            epoch,
+            volume: s.volume,
+        });
+    }
+
     fn lose_lease(&mut self) {
+        self.restamp_on_grant = None;
         if self.held.take().is_some() {
             self.detached = false;
             self.held_remote_epoch = None;
@@ -3389,6 +3443,7 @@ impl Engine {
             started_at,
             scrobbled,
             volume,
+            offset: _,
         } = stamp;
         let mut p = position;
         p.taken_at += self.offset_ms();
@@ -3401,6 +3456,7 @@ impl Engine {
             started_at,
             scrobbled,
             volume,
+            offset: self.offset_ms(),
         });
         let Some(h) = &self.held else {
             self.log(
@@ -3605,6 +3661,7 @@ impl Engine {
         });
         // Release locally right away: the room moves the lease atomically.
         self.held = None;
+        self.restamp_on_grant = None;
         self.detached = false;
         self.held_remote_epoch = None;
         self.out.push(Output::ReleaseTransport);
@@ -5302,6 +5359,135 @@ mod tests {
             .handle(Input::Tick)
             .iter()
             .any(|o| matches!(o, Output::Connect { .. })));
+    }
+
+    /// The owner plays on while cut off, then rejoins: the room still holds
+    /// the stamp from before the drop, so the owner re-sends where it is now
+    /// (on the room's clock) as soon as the room grants it the lease again.
+    #[test]
+    fn owner_resends_its_stamp_when_it_rejoins_a_room() {
+        let (mut e, clock) = engine("a");
+        attach(&mut e, None, vec![]);
+        e.handle(Input::ClaimTransport { takeover: false });
+        let granted = |epoch| Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch,
+                    expires_at: 999_999.0,
+                },
+            }),
+        };
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        e.handle(Input::Disconnected { peer: "up".into() });
+        // Offline, the next track starts: only our own room hears of it.
+        clock.0.store(15_000, Ordering::SeqCst);
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 0,
+                taken_at: 15_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 0,
+            started_at: 15_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        // Back on a room whose clock runs 500 s ahead of ours.
+        clock.0.store(20_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 520_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: None,
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::TransportStamp { .. })));
+        let outs = e.handle(granted(2));
+        let stamps: Vec<_> = wire_outs(&outs)
+            .into_iter()
+            .filter_map(|(p, m)| match m {
+                Msg::TransportStamp {
+                    key,
+                    position,
+                    epoch,
+                    ..
+                } => Some((p, key, position, epoch)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stamps.len(), 1, "{outs:?}");
+        let (peer, key, position, epoch) = &stamps[0];
+        assert_eq!(peer, "up2");
+        assert_eq!(key.as_deref(), Some("k2"));
+        assert_eq!(*epoch, 2);
+        assert!(position.is_playing);
+        assert_eq!(position.position_ms, 0);
+        assert_eq!(position.taken_at, 515_000.0, "moved onto the room's clock");
+        assert_eq!(extrapolate(position, e.now_session_ms()), 5_000);
+        // Only once per join: heartbeat acks don't re-send it.
+        let outs = e.handle(granted(2));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::TransportStamp { .. })));
+
+        // A pause while on the remote: only the remote room hears of it.
+        clock.0.store(20_500, Ordering::SeqCst);
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 5_500,
+                taken_at: 20_500.0,
+                rate: 1.0,
+                is_playing: false,
+            },
+            played_ms: 5_500,
+            started_at: 15_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        let last = e.room.replica().last_stamp.clone().unwrap();
+        assert!(last.position.is_playing, "the own room kept the play");
+
+        // Dropping back to our own room: the stamp returns to our clock and
+        // our room (silent while we followed the remote) hears it again.
+        clock.0.store(21_000, Ordering::SeqCst);
+        e.handle(Input::Disconnected { peer: "up2".into() });
+        assert_eq!(e.transport().position.taken_at, 20_500.0);
+        let last = e.room.replica().last_stamp.clone().unwrap();
+        assert_eq!(last.key.as_deref(), Some("k2"));
+        assert!(!last.position.is_playing, "{last:?}");
+        assert_eq!(last.position.position_ms, 5_500);
+        assert_eq!(last.position.taken_at, 20_500.0);
     }
 
     #[test]

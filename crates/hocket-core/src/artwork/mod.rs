@@ -6,7 +6,7 @@
 //! is tested once. Three styles, per edge:
 //!
 //! - [`ArtworkStyle::Mirror`] when a reflection would show nothing that looks wrong flipped: no
-//!   faces, no text or logos near the edge, not so busy that the controls drown in it;
+//!   faces, text or logos near the edge, not so busy that the controls drown in it;
 //! - [`ArtworkStyle::Extend`] when the edge is one colour (a plain background with text on it) or
 //!   its columns are (a horizon, a gradient): its colours carry on, nothing is flipped;
 //! - [`ArtworkStyle::Card`] otherwise.
@@ -209,6 +209,11 @@ fn edge(
     let marks = img.marks(N - REFLECT_ROWS..N);
     let busy = img.busyness(N - BUSY_ROWS..N);
     let face_count = faces.len() as u32;
+    // A reflection only shows a face sharply when it reaches into the zone by the edge; one
+    // further in (a portrait's head, the chin well clear of the edge) reflects blurred past
+    // reading, like the text further in.
+    let reflect_from = 1.0 - REFLECT_ROWS as f64 / N as f64;
+    let reflected_faces = faces.iter().filter(|f| f.y + f.h > reflect_from).count();
     let metrics = ArtworkMetrics {
         flat,
         drift,
@@ -219,7 +224,7 @@ fn edge(
         ..Default::default()
     };
 
-    let mirror_ok = face_count == 0 && marks < MARKS_MAX && busy <= BUSY_MAX;
+    let mirror_ok = reflected_faces == 0 && marks < MARKS_MAX && busy <= BUSY_MAX;
     // Only asked once the cheaper rules have not decided.
     let columns_ok = || drift <= DRIFT_MAX && rough <= ROUGH_MAX && img.marks(strip.clone()) == 0;
     let (style, reason): (ArtworkStyle, &str) = match preference {
@@ -234,7 +239,7 @@ fn edge(
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
         _ if face_count == 0 && columns_ok() => (ArtworkStyle::Extend, "extend:columns"),
         ImmersiveArtwork::Always => (ArtworkStyle::Extend, "extend:always"),
-        ImmersiveArtwork::Automatic if face_count > 0 => (ArtworkStyle::Card, "card:faces"),
+        ImmersiveArtwork::Automatic if reflected_faces > 0 => (ArtworkStyle::Card, "card:faces"),
         ImmersiveArtwork::Automatic if marks >= MARKS_MAX => (ArtworkStyle::Card, "card:marks"),
         ImmersiveArtwork::Automatic => (ArtworkStyle::Card, "card:busy"),
     };

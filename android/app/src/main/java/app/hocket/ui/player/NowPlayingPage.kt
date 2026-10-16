@@ -545,26 +545,20 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
 }
 
 /**
- * Whether another device holds the transport lease. Not when nobody does (a cold start with a
- * restored queue, or after Stop): this device is then simply not playing.
+ * The device holding the transport lease (playing), when it is another one we know of. Not when
+ * nobody holds it (a cold start with a restored queue, or after Stop), nor when the lease still
+ * names this device or one that is gone (a stale lease that has not lapsed yet): this device is
+ * then simply not playing.
  */
-@Composable
-private fun anotherDevicePlays(): Boolean {
-    val client = LocalCoreClient.current
-    val owns by client.ownsTransport.collectAsStateWithLifecycle()
-    val transport by client.transport.collectAsStateWithLifecycle()
-    return !owns && transport.lease.owner != null
-}
-
-/** The device holding the transport lease (playing), when it is another one ([anotherDevicePlays]). */
 @Composable
 private fun remoteDevice(): DeviceInfo? {
     val client = LocalCoreClient.current
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
     val transport by client.transport.collectAsStateWithLifecycle()
-    if (!anotherDevicePlays()) return null
-    val owner = transport.lease.owner
-    return devices.firstOrNull { it.id == owner && !it.isSelf } ?: devices.firstOrNull { it.playing && !it.isSelf }
+    val owner = transport.lease.owner ?: return null
+    if (owns) return null
+    return devices.firstOrNull { it.id == owner && !it.isSelf }
 }
 
 /** The wavy seek bar with elapsed and remaining time, and the status line between them ([SeekStatus]). */
@@ -593,13 +587,12 @@ private fun SeekStatus() {
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val remote = remoteDevice()
-    val elsewhere = anotherDevicePlays()
     val style = MaterialTheme.typography.labelLarge
     @Composable fun line(text: String, color: Color, tag: String, weight: FontWeight? = null) =
         Text(text, style = style, color = color, fontWeight = weight, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.testTag(tag))
     when {
         notice != null -> line(notice, MaterialTheme.colorScheme.error, "player.notice")
-        elsewhere -> line(stringResource(R.string.player_playing_on, remote?.name ?: stringResource(R.string.player_another_device)), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
+        remote != null -> line(stringResource(R.string.player_playing_on, remote.name), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
         sleep != null -> {
             val t = sleep!!
             line(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track), MaterialTheme.colorScheme.onSurfaceVariant, "player.sleepLine")
@@ -966,9 +959,9 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
 @Composable
 private fun DeviceButton(onConnect: () -> Unit) {
     val client = LocalCoreClient.current
-    val elsewhere = anotherDevicePlays()
     val devices by client.devices.collectAsStateWithLifecycle()
     val remote = remoteDevice()
+    val elsewhere = remote != null
     val haptics = LocalHapticFeedback.current
     val takeOverLabel = stringResource(R.string.player_take_over)
     val interaction = remember { MutableInteractionSource() }
@@ -977,7 +970,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
     val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
     val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
-    val icon = remote?.let { deviceIcon(it.platform) } ?: if (elsewhere) HocketIcons.Filled.Devices else HocketIcons.Filled.PhoneAndroid
+    val icon = remote?.let { deviceIcon(it.platform) } ?: HocketIcons.Filled.PhoneAndroid
     Box(
         Modifier
             .size(48.dp)

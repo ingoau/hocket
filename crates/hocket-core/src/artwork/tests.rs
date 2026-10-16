@@ -74,6 +74,22 @@ fn soft_texture() -> Canvas {
     c
 }
 
+/// [`soft_texture`] turned a quarter: its right and left edges are the soft texture's bottom and top.
+fn soft_texture_turned() -> Canvas {
+    let mut c = Canvas::new(S, S, [0; 3]);
+    for y in 0..S {
+        for x in 0..S {
+            let v = ((y as f32 / 9.0).sin() * (x as f32 / 11.0).cos() * 0.5 + 0.5) * 120.0;
+            c.set(
+                x,
+                y,
+                [20 + v as u8, 40 + (v * 0.6) as u8, 50 + (v * 0.8) as u8],
+            );
+        }
+    }
+    c
+}
+
 /// Deterministic high-contrast noise: a busy cover.
 fn noise() -> Canvas {
     let mut c = Canvas::new(S, S, [0; 3]);
@@ -152,16 +168,44 @@ fn never_is_always_a_card() {
 }
 
 #[test]
-fn a_face_rules_a_mirror_out_but_not_extending() {
+fn a_face_by_the_edge_rules_a_mirror_out_but_not_extending() {
+    // A close-up reaching into the zone a reflection shows sharply.
     let face = FaceRect {
         x: 0.3,
-        y: 0.2,
+        y: 0.5,
         w: 0.4,
-        h: 0.4,
+        h: 0.45,
     };
-    assert_ne!(
+    let l = soft_texture().layout(ImmersiveArtwork::Automatic, vec![face]);
+    assert_ne!(l.bottom.style, ArtworkStyle::Mirror);
+    // The top edge sees it well clear of it.
+    assert_eq!(l.top.style, ArtworkStyle::Mirror);
+    // On the right of the cover, by that edge: the right is ruled out, the left still mirrors.
+    let right = FaceRect {
+        x: 0.55,
+        y: 0.3,
+        w: 0.4,
+        h: 0.45,
+    };
+    let l = soft_texture_turned().layout(ImmersiveArtwork::Automatic, vec![right]);
+    assert_ne!(l.right.style, ArtworkStyle::Mirror);
+    assert_eq!(l.left.style, ArtworkStyle::Mirror);
+    // And mirrored, the other way round.
+    let left = FaceRect { x: 0.05, ..right };
+    let l = soft_texture_turned().layout(ImmersiveArtwork::Automatic, vec![left]);
+    assert_eq!(l.right.style, ArtworkStyle::Mirror);
+    assert_ne!(l.left.style, ArtworkStyle::Mirror);
+    // A portrait whose chin ends clear of the edge (Halsey's Manic) mirrors: only the neck and
+    // shoulders reflect sharply.
+    let portrait = FaceRect {
+        x: 0.3,
+        y: 0.25,
+        w: 0.4,
+        h: 0.55,
+    };
+    assert_eq!(
         soft_texture()
-            .layout(ImmersiveArtwork::Automatic, vec![face])
+            .layout(ImmersiveArtwork::Automatic, vec![portrait])
             .bottom
             .style,
         ArtworkStyle::Mirror
@@ -175,10 +219,10 @@ fn a_face_rules_a_mirror_out_but_not_extending() {
             .style,
         ArtworkStyle::Extend
     );
-    // Tiny faces (a crowd far away) are ignored.
+    // Tiny faces (a crowd far away) are ignored, even by the edge.
     let tiny = FaceRect {
         x: 0.5,
-        y: 0.5,
+        y: 0.9,
         w: 0.06,
         h: 0.06,
     };
@@ -205,6 +249,20 @@ fn columns_that_hold_their_colour_extend_column_by_column() {
     let l = c.auto();
     assert_eq!(l.bottom.style, ArtworkStyle::Extend, "{:?}", l.bottom);
     assert_eq!(l.bottom.reason, "extend:columns");
+    // A face anywhere, even one clear of the reflection zone, rules column extension out; the
+    // caption, not the face, is what rules the mirror out.
+    let far = FaceRect {
+        x: 0.3,
+        y: 0.1,
+        w: 0.4,
+        h: 0.45,
+    };
+    let with_face = c.layout(ImmersiveArtwork::Automatic, vec![far]);
+    assert_eq!(
+        with_face.bottom.reason, "card:marks",
+        "{:?}",
+        with_face.bottom
+    );
     let first = l.bottom.edge_colors[0];
     let last = *l.bottom.edge_colors.last().unwrap();
     assert!(

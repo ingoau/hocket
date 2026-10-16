@@ -37,7 +37,6 @@
     <string name="player_about_loading">Loading details…</string>
     <string name="player_remaining">−%1$s</string>
     <string name="player_playing_on">Playing on %1$s</string>
-    <string name="player_another_device">another device</string>
     <string name="player_queue_a11y">Queue: %1$s</string>
     <string name="player_lyrics_timing">Lyrics timing</string>
 </resources>

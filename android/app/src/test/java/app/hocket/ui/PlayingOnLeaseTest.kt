@@ -62,4 +62,22 @@ class PlayingOnLeaseTest : PlayerRulesTestBase() {
         assertFalse("no \"Playing on\" after Stop", exists("player.playingOn"))
         assertNull(compose.onNodeWithTag("player.connect").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription))
     }
+
+    @Test
+    fun aLeaseLeftByAGoneDeviceIsNotAnotherDevicePlaying() {
+        val core = TestCore(staleLeaseOwner = "gone")
+        startExpanded(core)
+        assertFalse(core.client.ownsTransport.value)
+        assertFalse("no \"Playing on another device\" for a device that is not listed", exists("player.playingOn"))
+        assertTrue(compose.onAllNodesWithText("Playing on", substring = true).fetchSemanticsNodes().isEmpty())
+        assertNull("no accent device button", compose.onNodeWithTag("player.connect").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription))
+    }
+
+    @Test
+    fun aListedDeviceHoldingTheLeaseIsNamed() {
+        val core = TestCore(staleLeaseOwner = "laptop")
+        startExpanded(core)
+        assertTrue(exists("player.playingOn"))
+        assertEquals("Playing on Laptop", compose.onNodeWithTag("player.connect").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription))
+    }
 }

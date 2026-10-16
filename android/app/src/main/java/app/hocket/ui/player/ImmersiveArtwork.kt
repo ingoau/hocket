@@ -140,7 +140,9 @@ object ImmersiveArtwork {
 
     /**
      * Faces as fractions of the image. [FaceDetector] wants RGB_565 and an even width, and reports
-     * the eyes' midpoint and spacing; a face is about two eye-spacings wide and 2.4 tall.
+     * the eyes' midpoint and spacing; a face is about two eye-spacings wide and 2.4 tall, ending
+     * between the mouth and the chin: the core only rules a mirror out for a face whose box reaches
+     * the reflection zone, and a chin tip alone reflected at the seam doesn't read as a face.
      */
     private fun faces(bitmap: Bitmap): List<FaceRect> {
         val w = bitmap.width and 1.inv()

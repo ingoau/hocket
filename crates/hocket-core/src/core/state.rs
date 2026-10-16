@@ -106,7 +106,7 @@ pub(crate) struct Playback {
 
 impl Playback {
     pub fn position_now(&self, now: EpochMs) -> Ms {
-        if self.playing && self.loaded {
+        if self.playing && self.loaded && !self.buffering {
             let elapsed = (now - self.position_at).max(0.0);
             let pos = f64::from(self.position_ms) + elapsed;
             let cap = self
