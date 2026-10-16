@@ -155,6 +155,7 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 - Menu timeout: Off / 3 / 5 / 10 s (default 5)
 - Show volume controls (default on), Show progress bar (default on), Show album art (default on; Time 2 and Round 2)
 - Open on watch when playback starts (default off)
+- Close when paused: Off / 1 / 5 / 10 / 30 min (default Off). The watchapp closes itself after that long paused, with nothing playing, or with the phone disconnected; playing stops the countdown, and a command or opening a list or lyrics restarts it. Sent as an optional trailing byte of the settings blob, so watchapps and phone apps on either side of the change still understand each other.
 - Install / update the watchapp, with installed-version status (the version the watch last reported on connect)
 
 

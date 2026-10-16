@@ -107,6 +107,7 @@ static void prv_outbox_failed(DictionaryIterator *iter, AppMessageResult reason,
 }
 
 void send_cmd(Cmd cmd, int32_t arg, const char *path, const char *item) {
+  idle_activity();
   OutMsg m = {.type = MsgCmd, .cmd = cmd, .arg = arg};
   if (path) strncpy(m.path, path, sizeof(m.path) - 1);
   if (item) strncpy(m.item, item, sizeof(m.item) - 1);
@@ -150,7 +151,8 @@ static void prv_default_settings(Settings *s) {
   memcpy(s->actions, DEFAULT_ACTIONS, sizeof(DEFAULT_ACTIONS));
 }
 
-// Blob: [1 version][flags][5 gestures][timeout][n menu][menu…][n actions][actions…]
+// Blob: [1 version][flags][5 gestures][timeout][n menu][menu…][n actions][actions…][close min]
+// The trailing byte is optional (an older phone app leaves it out: never close).
 static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
   if (len < 9 || b[0] != 1) return false;
   Settings s;
@@ -172,8 +174,37 @@ static bool prv_parse_settings(const uint8_t *b, size_t len, Settings *out) {
   if (n > MAX_MENU_ITEMS || at + n > len) return false;
   s.actions_count = 0;
   for (int i = 0; i < n; i++) if (b[at + i] < ItemCount) s.actions[s.actions_count++] = b[at + i];
+  at += n;
+  if (at < len) s.close_when_paused_min = b[at];
   *out = s;
   return true;
+}
+
+// -- Close when paused ------------------------------------------------------------------------------
+// Paused, nothing playing, or the phone gone for close_when_paused_min minutes closes the app.
+// Playing stops the countdown; a command or opening a list or lyrics restarts it (not the lists'
+// automatic retries, which would otherwise keep it open while the phone is away).
+
+static AppTimer *s_idle_timer;
+
+static void prv_idle_fired(void *context) {
+  s_idle_timer = NULL;
+  window_stack_pop_all(false);
+}
+
+static void prv_idle_update(void) {
+  const bool playing = (g_now.flags & NowPlaying) && connection_service_peek_pebble_app_connection();
+  const bool counting = g_settings.close_when_paused_min && !playing;
+  if (!counting) {
+    if (s_idle_timer) app_timer_cancel(s_idle_timer);
+    s_idle_timer = NULL;
+  } else if (!s_idle_timer) {
+    s_idle_timer = app_timer_register((uint32_t)g_settings.close_when_paused_min * 60 * 1000, prv_idle_fired, NULL);
+  }
+}
+
+void idle_activity(void) {
+  if (s_idle_timer) app_timer_reschedule(s_idle_timer, (uint32_t)g_settings.close_when_paused_min * 60 * 1000);
 }
 
 static void prv_apply_settings(void) {
@@ -187,6 +218,10 @@ static void prv_apply_settings(void) {
 #endif
   now_playing_settings_changed();
   list_refresh_local();
+  // A changed timeout starts over from now.
+  if (s_idle_timer) app_timer_cancel(s_idle_timer);
+  s_idle_timer = NULL;
+  prv_idle_update();
 }
 
 static void prv_load_settings(void) {
@@ -254,6 +289,7 @@ static void prv_handle_now(DictionaryIterator *iter) {
   now_playing_update(changed);
   if (changed) lyrics_track_changed();
   list_refresh_local();
+  prv_idle_update();
 }
 
 // Album art arrives as a 4-bit palettised bitmap in chunks, rows packed at (w + 1) / 2 bytes.
@@ -349,6 +385,7 @@ static void prv_inbox(DictionaryIterator *iter, void *context) {
 
 static void prv_connection(bool connected) {
   if (connected) prv_send_hello();
+  prv_idle_update();
 }
 
 // -- Touch -----------------------------------------------------------------------------------------
@@ -574,6 +611,7 @@ static void prv_init(void) {
   prv_send_hello();
 #ifdef HOCKET_DEMO
   prv_demo();
+  prv_idle_update();
 #endif
 }
 

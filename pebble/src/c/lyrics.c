@@ -287,6 +287,7 @@ static void prv_unload(Window *window) {
 }
 
 void lyrics_push(void) {
+  idle_activity();
   if (s_window) return;
   s_lines = malloc(MAX_LINES * sizeof(Line));
   if (!s_lines) {

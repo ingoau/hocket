@@ -492,6 +492,7 @@ static List *prv_push(ListKind kind, const char *title) {
 }
 
 void list_push_remote(const char *path, const char *title) {
+  idle_activity();
   List *l = prv_push(ListRemote, title);
   if (!l) return;
   strncpy(l->path, path, sizeof(l->path) - 1);

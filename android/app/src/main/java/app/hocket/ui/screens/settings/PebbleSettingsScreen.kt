@@ -37,6 +37,7 @@ fun PebbleSettingsScreen(nav: NavHostController) {
     val progress = setting(SettingKeys.PEBBLE_SHOW_PROGRESS_BAR)
     val art = setting(SettingKeys.PEBBLE_SHOW_ALBUM_ART)
     val autoOpen = setting(SettingKeys.PEBBLE_AUTO_OPEN)
+    val closeWhenPaused = setting(SettingKeys.PEBBLE_CLOSE_WHEN_PAUSED_MINUTES)
     SubScreen(nav, stringResource(R.string.settings_category_pebble)) {
         WatchappRow()
         SwitchRow(stringResource(R.string.pebble_touch_navigation), touchNav.bool ?: false, { touchNav.setBool(it) }, stringResource(R.string.pebble_touch_navigation_body), touchNav.scope, tag = "pebble.touchNavigation")
@@ -63,6 +64,9 @@ fun PebbleSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.pebble_progress_bar), progress.bool ?: true, { progress.setBool(it) }, stringResource(R.string.pebble_progress_bar_body), progress.scope, tag = "pebble.showProgressBar")
         SwitchRow(stringResource(R.string.pebble_album_art), art.bool ?: true, { art.setBool(it) }, stringResource(R.string.pebble_album_art_body), art.scope, tag = "pebble.showAlbumArt")
         SwitchRow(stringResource(R.string.pebble_auto_open), autoOpen.bool ?: false, { autoOpen.setBool(it) }, stringResource(R.string.pebble_auto_open_body), autoOpen.scope, tag = "pebble.autoOpen")
+        val minutes = closeWhenPaused.int ?: 0
+        SettingRow(stringResource(R.string.pebble_close_when_paused), if (minutes == 0) off else stringResource(R.string.pebble_minutes, minutes), closeWhenPaused.scope, tag = "pebble.closeWhenPausedMinutes")
+        ChoiceRow(listOf(0, 1, 5, 10, 30).map { it to if (it == 0) off else stringResource(R.string.pebble_minutes, it) }, isSelected = { minutes == it }, onSelect = { closeWhenPaused.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp))
     }
 }
 

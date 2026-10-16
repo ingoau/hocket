@@ -116,6 +116,7 @@ typedef struct {
   bool show_album_art;
   uint8_t gestures[GestureCount];
   uint8_t menu_timeout_s;
+  uint8_t close_when_paused_min;  // 0 = never
   uint8_t menu_count;
   uint8_t menu[MAX_MENU_ITEMS];
   uint8_t actions_count;
@@ -161,6 +162,8 @@ void open_menu_item(MenuItemId id, bool from_menu);
 const char *menu_item_label(MenuItemId id, char *buf, size_t n);
 void pop_to_now_playing(void);
 void show_notice(const char *text);
+// The user did something: restarts the close-when-paused countdown if it is running.
+void idle_activity(void);
 
 // Touch: each window registers a hold handler; a hold on the screen calls the top window's.
 typedef void (*HoldHandler)(void *ctx);

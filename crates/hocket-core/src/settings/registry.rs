@@ -107,6 +107,8 @@ pub mod keys {
     /// Ordered ids from [`PEBBLE_LIBRARY_SECTIONS`], [] = its default.
     pub const PEBBLE_LIBRARY: &str = "pebble.library";
     pub const PEBBLE_MENU_TIMEOUT_SECONDS: &str = "pebble.menuTimeoutSeconds";
+    /// Minutes paused (or with nothing playing) before the watchapp closes itself; 0 = never.
+    pub const PEBBLE_CLOSE_WHEN_PAUSED_MINUTES: &str = "pebble.closeWhenPausedMinutes";
     pub const PEBBLE_SHOW_VOLUME_CONTROLS: &str = "pebble.showVolumeControls";
     pub const PEBBLE_SHOW_PROGRESS_BAR: &str = "pebble.showProgressBar";
     pub const PEBBLE_SHOW_ALBUM_ART: &str = "pebble.showAlbumArt";
@@ -577,6 +579,12 @@ pub static REGISTRY: &[SettingDef] = &[
         Local,
         SettingKind::Int { min: 0, max: 30 },
         || json!(5),
+    ),
+    def(
+        PEBBLE_CLOSE_WHEN_PAUSED_MINUTES,
+        Local,
+        SettingKind::Int { min: 0, max: 120 },
+        || json!(0),
     ),
     def(
         PEBBLE_SHOW_VOLUME_CONTROLS,

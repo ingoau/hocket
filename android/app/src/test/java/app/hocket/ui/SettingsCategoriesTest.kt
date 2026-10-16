@@ -59,6 +59,7 @@ class SettingsCategoriesTest {
         "pebble.watchapp", "pebble.touchNavigation", "pebble.buttonsOnly", "pebble.gesture.up", "pebble.gesture.down", "pebble.gesture.left",
         "pebble.gesture.right", "pebble.gesture.hold", "pebble.menu", "pebble.actions", "pebble.library", "pebble.menuTimeoutSeconds",
         "pebble.showVolumeControls", "pebble.showProgressBar", "pebble.showAlbumArt", "pebble.autoOpen",
+        "pebble.closeWhenPausedMinutes",
     )
 
     /** Registry settings the old page did not show, now in their category. */

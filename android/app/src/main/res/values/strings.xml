@@ -703,6 +703,8 @@
     <string name="pebble_album_art_body">The cover behind Now Playing, on the Pebble Time 2 and Round 2.</string>
     <string name="pebble_auto_open">Open on watch when playback starts</string>
     <string name="pebble_auto_open_body">Opens the watchapp when this phone starts playing.</string>
+    <string name="pebble_close_when_paused">Close when paused</string>
+    <string name="pebble_minutes">%1$d min</string>
     <string name="pebble_item_now_playing">Now Playing</string>
     <string name="pebble_item_queue">Queue</string>
     <string name="pebble_item_library">Library</string>
