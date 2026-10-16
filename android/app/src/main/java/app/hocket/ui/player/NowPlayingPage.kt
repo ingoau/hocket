@@ -970,7 +970,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
     val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
     val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
-    val icon = remote?.let { deviceIcon(it.platform) } ?: if (elsewhere) HocketIcons.Filled.Devices else HocketIcons.Filled.PhoneAndroid
+    val icon = remote?.let { deviceIcon(it.platform) } ?: HocketIcons.Filled.PhoneAndroid
     Box(
         Modifier
             .size(48.dp)

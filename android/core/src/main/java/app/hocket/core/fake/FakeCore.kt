@@ -55,7 +55,7 @@ class FakeCore(
      * queue (nobody plays until Play takes the lease), as after Stop.
      */
     leaseHeld: Boolean = true,
-    /** A lease left by a device that is no longer listed (gone before it lapsed), in place of [leaseHeld]. */
+    /** Another device holding the lease at start, in place of [leaseHeld]: a listed one, or one that is gone but whose lease has not lapsed. */
     staleLeaseOwner: DeviceId? = null,
 ) : CoreHandle {
     override val kind: CoreKind = CoreKind.Fake
