@@ -6,7 +6,7 @@ import { bridge } from "../core/bridge";
 import { useApp, type MenuItem } from "../store/app";
 import { filterName } from "./filters";
 import { showToast } from "./ui-toast";
-import { LIBRARY_PINS_KEY, choosesTap, isPinned, movePin, parsePins, pinTap, removePin, setTap, togglePin, type LibraryPin, type PinKind, type PinTap } from "./library-pins";
+import { LIBRARY_PINS_KEY, canPin, choosesTap, isPinned, movePin, parsePins, pinTap, removePin, restorePin, setTap, shownNeighbour, togglePin, type LibraryPin, type PinKind, type PinTap } from "./library-pins";
 
 export function currentPins(): LibraryPin[] {
   const v = useApp.getState().setting<unknown>(LIBRARY_PINS_KEY, []);
@@ -26,8 +26,10 @@ export function playGenre(serverId: string, name: string, shuffle = false): void
 }
 
 function pinItem(kind: PinKind, id: string): MenuItem {
-  const pinned = isPinned(currentPins(), kind, id);
-  return { id: pinned ? "unpinFromLibrary" : "pinToLibrary", label: t(pinned ? "library.unpin" : "library.pin"), icon: pinned ? "pinOff" : "pin", enabled: true, run: () => savePins(togglePin(currentPins(), kind, id)) };
+  const pins = currentPins();
+  const pinned = isPinned(pins, kind, id);
+  // A full Library offers Pin greyed out, as the registry's Pin to Library is.
+  return { id: pinned ? "unpinFromLibrary" : "pinToLibrary", label: t(pinned ? "library.unpin" : "library.pin"), icon: pinned ? "pinOff" : "pin", enabled: pinned || canPin(pins), run: () => savePins(togglePin(currentPins(), kind, id)) };
 }
 
 /** A saved filter's menu: play, shuffle, edit, pin. */
@@ -50,12 +52,11 @@ export function genreMenuItems(name: string, serverId: string): MenuItem[] {
 }
 
 /**
- * The top of a pin's menu: "When clicked" (albums, artists and playlists), then moving it. Genres and
- * filters (no registry target) also get Unpin here; the others get the registry's Unpin from Library.
+ * The top of a pin's menu: "When clicked" (albums, artists and playlists), then moving it among the
+ * pins [shown]. Genres and filters (no registry target) also get Open, Play, Shuffle and Unpin here;
+ * the others get the registry's actions, its Unpin from Library among them.
  */
-export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean): MenuItem[] {
-  const pins = currentPins();
-  const i = pins.findIndex((p) => p.kind === pin.kind && p.id === pin.id);
+export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean, shown: readonly LibraryPin[]): MenuItem[] {
   const items: MenuItem[] = [];
   if (choosesTap(pin.kind)) {
     items.push({ id: "whenClicked", label: t("library.whenClicked"), icon: "", enabled: false, heading: true, run: () => {} });
@@ -63,13 +64,22 @@ export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean)
       items.push({ id: `tap-${tap}`, label: t(`library.tap.${tap}` as never), icon: tap === "open" ? "openInFull" : tap, enabled: true, checked: pinTap(pin) === tap, run: () => savePins(setTap(currentPins(), pin, tap)) });
     }
   }
-  items.push({ id: "pinUp", label: t("library.moveUp"), icon: "arrowUp", enabled: i > 0, run: () => savePins(movePin(currentPins(), pin, -1)) });
-  items.push({ id: "pinDown", label: t("library.moveDown"), icon: "arrowDown", enabled: i >= 0 && i < pins.length - 1, run: () => savePins(movePin(currentPins(), pin, 1)) });
+  if (pin.kind === "genre" || pin.kind === "filter") {
+    const app = useApp.getState();
+    const serverId = app.servers[0]?.id ?? "";
+    const filter = pin.kind === "filter" ? app.filters.find((f) => f.id === pin.id) : undefined;
+    const play = (shuffle: boolean) => (filter ? playFilter(serverId, filter, shuffle) : playGenre(serverId, pin.id, shuffle));
+    items.push({ id: "open", label: t("library.tap.open"), icon: "openInFull", enabled: true, run: () => useApp.getState().navigate(pin.kind === "genre" ? { view: "genre", id: pin.id } : { view: "filter", id: pin.id }) });
+    items.push({ id: "play", label: t("library.tap.play"), icon: "play", enabled: pin.kind === "genre" || !!filter, run: () => play(false) });
+    items.push({ id: "shuffle", label: t("library.tap.shuffle"), icon: "shuffle", enabled: pin.kind === "genre" || !!filter, run: () => play(true) });
+  }
+  items.push({ id: "pinUp", label: t("library.moveUp"), icon: "arrowUp", enabled: !!shownNeighbour(shown, pin, -1), run: () => savePins(movePin(currentPins(), pin, -1, shown)) });
+  items.push({ id: "pinDown", label: t("library.moveDown"), icon: "arrowDown", enabled: !!shownNeighbour(shown, pin, 1), run: () => savePins(movePin(currentPins(), pin, 1, shown)) });
   if (withUnpin) {
     items.push({ id: "unpin", label: t("library.unpin"), icon: "pinOff", enabled: true, run: () => {
-      const before = currentPins();
-      savePins(removePin(before, pin).pins);
-      showToast(t("library.unpinned", { title }), { type: "setSetting", data: { key: LIBRARY_PINS_KEY, value: JSON.stringify(before) } });
+      const { pins, at } = removePin(currentPins(), pin);
+      savePins(pins);
+      showToast(t("library.unpinned", { title }), () => savePins(restorePin(currentPins(), pin, at)));
     } });
   }
   return items;

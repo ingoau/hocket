@@ -180,41 +180,58 @@ export function ContextMenu() {
     return c ? formatChord(c, platform) : undefined;
   };
   let lastCategory: string | undefined;
+  const renderRow = (r: (typeof actions)[number], i: number) => {
+    const item = r.kind === "item" ? r.item : undefined;
+    const sep = lastCategory !== undefined && lastCategory !== r.category;
+    lastCategory = r.category;
+    const chord = r.kind === "action" ? chordFor(r.id) : undefined;
+    const icon = r.kind === "action" ? r.action.icon : r.item.icon;
+    const destructive = r.kind === "action" ? r.action.destructive : !!r.item.destructive;
+    const radio = item?.checked !== undefined;
+    return (
+      <Fragment key={`${r.kind}-${r.id}`}>
+        {sep ? <div className="sep" role="separator" /> : null}
+        <div
+          id={`cm-item-${i}`}
+          className={`mi ${r.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === i ? "active" : ""}`}
+          role={radio ? "menuitemradio" : "menuitem"}
+          aria-checked={radio ? !!item?.checked : undefined}
+          aria-disabled={!r.enabled || undefined}
+          onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }}
+          onClick={() => run(r)}
+          data-action={r.id}
+        >
+          {hasIcon(icon) ? <Icon name={icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
+          <span className="grow truncate">{r.label}</span>
+          {radio && item?.checked ? <Icon name="check" size={14} /> : null}
+          {chord ? <span className="kbd">{chord}</span> : null}
+        </div>
+      </Fragment>
+    );
+  };
+  // A heading and the radio items under it ("When clicked": Open, Play, Shuffle) form a labelled
+  // group, so a screen reader names the choice; everything else is a plain row.
+  type Placed = { r: (typeof actions)[number]; i: number };
+  const blocks: { heading?: Placed; rows: Placed[] }[] = [];
+  actions.forEach((r, i) => {
+    const item = r.kind === "item" ? r.item : undefined;
+    const last = blocks[blocks.length - 1];
+    if (item?.heading) blocks.push({ heading: { r, i }, rows: [] });
+    else if (last?.heading && item?.checked !== undefined) last.rows.push({ r, i });
+    else blocks.push({ rows: [{ r, i }] });
+  });
   return (
     <div {...exitProps} className={`menu ${motion}`} role="menu" aria-activedescendant={active >= 0 ? `cm-item-${active}` : undefined} tabIndex={-1} style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} data-testid="context-menu">
-      {actions.map((r, i) => {
-        const item = r.kind === "item" ? r.item : undefined;
-        const sep = (lastCategory !== undefined && lastCategory !== r.category) || (!!item?.heading && i > 0);
+      {blocks.map((b) => {
+        if (!b.heading) return b.rows.map(({ r, i }) => renderRow(r, i));
+        const { r, i } = b.heading;
         lastCategory = r.category;
-        if (item?.heading) {
-          return (
-            <Fragment key={`h-${r.id}`}>
-              {sep ? <div className="sep" role="separator" /> : null}
-              <div className="menu-heading" role="presentation">{item.label}</div>
-            </Fragment>
-          );
-        }
-        const chord = r.kind === "action" ? chordFor(r.id) : undefined;
-        const icon = r.kind === "action" ? r.action.icon : r.item.icon;
-        const destructive = r.kind === "action" ? r.action.destructive : !!r.item.destructive;
-        const radio = item?.checked !== undefined;
         return (
-          <Fragment key={`${r.kind}-${r.id}`}>
-            {sep ? <div className="sep" role="separator" /> : null}
-            <div
-              id={`cm-item-${i}`}
-              className={`mi ${r.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === i ? "active" : ""}`}
-              role={radio ? "menuitemradio" : "menuitem"}
-              aria-checked={radio ? !!item?.checked : undefined}
-              aria-disabled={!r.enabled || undefined}
-              onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }}
-              onClick={() => run(r)}
-              data-action={r.id}
-            >
-              {hasIcon(icon) ? <Icon name={icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
-              <span className="grow truncate">{r.label}</span>
-              {radio && item?.checked ? <Icon name="check" size={14} /> : null}
-              {chord ? <span className="kbd">{chord}</span> : null}
+          <Fragment key={`h-${r.id}`}>
+            {i > 0 ? <div className="sep" role="separator" /> : null}
+            <div role="group" aria-labelledby={`cm-heading-${i}`}>
+              <div className="menu-heading" id={`cm-heading-${i}`} role="presentation">{r.label}</div>
+              {b.rows.map(({ r: row, i: at }) => renderRow(row, at))}
             </div>
           </Fragment>
         );

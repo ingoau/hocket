@@ -298,7 +298,8 @@
 .home-list-main .t2 { color: var(--fg-muted); font-size: var(--fs-sm); }
 .home-icon-art { display: grid; place-items: center; clip-path: var(--lib-cookie-9); background: var(--accent-soft); color: var(--accent-text); }
 .home-list-main .home-icon-art { width: 44px; height: 44px; flex: 0 0 auto; }
-.tile .art.home-icon-art { aspect-ratio: 1; width: 100%; }
+/* As a tile's art: beats `.tile .art`'s block display and sunken background. */
+.tile .art.home-icon-art { display: grid; place-items: center; aspect-ratio: 1; width: 100%; background: var(--accent-soft); color: var(--accent-text); border-radius: 0; }
 .listen-tile { display: flex; align-items: center; gap: 28px; width: 100%; max-width: 640px; border: 0; border-radius: var(--shape-xl); background: var(--surface-tonal); padding: 20px 24px; text-align: left; color: var(--fg); }
 .listen-tile:hover { background: var(--selection); }
 .listen-text { display: flex; flex-direction: column; gap: 2px; }
@@ -321,6 +322,9 @@
 .customise-row.on { background: var(--surface-tonal); }
 .customise-row.dragging { opacity: 0.45; }
 .customise-row.drop-target { box-shadow: inset 0 2px 0 var(--accent-text); }
+.customise-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent-text); }
+/* The move arrows stay focusable at either end (aria-disabled), so focus isn't lost to the page. */
+.customise-line .btn[aria-disabled="true"] { opacity: 0.38; }
 .customise-line { display: flex; align-items: center; gap: 6px; }
 .customise-line .grip { color: var(--fg-faint); cursor: grab; display: grid; place-items: center; width: 22px; }
 .customise-text { display: flex; flex-direction: column; min-width: 0; }
@@ -363,3 +367,10 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .pin-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pin-kind { font-size: var(--fs-xs); color: var(--fg-faint); font-weight: 500; }
 .sidebar-pins-empty { padding: 2px 16px 8px; margin: 0; }
+
+/* The icon rail (below 900 CSS px): pins are their thumbnails alone, as places are their icons. */
+@media (max-width: 900px) {
+  .sidebar-pins-empty { display: none; }
+  .sidebar .nav-item.pin-item { height: 40px; padding: 0; justify-content: center; }
+  .sidebar .nav-item.pin-item > .icon { display: none; }
+}

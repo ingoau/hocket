@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { Album, Artist, Filter, SavedQueue, TrackSummary } from "@core/api";
 import { useApp, useJsonSetting, type MenuItem } from "../store/app";
@@ -72,9 +72,9 @@ export function Home() {
       for (const st of def.styles) items.push({ id: `style-${st}`, label: t(`home.style.${st}` as never), icon: styleIcon(st), enabled: true, checked: resolvedStyle(p) === st, run: () => save(updateSection(prefs, p.id, { style: st })) });
     }
     items.push({ id: "hide", label: t("home.hideSection"), icon: "remove", enabled: true, heading: false, run: () => {
-      const before = sectionsValue(prefs);
       save(updateSection(prefs, p.id, { on: false }));
-      showToast(t("home.hidden", { title }), { type: "setSetting", data: { key: HOME_SECTIONS_KEY, value: JSON.stringify(before) } });
+      // Undo shows just this section again, on whatever the list is by then.
+      showToast(t("home.hidden", { title }), () => save(updateSection(parseSections(useApp.getState().setting<unknown>(HOME_SECTIONS_KEY, [])), p.id, { on: true })));
     } });
     items.push({ id: "customise", label: t("home.customiseHome"), icon: "tune", enabled: true, run: () => setCustomising(true) });
     return items;
@@ -295,12 +295,20 @@ function playContext(serverId: string, kind: { type: "album" | "artist" | "playl
 function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: (p: SectionPref[]) => void; onClose: () => void }) {
   const known = prefs.filter((p) => sectionDef(p.id));
   const [dragId, setDragId] = useState<string | undefined>(undefined);
-  const [overId, setOverId] = useState<string | undefined>(undefined);
+  const [over, setOver] = useState<{ id: string; after: boolean } | undefined>(undefined);
+  const heading = useRef<HTMLHeadingElement>(null);
+  // Opening moves focus into the panel; closing (Escape too) returns it to Customise.
+  useEffect(() => heading.current?.focus(), []);
+  const close = () => {
+    onClose();
+    document.querySelector<HTMLElement>('[data-testid="home-customise"]')?.focus();
+  };
+  const endDrag = () => { setDragId(undefined); setOver(undefined); };
   return (
-    <aside className="customise-panel" aria-label={t("home.customiseHome")} data-testid="home-customise-panel">
+    <aside className="customise-panel" aria-label={t("home.customiseHome")} data-testid="home-customise-panel" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } }}>
       <div className="customise-head">
-        <h2 className="card-title grow">{t("home.customiseHome")}</h2>
-        <button type="button" className="btn icon" aria-label={t("home.customiseClose")} onClick={onClose}><Icon name="close" size={16} /></button>
+        <h2 className="card-title grow" tabIndex={-1} ref={heading}>{t("home.customiseHome")}</h2>
+        <button type="button" className="btn icon" aria-label={t("home.customiseClose")} onClick={close}><Icon name="close" size={16} /></button>
       </div>
       <p className="small muted customise-note"><Icon name="sync" size={14} /> {t("home.customiseSync")}</p>
       <ul className="plain-list customise-list">
@@ -309,22 +317,29 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
           if (!def) return null;
           const title = t(`home.section.${def.id}` as never);
           const style = resolvedStyle(p);
+          const target = over?.id === p.id && dragId && dragId !== p.id ? (over.after ? "drop-after" : "drop-target") : "";
           return (
             <li
               key={p.id}
-              className={`customise-row ${p.on ? "on" : ""} ${dragId === p.id ? "dragging" : ""} ${overId === p.id && dragId && dragId !== p.id ? "drop-target" : ""}`}
+              className={`customise-row ${p.on ? "on" : ""} ${dragId === p.id ? "dragging" : ""} ${target}`}
               draggable
               onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); setDragId(p.id); }}
-              onDragOver={(e) => { e.preventDefault(); if (overId !== p.id) setOverId(p.id); }}
-              onDrop={(e) => { e.preventDefault(); if (dragId) save(moveBefore(prefs, dragId, p.id)); setDragId(undefined); setOverId(undefined); }}
-              onDragEnd={() => { setDragId(undefined); setOverId(undefined); }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                // The lower half of a row drops after it, so a section can go one down or last.
+                const r = e.currentTarget.getBoundingClientRect();
+                const after = e.clientY > r.top + r.height / 2;
+                if (over?.id !== p.id || over.after !== after) setOver({ id: p.id, after });
+              }}
+              onDrop={(e) => { e.preventDefault(); if (dragId) save(moveBefore(prefs, dragId, p.id, over?.id === p.id && over.after)); endDrag(); }}
+              onDragEnd={endDrag}
               data-testid={`customise-${p.id}`}
             >
               <div className="customise-line">
                 <span className="grip" aria-hidden="true"><Icon name="dragHandle" size={16} /></span>
                 <span className="grow customise-text"><span className="t1">{title}</span><span className="t2">{t(`home.section.${def.id}.desc` as never)}</span></span>
-                <button type="button" className="btn icon sm" aria-label={t("home.moveUpNamed", { title })} disabled={i === 0} onClick={() => save(moveKnown(prefs, p.id, -1))}><Icon name="chevronUp" size={16} /></button>
-                <button type="button" className="btn icon sm" aria-label={t("home.moveDownNamed", { title })} disabled={i === known.length - 1} onClick={() => save(moveKnown(prefs, p.id, 1))}><Icon name="chevronDown" size={16} /></button>
+                <button type="button" className="btn icon sm" aria-label={t("home.moveUpNamed", { title })} aria-disabled={i === 0} onClick={() => { if (i > 0) save(moveKnown(prefs, p.id, -1)); }}><Icon name="chevronUp" size={16} /></button>
+                <button type="button" className="btn icon sm" aria-label={t("home.moveDownNamed", { title })} aria-disabled={i === known.length - 1} onClick={() => { if (i < known.length - 1) save(moveKnown(prefs, p.id, 1)); }}><Icon name="chevronDown" size={16} /></button>
                 <button type="button" role="switch" aria-checked={p.on} aria-label={t("home.showNamed", { title })} className={`m3-switch ${p.on ? "on" : ""}`} onClick={() => save(updateSection(prefs, p.id, { on: !p.on }))} data-testid={`customise-switch-${p.id}`}><span className="m3-switch-track" /><span className="m3-switch-handle" /></button>
               </div>
               {p.on && def.styles.length > 1 ? (

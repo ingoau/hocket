@@ -2,14 +2,10 @@ package app.hocket.ui.screens.library
 
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -19,33 +15,26 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
-import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -86,14 +75,11 @@ import app.hocket.core.client.SelectionKind
 import app.hocket.core.client.TrackListKey
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.AlbumCard
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.GenreRow
-import app.hocket.ui.components.JobsIndicator
-import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.PlaylistRow
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.TrackRow
@@ -103,8 +89,6 @@ import app.hocket.ui.components.TrackRowSkeleton
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.Dp
 import app.hocket.ui.nav.Route
-import app.hocket.ui.screens.detail.DetailPane
-import kotlinx.coroutines.launch
 
 @Composable
 fun sortLabel(sort: SortOrder): String = when (sort) {

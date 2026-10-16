@@ -235,6 +235,47 @@ fn customisation_round_trips_across_platforms() {
     assert!(broken.from_json("not json").is_err());
 }
 
+/// An order saved before the Library hub gains the Library in the sidebar and Pin / Unpin to
+/// Library in the context menu, once; a current save is left as the user made it.
+#[test]
+fn version_one_orders_gain_the_library() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(
+        r#"{"orders":{"sidebar":["navigateHome","navigateAlbums","navigatePlaylists"],"contextMenu":["playNext","goToArtist","addToPlaylist"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r.order(Surface::Sidebar),
+        vec![
+            "navigateHome",
+            "navigateLibrary",
+            "navigateAlbums",
+            "navigatePlaylists"
+        ]
+    );
+    assert_eq!(
+        r.order(Surface::ContextMenu),
+        vec![
+            "playNext",
+            "goToArtist",
+            "pinToLibrary",
+            "unpinFromLibrary",
+            "addToPlaylist"
+        ]
+    );
+    // Written back as version 2: removing the Library again sticks.
+    r.set_order(
+        Surface::Sidebar,
+        vec!["navigateHome".into(), "navigateAlbums".into()],
+    );
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(
+        again.order(Surface::Sidebar),
+        vec!["navigateHome", "navigateAlbums"]
+    );
+}
+
 #[test]
 fn surfaces_filter_and_order() {
     let mut r = ActionRegistry::new(Platform::Linux);
@@ -855,6 +896,7 @@ fn pinned(pins: &[(&str, &str)]) -> StateView {
                 kind: k.to_string(),
                 id: id.to_string(),
                 tap: "open".into(),
+                ..Default::default()
             })
             .collect(),
         ..state()
@@ -876,7 +918,7 @@ fn pins_written(cmds: &[Command]) -> Vec<super::LibraryPin> {
 /// out just that pin, keeping the others' order and tap choices.
 #[test]
 fn library_pins_toggle_through_the_setting() {
-    let mut r = ActionRegistry::new(Platform::Linux);
+    let r = ActionRegistry::new(Platform::Linux);
     let album = ActionTarget::Albums {
         ids: vec!["al1".into()],
     };
@@ -921,6 +963,25 @@ fn library_pins_toggle_through_the_setting() {
             .map(|p| (p.kind.as_str(), p.tap.as_str()))
             .collect::<Vec<_>>(),
         vec![("playlist", "open"), ("genre", "shuffle")]
+    );
+
+    // A newer device's pin (unknown kind, extra field) survives pinning something else.
+    let newer = StateView {
+        library_pins: super::LibraryPin::list_from(&serde_json::json!([
+            {"kind": "station", "id": "st1", "tap": "playNext", "serverId": "srv"}
+        ])),
+        ..state()
+    };
+    let kept = &r
+        .commands("pinToLibrary", &album, &newer, &NoResolver)
+        .unwrap();
+    let Command::SetSetting { value, .. } = &kept[0] else {
+        panic!("expected a setting write");
+    };
+    let written: serde_json::Value = serde_json::from_str(value).unwrap();
+    assert_eq!(
+        written[0],
+        serde_json::json!({"kind": "station", "id": "st1", "tap": "playNext", "serverId": "srv"})
     );
 
     // Saved queues have their own "Pin queue" (kept from trimming); no second pin there.

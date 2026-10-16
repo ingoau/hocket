@@ -69,6 +69,7 @@ test.describe("axe: no violations anywhere", () => {
       await openPlace(page, "genres");
       await page.getByTestId("genre-tile").first().click();
       await expect(page.getByTestId("view-albums")).toBeVisible();
+      await page.waitForTimeout(250);
       await expectNoViolations(page, `${theme} genre detail`);
       await openPlace(page, "filters");
       await page.getByTestId("new-filter").click();

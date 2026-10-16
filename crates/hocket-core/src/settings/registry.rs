@@ -260,10 +260,6 @@ fn home_sections_valid(v: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The kinds of thing that can be pinned to the Library.
-pub const LIBRARY_PIN_KINDS: &[&str] = &["album", "artist", "playlist", "track", "genre", "filter"];
-/// What tapping a pin does.
-pub const LIBRARY_PIN_TAPS: &[&str] = &["open", "play", "shuffle"];
 /// Most pins the Library keeps.
 pub const LIBRARY_PINS_MAX: usize = 200;
 
@@ -275,17 +271,19 @@ fn library_pins_valid(v: &Value) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for p in arr {
         let o = p.as_object().ok_or("expected a list of pins")?;
-        let kind = o.get("kind").and_then(Value::as_str).unwrap_or("");
-        if !LIBRARY_PIN_KINDS.contains(&kind) {
-            return Err(format!("unknown pin kind {kind:?}"));
-        }
+        // Kinds and taps are checked for shape only: a newer device may add one, and older ones
+        // keep it (not shown) rather than dropping the whole list (see design.md, syncing).
+        let kind = match o.get("kind").and_then(Value::as_str) {
+            Some(kind) if !kind.is_empty() => kind,
+            _ => return Err("a pin needs a kind".into()),
+        };
         let id = match o.get("id").and_then(Value::as_str) {
             Some(id) if !id.is_empty() => id,
             _ => return Err("a pin needs an id".into()),
         };
         if let Some(tap) = o.get("tap") {
-            if !tap.as_str().is_some_and(|t| LIBRARY_PIN_TAPS.contains(&t)) {
-                return Err("a pin's tap is open, play or shuffle".into());
+            if !tap.as_str().is_some_and(|t| !t.is_empty()) {
+                return Err("a pin's tap is text".into());
             }
         }
         if !seen.insert((kind, id)) {

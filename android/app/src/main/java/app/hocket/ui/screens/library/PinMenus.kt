@@ -53,12 +53,11 @@ private fun SheetRow(label: String, icon: ImageVector, enabled: Boolean = true, 
 
 /** "When tapped: Open / Play / Shuffle" and moving the pin, at the top of a pin's menu. */
 @Composable
-private fun PinControls(pin: ResolvedPin, onDone: () -> Unit) {
+private fun PinControls(pin: ResolvedPin, shown: List<PinEntry>, onDone: () -> Unit) {
     val client = LocalCoreClient.current
     val settings by client.settings.collectAsStateWithLifecycle()
     val pins = LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value)
-    val at = pins.indexOfFirst { it.kind == pin.entry.kind && it.id == pin.entry.id }
-    val tap = pins.getOrNull(at)?.pinTap ?: pin.entry.pinTap
+    val tap = pins.firstOrNull { it.same(pin.entry) }?.pinTap ?: pin.entry.pinTap
     if (pin.kind.choosesTap) {
         Text(stringResource(R.string.library_pin_when_tapped), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 4.dp))
         Row(Modifier.padding(horizontal = 24.dp, vertical = 4.dp).testTag("pin.tap"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,8 +73,8 @@ private fun PinControls(pin: ResolvedPin, onDone: () -> Unit) {
             }
         }
     }
-    SheetRow(stringResource(R.string.library_pin_move_earlier), HocketIcons.Filled.KeyboardArrowDown, enabled = at > 0, flip = true) { LibraryPins.move(client, pin.entry, -1); onDone() }
-    SheetRow(stringResource(R.string.library_pin_move_later), HocketIcons.Filled.KeyboardArrowDown, enabled = at in 0 until pins.lastIndex) { LibraryPins.move(client, pin.entry, 1); onDone() }
+    SheetRow(stringResource(R.string.library_pin_move_earlier), HocketIcons.Filled.KeyboardArrowDown, enabled = LibraryPins.shownNeighbour(shown, pin.entry, -1) != null, flip = true) { LibraryPins.move(client, pin.entry, -1, shown); onDone() }
+    SheetRow(stringResource(R.string.library_pin_move_later), HocketIcons.Filled.KeyboardArrowDown, enabled = LibraryPins.shownNeighbour(shown, pin.entry, 1) != null) { LibraryPins.move(client, pin.entry, 1, shown); onDone() }
 }
 
 /**
@@ -84,12 +83,12 @@ private fun PinControls(pin: ResolvedPin, onDone: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PinMenuSheet(pin: ResolvedPin, nav: NavHostController, serverId: String, onUnpinned: (PinEntry, Int) -> Unit, onDismiss: () -> Unit) {
+fun PinMenuSheet(pin: ResolvedPin, shown: List<PinEntry>, nav: NavHostController, serverId: String, onUnpinned: (PinEntry, Int) -> Unit, onDismiss: () -> Unit) {
     val client = LocalCoreClient.current
     val kindLabel = stringResource(pin.kind.label)
     val target = pin.target
     if (target != null) {
-        ActionSheet(target, pin.title, kindLabel, onDismiss = onDismiss, extraTop = { PinControls(pin, onDismiss) })
+        ActionSheet(target, pin.title, kindLabel, onDismiss = onDismiss, extraTop = { PinControls(pin, shown, onDismiss) })
         return
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("pin.menu")) {
@@ -97,7 +96,7 @@ fun PinMenuSheet(pin: ResolvedPin, nav: NavHostController, serverId: String, onU
             Text(pin.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Text(kindLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(8.dp))
-            PinControls(pin, onDismiss)
+            PinControls(pin, shown, onDismiss)
             HorizontalDivider()
             SheetRow(stringResource(R.string.library_pin_tap_open), HocketIcons.Filled.ChevronRight) { onDismiss(); performPin(client, nav, serverId, pin, PinTap.Open) }
             SheetRow(stringResource(R.string.action_play), HocketIcons.Filled.PlayArrow) {
@@ -124,7 +123,8 @@ fun PinMenuSheet(pin: ResolvedPin, nav: NavHostController, serverId: String, onU
 fun FilterMenuSheet(filter: Filter, nav: NavHostController, serverId: String, onDismiss: () -> Unit, onDelete: (() -> Unit)? = null) {
     val client = LocalCoreClient.current
     val settings by client.settings.collectAsStateWithLifecycle()
-    val pinned = LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value).any { it.kind == PinKind.Filter.id && it.id == filter.id }
+    val allPins = LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value)
+    val pinned = allPins.any { it.kind == PinKind.Filter.id && it.id == filter.id }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("filter.menu")) {
         Column(Modifier.navigationBarsPadding()) {
             Text(filter.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
@@ -134,7 +134,7 @@ fun FilterMenuSheet(filter: Filter, nav: NavHostController, serverId: String, on
             SheetRow(stringResource(R.string.action_play), HocketIcons.Filled.PlayArrow) { onDismiss(); client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter))) }
             SheetRow(stringResource(R.string.action_shuffle), HocketIcons.Filled.Shuffle) { onDismiss(); client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter), shuffle = true)) }
             SheetRow(stringResource(R.string.filter_edit), HocketIcons.Filled.Tune) { onDismiss(); nav.navigate(Route.FilterBuilder(filter.id)) }
-            SheetRow(stringResource(if (pinned) R.string.library_pin_remove else R.string.library_pin_add), if (pinned) HocketIcons.Outlined.PushPin else HocketIcons.Filled.PushPin, tag = "filter.menu.pin") {
+            SheetRow(stringResource(if (pinned) R.string.library_pin_remove else R.string.library_pin_add), if (pinned) HocketIcons.Outlined.PushPin else HocketIcons.Filled.PushPin, enabled = pinned || LibraryPins.canPin(allPins), tag = "filter.menu.pin") {
                 onDismiss(); LibraryPins.toggle(client, PinKind.Filter, filter.id)
             }
             if (onDelete != null) SheetRow(stringResource(R.string.action_delete), HocketIcons.Filled.Delete, tag = "filter.menu.delete") { onDismiss(); onDelete() }

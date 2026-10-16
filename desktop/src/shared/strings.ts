@@ -18,8 +18,6 @@ const STRINGS = {
   "nav.stats": "Stats",
   "nav.settings": "Settings",
   "nav.library": "Library",
-  "nav.savedFilters": "Saved filters",
-  "nav.playlistsSection": "Playlists",
   "nav.customise": "Customise sidebar…",
 
   // Server setup
@@ -248,10 +246,6 @@ const STRINGS = {
   // Library views
   "home.title": "Home",
   "home.recentlyPlayed": "Recently played",
-  "home.recentlyAdded": "Recently added",
-  "home.mostPlayed": "Most played",
-  "home.random": "Something different",
-  "home.empty": "Your library is syncing. Albums appear here as soon as they land.",
   "home.customise": "Customise",
   "home.customiseHome": "Customise Home",
   "home.customiseSync": "Drag to reorder. Changes sync to your other devices.",

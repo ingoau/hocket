@@ -2097,7 +2097,9 @@ export class FakeCore implements CoreHandle {
       case "unpinFromLibrary": {
         const pin = this.libraryPinOf(target);
         if (!pin) return;
-        const others = this.libraryPins().filter((p) => !(p.kind === pin.kind && p.id === pin.id));
+        const pins = this.libraryPins();
+        const others = pins.filter((p) => !(p.kind === pin.kind && p.id === pin.id));
+        if (actionId === "pinToLibrary" && (others.length < pins.length || pins.length >= 200)) return;
         const next = actionId === "pinToLibrary" ? [...others, { ...pin, tap: pin.kind === "track" ? "play" : "open" }] : others;
         this.setSettingValue("library.pins", JSON.stringify(next));
         return;
@@ -2420,6 +2422,7 @@ export class FakeCore implements CoreHandle {
       savedQueuePinned: sq?.pinned,
       inPlaylist: true,
       libraryPinned: this.libraryPinned(target),
+      libraryFull: this.libraryPins().length >= 200,
     });
   }
 

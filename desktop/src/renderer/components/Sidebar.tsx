@@ -72,7 +72,7 @@ export function Sidebar() {
               title={`${rp.title} · ${t(`library.kind.${rp.kind}` as never)} · ${hint}`}
               onClick={(e) => { e.preventDefault(); performPin(rp); }}
               onContextMenu={(e) => {
-                const items = pinMenuItems(rp.pin, rp.title, !rp.target);
+                const items = pinMenuItems(rp.pin, rp.title, !rp.target, (pins ?? []).map((x) => x.pin));
                 if (rp.target) void openContextMenu(e, rp.target, undefined, items);
                 else openItemsMenu(e, items);
               }}

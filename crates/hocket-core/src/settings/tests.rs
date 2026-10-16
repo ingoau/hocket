@@ -785,8 +785,8 @@ fn swipe_actions_are_registry_actions_for_their_rows() {
 }
 
 /// Home's sections and the Library's pins are synced lists the validators keep well formed:
-/// unknown section ids pass (a newer device may add sections), unknown pin kinds and bad tap
-/// choices don't, nor does pinning the same thing twice.
+/// unknown section ids, pin kinds and tap choices pass (a newer device may add them), malformed
+/// entries don't, nor does pinning the same thing twice.
 #[test]
 fn home_sections_and_library_pins_validate() {
     let store = MemoryStore::default();
@@ -807,11 +807,12 @@ fn home_sections_and_library_pins_validate() {
         keys::LIBRARY_PINS,
         r#"[{"kind":"album","id":"a1","tap":"shuffle"},{"kind":"genre","id":"Folk"}]"#
     ));
-    assert!(!ok(
+    assert!(ok(
         &mut s,
         keys::LIBRARY_PINS,
-        r#"[{"kind":"station","id":"s"}]"#
+        r#"[{"kind":"station","id":"s","tap":"playNext"}]"#
     ));
+    assert!(!ok(&mut s, keys::LIBRARY_PINS, r#"[{"id":"s"}]"#));
     assert!(!ok(
         &mut s,
         keys::LIBRARY_PINS,
@@ -820,7 +821,7 @@ fn home_sections_and_library_pins_validate() {
     assert!(!ok(
         &mut s,
         keys::LIBRARY_PINS,
-        r#"[{"kind":"album","id":"a","tap":"rate"}]"#
+        r#"[{"kind":"album","id":"a","tap":3}]"#
     ));
     assert!(!ok(
         &mut s,

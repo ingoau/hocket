@@ -6,14 +6,12 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,12 +38,12 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -92,7 +90,7 @@ private const val RECENT_ALBUMS = 60
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(nav: NavHostController, @Suppress("UNUSED_PARAMETER") initialTab: Int = 0) {
+fun LibraryScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
@@ -110,7 +108,7 @@ fun LibraryScreen(nav: NavHostController, @Suppress("UNUSED_PARAMETER") initialT
             if (snackbar.showSnackbar(unpinnedLabel.replace("%s", title), undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) LibraryPins.restore(client, entry, at)
         }
     }
-    if (pins != null && pins.isEmpty() && editing) editing = false
+    LaunchedEffect(pins?.isEmpty()) { if (pins?.isEmpty() == true) editing = false }
     val key = remember(serverId) { AlbumListKey(serverId, SortOrder.DateAdded, true) }
     val recent by client.albumPages.state(key).collectAsStateWithLifecycle()
     LaunchedEffect(key, recent.generation) { client.albumPages.ensure(key, 0) }
@@ -184,7 +182,7 @@ fun LibraryScreen(nav: NavHostController, @Suppress("UNUSED_PARAMETER") initialT
         }
     }
     pinMenu?.let { pin ->
-        PinMenuSheet(pin, nav, serverId, onUnpinned = { entry, at -> unpinned(entry, at, pin.title) }, onDismiss = { pinMenu = null })
+        PinMenuSheet(pin, pins.orEmpty().map { it.entry }, nav, serverId, onUnpinned = { entry, at -> unpinned(entry, at, pin.title) }, onDismiss = { pinMenu = null })
     }
     if (jobs) JobsSheet { jobs = false }
 }

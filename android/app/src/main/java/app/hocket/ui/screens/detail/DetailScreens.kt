@@ -472,10 +472,12 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val tr = tracks
     // The genre's name is known up front: the bar shows it at once, the rest loads under it.
     val settings by client.settings.collectAsStateWithLifecycle()
-    val pinned = app.hocket.ui.screens.library.LibraryPins.parse(settings[app.hocket.core.SettingKeys.LIBRARY_PINS]?.value).any { it.kind == "genre" && it.id == name }
+    val allPins = app.hocket.ui.screens.library.LibraryPins.parse(settings[app.hocket.core.SettingKeys.LIBRARY_PINS]?.value)
+    val pinned = allPins.any { it.kind == "genre" && it.id == name }
     DetailScaffold(nav, embedded, name, tr?.let { stringResource(R.string.library_count_songs, it.size) }, al?.firstOrNull()?.coverArt, loading = al == null || tr == null, actions = {
         // Genres have no registry menu: pinning is the genre page's own toggle.
-        IconButton(onClick = { app.hocket.ui.screens.library.LibraryPins.toggle(client, app.hocket.ui.screens.library.PinKind.Genre, name) }, modifier = Modifier.testTag("genre.pin")) {
+        // A full Library can still unpin, not pin.
+        IconButton(onClick = { app.hocket.ui.screens.library.LibraryPins.toggle(client, app.hocket.ui.screens.library.PinKind.Genre, name) }, enabled = pinned || app.hocket.ui.screens.library.LibraryPins.canPin(allPins), modifier = Modifier.testTag("genre.pin")) {
             Icon(if (pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (pinned) R.string.library_pin_remove else R.string.library_pin_add))
         }
     }, header = {

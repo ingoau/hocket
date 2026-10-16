@@ -7,8 +7,8 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,6 +24,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.nav.Route
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -56,10 +57,15 @@ enum class PinKind(val id: String, @StringRes val label: Int) {
     }
 }
 
-/** One entry of `library.pins`. [kind] may be one this build doesn't know (kept, not shown). */
-data class PinEntry(val kind: String, val id: String, val tap: String = "open") {
+/**
+ * One entry of `library.pins`. [kind] may be one this build doesn't know (kept, not shown), and
+ * [extra] holds fields a newer device added, written back untouched.
+ */
+data class PinEntry(val kind: String, val id: String, val tap: String = "open", val extra: Map<String, JsonElement> = emptyMap()) {
     val pinKind: PinKind? get() = PinKind.of(kind)
     val pinTap: PinTap get() = PinTap.of(tap)
+
+    fun same(other: PinEntry) = kind == other.kind && id == other.id
 }
 
 object LibraryPins {
@@ -68,13 +74,53 @@ object LibraryPins {
             val o = e as? JsonObject ?: return@mapNotNull null
             val kind = (o["kind"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
             val id = (o["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
-            PinEntry(kind, id, (o["tap"] as? JsonPrimitive)?.contentOrNull ?: "open")
+            if (id.isEmpty()) return@mapNotNull null
+            PinEntry(kind, id, (o["tap"] as? JsonPrimitive)?.contentOrNull ?: "open", o - setOf("kind", "id", "tap"))
         }.distinctBy { it.kind to it.id }
     }.getOrDefault(emptyList())
 
     fun encode(pins: List<PinEntry>): String = JsonArray(pins.map { p ->
-        JsonObject(mapOf("kind" to JsonPrimitive(p.kind), "id" to JsonPrimitive(p.id), "tap" to JsonPrimitive(p.tap)))
+        JsonObject(p.extra + mapOf("kind" to JsonPrimitive(p.kind), "id" to JsonPrimitive(p.id), "tap" to JsonPrimitive(p.tap)))
     }).toString()
+
+    /** Most pins the Library keeps (the core's validator refuses more). */
+    const val MAX = 200
+
+    fun canPin(pins: List<PinEntry>) = pins.size < MAX
+
+    /** Pins or unpins; a song plays when tapped, everything else opens. A full Library is left as it is. */
+    fun toggled(pins: List<PinEntry>, kind: PinKind, id: String): List<PinEntry> = when {
+        pins.any { it.kind == kind.id && it.id == id } -> pins.filterNot { it.kind == kind.id && it.id == id }
+        canPin(pins) -> pins + PinEntry(kind.id, id, if (kind == PinKind.Track) "play" else "open")
+        else -> pins
+    }
+
+    /** The pin [by] places from [pin] among [shown] (the pins drawn), or null at either end. */
+    fun shownNeighbour(shown: List<PinEntry>, pin: PinEntry, by: Int): PinEntry? {
+        val i = shown.indexOfFirst { it.same(pin) }
+        return if (i < 0) null else shown.getOrNull(i + by)
+    }
+
+    /**
+     * [pin] moved one place earlier ([by] -1) or later (1) among [shown], past its shown neighbour;
+     * pins that aren't shown (their album or filter is gone) keep their place.
+     */
+    fun moved(pins: List<PinEntry>, pin: PinEntry, by: Int, shown: List<PinEntry> = pins): List<PinEntry> {
+        val other = shownNeighbour(shown, pin, by) ?: return pins
+        val moving = pins.firstOrNull { it.same(pin) } ?: return pins
+        val list = pins.filterNot { it.same(pin) }.toMutableList()
+        val j = list.indexOfFirst { it.same(other) }
+        if (j < 0) return pins
+        list.add(if (by < 0) j else j + 1, moving)
+        return list
+    }
+
+    /** [pin] put back at [at], for Undo; the rest of the list stays as it is now. */
+    fun restored(pins: List<PinEntry>, pin: PinEntry, at: Int): List<PinEntry> {
+        val list = pins.filterNot { it.same(pin) }.toMutableList()
+        if (canPin(list)) list.add(at.coerceIn(0, list.size), pin)
+        return list
+    }
 
     fun current(client: CoreClient): List<PinEntry> = parse(client.settings.value[SettingKeys.LIBRARY_PINS]?.value)
 
@@ -82,12 +128,7 @@ object LibraryPins {
 
     fun isPinned(client: CoreClient, kind: PinKind, id: String) = current(client).any { it.kind == kind.id && it.id == id }
 
-    /** Pins or unpins; a song plays when tapped, everything else opens (as the core's action does). */
-    fun toggle(client: CoreClient, kind: PinKind, id: String) {
-        val pins = current(client)
-        save(client, if (pins.any { it.kind == kind.id && it.id == id }) pins.filterNot { it.kind == kind.id && it.id == id }
-        else pins + PinEntry(kind.id, id, if (kind == PinKind.Track) "play" else "open"))
-    }
+    fun toggle(client: CoreClient, kind: PinKind, id: String) = save(client, toggled(current(client), kind, id))
 
     fun remove(client: CoreClient, pin: PinEntry): Int {
         val pins = current(client)
@@ -97,23 +138,12 @@ object LibraryPins {
     }
 
     /** Puts [pin] back where it was ([at]), for Undo. */
-    fun restore(client: CoreClient, pin: PinEntry, at: Int) {
-        val pins = current(client).filterNot { it.kind == pin.kind && it.id == pin.id }.toMutableList()
-        pins.add(at.coerceIn(0, pins.size), pin)
-        save(client, pins)
-    }
+    fun restore(client: CoreClient, pin: PinEntry, at: Int) = save(client, restored(current(client), pin, at))
 
     fun setTap(client: CoreClient, pin: PinEntry, tap: PinTap) =
         save(client, current(client).map { if (it.kind == pin.kind && it.id == pin.id) it.copy(tap = tap.id) else it })
 
-    fun move(client: CoreClient, pin: PinEntry, by: Int) {
-        val pins = current(client).toMutableList()
-        val i = pins.indexOfFirst { it.kind == pin.kind && it.id == pin.id }
-        val j = i + by
-        if (i < 0 || j !in pins.indices) return
-        pins.add(j, pins.removeAt(i))
-        save(client, pins)
-    }
+    fun move(client: CoreClient, pin: PinEntry, by: Int, shown: List<PinEntry>) = save(client, moved(current(client), pin, by, shown))
 }
 
 /** A pin with what it shows: its title, artwork and kind. */

@@ -527,7 +527,7 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         sizeTransform = null,
     ) {
         screen<Route.Home>(transitions) { HomeScreen(nav) }
-        screen<Route.Library>(transitions) { entry -> LibraryScreen(nav, initialTab = entry.toRoute<Route.Library>().tab) }
+        screen<Route.Library>(transitions) { LibraryScreen(nav) }
         screen<Route.Search>(transitions) { SearchScreen(nav) }
         screen<Route.Settings>(transitions) { SettingsScreen(nav) }
         screen<Route.Downloads>(transitions) { DownloadsScreen(nav) }

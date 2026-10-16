@@ -119,6 +119,8 @@ export interface ActionContext {
   inPlaylist?: boolean;
   /** One album, artist, playlist or song: whether it's pinned to the Library (undefined otherwise). */
   libraryPinned?: boolean;
+  /** `library.pins` is at its limit (the core's LIBRARY_PINS_MAX). */
+  libraryFull?: boolean;
 }
 
 export function describeActions(surface: string, target: ActionTarget, order: string[] | undefined, ctx: ActionContext): ActionDescriptor[] {
@@ -147,8 +149,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       if (e.id === "pinSavedQueue" && ctx.savedQueuePinned) return false;
       if (e.id === "unpinSavedQueue" && !ctx.savedQueuePinned) return false;
       if (e.id === "removeFromPlaylist" && !ctx.inPlaylist) return false;
-      if (e.id === "pinToLibrary" && ctx.libraryPinned !== false) return false;
-      if (e.id === "unpinFromLibrary" && ctx.libraryPinned !== true) return false;
+      // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
+      if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;
       return true;
     })
@@ -169,6 +171,8 @@ function enabledFor(id: string, ctx: ActionContext): boolean {
   if (id === "togglePlay") return true;
   if (id === "undo") return ctx.canUndo;
   if (id === "redo") return ctx.canRedo;
+  if (id === "pinToLibrary") return ctx.libraryPinned === false && !ctx.libraryFull;
+  if (id === "unpinFromLibrary") return ctx.libraryPinned === true;
   return true;
 }
 

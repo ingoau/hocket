@@ -298,6 +298,7 @@ fn pin_to_library(t: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Comm
         kind: kind.into(),
         id: id.into(),
         tap: tap.into(),
+        ..Default::default()
     });
     set_library_pins(pins)
 }

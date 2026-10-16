@@ -3,6 +3,7 @@ import type { Command } from "@core/api";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { usePresenceList } from "../lib/presence";
+import { UI_UNDO, runUiUndo } from "../lib/ui-toast";
 
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);
@@ -29,7 +30,8 @@ export function Toasts() {
               data-testid="toast-action"
               onClick={() => {
                 try {
-                  bridge().dispatch(JSON.parse(t.actionCommand as string) as Command);
+                  if (t.actionCommand === UI_UNDO) runUiUndo(t.id);
+                  else bridge().dispatch(JSON.parse(t.actionCommand as string) as Command);
                 } catch (err) {
                   console.error("bad toast command", err);
                 }
