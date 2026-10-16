@@ -16,8 +16,9 @@
 //!   and the platform applies it (Media3: `setVolume(10^(gain_db/20))` on the
 //!   item or a `ReplayGainAudioProcessor`; EQ through `android.media.audiofx`
 //!   with the same band table). The value is absolute per item, not a delta.
-//! - **Volume** — `SetVolume` is the user volume, distinct from `gain_db`.
-//!   The platform multiplies them.
+//! - **Volume** — `SetVolume` is the user volume as an amplitude gain (the
+//!   core has already mapped the slider onto a dB scale), distinct from
+//!   `gain_db`. The platform multiplies them.
 //! - **Output device** — the platform owns routing on Android;
 //!   [`PlaybackBackend::set_output_device`] returns
 //!   [`BackendError::Unsupported`] and [`PlaybackBackend::output_devices`] is

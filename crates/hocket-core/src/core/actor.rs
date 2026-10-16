@@ -1119,8 +1119,11 @@ impl Actor {
         self.server.as_ref().and_then(|s| s.api.clone())
     }
 
+    /// The gain the backend applies: the volume slider on a dB scale, times
+    /// the sleep timer's fade.
     pub(crate) fn effective_volume(&self) -> f64 {
-        (self.playback.volume * self.playback.fade_gain.unwrap_or(1.0)).clamp(0.0, 1.0)
+        let gain = crate::audio::backend::volume_to_gain(self.playback.volume);
+        (gain * self.playback.fade_gain.unwrap_or(1.0)).clamp(0.0, 1.0)
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
