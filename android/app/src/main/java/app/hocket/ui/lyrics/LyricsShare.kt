@@ -26,6 +26,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -61,6 +63,8 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -114,11 +118,22 @@ import kotlinx.coroutines.launch
 internal const val MAX_SHARED_LINES = 6
 
 /**
- * A long-press on lyric [line]. [source] says where that line sits on screen now (null once it has
- * scrolled away): the card grows out of it, and goes back to wherever it is on close.
+ * A held lyric line as the list draws it: its [bounds] on screen (with the list's scaling of the
+ * line), the width its text is laid out in, and its text style and colour.
  */
 @Immutable
-internal class LyricsShareRequest(val line: Int, val source: () -> Rect?)
+internal class SourceLine(val bounds: Rect, val layoutWidth: Int, val style: TextStyle, val color: Color)
+
+/**
+ * A long-press on lyric [line]. [source] says where that line sits on screen now (null once it has
+ * scrolled away): its text flies from there into the card, and back on close.
+ */
+@Immutable
+internal class LyricsShareRequest(val line: Int, val source: () -> SourceLine?)
+
+/** Where the held line's text sits in the card (relative to the card) and how the card draws it. */
+@Immutable
+private class TrackedText(val offset: Offset, val width: Int, val style: TextStyle, val color: Color)
 
 internal enum class CardBackground { Artwork, Colour }
 internal enum class CardAlign { Start, Centre }
@@ -155,9 +170,13 @@ private const val EXPORT_WIDTH_PX = 1080f
 /**
  * The lyrics share screen, from a long-press on a lyric line: a card (album art, title and artist at
  * the top, the chosen lines, the app's icon and name at the bottom, over the player's blurred
- * artwork) that grows out of the held line while the screen behind dims, with the options (which
- * lines, background, alignment, shape) and Save / Share below it. Closing runs the same motion back
- * into the line. With reduced motion the card simply appears.
+ * artwork) with the options (which lines, background, alignment, shape) and Save / Share below it.
+ *
+ * The held line's text flies out of the lyrics into its place on the card, moving and resizing from
+ * the list's type to the card's (two copies crossfading on the way, each laid out as its end draws
+ * it), while the card forms around it from the line and the screen behind dims. Meanwhile the line
+ * in the list and its copy on the card are hidden, so neither end jumps. Closing runs it all back
+ * into wherever the line is now. With reduced motion the card simply appears.
  */
 @Composable
 internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: LyricsShareRequest, onDismiss: () -> Unit) {
@@ -179,6 +198,8 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
     var selected by remember(request.line) { mutableStateOf(setOf(request.line)) }
     var style by remember { mutableStateOf(LyricsCardStyle()) }
     var target by remember { mutableStateOf<Rect?>(null) }
+    var tracked by remember { mutableStateOf<TrackedText?>(null) }
+    var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
     var busy by remember { mutableStateOf(false) }
     // The card's recording; created in the dialog's window, which draws it.
     val layerRef = remember { arrayOfNulls<GraphicsLayer>(1) }
@@ -225,6 +246,8 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
         }
         // The progress is read in the layers only: the motion redraws, it does not recompose.
         val shown = Modifier.graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) }
+        // Settled open: the card shows its own copy of the line, and nothing flies.
+        val settled = { !closing && !progress.isRunning && target != null }
         Box(Modifier.fillMaxSize().testTag("lyrics.share")) {
             Box(
                 Modifier.fillMaxSize()
@@ -246,12 +269,17 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
                     Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
                         val view = LocalView.current
                         val lines = remember(doc, selected) { doc.lines.filterIndexed { i, _ -> i in selected } }
+                        // The held line's place among the card's lines (they keep the lyrics' order).
+                        val heldPosition = heldAt(selected, request.line)
                         Box(Modifier.aspectRatio(ratio).onGloballyPositioned { target = screenBounds(view, it) }.consumeTaps()) {
                             LyricsCard(
                                 track, lines, style, layer,
-                                Modifier.fillMaxSize().graphicsLayer {
+                                tracked = heldPosition,
+                                trackedAlpha = { if (settled()) 1f else 0f },
+                                onTracked = { offset, width, textStyle, color -> tracked = TrackedText(offset, width, textStyle, color) },
+                                modifier = Modifier.fillMaxSize().graphicsLayer {
                                     val p = progress.value
-                                    val start = from
+                                    val start = from?.bounds
                                     val to = target
                                     // From the held line (its centre, as tall as the line) to the card's place.
                                     if (start != null && to != null && to.width > 0f && to.height > 0f) {
@@ -260,8 +288,8 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
                                         translationX = lerp(start.center.x - to.center.x, 0f, p)
                                         translationY = lerp(start.center.y - to.center.y, 0f, p)
                                     }
-                                    // Visible quickly, so it reads as the line lifting off, not a fade.
-                                    alpha = (p * 2.5f).coerceIn(0f, 1f)
+                                    // Forms around the text as it flies in, a little behind it.
+                                    alpha = (p * 1.6f).coerceIn(0f, 1f)
                                 },
                             )
                         }
@@ -292,12 +320,50 @@ internal fun LyricsShareDialog(doc: Lyrics, track: TrackSummary, request: Lyrics
                     )
                 }
             }
+            // The held line in flight, over everything (and out of the accessibility tree: the
+            // card already speaks its lines).
+            val view = LocalView.current
+            Box(Modifier.fillMaxSize().onGloballyPositioned { c -> screenBounds(view, c)?.let { overlayOrigin = it.topLeft } }.clearAndSetSemantics { }) {
+                val start = from
+                val end = tracked
+                val text = doc.lines.getOrNull(request.line)?.text
+                if (start != null && end != null && text != null && heldAt(selected, request.line) >= 0) {
+                    // Both copies follow one path: the top-left corner and the type size move from
+                    // the list's to the card's; each is scaled from its own type size to that.
+                    fun GraphicsLayerScope.fly(ownSize: Float, visible: (Float) -> Float) {
+                        val card = target
+                        val p = progress.value
+                        if (card == null || settled()) { alpha = 0f; return }
+                        val from0 = start.bounds.topLeft - overlayOrigin
+                        val to0 = card.topLeft + end.offset - overlayOrigin
+                        val sourceSize = start.style.fontSize.toPx() * (start.bounds.width / start.layoutWidth.coerceAtLeast(1))
+                        val typeSize = lerp(sourceSize, end.style.fontSize.toPx(), p)
+                        transformOrigin = TransformOrigin(0f, 0f)
+                        translationX = lerp(from0.x, to0.x, p)
+                        translationY = lerp(from0.y, to0.y, p)
+                        scaleX = typeSize / ownSize; scaleY = scaleX
+                        alpha = visible(((p - 0.2f) / 0.5f).coerceIn(0f, 1f))
+                    }
+                    FlyingText(text, start.style, start.color, start.layoutWidth) { fly(start.style.fontSize.toPx()) { 1f - it } }
+                    FlyingText(text, end.style, end.color, end.width) { fly(end.style.fontSize.toPx()) { it } }
+                }
+            }
         }
     }
 }
 
 /** Takes taps without doing anything, so they do not reach the scrim (which closes). */
 private fun Modifier.consumeTaps(): Modifier = pointerInput(Unit) { detectTapGestures { } }
+
+/** [line]'s place among the [selected] lines on the card (they keep the lyrics' order), or -1. */
+private fun heldAt(selected: Set<Int>, line: Int): Int = if (line in selected) selected.count { it < line } else -1
+
+/** A copy of the held line laid out [widthPx] wide at the top-left corner, moved by [layer]. */
+@Composable
+private fun FlyingText(text: String, style: TextStyle, color: Color, widthPx: Int, layer: GraphicsLayerScope.() -> Unit) {
+    val width = with(LocalDensity.current) { widthPx.toDp() }
+    Text(text, style = style, color = color, modifier = Modifier.wrapContentSize(Alignment.TopStart, unbounded = true).graphicsLayer(layer).requiredWidth(width))
+}
 
 /**
  * The shareable card. Every size is relative to the card's width (a 320 dp reference, 250 dp when
@@ -306,7 +372,24 @@ private fun Modifier.consumeTaps(): Modifier = pointerInput(Unit) { detectTapGes
  * Share export.
  */
 @Composable
-internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: LyricsCardStyle, layer: GraphicsLayer?, modifier: Modifier = Modifier) {
+internal fun LyricsCard(
+    track: TrackSummary,
+    lines: List<LyricLine>,
+    style: LyricsCardStyle,
+    layer: GraphicsLayer?,
+    modifier: Modifier = Modifier,
+    tracked: Int = -1,
+    trackedAlpha: () -> Float = { 1f },
+    onTracked: (offset: Offset, width: Int, style: TextStyle, color: Color) -> Unit = { _, _, _, _ -> },
+) {
+    // Where line [tracked] is laid out in the card, reported whenever the card or it moves.
+    val placed = remember { arrayOfNulls<LayoutCoordinates>(2) }
+    val trackedLook = remember { arrayOfNulls<Any>(2) }
+    fun report() {
+        val root = placed[0]; val text = placed[1]
+        if (root == null || text == null || !root.isAttached || !text.isAttached) return
+        onTracked(root.localPositionOf(text, Offset.Zero), text.size.width, trackedLook[0] as TextStyle, trackedLook[1] as Color)
+    }
     val cardLabel = stringResource(R.string.lyrics_share_card_a11y, lines.joinToString(" ") { it.text })
     BoxWithConstraints(
         modifier
@@ -319,6 +402,7 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
                     scale(1f / k, 1f / k, pivot = Offset.Zero) { drawLayer(layer) }
                 }
             }
+            .onGloballyPositioned { placed[0] = it; report() }
             .clip(RoundedCornerShape(percent = 7))
             .testTag("lyrics.share.card")
             // One node: the lines once, not the description and then each line again.
@@ -380,8 +464,14 @@ internal fun LyricsCard(track: TrackSummary, lines: List<LyricLine>, style: Lyri
                 verticalArrangement = Arrangement.spacedBy(d(8.dp), Alignment.CenterVertically),
                 horizontalAlignment = if (centred) Alignment.CenterHorizontally else Alignment.Start,
             ) {
-                for (line in lines) {
-                    Text(line.text, style = lineStyle(line, fit), color = if (line.background) LyricsContrast.secondary else Color.White, modifier = Modifier.fillMaxWidth())
+                lines.forEachIndexed { i, line ->
+                    val lineStyle = lineStyle(line, fit)
+                    val color = if (line.background) LyricsContrast.secondary else Color.White
+                    val modifier = if (i != tracked) Modifier.fillMaxWidth() else {
+                        trackedLook[0] = lineStyle; trackedLook[1] = color
+                        Modifier.fillMaxWidth().onGloballyPositioned { placed[1] = it; report() }.graphicsLayer { alpha = trackedAlpha() }
+                    }
+                    Text(line.text, style = lineStyle, color = color, modifier = modifier)
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {

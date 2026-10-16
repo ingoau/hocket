@@ -298,8 +298,10 @@ Symbols name in the script, list it under its group, and re-run; the output is c
 - Lyrics: syllable gradient sweep per syllable driven by `withFrameNanos` and `LyricsCursor`,
   30 fps in battery saver, stopped when not visible; AGSL warp background on Android 13+, static
   blurred still otherwise or when battery saver / "animated background off" applies. Holding a line
-  (`LyricsShareDialog`) grows a share card out of it over a fading scrim while the options slide
-  up: album art, title and artist at the top, the chosen lines (up to six) on the blurred artwork
+  (`LyricsShareDialog`) flies its text out of the lyrics into its place on a share card, which forms
+  around it over a fading scrim while the options slide up (two copies of the line crossfade in
+  flight, one laid out like the list, one like the card; the line in the list and its copy on the
+  card are hidden meanwhile): album art, title and artist at the top, the chosen lines (up to six) on the blurred artwork
   (or the artwork's colour), the app's icon and name at the bottom; alignment and square / tall
   shape. The card is recorded into a `GraphicsLayer` at 1080 px wide (drawn from it scaled down)
   and exported as a PNG: Share through

@@ -146,7 +146,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         val doc = lyrics ?: return@Box
         var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
-            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, modifier = Modifier.weight(1f).then(listModifier),
+            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier),
                 padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
             // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
             if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
@@ -278,7 +278,7 @@ internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
 }
 
 @Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
+private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     val listState = rememberLazyListState()
@@ -301,14 +301,14 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, on
             val side = line.agent?.let { sides[it] } ?: 0
             // The core compares `position - offset` against the line start, so seeking to a line's
             // start means `start + offset` in audio time.
-            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) })
+            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
         }
         if (cursor.inGap) item { Text(stringResource(R.string.lyrics_instrumental), color = LyricsContrast.active, modifier = Modifier.padding(8.dp)) }
     }
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> androidx.compose.ui.geometry.Rect?) -> Unit) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
     val animatedScale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
     val scale = if (reducedMotion) 1f else animatedScale
     val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
@@ -323,10 +323,16 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     val shareLabel = stringResource(R.string.lyrics_share)
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
-    // Where the line is laid out, for the share card to grow out of and go back to (not state: read
-    // on hold and on close only).
+    // Where the line is laid out and how it is drawn, for its text to fly into the share card and
+    // back (not state: read on hold and on close only).
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val share: (() -> Unit)? = if (line.text.isBlank()) null else ({ onShare { screenBounds(view, coords[0]) } })
+    val lineStyle = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
+    val lineColor = if (lit) LyricsContrast.active else if (line.background) LyricsContrast.secondary else LyricsContrast.inactive
+    val currentLineStyle by rememberUpdatedState(lineStyle)
+    val currentLineColor by rememberUpdatedState(lineColor)
+    val share: (() -> Unit)? = if (line.text.isBlank()) null else ({
+        onShare { coords[0]?.let { c -> screenBounds(view, c)?.let { SourceLine(it, c.size.width, currentLineStyle, currentLineColor) } } }
+    })
     val currentShare by rememberUpdatedState(share)
     val a11yText = listOfNotNull(line.text, line.translation).joinToString(". ")
     val a11yState = listOfNotNull(if (focused) currentState else null, if (line.background) backgroundState else null).joinToString(", ")
@@ -342,11 +348,14 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     }
     Column(
         Modifier.fillMaxWidth().padding(vertical = 8.dp)
-            .onGloballyPositioned { coords[0] = it }
             .graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f) }
+            // Inside the scale: the bounds as drawn, the size as laid out.
+            .onGloballyPositioned { coords[0] = it }
             // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
             // the halo of text near the sides was cut off (#68).
-            .blur(blur, BlurredEdgeTreatment.Unbounded).alpha(alpha)
+            .blur(blur, BlurredEdgeTreatment.Unbounded)
+            // Hidden while it is on the share card (its text flies there and back).
+            .alpha(if (hidden) 0f else alpha)
             // Tap seeks, hold shares; unsynced lines have nowhere to seek to, but can still be held.
             .then(
                 when {
@@ -374,7 +383,7 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
         val activeColor = LyricsContrast.active
         // Background vocals are smaller (not "large text"), so they keep the 4.5:1 secondary colour.
         val inactiveColor = if (line.background) LyricsContrast.secondary else LyricsContrast.inactive
-        val style = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
+        val style = lineStyle
         when {
             tier == LyricsTier.Syllable && line.syllables.isNotEmpty() -> {
                 // Wrapped by word: a word's syllables (joined ones) stay together on one line.
