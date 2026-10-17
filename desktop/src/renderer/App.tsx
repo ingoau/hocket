@@ -10,6 +10,7 @@ import { bridge } from "./core/bridge";
 import { extractAccent } from "./lib/accent";
 import { resolveArtwork } from "./components/Artwork";
 import { Sidebar } from "./components/Sidebar";
+import { EditPinsPanel } from "./components/EditPinsPanel";
 import { TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
 import { NowPlayingSidebar } from "./components/NowPlayingSidebar";
@@ -61,6 +62,8 @@ export function App() {
       <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" id="main" tabIndex={-1} data-testid="content">
+          {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}
+          <EditPinsPanel />
           <Router />
         </main>
         <NowPlayingSidebar />

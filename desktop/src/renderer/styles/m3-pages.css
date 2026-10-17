@@ -463,3 +463,65 @@ button.m3-switch { border: 0; padding: 0; background: none; }
   .sidebar .nav-item.pin-item { height: 40px; padding: 0; justify-content: center; }
   .sidebar .nav-item.pin-item > .icon { display: none; }
 }
+
+/* ---- Edit pins (library.pins) ---------------------------------------------
+   The Customise Home panel's shell at the content's leading edge, beside the
+   sidebar: the pins as one connected group of tall tonal tiles, two across
+   (large corners on the group's outer edges, small ones inside; set per tile
+   from lib/pin-editor's tileRadius), the dragged or picked-up one lifted. */
+.content:has(> .pins-panel) { flex-direction: row; container-type: inline-size; }
+.content:has(> .pins-panel) > .view { min-width: 0; }
+.content > .pins-panel { order: -1; border-left: 0; border-right: 1px solid var(--border); padding: 20px 16px 16px; gap: 10px; animation: pins-panel-in var(--dur-spring) var(--spring-fast); }
+@keyframes pins-panel-in { from { transform: translateX(-16px); } to { transform: none; } }
+.pins-head { gap: 6px; margin-left: -6px; }
+.pins-head .btn.icon { width: 36px; height: 36px; }
+.pins-head .card-title { font-size: var(--title-card); }
+.pins-head .card-title:focus { outline: none; }
+.pins-done { border-radius: var(--shape-full); padding: 0 18px 0 14px; font-weight: 600; gap: 6px; }
+.pins-hint { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 4px; padding: 10px 14px; border-radius: var(--shape-md); background: var(--state-selected); color: var(--fg); font-size: var(--fs-md); line-height: 1.45; }
+.pins-hint > .icon { flex: 0 0 auto; margin-top: 1px; }
+.pins-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
+.pin-tile {
+  position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; height: 188px; padding: 0 8px 6px;
+  background: var(--surface-tonal); color: var(--fg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 50%, transparent);
+  transition: border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-fast), box-shadow var(--dur-short) var(--ease-emphasized);
+}
+/* Picked up (handle) or being dragged: tilted, raised and above its neighbours. */
+.pin-tile.lifted { z-index: 1; transform: rotate(-1.5deg) scale(1.02); background: var(--bg-elev); box-shadow: 0 10px 22px rgba(20, 24, 50, 0.22), 0 2px 6px rgba(20, 24, 50, 0.12); }
+:root[data-theme="dark"] .pin-tile.lifted { background: color-mix(in srgb, var(--accent-tint) 10%, var(--bg-elev)); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35); }
+.pin-tile-top { align-self: stretch; display: flex; justify-content: space-between; align-items: center; height: 44px; margin: 0 -4px; }
+.pin-tile .pin-tile-handle { width: 36px; height: 36px; color: var(--fg-muted); cursor: grab; }
+.pin-tile-unpin { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; background: none; color: var(--fg); padding: 0; cursor: pointer; }
+.pin-tile-x { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--bg-active); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.pin-tile-unpin:hover .pin-tile-x { background: color-mix(in srgb, var(--fg) 16%, transparent); }
+.pin-tile-unpin:focus-visible, .pin-chip:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.pin-thumb.lg { width: 64px; height: 64px; margin-top: -6px; }
+.pin-thumb.lg .art { width: 64px; height: 64px; border-radius: 16px; }
+.pin-thumb.lg.track .art { border-radius: 10px; }
+.pin-thumb.lg.artist .art { border-radius: 50%; }
+.pin-thumb.lg.icon-thumb.filter { clip-path: var(--lib-clover-4); }
+.pin-tile-title { align-self: stretch; margin-top: 8px; text-align: center; font-size: var(--fs-lg); font-weight: 600; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-tile-kind { font-size: var(--fs-sm); line-height: 16px; color: var(--fg-muted); }
+/* What a click does: a chip centred under the title, so a wider word doesn't move anything else. */
+.pin-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px; margin-top: auto; padding: 0 10px 0 9px; border: 0; border-radius: var(--shape-full);
+  font: inherit; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized);
+}
+.pin-chip.open { background: var(--bg-active); color: var(--fg); }
+.pin-chip.play { background: var(--accent); color: var(--accent-fg); }
+.pin-chip.shuffle { background: var(--state-selected); color: var(--fg); }
+.pin-chip.open:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.pin-chip.play:hover { filter: brightness(1.08); }
+.pin-chip.shuffle:hover { background: color-mix(in srgb, var(--accent) 14%, var(--state-selected)); }
+.pin-chip-fixed { display: inline-flex; align-items: center; gap: 4px; height: 30px; margin-top: auto; font-size: var(--fs-md); font-weight: 600; color: var(--fg-muted); }
+.pins-foot { margin: auto 0 0; padding-top: 12px; text-align: center; }
+/* Too little room for the page beside it (the side panel open, a narrow window): over the page. */
+@container (max-width: 760px) {
+  .content > .pins-panel { position: absolute; inset: 0 auto 0 0; z-index: 5; max-width: 100%; background: var(--bg-elev); box-shadow: var(--shadow); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .content > .pins-panel { animation: none; }
+  .pin-tile, .pin-chip { transition: none; }
+  .pin-tile.lifted { transform: none; }
+}

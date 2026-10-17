@@ -9,7 +9,7 @@ import { Icon } from "./Icon";
 import { openItemsMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
-import { pinMenuItems } from "../lib/pin-menus";
+import { editPinsItem, pinMenuItems } from "../lib/pin-menus";
 import { pinTap } from "../lib/library-pins";
 
 export function Sidebar() {
@@ -49,7 +49,7 @@ export function Sidebar() {
 
   return (
     <nav className="sidebar" aria-label={t("nav.library")} data-testid="sidebar">
-      <div className="sidebar-scroll">
+      <div className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
         <div className="section-title">{t("nav.library")}</div>
         {items.map((it) => (
           <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
@@ -57,35 +57,40 @@ export function Sidebar() {
             <span>{it.label}</span>
           </a>
         ))}
-        {/* No visible "Pinned" title (the pins' thumbnails say it); a gap, and the name for screen readers. */}
-        <div className="sidebar-pins-gap" role="presentation" />
-        <div className="sr-only">{t("library.pinned")}</div>
-        {pins && !pins.length ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
-        {(pins ?? []).map((rp) => {
-          const active = isPinActive(rp);
-          const tap = pinTap(rp.pin);
-          const hint = tap === "play" ? t("library.pinPlays") : tap === "shuffle" ? t("library.pinShuffles") : t("library.pinOpens");
-          return (
-            <a
-              key={`${rp.pin.kind}:${rp.pin.id}`}
-              href="#"
-              className={`nav-item pin-item ${active ? "active" : ""}`}
-              aria-current={active ? "page" : undefined}
-              title={`${rp.title} · ${t(`library.kind.${rp.kind}` as never)} · ${hint}`}
-              onClick={(e) => { e.preventDefault(); performPin(rp); }}
-              onContextMenu={(e) => {
-                const items = pinMenuItems(rp.pin, rp.title, !rp.target, (pins ?? []).map((x) => x.pin));
-                if (rp.target) void openContextMenu(e, rp.target, undefined, items);
-                else openItemsMenu(e, items);
-              }}
-              data-testid="sidebar-pin"
-            >
-              <PinThumb rp={rp} />
-              <span className="pin-text"><span className="pin-title">{rp.title}</span><span className="pin-kind">{t(`library.kind.${rp.kind}` as never)}</span></span>
-              {tap !== "open" && rp.kind !== "track" ? <Icon name={tap} size={14} /> : null}
-            </a>
-          );
-        })}
+        {/* No visible "Pinned" title (the pins' thumbnails say it); a gap, and the name for screen readers.
+            Right-clicking around and below the pins (not on one: that has its own menu) offers Edit pins. */}
+        <div className="sidebar-pins" data-testid="sidebar-pins">
+          <div className="sidebar-pins-gap" role="presentation" />
+          <div className="sr-only">{t("library.pinned")}</div>
+          {pins && !pins.length ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
+          {(pins ?? []).map((rp) => {
+            const active = isPinActive(rp);
+            // A song always plays; the rest do what their pin says.
+            const tap = rp.kind === "track" ? "play" : pinTap(rp.pin);
+            const hint = tap === "play" ? t("library.pinPlays") : tap === "shuffle" ? t("library.pinShuffles") : t("library.pinOpens");
+            return (
+              <a
+                key={`${rp.pin.kind}:${rp.pin.id}`}
+                href="#"
+                className={`nav-item pin-item ${active ? "active" : ""}`}
+                aria-current={active ? "page" : undefined}
+                title={`${rp.title} · ${t(`library.kind.${rp.kind}` as never)} · ${hint}`}
+                onClick={(e) => { e.preventDefault(); performPin(rp); }}
+                onContextMenu={(e) => {
+                  const items = pinMenuItems(rp.pin, rp.title, !rp.target, (pins ?? []).map((x) => x.pin));
+                  if (rp.target) void openContextMenu(e, rp.target, undefined, items);
+                  else openItemsMenu(e, items);
+                }}
+                data-testid="sidebar-pin"
+                data-pin={`${rp.pin.kind}:${rp.pin.id}`}
+              >
+                <PinThumb rp={rp} />
+                <span className="pin-text"><span className="pin-title">{rp.title}</span><span className="pin-kind">{t(`library.kind.${rp.kind}` as never)}</span></span>
+                {tap !== "open" && rp.kind !== "track" ? <Icon name={tap} size={14} /> : null}
+              </a>
+            );
+          })}
+        </div>
       </div>
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">
@@ -101,8 +106,9 @@ export function Sidebar() {
   );
 }
 
-/** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. */
-function PinThumb({ rp }: { rp: ResolvedPin }) {
-  if (rp.kind === "genre" || rp.kind === "filter") return <span className={`pin-thumb icon-thumb ${rp.kind}`} aria-hidden="true"><Icon name={rp.kind} size={16} /></span>;
-  return <span className={`pin-thumb ${rp.kind}`} aria-hidden="true"><Artwork id={rp.coverArt} size={64} round={rp.kind === "artist"} /></span>;
+/** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. [large]: Edit pins' tiles. */
+export function PinThumb({ rp, large = false }: { rp: ResolvedPin; large?: boolean }) {
+  const cls = `pin-thumb ${large ? "lg" : ""}`;
+  if (rp.kind === "genre" || rp.kind === "filter") return <span className={`${cls} icon-thumb ${rp.kind}`} aria-hidden="true"><Icon name={rp.kind} size={large ? 28 : 16} /></span>;
+  return <span className={`${cls} ${rp.kind}`} aria-hidden="true"><Artwork id={rp.coverArt} size={large ? 128 : 64} round={rp.kind === "artist"} /></span>;
 }

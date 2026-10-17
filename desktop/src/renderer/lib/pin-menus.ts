@@ -1,5 +1,5 @@
 // The renderer's own menus for things the action registry has no target for (filters, genres), and
-// the "When clicked" choice and moves at the top of a pin's menu.
+// the "When clicked" choice, moves and Edit pins at the top of a pin's menu.
 import type { Filter } from "@core/api";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
@@ -23,6 +23,11 @@ export function playFilter(serverId: string, f: Filter, shuffle = false): void {
 
 export function playGenre(serverId: string, name: string, shuffle = false): void {
   bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "genre", data: { name } }, label: name, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+}
+
+/** Opens the Edit pins panel (from [pin]'s menu, focus going back to it after, or the sidebar's pins). */
+export function editPinsItem(pin?: LibraryPin): MenuItem {
+  return { id: "editPins", label: t("library.editPinsMenu"), icon: "edit", enabled: true, run: () => useApp.getState().setEditingPins(true, pin && `${pin.kind}:${pin.id}`) };
 }
 
 function pinItem(kind: PinKind, id: string): MenuItem {
@@ -52,9 +57,9 @@ export function genreMenuItems(name: string, serverId: string): MenuItem[] {
 }
 
 /**
- * The top of a pin's menu: "When clicked" (albums, artists and playlists), then moving it among the
- * pins [shown]. Genres and filters (no registry target) also get Open, Play, Shuffle and Unpin here;
- * the others get the registry's actions, its Unpin from Library among them.
+ * The top of a pin's menu: "When clicked" (anything but a song, which always plays), then moving it
+ * among the pins [shown] and Edit pins. Genres and filters (no registry target) also get Open, Play,
+ * Shuffle and Unpin here; the others get the registry's actions, its Unpin from Library among them.
  */
 export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean, shown: readonly LibraryPin[]): MenuItem[] {
   const items: MenuItem[] = [];
@@ -77,6 +82,7 @@ export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean,
   }
   items.push({ id: "pinUp", label: t("library.moveUp"), icon: "arrowUp", enabled: !!shownNeighbour(shown, pin, -1), run: () => savePins(movePin(currentPins(), pin, -1, shown)) });
   items.push({ id: "pinDown", label: t("library.moveDown"), icon: "arrowDown", enabled: !!shownNeighbour(shown, pin, 1), run: () => savePins(movePin(currentPins(), pin, 1, shown)) });
+  items.push(editPinsItem(pin));
   if (withUnpin) {
     items.push({ id: "unpin", label: t("library.unpin"), icon: "pinOff", enabled: true, run: () => {
       const { pins, at } = removePin(currentPins(), pin);
