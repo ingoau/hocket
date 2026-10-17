@@ -60,6 +60,7 @@ import { scrimAlpha } from "../lib/contrast";
 import { SK } from "@shared/settings-keys";
 import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { useVolumeControl } from "../lib/volume";
+import { useConnectSyncing } from "../lib/connect-sync";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 
 type Pane = Exclude<NowPlayingMode, "art">;
@@ -500,6 +501,7 @@ function ImmersiveContinuation({ img, edge, orientation, controls, split = false
  */
 function NpVolume({ open, setOpen }: { open: boolean; setOpen: (open: boolean) => void }) {
   const v = useVolumeControl();
+  const syncing = useConnectSyncing();
   const silent = v.muted || v.shown === 0;
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -513,7 +515,7 @@ function NpVolume({ open, setOpen }: { open: boolean; setOpen: (open: boolean) =
     return () => window.removeEventListener("mousedown", down, true);
   }, [open, setOpen]);
   return (
-    <div ref={wrap} className="np-volume-wrap" onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
+    <div ref={wrap} className={`np-volume-wrap ${syncing ? "connect-syncing" : ""}`} aria-busy={syncing || undefined} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
       <button ref={button} type="button" className={`np-mode ${open ? "on" : ""}`} aria-expanded={open} aria-haspopup="dialog" aria-label={v.label} title={v.label} onClick={() => setOpen(!open)} data-testid="fs-pill-volume"><Icon name={silent ? "mute" : "volume"} size={22} /></button>
       {pop.value ? (
         <div {...pop.exitProps} className={`np-volume-pop ${pop.motion}`} role="dialog" aria-label={v.label} data-testid="fs-volume-popover">

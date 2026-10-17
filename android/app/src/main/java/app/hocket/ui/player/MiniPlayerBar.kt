@@ -106,7 +106,9 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val previousLabel = stringResource(R.string.action_previous)
     val reducedMotion = LocalReducedMotion.current
     val durationMs = track?.durationMs?.toFloat()?.takeIf { it > 0f } ?: 1f
-    val line = MaterialTheme.colorScheme.primary
+    // Waiting for the room's position (ConnectSync): the line shows, dimmed.
+    val syncing = rememberConnectSyncing()
+    val line = MaterialTheme.colorScheme.primary.let { if (syncing) it.copy(alpha = CONNECT_SYNC_ALPHA) else it }
     val lineTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
     // The item's description already carries both lines; the scrolling texts themselves stay out of

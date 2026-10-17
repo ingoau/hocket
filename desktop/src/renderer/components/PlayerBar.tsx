@@ -17,6 +17,7 @@ import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
 import { seekKeyTarget, seekValueText } from "../lib/a11y";
 import { useVolumeControl } from "../lib/volume";
+import { useConnectSyncing } from "../lib/connect-sync";
 import { NARROW, useMediaQuery } from "../lib/media";
 import { openContextMenu, openMenuFromButton } from "./ContextMenu";
 import { Artwork } from "./Artwork";
@@ -175,9 +176,10 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
 /** The volume of the device playing (this one, or the one holding transport). */
 function Volume() {
   const v = useVolumeControl();
+  const syncing = useConnectSyncing();
   const silent = v.muted || v.shown === 0;
   return (
-    <div className="volume" title={v.label}>
+    <div className={`volume ${syncing ? "connect-syncing" : ""}`} title={v.label} aria-busy={syncing || undefined}>
       <button type="button" className="btn icon" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute} data-testid="mute"><Icon name={silent ? "mute" : "volume"} size={20} /></button>
       <Slider size="sm" min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="volume" />
     </div>
