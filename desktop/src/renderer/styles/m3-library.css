@@ -78,7 +78,7 @@
 /* The sort popover: a "Sort by" heading over the orders as a connected list (2px apart, the list's
    ends round and the joins tight; the chosen row tonal with a check), then the direction as a
    connected segmented pair (.seg). Its surface and highlights are the context menu's. */
-.menu.sort-pop { min-width: 0; max-width: calc(100vw - 16px); padding: 8px; border-radius: 20px; display: flex; flex-direction: column; gap: 10px; transform-origin: top right; }
+.menu.sort-pop { min-width: 0; max-width: calc(100vw - 16px); overflow-y: auto; overscroll-behavior: contain; padding: 8px; border-radius: 20px; display: flex; flex-direction: column; gap: 10px; transform-origin: top right; }
 .menu.sort-pop.above { transform-origin: bottom right; }
 .sort-options, .sort-dir-block { display: flex; flex-direction: column; gap: 2px; }
 .sort-heading { padding: 4px 10px 6px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }

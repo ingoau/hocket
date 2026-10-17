@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, launchFake, openPlace, test } from "./fixtures";
+import { completeSetup, expect, launchFake, openPlace, resizeWindow, test } from "./fixtures";
 
 async function serverId(page: Page): Promise<string> {
   const s = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: { id: string }[] };
@@ -76,6 +76,31 @@ test.describe("library lists", () => {
     await expect(menu).toBeVisible();
     await page.getByTestId("view-albums").locator("h1").click();
     await expect(menu).toHaveCount(0);
+  });
+
+  test("the sort popover stays inside a short window, scrolling where it doesn't fit", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    // The smallest window: Songs' nine orders fit neither below nor above the button.
+    await resizeWindow(app, page, 900, 600);
+    await openPlace(page, "songs");
+    await page.getByTestId("songs-sort").click();
+    const menu = page.getByTestId("songs-sort-menu");
+    await expect(menu).toBeVisible();
+    await expect.poll(async () => {
+      const box = (await menu.boundingBox())!;
+      const height = await page.evaluate(() => window.innerHeight);
+      return box.y >= 0 && box.y + box.height <= height;
+    }).toBe(true);
+    // The direction, last in the menu, is still reachable.
+    await page.keyboard.press("End");
+    await expect(menu.getByTestId("sort-descending")).toBeFocused();
+    await expect(menu.getByTestId("sort-descending")).toBeInViewport();
+    // A click on the heading keeps the keys with the popover: Escape still closes it.
+    await menu.getByText("Sort by").click();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("songs-sort")).toBeFocused();
   });
 
   test("each list remembers its sort, when reopened and after a restart", async () => {
@@ -181,8 +206,11 @@ test.describe("library lists", () => {
     // Albums: Recent holds the albums of the recently played songs; nothing pinned there but al-1.
     await openPlace(page, "albums");
     await expect(page.getByTestId("albums-pinned").getByTestId("group-pinned-item")).toHaveCount(1);
+    // Recent loads after the history and each album's details: wait for it rather than count at once.
     const recentAlbums = page.getByTestId("albums-recent").getByTestId("group-recent-item");
-    expect(await recentAlbums.count()).toBeGreaterThan(0);
+    await expect(recentAlbums.first()).toBeVisible();
+    const pinnedAlbum = (await page.evaluate(() => window.hocket.query({ type: "album", data: { id: "al-1" } }))) as { data: { name: string } };
+    expect(await recentAlbums.locator(".t1").allTextContents()).not.toContain(pinnedAlbum.data.name);
     expect(await recentAlbums.count()).toBeLessThanOrEqual(6);
   });
 

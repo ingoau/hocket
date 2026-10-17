@@ -20,7 +20,7 @@ export function SortMenu({ list, value, onChange, testId }: { list: ListId; valu
   const [ascLabel, descLabel] = directionLabels(current.words);
   const dirLabel = t(value.descending ? descLabel : ascLabel);
   const [open, setOpen] = useState(false);
-  const [at, setAt] = useState<{ right: number; top?: number; bottom?: number } | undefined>(undefined);
+  const [at, setAt] = useState<{ right: number; top?: number; bottom?: number; maxHeight: number } | undefined>(undefined);
   const button = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const presence = usePresence(open ? at : undefined, pop);
@@ -33,7 +33,8 @@ export function SortMenu({ list, value, onChange, testId }: { list: ListId; valu
     setAt(undefined);
     if (refocus) button.current?.focus({ preventScroll: true });
   };
-  // Right-aligned with the button (it ends its header row): below it, or above where there's no room.
+  // Right-aligned with the button (it ends its header row): below it, or above where there's no room
+  // below but more above; where neither side fits it scrolls within the room it has.
   useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
@@ -42,7 +43,9 @@ export function SortMenu({ list, value, onChange, testId }: { list: ListId; valu
       if (r.bottom < 0 || r.top > window.innerHeight) { close(false); return; }
       const right = Math.max(8, window.innerWidth - r.right);
       const height = 120 + 38 * options.length;
-      setAt(window.innerHeight - r.bottom - 8 >= height || r.top < height ? { right, top: r.bottom + 6 } : { right, bottom: window.innerHeight - r.top + 6 });
+      const below = window.innerHeight - r.bottom - 14;
+      const above = r.top - 14;
+      setAt(below >= height || below >= above ? { right, top: r.bottom + 6, maxHeight: below } : { right, bottom: window.innerHeight - r.top + 6, maxHeight: above });
     };
     place();
     // It follows the button while the page scrolls under it, and closes once the button leaves the window.
@@ -110,8 +113,8 @@ export function SortMenu({ list, value, onChange, testId }: { list: ListId; valu
         <Icon name={value.descending ? "arrowDown" : "arrowUp"} size={18} />
       </button>
       {shown ? createPortal(
-        <div {...presence.exitProps} className={`menu sort-pop ${shown.bottom !== undefined ? "above" : "below"} ${presence.motion}`} role="menu" aria-labelledby={headingId}
-          style={{ right: shown.right, top: shown.top, bottom: shown.bottom, width: WIDTH }} onKeyDown={onKey} data-testid={`${testId}-menu`}>
+        <div {...presence.exitProps} className={`menu sort-pop ${shown.bottom !== undefined ? "above" : "below"} ${presence.motion}`} role="menu" aria-labelledby={headingId} tabIndex={-1}
+          style={{ right: shown.right, top: shown.top, bottom: shown.bottom, maxHeight: shown.maxHeight, width: WIDTH }} onKeyDown={onKey} data-testid={`${testId}-menu`}>
           <div role="group" aria-labelledby={headingId} className="sort-options">
             <div id={headingId} className="sort-heading" role="presentation">{t("sort.heading")}</div>
             {options.map((o) => {
