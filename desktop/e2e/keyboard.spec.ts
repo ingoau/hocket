@@ -50,4 +50,29 @@ test.describe("keyboard", () => {
     const label = await table.getAttribute("aria-label");
     expect(label).toMatch(/\d{3,} selected/);
   });
+
+  test("a shortcut pressed while a context menu is open acts on the menu's item", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    await openPlace(page, "songs");
+    // Right-click a song that isn't the one playing; Ctrl+L loves it, and only it.
+    const row = page.getByTestId("track-row").nth(4);
+    await row.click({ button: "right" });
+    const menu = page.getByTestId("context-menu");
+    await expect(menu.locator('[data-action="love"]')).toBeVisible();
+    await page.keyboard.press("Control+l");
+    await expect(menu).toHaveCount(0);
+    await row.click({ button: "right" });
+    await expect(menu.locator('[data-action="unlove"]')).toBeVisible();
+    // The same chord unloves it again from the menu.
+    await page.keyboard.press("Control+l");
+    await expect(menu).toHaveCount(0);
+    await row.click({ button: "right" });
+    await expect(menu.locator('[data-action="love"]')).toBeVisible();
+    // A digit rates the menu's song.
+    await page.keyboard.press("4");
+    await expect(menu).toHaveCount(0);
+    await expect(row.locator('[data-star="4"]')).toHaveAttribute("aria-checked", "true");
+  });
 });

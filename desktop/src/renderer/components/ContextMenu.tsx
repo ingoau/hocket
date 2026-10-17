@@ -6,7 +6,9 @@
 // and focus returns to whatever opened it.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ActionDescriptor, ActionTarget } from "@core/api";
-import { formatChord, parseChord } from "../store/shortcuts";
+import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
+import { useKeymap } from "../store/keyboard";
+import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { fetchActions } from "../store/queries";
 import { useApp, type MenuItem } from "../store/app";
 import { executeAction, type ActionContext } from "../store/actions";
@@ -20,6 +22,9 @@ let openedByKeyboard = false;
 
 /** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
 const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
+
+/** Actions that share one shortcut because the menu only ever shows one of them. */
+const TOGGLE_PARTNER: Record<string, string> = { love: "unlove", unlove: "love" };
 
 /** Open the menu for a target at the pointer. Call from an onContextMenu handler. */
 export async function openContextMenu(e: { clientX: number; clientY: number; preventDefault(): void }, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): Promise<void> {
@@ -78,6 +83,7 @@ export function ContextMenu() {
   const close = useApp((s) => s.closeContextMenu);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
+  const keymap = useKeymap();
   const ref = useRef<HTMLDivElement>(null);
   // The closed menu stays mounted, inert, while its exit plays. Everything
   // below that positions, focuses or listens is keyed on the live state.
@@ -166,6 +172,19 @@ export function ContextMenu() {
     }
     if (e.key === "Home") { e.preventDefault(); setActive(enabledIdx[0] ?? -1); }
     if (e.key === "End") { e.preventDefault(); setActive(enabledIdx[enabledIdx.length - 1] ?? -1); }
+    // A shortcut shown in the menu runs on the menu's own item (right-click a song, Ctrl+L loves
+    // that song), not on the selection or what's playing. Love and Unlove share one chord.
+    const chord = chordFromEvent(e, platform);
+    const ids = chord ? keymap.lookup(chord) : [];
+    if (ids.length) {
+      const want = new Set(ids.flatMap((id) => (TOGGLE_PARTNER[id] ? [id, TOGGLE_PARTNER[id]] : [id])));
+      const hit = actions.find((a) => a.kind === "action" && a.enabled && want.has(a.id));
+      if (hit) {
+        e.preventDefault();
+        run(hit);
+        return;
+      }
+    }
     // Type-ahead: the next enabled item whose label starts with the key.
     if (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const k = e.key.toLowerCase();
@@ -174,11 +193,18 @@ export function ContextMenu() {
       if (hit !== undefined) setActive(hit);
     }
   };
-  const chordFor = (id: string) => {
+  const chordFor = (id: string): string | undefined => {
     const s = shortcuts.find((x) => x.actionId === id)?.shortcut ?? menu.actions.find((a) => a.id === id)?.defaultShortcut;
+    if (!s && TOGGLE_PARTNER[id] && !menu.actions.some((a) => a.id === TOGGLE_PARTNER[id])) return chordForPartner(TOGGLE_PARTNER[id]);
     const c = s ? parseChord(s) : undefined;
     return c ? formatChord(c, platform) : undefined;
   };
+  // The hidden half of a toggle (Love when Unlove shows) still names the shared chord.
+  function chordForPartner(id: string): string | undefined {
+    const s = shortcuts.find((x) => x.actionId === id)?.shortcut ?? DEFAULT_KEYMAP.find((d) => d.actionId === id)?.shortcut;
+    const c = s ? parseChord(s) : undefined;
+    return c ? formatChord(c, platform) : undefined;
+  }
   let lastCategory: string | undefined;
   const renderRow = (r: (typeof actions)[number], i: number) => {
     const item = r.kind === "item" ? r.item : undefined;
