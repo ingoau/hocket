@@ -61,7 +61,9 @@ export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean,
   if (choosesTap(pin.kind)) {
     items.push({ id: "whenClicked", label: t("library.whenClicked"), icon: "", enabled: false, heading: true, run: () => {} });
     for (const tap of ["open", "play", "shuffle"] as PinTap[]) {
-      items.push({ id: `tap-${tap}`, label: t(`library.tap.${tap}` as never), icon: tap === "open" ? "openInFull" : tap, enabled: true, checked: pinTap(pin) === tap, run: () => savePins(setTap(currentPins(), pin, tap)) });
+      // Worded as a setting ("Click plays"), not an action, so it isn't read as a second Play beside
+      // the item's own Play and Shuffle play further down; drawn as radios, not with their icons.
+      items.push({ id: `tap-${tap}`, label: t(`library.tapChoice.${tap}` as never), icon: "", enabled: true, checked: pinTap(pin) === tap, run: () => savePins(setTap(currentPins(), pin, tap)) });
     }
   }
   if (pin.kind === "genre" || pin.kind === "filter") {

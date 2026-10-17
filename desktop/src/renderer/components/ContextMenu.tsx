@@ -201,15 +201,15 @@ export function ContextMenu() {
           onClick={() => run(r)}
           data-action={r.id}
         >
-          {hasIcon(icon) ? <Icon name={icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
+          {/* A choice is drawn as a radio, so it can't be mistaken for an action with the same icon. */}
+          {radio ? <span className={`mi-radio ${item?.checked ? "on" : ""}`} aria-hidden="true" /> : hasIcon(icon) ? <Icon name={icon} size={14} /> : <span style={{ width: 14 }} aria-hidden="true" />}
           <span className="grow truncate">{r.label}</span>
-          {radio && item?.checked ? <Icon name="check" size={14} /> : null}
           {chord ? <span className="kbd">{chord}</span> : null}
         </div>
       </Fragment>
     );
   };
-  // A heading and the radio items under it ("When clicked": Open, Play, Shuffle) form a labelled
+  // A heading and the radio items under it ("When clicked": Click opens, plays, shuffles) form a labelled
   // group, so a screen reader names the choice; everything else is a plain row.
   type Placed = { r: (typeof actions)[number]; i: number };
   const blocks: { heading?: Placed; rows: Placed[] }[] = [];
@@ -226,12 +226,15 @@ export function ContextMenu() {
         if (!b.heading) return b.rows.map(({ r, i }) => renderRow(r, i));
         const { r, i } = b.heading;
         lastCategory = r.category;
+        const choices = b.rows.map(({ r: row, i: at }) => renderRow(row, at));
+        // What follows the choice gets a separator, setting it apart.
+        lastCategory = "group";
         return (
           <Fragment key={`h-${r.id}`}>
             {i > 0 ? <div className="sep" role="separator" /> : null}
             <div role="group" aria-labelledby={`cm-heading-${i}`}>
               <div className="menu-heading" id={`cm-heading-${i}`} role="presentation">{r.label}</div>
-              {b.rows.map(({ r: row, i: at }) => renderRow(row, at))}
+              {choices}
             </div>
           </Fragment>
         );

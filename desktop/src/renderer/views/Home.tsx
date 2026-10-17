@@ -193,11 +193,7 @@ function useSectionData(id: HomeSectionId): SectionData {
   const filters = useApp((s) => s.filters);
   const saved = useApp((s) => s.savedQueues);
   const nowId = useApp((s) => s.session?.current?.trackId);
-  const needsStats = id === "favouriteArtists" || id === "topGenre" || id === "moreFromArtist" || id === "onRepeat";
-  const month = useQuery(() => (needsStats ? { type: "stats", data: { period_days: 30 } } : null), "stats", [needsStats, nowId]);
-  // A quiet month falls back to the year, so favourites are still there.
-  const year = useQuery(() => (needsStats && month.data && month.data.totalPlays === 0 ? { type: "stats", data: { period_days: 365 } } : null), "stats", [needsStats, month.data?.totalPlays]);
-  const stats = month.data && month.data.totalPlays === 0 && year.data ? year.data : month.data;
+  const stats = useListeningStats(id === "favouriteArtists" || id === "topGenre" || id === "moreFromArtist" || id === "onRepeat");
   const genre = useMemo(() => {
     const counts = new Map<string, number>();
     for (const a of stats?.topAlbums ?? []) if (a.genre?.trim()) counts.set(a.genre, (counts.get(a.genre) ?? 0) + 1);
@@ -266,6 +262,15 @@ function useSectionData(id: HomeSectionId): SectionData {
   }
 }
 
+/** The listening stats the "favourite" sections read: the last month, or the year when the month was quiet. */
+function useListeningStats(enabled: boolean) {
+  const nowId = useApp((s) => s.session?.current?.trackId);
+  const month = useQuery(() => (enabled ? { type: "stats", data: { period_days: 30 } } : null), "stats", [enabled, nowId]);
+  // A quiet month falls back to the year, so favourites are still there.
+  const year = useQuery(() => (enabled && month.data && month.data.totalPlays === 0 ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, month.data?.totalPlays]);
+  return month.data && month.data.totalPlays === 0 && year.data ? year.data : month.data;
+}
+
 /** Albums by id, in that order (recently played reads them one by one). */
 function useAlbumsByIds(ids: string[]): { ready: boolean; albums: Album[] } {
   const key = ids.join(",");
@@ -302,6 +307,9 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
     document.querySelector<HTMLElement>('[data-testid="home-customise"]')?.focus();
   };
   const endDrag = () => { setDragId(undefined); setOver(undefined); };
+  // Named as on Home: "More from <artist>" once the artist is known.
+  const topArtist = useListeningStats(known.some((p) => p.id === "moreFromArtist"))?.topArtists[0];
+  const titleOf = (id: string) => (id === "moreFromArtist" && topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : t(`home.section.${id}` as never));
   return (
     <aside className="customise-panel" aria-label={t("home.customiseHome")} data-testid="home-customise-panel" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } }}>
       <div className="customise-head">
@@ -313,7 +321,8 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
         {known.map((p, i) => {
           const def = sectionDef(p.id);
           if (!def) return null;
-          const title = t(`home.section.${def.id}` as never);
+          const title = titleOf(def.id);
+          const desc = t(`home.section.${def.id}.desc` as never);
           const style = resolvedStyle(p);
           const target = over?.id === p.id && dragId && dragId !== p.id ? (over.after ? "drop-after" : "drop-target") : "";
           return (
@@ -335,23 +344,43 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
             >
               <div className="customise-line">
                 <span className="grip" aria-hidden="true"><Icon name="dragHandle" size={16} /></span>
-                <span className="grow customise-text"><span className="t1">{title}</span><span className="t2">{t(`home.section.${def.id}.desc` as never)}</span></span>
+                <span className="grow customise-text"><span className="t1" title={title}>{title}</span><span className="t2" title={desc}>{desc}</span></span>
                 <button type="button" className="btn icon sm" aria-label={t("home.moveUpNamed", { title })} aria-disabled={i === 0} onClick={() => { if (i > 0) save(moveKnown(prefs, p.id, -1)); }}><Icon name="chevronUp" size={16} /></button>
                 <button type="button" className="btn icon sm" aria-label={t("home.moveDownNamed", { title })} aria-disabled={i === known.length - 1} onClick={() => { if (i < known.length - 1) save(moveKnown(prefs, p.id, 1)); }}><Icon name="chevronDown" size={16} /></button>
                 <button type="button" role="switch" aria-checked={p.on} aria-label={t("home.showNamed", { title })} className={`m3-switch ${p.on ? "on" : ""}`} onClick={() => save(updateSection(prefs, p.id, { on: !p.on }))} data-testid={`customise-switch-${p.id}`}><span className="m3-switch-track" /><span className="m3-switch-handle" /></button>
               </div>
-              {p.on && def.styles.length > 1 ? (
-                <div className="customise-styles" role="group" aria-label={t("home.showAs")}>
-                  {def.styles.map((st) => (
-                    <button key={st} type="button" className={`chip ${style === st ? "selected" : ""}`} aria-pressed={style === st} onClick={() => save(updateSection(prefs, p.id, { style: st }))}>{t(`home.style.${st}` as never)}</button>
-                  ))}
-                </div>
-              ) : null}
+              {p.on && def.styles.length > 1 ? <StyleGroup styles={def.styles} value={style} label={t("home.showAsNamed", { title })} onChange={(st) => save(updateSection(prefs, p.id, { style: st }))} /> : null}
             </li>
           );
         })}
       </ul>
       <button type="button" className="btn text" onClick={() => save(parseSections([]))}>{t("home.customiseReset")}</button>
     </aside>
+  );
+}
+
+/**
+ * Row / Grid / List: an M3 Expressive connected button group, one radio group. Arrow keys (and
+ * Home/End) choose and move focus, as in any radio group; only the chosen one is in the tab order.
+ */
+function StyleGroup({ styles, value, label, onChange }: { styles: readonly SectionStyle[]; value: SectionStyle; label: string; onChange: (st: SectionStyle) => void }) {
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const i = styles.indexOf(value);
+    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? (i + 1) % styles.length : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (i - 1 + styles.length) % styles.length : e.key === "Home" ? 0 : e.key === "End" ? styles.length - 1 : -1;
+    const st = styles[next];
+    if (!st) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onChange(st);
+    e.currentTarget.querySelector<HTMLElement>(`[data-style="${st}"]`)?.focus();
+  };
+  return (
+    <div className="customise-styles seg-group" role="radiogroup" aria-label={label} onKeyDown={onKey}>
+      {styles.map((st) => (
+        <button key={st} type="button" role="radio" aria-checked={value === st} tabIndex={value === st ? 0 : -1} className={`seg ${value === st ? "on" : ""}`} onClick={() => onChange(st)} data-style={st}>
+          {value === st ? <Icon name="check" size={16} /> : null}{t(`home.style.${st}` as never)}
+        </button>
+      ))}
+    </div>
   );
 }

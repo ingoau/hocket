@@ -5,6 +5,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { Icon } from "../components/Icon";
+import { BrandMark } from "../components/BrandMark";
 
 export function Setup() {
   const [url, setUrl] = useState("");
@@ -41,7 +42,8 @@ export function Setup() {
           <div className="setup-shapes" aria-hidden="true">
             <span className="shape cookie" /><span className="shape pill" /><span className="shape circle" /><span className="shape square" />
           </div>
-          <div className="brand" aria-hidden="true">{t("app.name")}</div>
+          {/* The lockup (docs/brand.md): the bare wave and the lowercase word mark, read once as "Hocket". */}
+          <p className="brand brand-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("app.name")}</span></p>
           <h1 id="setup-title" className="setup-title">{t("setup.title")}</h1>
           <div className="muted" id="setup-subtitle">{t("setup.subtitle")}</div>
         </div>

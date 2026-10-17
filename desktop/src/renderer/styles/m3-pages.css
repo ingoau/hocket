@@ -106,7 +106,8 @@
 .setup { padding: 32px; }
 .setup form { width: 960px; max-width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 56px; align-items: center; margin: auto 0; }
 .setup-hero { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.setup .brand { font-size: clamp(64px, 8vw, 104px); font-weight: 800; letter-spacing: -0.045em; line-height: 0.92; color: var(--accent-text); overflow-wrap: anywhere; }
+/* The lockup at hero size (the word mark's type and inks are with the Home header's, below). */
+.setup .brand { margin: 0; font-size: clamp(48px, 5vw, 72px); line-height: 1.1; white-space: nowrap; }
 .setup .setup-title { font-size: 28px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.15; }
 .setup #setup-subtitle { font-size: var(--fs-lg); max-width: 38ch; }
 /* Decorative M3 shapes above the wordmark. */
@@ -246,6 +247,8 @@
   .page-downloads .pin-row .progress { border: 0; }
   .page-stats .bars div:hover { background: Highlight; }
   .setup-shapes { display: none; }
+  .seg { border: 1px solid ButtonText; }
+  .seg.on { outline: 2px solid Highlight; }
   .mini .btn.mini-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
 }
 
@@ -269,7 +272,7 @@
   .page-stats .stat-figure { font-size: 44px; }
   .setup { padding: 16px; }
   .setup form { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .setup .brand { font-size: 56px; }
+  .setup .brand { font-size: 48px; }
   .setup .setup-title { font-size: 22px; }
   .setup-card { padding: 20px; }
 }
@@ -324,18 +327,44 @@
 .customise-line .btn[aria-disabled="true"] { opacity: 0.38; }
 .customise-line { display: flex; align-items: center; gap: 6px; }
 .customise-line .grip { color: var(--fg-faint); cursor: grab; display: grid; place-items: center; width: 22px; }
+/* The titles truncate rather than wrap, and the grip, arrows and switch keep their size, so every row lines up. */
+.customise-line > * { flex: 0 0 auto; }
+.customise-line > .customise-text { flex: 1 1 0; }
 .customise-text { display: flex; flex-direction: column; min-width: 0; }
+.customise-text :is(.t1, .t2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .customise-text .t1 { font-weight: 600; }
 .customise-row:not(.on) .customise-text .t1 { color: var(--fg-muted); }
 .customise-text .t2 { font-size: var(--fs-sm); color: var(--fg-faint); }
-.customise-styles { display: flex; gap: 6px; padding-left: 28px; flex-wrap: wrap; }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--shape-full); border: 1px solid var(--border-strong); background: transparent; color: var(--fg); font-size: var(--fs-sm); font-weight: 600; transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
-.chip:hover { background: var(--bg-hover); }
-.chip.selected { background: var(--selection); border-color: transparent; border-radius: var(--shape-sm); color: var(--accent-text); }
+.customise-styles { padding-left: 28px; }
+/* Show as: an M3 Expressive connected button group. Joined buttons 2px apart, the group's ends fully
+   round and the joins tight; hovering softens a button's inner corners, pressing squeezes them, and
+   the chosen one fills with the accent, gains a check and rounds off fully. */
+.seg-group { display: flex; gap: 2px; }
+.seg {
+  --seg-start: var(--shape-xs); --seg-end: var(--shape-xs);
+  flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 32px; padding: 0 12px; border: 0;
+  border-radius: var(--seg-start) var(--seg-end) var(--seg-end) var(--seg-start); background: var(--state-selected); color: var(--fg);
+  font: inherit; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; -webkit-appearance: none; appearance: none;
+  transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized);
+}
+.seg:first-child { --seg-start: var(--shape-full); }
+.seg:last-child { --seg-end: var(--shape-full); }
+.seg:hover { background: color-mix(in srgb, var(--accent) 14%, var(--state-selected)); }
+.seg:hover:not(:first-child) { --seg-start: var(--shape-sm); }
+.seg:hover:not(:last-child) { --seg-end: var(--shape-sm); }
+.seg:active:not(:first-child) { --seg-start: 2px; }
+.seg:active:not(:last-child) { --seg-end: 2px; }
+.seg.on { --seg-start: var(--shape-full); --seg-end: var(--shape-full); background: var(--accent); color: var(--accent-fg); }
+.seg.on:active { --seg-start: var(--shape-md); --seg-end: var(--shape-md); }
+.seg:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .seg { transition: none; } }
 button.m3-switch { border: 0; padding: 0; background: none; }
 
 /* Menu headings (a pin's "When clicked", a section's "Show as"). */
 .menu .menu-heading { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+/* A choice in a menu ("When clicked", "Show as") is a radio: a ring, filled with a dot when chosen. */
+.menu .mi-radio { flex: 0 0 auto; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--fg-muted); transition: border-color var(--dur-short) var(--ease-emphasized), border-width var(--dur-spring) var(--spring-fast); }
+.menu .mi-radio.on { border: 4px solid var(--accent-text); }
 
 /* ---- Library: browse tiles + Recently added -------------------------------- */
 /* Browse and the links below it are one connected group: 3px apart, tight corners where tiles meet,
@@ -398,12 +427,12 @@ button.m3-switch { border: 0; padding: 0; background: none; }
   font-weight: 200 900;
   font-display: block;
 }
-.view-header h1.brand-type, .view-header h1.brand-lockup { font-family: "Unbounded", var(--font-ui); font-weight: 500; letter-spacing: -0.03em; }
-/* Home's header: the bare wave, then "hocket" lowercase in the word mark's ink, at the Library title's
-   size (wave 0.8em tall, gap 0.3em). On light grounds the wave is one colour, the ink; on dark it
-   keeps its two voices. */
-.view-header h1.brand-lockup { --brand-voice-1: #1B1730; --brand-voice-2: #1B1730; display: inline-flex; align-items: center; gap: 0.3em; color: #1B1730; }
-:root[data-theme="dark"] .view-header h1.brand-lockup { --brand-voice-1: #E4DFFF; --brand-voice-2: #8F80F5; color: #ECE9FF; }
+.view-header h1.brand-type, .view-header h1.brand-lockup, .setup .brand { font-family: "Unbounded", var(--font-ui); font-weight: 500; letter-spacing: -0.03em; }
+/* The lockup (Home's header, the setup hero): the bare wave, then "hocket" lowercase in the word
+   mark's ink, at the Library title's size on Home (wave 0.8em tall, gap 0.3em). On light grounds the
+   wave is one colour, the ink; on dark it keeps its two voices. */
+:is(.view-header h1, .setup .brand).brand-lockup { --brand-voice-1: #1B1730; --brand-voice-2: #1B1730; display: inline-flex; align-items: center; gap: 0.3em; color: #1B1730; }
+:root[data-theme="dark"] :is(.view-header h1, .setup .brand).brand-lockup { --brand-voice-1: #E4DFFF; --brand-voice-2: #8F80F5; color: #ECE9FF; }
 .brand-lockup .brand-mark { height: 0.8em; width: calc(0.8em * 80 / 43.2); flex: 0 0 auto; }
 .brand-mark .v1 { stroke: var(--brand-voice-1); }
 .brand-mark .v2 { stroke: var(--brand-voice-2); }
