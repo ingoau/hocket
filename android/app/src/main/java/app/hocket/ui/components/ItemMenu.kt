@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -46,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
@@ -300,53 +303,64 @@ fun MenuSheet(
     fun runAndClose(a: ActionDescriptor) { if (a.id !in ActionIds.UI_HANDLED) run(a); hideThen(onRan) }
     val canExpand = layout.hidden > 0
     val canExpandNow by rememberUpdatedState(canExpand)
-    // How far the rest of the menu is open, 0 to 1. A drag moves it with the finger; More, Show less
-    // and the handle animate it to where [expanded] says.
+    // How far the rest of the menu is open, 0 to 1: [openness] animates it, and while a finger holds
+    // it [held] says where (written at once, so a quick release never races a pending snap).
     val openness = remember { Animatable(if (expanded) 1f else 0f) }
+    val held = remember { mutableFloatStateOf(-1f) }
+    fun shown(): Float = held.floatValue.takeIf { it >= 0f } ?: openness.value
     /** The rest of the menu's full height, measured each layout (it is always laid out, clipped). */
     val restHeight = remember { intArrayOf(0) }
     val settleSpec = remember { spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow) }
+    // More, Show less and the handle animate it to where [expanded] says; a released drag has
+    // already set off there, with the finger's speed.
     LaunchedEffect(expanded) {
         val target = if (expanded) 1f else 0f
-        // A settling drag has already set off towards it, with the finger's speed.
-        if (openness.targetValue != target) openness.animateTo(target, settleSpec)
+        if (held.floatValue < 0f && openness.targetValue != target) openness.animateTo(target, settleSpec)
     }
-    val showingRest by remember { derivedStateOf { openness.value > 0f } }
-    val showingMore by remember { derivedStateOf { openness.value < 1f } }
+    val showingRest by remember { derivedStateOf { shown() > 0f } }
+    val showingMore by remember { derivedStateOf { shown() < 1f } }
     // A drag the list can't take follows the finger: up opens the rest of the menu, down (with the
     // list at its top) closes it, and only then does the sheet itself move. Letting go settles it
     // open or closed: a flick goes its way, otherwise whichever is nearer.
     val followDrag = remember {
         object : NestedScrollConnection {
-            var dragging = false
-            var at = 0f
+            fun release(open: Boolean, velocity: Float) {
+                val from = held.floatValue
+                expanded = open
+                scope.launch {
+                    openness.snapTo(from)
+                    held.floatValue = -1f
+                    openness.animateTo(if (open) 1f else 0f, settleSpec, initialVelocity = velocity)
+                }
+            }
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 val height = restHeight[0]
                 if (source != NestedScrollSource.UserInput || !canExpandNow || height <= 0) return Offset.Zero
-                if (!dragging) at = openness.value
+                val at = shown()
                 val dy = available.y
                 if (!((dy < 0f && at < 1f) || (dy > 0f && at > 0f))) return Offset.Zero
                 val next = (at - dy / height).coerceIn(0f, 1f)
-                val used = (at - next) * height
-                at = next
-                dragging = true
-                scope.launch { openness.snapTo(next) }
-                return Offset(0f, used)
+                held.floatValue = next
+                return Offset(0f, (at - next) * height)
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (!dragging) return Velocity.Zero
-                dragging = false
+                val at = held.floatValue
+                if (at < 0f) return Velocity.Zero
                 val v = available.y
+                // Closed and still going down (the sheet has moved on with it), or open and going up:
+                // the fling is the sheet's or the list's.
+                if ((at <= 0f && v > 0f) || (at >= 1f && v < 0f)) {
+                    release(at >= 1f, 0f)
+                    return Velocity.Zero
+                }
                 val open = when {
                     v < -FLICK_VELOCITY -> true
                     v > FLICK_VELOCITY -> false
                     else -> at > 0.5f
                 }
-                expanded = open
-                val height = restHeight[0].coerceAtLeast(1)
-                openness.animateTo(if (open) 1f else 0f, settleSpec, initialVelocity = -v / height)
+                release(open, -v / restHeight[0].coerceAtLeast(1))
                 // Taken whole: neither the list nor the sheet flings on from it.
                 return available
             }
@@ -440,19 +454,20 @@ fun MenuSheet(
                 layout.primary.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, primaryRows)) }
                 if (withMore) {
                     // Folds away as the rest opens.
-                    Box(Modifier.revealed { 1f - openness.value }) {
+                    Box(Modifier.revealed { 1f - shown() }) {
                         MoreRow(layout.hidden, connectedShape(primaryRows - 1, primaryRows), tag) { expanded = true }
                     }
                 }
             }
             if (canExpand) {
-                // Always laid out (so a drag knows its full height), shown as far as it is open; closed,
-                // it is out of the semantics tree too.
+                // Always laid out (so a drag knows its full height), shown as far as it is open.
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .revealed(onMeasured = { restHeight[0] = it }) { openness.value }
-                        .then(if (showingRest) Modifier else Modifier.clearAndSetSemantics {}),
+                        .revealed(onMeasured = { restHeight[0] = it }) { shown() }
+                        // Closed, it is out of reach: no semantics, and focus (a keyboard's Tab) passes it by.
+                        .then(if (showingRest) Modifier else Modifier.clearAndSetSemantics {}.focusProperties { onEnter = { cancelFocusChange() } })
+                        .focusGroup(),
                 ) {
                     if (layout.more.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         layout.more.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, layout.more.size)) }

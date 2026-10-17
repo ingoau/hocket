@@ -83,6 +83,26 @@ class SongMenuTest {
     private fun height(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.height
 
     /**
+     * A quick swipe settles all the way (never stuck part way): a short fast flick up opens the rest;
+     * then, open, one long fast swipe down closes the rest and carries on to dismiss the menu.
+     */
+    @Test
+    fun quickSwipesSettleAllTheWayAndAFlickDownStillDismisses() {
+        val core = TestCore()
+        openPlayer(core)
+        repeat(3) {
+            openMenu()
+            swipeMenu(-200f, 60)
+            compose.waitForIdle()
+            assertTrue("stuck part way after a quick flick up", !present("songMenu.more") && present("songMenu.showLess"))
+            swipeMenu(1400f, 160)
+            compose.waitUntil(5_000) { !present("songMenu.header") }
+            compose.waitForIdle()
+            assertTrue(displayed("player.playPause"))
+        }
+    }
+
+    /**
      * Swiping up on the menu opens the rest of it with the finger: part way, the rest shows part of
      * its height and More is still folding away; let go short of half and it settles back; a full
      * swipe opens it, and a swipe down (the list at its top) closes it again before the sheet moves.
@@ -111,8 +131,8 @@ class SongMenuTest {
         swipeMenu(-900f, 600)
         compose.waitUntil(5_000) { !present("songMenu.more") }
         assertTrue(present("songMenu.showLess"))
-        // A swipe down closes the rest first, and the menu stays.
-        swipeMenu(500f, 900)
+        // A short flick down closes the rest, and the menu stays.
+        swipeMenu(300f, 100)
         compose.waitForIdle()
         assertTrue(present("songMenu.header"))
         assertTrue(!present("songMenu.showLess"))
