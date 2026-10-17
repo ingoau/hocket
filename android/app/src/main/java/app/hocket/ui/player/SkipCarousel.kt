@@ -70,12 +70,12 @@ internal const val PREVIOUS_RESTART_MS = 3_000L
 
 /**
  * Whether Previous restarts the current track rather than going back (the swipe then peeks at it
- * again), as the core (`handlers::session::previous`): [PREVIOUS_RESTART_MS] into a track loaded
- * here (this device holds the transport: not while another device plays, nor before anything has
- * loaded, as on a cold start or after Stop), or with nothing before it.
+ * again), as the core (`handlers::session::previous`): [PREVIOUS_RESTART_MS] into a track some
+ * device plays (here or another one: not before anything has loaded, as on a cold start or after
+ * Stop, when nobody holds the transport), or with nothing before it.
  */
-internal fun previousRestarts(ownsTransport: Boolean, positionMs: Long, historyEmpty: Boolean): Boolean =
-    (ownsTransport && positionMs >= PREVIOUS_RESTART_MS) || historyEmpty
+internal fun previousRestarts(leaseHeld: Boolean, positionMs: Long, historyEmpty: Boolean): Boolean =
+    (leaseHeld && positionMs >= PREVIOUS_RESTART_MS) || historyEmpty
 
 /**
  * A three-slot carousel (previous, current, next) under the finger: [offset] follows it 1:1 (px,
@@ -151,7 +151,7 @@ internal class SkipCarousel {
                 offset.stop()
                 drag.raw = offset.value
                 drag.crossed = false
-                restartPeek = previousRestarts(client.ownsTransport.value, client.positionNow(), client.queue.value.history.isEmpty())
+                restartPeek = previousRestarts(client.transport.value.lease.owner != null, client.positionNow(), client.queue.value.history.isEmpty())
             },
             onDragStopped = { v ->
                 scope.launch {
