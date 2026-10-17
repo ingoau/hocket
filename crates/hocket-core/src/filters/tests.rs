@@ -969,9 +969,11 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
     #[test]
-    fn sql_and_memory_agree_on_random_trees(node in any_tree_strategy(), sort_idx in 0..11usize, desc in any::<bool>()) {
+    fn sql_and_memory_agree_on_random_trees(node in any_tree_strategy(), sort_idx in 0..13usize, desc in any::<bool>()) {
+        // The artist-only orders too: both sides fall back to the default.
         let sorts = [SortOrder::Default, SortOrder::Title, SortOrder::Artist, SortOrder::Album, SortOrder::Year,
-            SortOrder::DateAdded, SortOrder::Rating, SortOrder::PlayCount, SortOrder::Duration, SortOrder::Bpm, SortOrder::Energy];
+            SortOrder::DateAdded, SortOrder::Rating, SortOrder::PlayCount, SortOrder::Duration, SortOrder::Bpm, SortOrder::Energy,
+            SortOrder::AlbumCount, SortOrder::SongCount];
         let rows = corpus();
         let conn = mirror(&rows);
         prop_assert!(validate_node(&node).is_ok());

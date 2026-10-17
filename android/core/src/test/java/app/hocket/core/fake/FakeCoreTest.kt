@@ -327,6 +327,9 @@ class FakeCoreTest {
         assertEquals(most.sortedDescending(), most)
         val fewest = artists(SortOrder.SongCount, false).map { it.songCount }
         assertEquals(fewest.sorted(), fewest)
+        // Plays as the core sums them: over the albums an artist is the album artist of.
+        val plays = artists(SortOrder.PlayCount, true).map { a -> core.library.artistAlbums(a.id).sumOf { it.playCount.toLong() } }
+        assertEquals(plays.sortedDescending(), plays)
         // Through the client's query helper too.
         val helper = (core.query(Queries.artists(server, Page(0u, 500u), SortOrder.AlbumCount, true)) as QueryResult.Artists).data.items
         assertEquals(artists(SortOrder.AlbumCount, true), helper)

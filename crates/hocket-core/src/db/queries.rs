@@ -1986,7 +1986,17 @@ mod tests {
             .unwrap();
         assert_eq!(artists.total, 2);
         assert_eq!(artists.items[0].name, "Boards of Canada");
-        // Sorted: names flip with descending; counts and plays order by their numbers.
+        // Sorted by name and counts (plays, dates and the shuffle have a test of their own). Each
+        // case puts the alphabetically later Sade first one way, so none passes on the name
+        // tie-break alone: Sade has fewer albums but more songs.
+        db.with_conn(|c| {
+            c.execute_batch(
+                "UPDATE artists SET album_count = 2, song_count = 5 WHERE id = 'ar-Boards of Canada';
+                 UPDATE artists SET album_count = 1, song_count = 9 WHERE id = 'ar-Sade';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
         let all = Page {
             offset: 0,
             limit: 10,
@@ -1999,31 +2009,15 @@ mod tests {
                 .map(|a| a.name)
                 .collect()
         };
-        assert_eq!(
-            names(SortOrder::Default, true),
-            vec!["Sade", "Boards of Canada"]
-        );
-        let by_albums = db
-            .artist_page_sorted("s", all.clone(), SortOrder::AlbumCount, true)
-            .unwrap()
-            .items;
-        assert!(by_albums
-            .windows(2)
-            .all(|w| w[0].album_count >= w[1].album_count));
-        let by_songs = db
-            .artist_page_sorted("s", all.clone(), SortOrder::SongCount, false)
-            .unwrap()
-            .items;
-        assert!(by_songs
-            .windows(2)
-            .all(|w| w[0].song_count <= w[1].song_count));
-        for sort in [
-            SortOrder::PlayCount,
-            SortOrder::DateAdded,
-            SortOrder::Random,
-        ] {
-            assert_eq!(names(sort, false).len(), 2, "{sort:?}");
-        }
+        let (boc, sade) = ("Boards of Canada", "Sade");
+        assert_eq!(names(SortOrder::Default, false), vec![boc, sade]);
+        assert_eq!(names(SortOrder::Default, true), vec![sade, boc]);
+        assert_eq!(names(SortOrder::AlbumCount, true), vec![boc, sade]);
+        assert_eq!(names(SortOrder::AlbumCount, false), vec![sade, boc]);
+        assert_eq!(names(SortOrder::SongCount, true), vec![sade, boc]);
+        assert_eq!(names(SortOrder::SongCount, false), vec![boc, sade]);
+        // An order artists don't have is by name.
+        assert_eq!(names(SortOrder::Bpm, true), vec![sade, boc]);
         db.set_artist_biography("ar-Sade", Some("bio")).unwrap();
         assert_eq!(
             db.artist("ar-Sade").unwrap().unwrap().biography.as_deref(),

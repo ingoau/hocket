@@ -183,8 +183,9 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
     }
 
     /**
-     * Artists as the core orders them: by name unless asked for album or song count, plays (summed
-     * over their songs), when their newest album was added, or a stable shuffle; ties on name.
+     * Artists as the core orders them: by name unless asked for album or song count, plays or when
+     * their newest album was added (both over the albums they are the album artist of; an artist
+     * with no albums last either way), or a stable shuffle; ties on name.
      */
     fun sortedArtists(list: List<Artist>, sort: SortOrder, descending: Boolean): List<Artist> {
         val byName = compareBy<Artist> { it.name.lowercase() }.thenBy { it.id }
@@ -192,14 +193,16 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
         val key: (Artist) -> Comparable<*>? = when (sort) {
             SortOrder.AlbumCount -> { a -> a.albumCount }
             SortOrder.SongCount -> { a -> a.songCount }
-            SortOrder.PlayCount -> { a -> artistAlbums(a.id).flatMap { albumTracks(it.id) }.sumOf { it.playCount.toLong() } }
+            SortOrder.PlayCount -> { a -> artistAlbums(a.id).takeIf { it.isNotEmpty() }?.sumOf { it.playCount.toLong() } }
             SortOrder.DateAdded -> { a -> artistAlbums(a.id).mapNotNull { it.created }.maxOrNull() }
             else -> return list.sortedWith(if (descending) byName.reversed() else byName)
         }
         val keys = list.associate { it.id to key(it) }
         @Suppress("UNCHECKED_CAST")
         val byKey = Comparator<Artist> { x, y -> compareValues(keys[x.id] as Comparable<Any>?, keys[y.id] as Comparable<Any>?) }
-        return list.sortedWith((if (descending) byKey.reversed() else byKey).then(byName))
+        // Nothing to go by (no albums, or none dated) goes last either way, as in the core.
+        val undatedLast = compareBy<Artist> { keys[it.id] == null }
+        return list.sortedWith(undatedLast.then(if (descending) byKey.reversed() else byKey).then(byName))
     }
 
     // -- generators ---------------------------------------------------------------------------------
