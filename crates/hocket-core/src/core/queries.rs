@@ -84,15 +84,20 @@ impl Actor {
             Query::AlbumTracks { id } => {
                 QueryResult::TrackList(self.db.album_tracks(&id).unwrap_or_default())
             }
-            Query::Artists { server_id, page } => {
-                QueryResult::Artists(self.db.artist_page(&server_id, page.clone()).unwrap_or(
-                    ArtistPage {
+            Query::Artists {
+                server_id,
+                page,
+                sort,
+                descending,
+            } => QueryResult::Artists(
+                self.db
+                    .artist_page_sorted(&server_id, page.clone(), sort, descending)
+                    .unwrap_or(ArtistPage {
                         items: vec![],
                         offset: page.offset,
                         total: 0,
-                    },
-                ))
-            }
+                    }),
+            ),
             Query::Artist { id } => QueryResult::ArtistDetail(self.db.artist(&id).ok().flatten()),
             Query::ArtistTopSongs { id, count } => {
                 self.artist_top_songs(id, count, reply);

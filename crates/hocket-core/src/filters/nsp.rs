@@ -75,7 +75,7 @@ pub fn to_nsp(filter: &Filter, caps: ServerCaps) -> Result<String, FilterError> 
 /// NSP sort name for a sort order; `None` for the default order.
 pub fn sort_name(sort: SortOrder) -> Option<&'static str> {
     Some(match sort {
-        SortOrder::Default => return None,
+        SortOrder::Default | SortOrder::AlbumCount | SortOrder::SongCount => return None,
         SortOrder::Title => "title",
         SortOrder::Artist => "artist",
         SortOrder::Album => "album",

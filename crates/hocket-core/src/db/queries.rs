@@ -229,7 +229,9 @@ pub fn track_order(sort: SortOrder, descending: bool, seed: i64) -> String {
     let dir = if descending { "DESC" } else { "ASC" };
     let tail = "album COLLATE NOCASE ASC, disc_number ASC, track_number ASC, id ASC";
     match sort {
-        SortOrder::Default => format!("album_artist COLLATE NOCASE {dir}, year {dir}, {tail}"),
+        SortOrder::Default | SortOrder::AlbumCount | SortOrder::SongCount => {
+            format!("album_artist COLLATE NOCASE {dir}, year {dir}, {tail}")
+        }
         SortOrder::Title => format!("title COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Artist => format!("artist COLLATE NOCASE {dir}, {tail}"),
         SortOrder::Album => {
@@ -250,9 +252,11 @@ pub fn track_order(sort: SortOrder, descending: bool, seed: i64) -> String {
 pub fn album_order(sort: SortOrder, descending: bool, seed: i64) -> String {
     let dir = if descending { "DESC" } else { "ASC" };
     match sort {
-        SortOrder::Default | SortOrder::Album | SortOrder::Title => {
-            format!("name COLLATE NOCASE {dir}, id ASC")
-        }
+        SortOrder::Default
+        | SortOrder::Album
+        | SortOrder::Title
+        | SortOrder::AlbumCount
+        | SortOrder::SongCount => format!("name COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Artist => {
             format!("artist COLLATE NOCASE {dir}, year ASC, name COLLATE NOCASE ASC, id ASC")
         }
@@ -263,6 +267,25 @@ pub fn album_order(sort: SortOrder, descending: bool, seed: i64) -> String {
         SortOrder::Duration => format!("duration_ms {dir}, id ASC"),
         SortOrder::Bpm | SortOrder::Energy => format!("name COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Random => format!("((rowid * 2654435761 + {seed}) % 2147483647) {dir}, id ASC"),
+    }
+}
+
+/// ORDER BY for artists: by name unless asked for counts, plays (summed over their songs), when
+/// their newest album was added, or a stable shuffle. Ties break on name.
+pub fn artist_order(sort: SortOrder, descending: bool, seed: i64) -> String {
+    let dir = if descending { "DESC" } else { "ASC" };
+    let tail = "name COLLATE NOCASE ASC, id ASC";
+    match sort {
+        SortOrder::AlbumCount => format!("album_count {dir}, {tail}"),
+        SortOrder::SongCount => format!("song_count {dir}, {tail}"),
+        SortOrder::PlayCount => format!(
+            "(SELECT COALESCE(SUM(t.play_count), 0) FROM tracks t WHERE t.server_id = artists.server_id AND t.artist_id = artists.id) {dir}, {tail}"
+        ),
+        SortOrder::DateAdded => format!(
+            "(SELECT MAX(al.created) FROM albums al WHERE al.server_id = artists.server_id AND al.artist_id = artists.id) {dir}, {tail}"
+        ),
+        SortOrder::Random => format!("((rowid * 2654435761 + {seed}) % 2147483647) {dir}, id ASC"),
+        _ => format!("name COLLATE NOCASE {dir}, id ASC"),
     }
 }
 
@@ -593,8 +616,23 @@ impl Db {
     // -- artists ------------------------------------------------------------
 
     pub fn artists(&self, server_id: &str, page: Option<Page>) -> DbResult<Vec<Artist>> {
+        self.artists_sorted(server_id, page, SortOrder::Default, false)
+    }
+
+    pub fn artists_sorted(
+        &self,
+        server_id: &str,
+        page: Option<Page>,
+        sort: SortOrder,
+        descending: bool,
+    ) -> DbResult<Vec<Artist>> {
+        let seed = self.random_seed();
         self.with_conn(|c| {
-            let sql = format!("SELECT {ARTIST_COLUMNS} FROM artists WHERE server_id = ?1 ORDER BY name COLLATE NOCASE ASC, id ASC{}", page_sql(&page));
+            let sql = format!(
+                "SELECT {ARTIST_COLUMNS} FROM artists WHERE server_id = ?1 ORDER BY {}{}",
+                artist_order(sort, descending, seed),
+                page_sql(&page)
+            );
             let mut st = c.prepare_cached(&sql)?;
             let rows = st.query_map([server_id], artist_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -602,7 +640,17 @@ impl Db {
     }
 
     pub fn artist_page(&self, server_id: &str, page: Page) -> DbResult<api::ArtistPage> {
-        let items = self.artists(server_id, Some(page.clone()))?;
+        self.artist_page_sorted(server_id, page, SortOrder::Default, false)
+    }
+
+    pub fn artist_page_sorted(
+        &self,
+        server_id: &str,
+        page: Page,
+        sort: SortOrder,
+        descending: bool,
+    ) -> DbResult<api::ArtistPage> {
+        let items = self.artists_sorted(server_id, Some(page.clone()), sort, descending)?;
         let total = self.artist_count(server_id)?;
         Ok(api::ArtistPage {
             items,
@@ -1854,6 +1902,44 @@ mod tests {
             .unwrap();
         assert_eq!(artists.total, 2);
         assert_eq!(artists.items[0].name, "Boards of Canada");
+        // Sorted: names flip with descending; counts and plays order by their numbers.
+        let all = Page {
+            offset: 0,
+            limit: 10,
+        };
+        let names = |sort, desc| -> Vec<String> {
+            db.artist_page_sorted("s", all.clone(), sort, desc)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|a| a.name)
+                .collect()
+        };
+        assert_eq!(
+            names(SortOrder::Default, true),
+            vec!["Sade", "Boards of Canada"]
+        );
+        let by_albums = db
+            .artist_page_sorted("s", all.clone(), SortOrder::AlbumCount, true)
+            .unwrap()
+            .items;
+        assert!(by_albums
+            .windows(2)
+            .all(|w| w[0].album_count >= w[1].album_count));
+        let by_songs = db
+            .artist_page_sorted("s", all.clone(), SortOrder::SongCount, false)
+            .unwrap()
+            .items;
+        assert!(by_songs
+            .windows(2)
+            .all(|w| w[0].song_count <= w[1].song_count));
+        for sort in [
+            SortOrder::PlayCount,
+            SortOrder::DateAdded,
+            SortOrder::Random,
+        ] {
+            assert_eq!(names(sort, false).len(), 2, "{sort:?}");
+        }
         db.set_artist_biography("ar-Sade", Some("bio")).unwrap();
         assert_eq!(
             db.artist("ar-Sade").unwrap().unwrap().biography.as_deref(),

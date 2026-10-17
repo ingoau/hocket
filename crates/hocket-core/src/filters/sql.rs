@@ -250,6 +250,10 @@ pub fn order_by(sort: SortOrder, descending: bool) -> String {
         SortOrder::Bpm => vec![format!("tracks.bpm {dir}")],
         SortOrder::Energy => vec![format!("tracks.energy {dir}")],
         SortOrder::Random => return "ORDER BY RANDOM()".into(),
+        // Artist-only orders: tracks keep their default order.
+        SortOrder::AlbumCount | SortOrder::SongCount => {
+            return order_by(SortOrder::Default, descending)
+        }
     };
     let mut keys = primary;
     if !matches!(sort, SortOrder::Default | SortOrder::Title) {
