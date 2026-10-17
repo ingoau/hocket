@@ -7,7 +7,7 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { useResolvedPins, type ResolvedPin } from "../lib/use-pins";
+import { usePins, useResolvedPins, type ResolvedPin } from "../lib/use-pins";
 import type { PinKind } from "../lib/library-pins";
 import { useRoving } from "../lib/roving";
 import { Tile, TileList } from "./Tile";
@@ -90,8 +90,16 @@ const NO_PINS: ResolvedPin[] = [];
 
 /** The Library pins of one kind, in pin order (none until they're resolved). */
 export function usePinsOf(kind: PinKind): ResolvedPin[] {
-  const all = useResolvedPins();
-  return useMemo(() => all?.filter((p) => p.kind === kind) ?? NO_PINS, [all, kind]);
+  return useResolvedPins(kind) ?? NO_PINS;
+}
+
+/**
+ * The ids pinned of one kind, straight from the setting: what Recent leaves out, so a pin isn't shown
+ * there while the pins are still resolving.
+ */
+export function usePinnedIds(kind: PinKind): ReadonlySet<string> {
+  const pins = usePins();
+  return useMemo(() => new Set(pins.filter((p) => p.kind === kind).map((p) => p.id)), [pins, kind]);
 }
 
 /** The recently played songs, newest first (refreshed as the current song changes, as Home's). */

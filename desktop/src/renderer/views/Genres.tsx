@@ -7,7 +7,7 @@ import { genreMenuItems } from "../lib/pin-menus";
 import { useQuery } from "../store/queries";
 import { EmptyState } from "../components/EmptyState";
 import { TileList } from "../components/Tile";
-import { ListGroups, ListSection, usePinsOf, useRecentHistory } from "../components/ListGroups";
+import { ListGroups, ListSection, usePinnedIds, usePinsOf, useRecentHistory } from "../components/ListGroups";
 import { SortMenu } from "../components/SortMenu";
 import { loadListSort, saveListSort, sortGenres, type ListSort } from "../lib/list-sort";
 import { recentGenres } from "../lib/list-groups";
@@ -45,6 +45,7 @@ export function Genres() {
 
 function GenreGroups({ genres, tile }: { genres: Genre[]; tile: (g: Genre, testId: string) => React.ReactNode }) {
   const pins = usePinsOf("genre");
+  const pinnedIds = usePinnedIds("genre");
   const history = useRecentHistory();
   const byName = useMemo(() => new Map(genres.map((g) => [g.name, g])), [genres]);
   const pinned = useMemo(() => pins.map((p) => byName.get(p.pin.id)).filter((g): g is Genre => !!g), [pins, byName]);
@@ -53,8 +54,8 @@ function GenreGroups({ genres, tile }: { genres: Genre[]; tile: (g: Genre, testI
   const tracks = useQuery(() => (ids.length ? { type: "tracksByIds", data: { ids } } : null), "trackList", [ids.join(",")]);
   const recent = useMemo(() => {
     const genreOf = new Map((tracks.data ?? []).map((tr) => [tr.id, tr.genre]));
-    return recentGenres(ids, genreOf, new Set(byName.keys()), new Set(pinned.map((g) => g.name))).map((n) => byName.get(n)!);
-  }, [tracks.data, ids, byName, pinned]);
+    return recentGenres(ids, genreOf, new Set(byName.keys()), pinnedIds).map((n) => byName.get(n)!);
+  }, [tracks.data, ids, byName, pinnedIds]);
   const asItems = (list: Genre[]) => list.map((g) => ({ key: g.name, title: g.name, open: () => undefined }));
   return (
     <ListGroups list="genres" pinned={asItems(pinned)} recent={asItems(recent)}

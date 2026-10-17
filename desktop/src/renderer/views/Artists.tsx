@@ -5,7 +5,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { AlbumGrid, type GridItem } from "../components/AlbumGrid";
 import { openContextMenu } from "../components/ContextMenu";
-import { ListGroups, ListHeader, TileRow, useDetails, usePinsOf, useRecentHistory, type GroupItem } from "../components/ListGroups";
+import { ListGroups, ListHeader, TileRow, useDetails, usePinnedIds, usePinsOf, useRecentHistory, type GroupItem } from "../components/ListGroups";
 import { SortMenu } from "../components/SortMenu";
 import { usePagedGrid } from "./paged";
 import { loadListSort, saveListSort, type ListSort } from "../lib/list-sort";
@@ -45,7 +45,7 @@ function ArtistGroups({ play }: { play: (id: string, label: string) => void }) {
   const navigate = useApp((s) => s.navigate);
   const pins = usePinsOf("artist");
   const history = useRecentHistory();
-  const pinnedIds = useMemo(() => new Set(pins.map((p) => p.pin.id)), [pins]);
+  const pinnedIds = usePinnedIds("artist");
   const recentIds = useMemo(() => recentFromHistory(history ?? [], (tr) => tr.artistId, pinnedIds), [history, pinnedIds]);
   const recent = useDetails("artist", recentIds);
   const item = (id: string, title: string, subtitle: string | undefined, coverArt: string | undefined): GroupItem => ({

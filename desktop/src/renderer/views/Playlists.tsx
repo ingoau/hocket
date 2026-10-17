@@ -6,7 +6,7 @@ import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { AlbumGrid, type GridItem } from "../components/AlbumGrid";
 import { openContextMenu } from "../components/ContextMenu";
-import { ListGroups, ListHeader, TileRow, usePinsOf, type GroupItem } from "../components/ListGroups";
+import { ListGroups, ListHeader, TileRow, usePinnedIds, usePinsOf, type GroupItem } from "../components/ListGroups";
 import { SortMenu } from "../components/SortMenu";
 import { executeAction } from "../store/actions";
 import { Icon } from "../components/Icon";
@@ -46,8 +46,9 @@ function playlistLine(p: Playlist): string {
 function PlaylistGroups({ playlists, play }: { playlists: Playlist[]; play: (id: string, label: string) => void }) {
   const navigate = useApp((s) => s.navigate);
   const pins = usePinsOf("playlist");
+  const pinnedIds = usePinnedIds("playlist");
   const byId = useMemo(() => new Map(playlists.map((p) => [p.id, p])), [playlists]);
-  const recent = useMemo(() => recentPlaylists(playlists, new Set(pins.map((p) => p.pin.id)), RECENT_PLAYLISTS), [playlists, pins]);
+  const recent = useMemo(() => recentPlaylists(playlists, pinnedIds, RECENT_PLAYLISTS), [playlists, pinnedIds]);
   const item = (id: string, title: string, subtitle: string | undefined, coverArt: string | undefined): GroupItem => ({
     key: id, title, subtitle, coverArt,
     open: () => navigate({ view: "playlist", id }),

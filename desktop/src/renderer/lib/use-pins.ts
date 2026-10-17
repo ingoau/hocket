@@ -26,8 +26,10 @@ export function usePins(): LibraryPin[] {
   return useMemo(() => parsePins(v), [v]);
 }
 
-export function useResolvedPins(): ResolvedPin[] | undefined {
-  const pins = usePins();
+/** The pins as drawn, in pin order (only [kind]'s when given, so a list resolves just its own). */
+export function useResolvedPins(kind?: PinKind): ResolvedPin[] | undefined {
+  const all = usePins();
+  const pins = useMemo(() => (kind ? all.filter((p) => p.kind === kind) : all), [all, kind]);
   const filters = useApp((s) => s.filters);
   const libraryVersion = useApp((s) => s.libraryVersion);
   const [resolved, setResolved] = useState<ResolvedPin[] | undefined>(undefined);
@@ -39,7 +41,7 @@ export function useResolvedPins(): ResolvedPin[] | undefined {
       try {
         switch (p.kind) {
           case "album": { const r = await bridge().query({ type: "album", data: { id: p.id } }); return r.type === "albumDetail" && r.data ? { pin: p, kind: "album", title: r.data.name, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "albums", data: { ids: [p.id] } } } : undefined; }
-          case "artist": { const r = await bridge().query({ type: "artist", data: { id: p.id } }); return r.type === "artistDetail" && r.data ? { pin: p, kind: "artist", title: r.data.name, coverArt: r.data.coverArt, subtitle: t("artist.albumsCount", { albums: r.data.albumCount, songs: r.data.songCount }), target: { type: "artists", data: { ids: [p.id] } } } : undefined; }
+          case "artist": { const r = await bridge().query({ type: "artist", data: { id: p.id } }); return r.type === "artistDetail" && r.data ? { pin: p, kind: "artist", title: r.data.name, coverArt: r.data.coverArt, subtitle: r.data.albumCount === 1 ? t("artists.albumCount.one") : t("artists.albumCount.other", { n: r.data.albumCount }), target: { type: "artists", data: { ids: [p.id] } } } : undefined; }
           case "playlist": { const r = await bridge().query({ type: "playlist", data: { id: p.id } }); return r.type === "playlistDetail" && r.data ? { pin: p, kind: "playlist", title: r.data.name, coverArt: r.data.coverArt, subtitle: t("misc.tracks", { count: r.data.songCount }), target: { type: "playlists", data: { ids: [p.id] } } } : undefined; }
           case "track": { const r = await bridge().query({ type: "track", data: { id: p.id } }); return r.type === "trackDetail" && r.data ? { pin: p, kind: "track", title: r.data.title, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "tracks", data: { ids: [p.id] } } } : undefined; }
           case "genre": return { pin: p, kind: "genre", title: p.id };

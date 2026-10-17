@@ -4,7 +4,7 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "../components/ContextMenu";
-import { ListGroups, ListHeader, SongRows, usePinsOf, useRecentHistory, type GroupItem } from "../components/ListGroups";
+import { ListGroups, ListHeader, SongRows, usePinnedIds, usePinsOf, useRecentHistory, type GroupItem } from "../components/ListGroups";
 import { SortMenu } from "../components/SortMenu";
 import { TrackTable, usePagedTracks } from "../components/TrackTable";
 import { loadListSort, saveListSort, type ListSort } from "../lib/list-sort";
@@ -48,12 +48,12 @@ export function Songs() {
 function SongGroups() {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const pins = usePinsOf("track");
+  const pinned = usePinnedIds("track");
   const history = useRecentHistory();
   const recent = useMemo(() => {
-    const pinned = new Set(pins.map((p) => p.pin.id));
     const seen = new Set<string>();
     return (history ?? []).map((h) => h.track).filter((tr) => !pinned.has(tr.id) && !seen.has(tr.id) && !!seen.add(tr.id)).slice(0, GROUP_SIZE);
-  }, [history, pins]);
+  }, [history, pinned]);
   const item = (id: string, title: string, subtitle: string | undefined, coverArt: string | undefined): GroupItem => ({
     key: id, title, subtitle, coverArt,
     open: () => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [id], start_index: 0, label: title, shuffle: false } }),
