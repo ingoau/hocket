@@ -2,13 +2,13 @@
 // by opaque token from the image cache only, and no window can navigate away.
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, test, openPlace } from "./fixtures";
 
 test.describe("renderer isolation", () => {
   test("hocket-art:// serves only tokens main handed out; userData files are refused", async ({ hocket }) => {
     const { app, page, userData } = hocket;
     await completeSetup(page);
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     const img = page.locator("img.art").first();
     await expect(img).toBeVisible();
     await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);

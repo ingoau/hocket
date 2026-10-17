@@ -1,11 +1,11 @@
 // Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info.
 import { useEffect, useRef, useState } from "react";
-import type { Playlist, Track } from "@core/api";
+import type { Album, Track } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
@@ -43,10 +43,10 @@ export function Dialogs() {
       <div {...exitProps} className={`dialog ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
-        {dialog.kind === "addToPlaylist" ? <AddToPlaylist trackIds={dialog.trackIds} /> : null}
         {dialog.kind === "sleepTimer" ? <SleepTimerDialog /> : null}
         {dialog.kind === "connect" ? <ConnectDialog /> : null}
         {dialog.kind === "trackInfo" ? <TrackInfo trackId={dialog.trackId} /> : null}
+        {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
       </div>
     </div>
   );
@@ -85,42 +85,6 @@ function Confirm({ title, message, confirmLabel, destructive, onConfirm }: { tit
       <div className="buttons">
         <button type="button" className="btn" onClick={close} data-autofocus>{t("dialog.cancel")}</button>
         <button type="button" className={`btn ${destructive ? "danger" : "primary"}`} onClick={() => { onConfirm(); close(); }} data-testid="confirm-ok">{confirmLabel ?? t("dialog.confirm")}</button>
-      </div>
-    </>
-  );
-}
-
-function AddToPlaylist({ trackIds }: { trackIds: string[] }) {
-  const close = useApp((s) => s.closeDialog);
-  const serverId = useApp((s) => s.servers[0]?.id);
-  const { data } = useQuery(() => (serverId ? { type: "playlists", data: { server_id: serverId } } : null), "playlists", [serverId]);
-  const editable = (data ?? []).filter((p: Playlist) => !p.isSmart && p.isMine);
-  const add = (p: Playlist) => {
-    bridge().dispatch({ type: "playlistAdd", data: { playlist_id: p.id, track_ids: trackIds, at_index: undefined } });
-    close();
-  };
-  const create = () => {
-    close();
-    useApp.getState().openDialog({ kind: "prompt", title: t("dialog.newPlaylist"), label: t("dialog.playlistName"), onConfirm: (name) => serverId && bridge().dispatch({ type: "createPlaylist", data: { server_id: serverId, name, track_ids: trackIds } }) });
-  };
-  return (
-    <>
-      <h2 className="dialog-title" id="dialog-title">{t("dialog.addToPlaylist")}</h2>
-      <div className="muted small">{t("misc.tracks", { count: trackIds.length })}</div>
-      <ul className="list plain-list">
-        <li><button type="button" className="li" onClick={create}>
-          <Icon name="plus" size={14} /> {t("action.newPlaylist")}
-        </button></li>
-        {editable.map((p: Playlist) => (
-          <li key={p.id}><button type="button" className="li" onClick={() => add(p)} data-testid="playlist-choice">
-            <Icon name="playlist" size={14} />
-            <span className="grow truncate">{p.name}</span>
-            <span className="faint small">{t("misc.tracks", { count: p.songCount })}</span>
-          </button></li>
-        ))}
-      </ul>
-      <div className="buttons">
-        <button type="button" className="btn" onClick={close}>{t("dialog.cancel")}</button>
       </div>
     </>
   );
@@ -230,6 +194,46 @@ function TrackInfo({ trackId }: { trackId: string }) {
       </div>
       <div className="buttons">
         {tr.path ? <button type="button" className="btn" onClick={() => bridge().shell.showItemInFolder(tr.path as string)}><Icon name="folder" size={14} /> {t("action.showInFolder")}</button> : null}
+        <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>
+      </div>
+    </>
+  );
+}
+
+/** "Album info" in an album's menu: the same details Android's album sheet shows. */
+function AlbumInfo({ albumId }: { albumId: string }) {
+  const close = useApp((s) => s.closeDialog);
+  const { data } = useQuery(() => ({ type: "album", data: { id: albumId } }), "albumDetail", [albumId]);
+  const al = data as Album | undefined;
+  if (!al) return <><h2 className="dialog-title" id="dialog-title">{t("misc.loading")}</h2></>;
+  const rows: [string, string | number | undefined][] = [
+    ["Artist", al.artist], ["Year", al.year || undefined], ["Genre", al.genre], ["Songs", al.songCount], ["Duration", fmtDuration(al.durationMs)],
+    ["Plays", al.playCount], ["Added", fmtDate(al.created)], ["Last played", fmtDate(al.lastPlayed)],
+    ["ReplayGain", al.replayGain?.albumGainDb !== undefined ? `${al.replayGain.albumGainDb.toFixed(1)} dB` : undefined],
+    ["Offline", al.offline !== "none" ? al.offline : undefined],
+  ];
+  const artistId = al.artistId;
+  return (
+    <>
+      <div className="row">
+        <Artwork id={al.coverArt} size={64} className="art" />
+        <div className="grow">
+          <h2 className="dialog-title truncate" id="dialog-title">{al.name}</h2>
+          <div className="muted truncate">{al.artist}</div>
+        </div>
+      </div>
+      <div className="list" style={{ padding: 6 }} tabIndex={0} role="group" aria-labelledby="dialog-title">
+      <dl className="info-list">
+        {rows.filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => (
+          <div key={k} className="row small" style={{ padding: "2px 4px" }}>
+            <dt className="muted" style={{ width: 90, flex: "0 0 auto" }}>{k}</dt>
+            <dd className="grow truncate" title={String(v)}>{String(v)}</dd>
+          </div>
+        ))}
+      </dl>
+      </div>
+      <div className="buttons">
+        {artistId ? <button type="button" className="btn" onClick={() => { close(); useApp.getState().navigate({ view: "artist", id: artistId }); }}><Icon name="artist" size={14} /> {t("action.goToArtist")}</button> : null}
         <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>
       </div>
     </>

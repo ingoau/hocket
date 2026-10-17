@@ -24,6 +24,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
 import app.hocket.R
@@ -38,6 +46,13 @@ import app.hocket.R
 object Brand {
     /** The word mark's ink on dark grounds. */
     val inkOnDark = Color(0xFFECE9FF)
+
+    /** The word mark's ink on light grounds (the tile gradient's bottom stop). */
+    val inkOnLight = Color(0xFF1B1730)
+
+    /** The two voices: notes 1 and 3, then 2 and 4. */
+    internal val voice1 = Color(0xFFE4DFFF)
+    internal val voice2 = Color(0xFF8F80F5)
 
     /** Unbounded at every weight its axis has (200–900). */
     val unbounded = FontFamily(
@@ -103,5 +118,58 @@ fun Lockup(fontSize: Dp, color: Color = Brand.inkOnDark, modifier: Modifier = Mo
                 lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
             ),
         )
+    }
+}
+
+/** The word mark's ink for the current theme's ground. */
+@Composable
+fun brandInk(): Color = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) Brand.inkOnDark else Brand.inkOnLight
+
+/**
+ * A page header set in the word mark's type: Unbounded 500 at the size of the surrounding title
+ * style (so a collapsing top bar resizes it), tracked −0.015em.
+ */
+@Composable
+fun brandTitleStyle(): TextStyle = LocalTextStyle.current.merge(
+    TextStyle(fontFamily = Brand.unbounded, fontWeight = FontWeight.Medium, letterSpacing = (-0.015).em),
+)
+
+/**
+ * The app's name as a page header (Home): the bare Crescendo wave, then "hocket" in the word mark,
+ * at the size of the surrounding title style (the wave as tall as the type's x-height and a little
+ * more, the gap 0.3 of the type size). On dark grounds the wave keeps its two voices; on light ones,
+ * where the pale voice would vanish, it's one colour, the word mark's ink. It reads as one heading.
+ */
+@Composable
+fun HeaderLockup(modifier: Modifier = Modifier) {
+    val style = brandTitleStyle()
+    val name = stringResource(R.string.app_name)
+    val type = with(LocalDensity.current) { style.fontSize.toDp() }
+    val ink = brandInk()
+    val dark = ink == Brand.inkOnDark
+    Row(modifier.semantics(mergeDescendants = true) { contentDescription = name; heading() }, verticalAlignment = Alignment.CenterVertically) {
+        VoicedMark(height = type * 0.8f, voices = if (dark) listOf(Brand.voice1, Brand.voice2) else listOf(ink, ink))
+        Spacer(Modifier.width(type * 0.3f))
+        Text(
+            "hocket",
+            color = ink,
+            maxLines = 1,
+            style = style.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)),
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+/** The bare wave [height] tall, notes 1 and 3 in the first of [voices], 2 and 4 in the second. */
+@Composable
+private fun VoicedMark(height: Dp, voices: List<Color>, modifier: Modifier = Modifier) {
+    val paths = remember { Brand.notes.map { PathParser().parsePathString(it).toPath() } }
+    Canvas(modifier.size(width = height * (Brand.WAVE_WIDTH / Brand.WAVE_HEIGHT), height = height)) {
+        val k = size.height / Brand.WAVE_HEIGHT
+        scale(k, k, pivot = Offset.Zero) {
+            translate(-Brand.WAVE_LEFT, -Brand.WAVE_TOP) {
+                paths.forEachIndexed { i, p -> drawPath(p, voices[i % 2], style = Stroke(width = Brand.STROKE, cap = StrokeCap.Round)) }
+            }
+        }
     }
 }

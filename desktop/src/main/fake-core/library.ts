@@ -212,6 +212,13 @@ export function generateLibrary(serverId: string, seed = 7, trackTarget = 3200):
       trackIds,
     });
   });
+  // One playlist holds a song twice (its first, again at the end): the add to playlist picker's ×2 badge and "Remove one".
+  const twice = playlists.find((p) => p.playlist.name === "Slow Sundays");
+  if (twice?.trackIds[0]) {
+    twice.trackIds.push(twice.trackIds[0]);
+    twice.playlist.songCount = twice.trackIds.length;
+    twice.playlist.durationMs += tracks.find((t) => t.id === twice.trackIds[0])?.durationMs ?? 0;
+  }
   const tracksById = new Map(tracks.map((t) => [t.id, t]));
   return { serverId, tracks, albums, artists, genres, playlists, tracksById, albumTracks, artistAlbums };
 }

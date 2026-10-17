@@ -1,4 +1,4 @@
-import { completeSetup, expect, playFirstAlbum, test } from "./fixtures";
+import { completeSetup, expect, playFirstAlbum, test, openPlace } from "./fixtures";
 
 test.describe("playback and queue", () => {
   test("playing an album fills the queue timeline with the model visible", async ({ hocket }) => {
@@ -17,7 +17,7 @@ test.describe("playback and queue", () => {
     await page.getByTestId("previous").click();
     await expect(page.getByTestId("queue-row-history")).toHaveCount(0);
     // Play next inserts into "Playing next".
-    await page.getByTestId("nav-songs").click();
+    await openPlace(page, "songs");
     const row = page.getByTestId("track-row").nth(3);
     await row.click({ button: "right" });
     await page.getByTestId("context-menu").locator('[data-action="playNext"]').click();

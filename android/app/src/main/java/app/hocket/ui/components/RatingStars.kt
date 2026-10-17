@@ -51,7 +51,8 @@ import kotlin.math.roundToInt
  * a "Clear rating" action resets it. The single node is at least 48 dp tall; the individual stars
  * are pointer targets only. [spacing] is the gap between stars (their touch cells share it);
  * [verticalAlignment] places them in that 48 dp row (the player tops them, so the row's touch area
- * hangs below the stars rather than spacing them off the text above).
+ * hangs below the stars rather than spacing them off the text above). [stateOverride] replaces
+ * the spoken state (several songs rated differently read "Mixed", not "Not rated").
  */
 @Composable
 fun RatingStars(
@@ -63,6 +64,7 @@ fun RatingStars(
     spacing: Dp = 12.dp,
     emptyTint: Color = MaterialTheme.colorScheme.outline,
     verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
+    stateOverride: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val resources = androidx.compose.ui.platform.LocalResources.current
@@ -70,7 +72,7 @@ fun RatingStars(
     // While a finger drags along the row: the rating under it (shown, not yet sent).
     var dragged by remember { mutableStateOf<Int?>(null) }
     val shown = dragged ?: rating
-    val state = Spoken.rating(resources, rating)
+    val state = stateOverride ?: Spoken.rating(resources, rating)
     val clear = stringResource(R.string.rating_clear)
     val current by rememberUpdatedState(rating)
     val rate by rememberUpdatedState(onRate)

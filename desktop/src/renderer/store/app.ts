@@ -1,6 +1,7 @@
 // The renderer store: core state mirrored from events (reducer.ts) plus view
 // state. Components read slices with `useApp(selector)` and act through
 // `dispatch`/`query` which go straight to the bridge.
+import { useMemo } from "react";
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
 import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
@@ -11,8 +12,9 @@ import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } 
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
 import { SK } from "@shared/settings-keys";
+import type { MenuFacts } from "../lib/menu-model";
 
-export type ViewName = "home" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
+export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
 
 export interface Route {
   view: ViewName;
@@ -36,24 +38,49 @@ export interface PanelState {
   sidebarWidth: number;
 }
 
+/** A menu item the renderer runs itself (a pin's "When clicked" choice, moving a Home section). */
+export interface MenuItem {
+  id: string;
+  label: string;
+  icon: string;
+  enabled: boolean;
+  /** A choice among siblings (radio): shown with a check, announced as checked. */
+  checked?: boolean;
+  destructive?: boolean;
+  /** A heading over a group of items; not selectable. */
+  heading?: boolean;
+  run: () => void;
+}
+
 export interface ContextMenuState {
   x: number;
   y: number;
   target: ActionTarget;
   actions: ActionDescriptor[];
+  /** Renderer-run items shown above the registry's actions (or alone). */
+  items?: MenuItem[];
   /** Extra renderer-only context (e.g. playlist id for "remove from playlist"). */
   context?: { playlistId?: string; indices?: number[]; savedQueueId?: string };
   /** Opened with the context-menu key / Shift+F10: the first item starts active. */
   keyboard?: boolean;
+  /** The header, the checkboxes' and stars' state and the songs to add (lib/menu-facts). */
+  facts?: MenuFacts;
 }
 
 export type DialogState =
   | { kind: "prompt"; title: string; label: string; initial?: string; confirmLabel?: string; onConfirm: (value: string) => void }
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
-  | { kind: "addToPlaylist"; trackIds: string[] }
   | { kind: "sleepTimer" }
   | { kind: "connect" }
-  | { kind: "trackInfo"; trackId: string };
+  | { kind: "trackInfo"; trackId: string }
+  | { kind: "albumInfo"; albumId: string };
+
+/** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
+export interface PlaylistPickerState {
+  trackIds: string[];
+  /** The button (or focused item) it opens from, in window coordinates. */
+  anchor: { left: number; right: number; top: number; bottom: number };
+}
 
 export interface UiState {
   meta: AppMeta | undefined;
@@ -65,6 +92,7 @@ export interface UiState {
   fullscreen: boolean;
   paletteOpen: boolean;
   contextMenu: ContextMenuState | undefined;
+  playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
@@ -95,6 +123,8 @@ export interface AppStore extends CoreState, UiState {
   setPaletteOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
+  openPlaylistPicker(picker: PlaylistPickerState): void;
+  closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
   setSelection(selection: Selection, scope: string): void;
@@ -138,6 +168,7 @@ export const useApp = create<AppStore>((set, get) => ({
   fullscreen: false,
   paletteOpen: false,
   contextMenu: undefined,
+  playlistPicker: undefined,
   dialog: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
@@ -164,7 +195,7 @@ export const useApp = create<AppStore>((set, get) => ({
   navigate(route, replace = false) {
     const cur = get().route;
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined, playlistPicker: undefined }));
   },
   back() {
     const { history, route } = get();
@@ -184,19 +215,25 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ panels });
   },
   setFullscreen(on) {
-    set({ fullscreen: on, contextMenu: undefined });
+    set({ fullscreen: on, contextMenu: undefined, playlistPicker: undefined });
   },
   setPaletteOpen(open) {
-    set({ paletteOpen: open, contextMenu: undefined });
+    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
   },
   openContextMenu(menu) {
-    set({ contextMenu: menu });
+    set({ contextMenu: menu, playlistPicker: undefined });
   },
   closeContextMenu() {
     if (get().contextMenu) set({ contextMenu: undefined });
   },
+  openPlaylistPicker(picker) {
+    set({ playlistPicker: picker, contextMenu: undefined });
+  },
+  closePlaylistPicker() {
+    if (get().playlistPicker) set({ playlistPicker: undefined });
+  },
   openDialog(dialog) {
-    set({ dialog, contextMenu: undefined });
+    set({ dialog, contextMenu: undefined, playlistPicker: undefined });
   },
   closeDialog() {
     set({ dialog: undefined });
@@ -366,4 +403,20 @@ export function connectStore(): () => void {
 
 export function useSetting<T>(key: string, fallback: T): T {
   return useApp((s) => settingValue(s, key, fallback));
+}
+
+/**
+ * A list or object setting's parsed value. `useSetting` parses on every read, a new value each time,
+ * which only primitives survive; this selects the stored text and parses it once per change.
+ */
+export function useJsonSetting(key: string): unknown {
+  const raw = useApp((s) => s.settings[key]?.value);
+  return useMemo(() => {
+    if (raw === undefined) return undefined;
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return undefined;
+    }
+  }, [raw]);
 }

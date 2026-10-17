@@ -17,6 +17,11 @@ export const EXEMPT: { rule: string; within: string; why: string }[] = [
     within: '[data-testid="context-menu"]',
     why: "The context menu is a transient popup rendered at the end of the document, like a native menu; it belongs to the item that opened it, not to a page region, and wrapping it in a landmark would add a bogus region to the landmarks list.",
   },
+  {
+    rule: "region",
+    within: '[data-testid="playlist-submenu"]',
+    why: "The context menu's Add to playlist submenu: the same transient popup as the menu it opens from.",
+  },
 ];
 
 /** Elements excluded from every scan, with the reason. Empty: nothing is excluded. */
@@ -50,8 +55,20 @@ export async function axe(page: Page): Promise<ScanResult[]> {
   return out;
 }
 
+/**
+ * Waits (up to 2 s) for the page's finite animations and transitions to end, so a scan never reads
+ * an element mid-fade (a lyric line easing in measures as low contrast for a frame or two).
+ */
+export async function settleAnimations(page: Page): Promise<void> {
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY).map((a) => a.finished.catch(() => undefined))),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]));
+}
+
 /** Scan and require zero violations of any impact (serious and critical included, and moderate/minor too). */
 export async function expectNoViolations(page: Page, label: string): Promise<void> {
+  await settleAnimations(page);
   const v = await axe(page);
   const summary = v.map((x) => `${x.impact} ${x.id}\n    ${x.nodes.slice(0, 4).join("\n    ")}`).join("\n");
   expect(v, `${label}\n${summary}`).toEqual([]);

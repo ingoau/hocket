@@ -75,7 +75,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         </div>
         {track ? (
           <div className="now-actions">
-            <button type="button" className="btn icon" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={() => void executeAction("addToPlaylist")} data-testid="bar-add"><Icon name="playlistAdd" size={20} /></button>
+            <button type="button" className="btn icon" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="bar-add"><Icon name="playlistAdd" size={20} /></button>
             <button type="button" className="btn icon" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="bar-more"><Icon name="more" size={20} /></button>
           </div>
         ) : null}

@@ -2,6 +2,10 @@
 // Values are JSON strings in Setting.value. Keys the app needs that the registry
 // doesn't define (close-to-tray) live in the app's own device-local preferences.
 export const SK = {
+  /** Home's sections, [{id, on, style}] in order; [] = the default (renderer/lib/home-sections.ts). Synced. */
+  homeSections: "home.sections",
+  /** What's pinned to the Library (the sidebar), [{kind, id, tap}] in order. Synced. */
+  libraryPins: "library.pins",
   queueMode: "queue.mode",
   queueSavedCap: "queue.savedCap",
   lyricsExternalEnabled: "lyrics.external.enabled",

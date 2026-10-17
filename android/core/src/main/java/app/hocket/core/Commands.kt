@@ -159,6 +159,8 @@ object Queries {
     fun playlists(serverId: ServerId) = Query.Playlists(QueryPlaylistsInner(serverId))
     fun playlist(id: PlaylistId) = Query.Playlist(QueryPlaylistInner(id))
     fun playlistTracks(id: PlaylistId, page: Page) = Query.PlaylistTracks(QueryPlaylistTracksInner(id, page))
+    /** Every playlist of the server with the indices at which it holds any of [trackIds] (the add to playlist sheet). */
+    fun playlistMembership(serverId: ServerId, trackIds: List<TrackId>) = Query.PlaylistMembership(QueryPlaylistMembershipInner(serverId, trackIds))
     fun search(serverId: ServerId, query: String, limit: Int, includeServer: Boolean, requestId: String) =
         Query.Search(QuerySearchInner(serverId, query, limit.toUInt(), includeServer, requestId))
     fun lyrics(trackId: TrackId) = Query.Lyrics(QueryLyricsInner(trackId))

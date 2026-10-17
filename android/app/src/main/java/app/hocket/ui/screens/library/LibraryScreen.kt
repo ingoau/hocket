@@ -2,14 +2,10 @@ package app.hocket.ui.screens.library
 
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -19,33 +15,26 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
-import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -58,11 +47,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import androidx.annotation.StringRes
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.NavItem
 import app.hocket.ui.nav.icon
@@ -86,14 +71,11 @@ import app.hocket.core.client.SelectionKind
 import app.hocket.core.client.TrackListKey
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.AlbumCard
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.GenreRow
-import app.hocket.ui.components.JobsIndicator
-import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.PlaylistRow
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.TrackRow
@@ -103,8 +85,19 @@ import app.hocket.ui.components.TrackRowSkeleton
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.Dp
 import app.hocket.ui.nav.Route
-import app.hocket.ui.screens.detail.DetailPane
-import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.toShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
 fun sortLabel(sort: SortOrder): String = when (sort) {
@@ -123,117 +116,29 @@ sealed interface DetailTarget {
 }
 
 /**
- * Library tabs (albums grid, artists, playlists, songs, genres) as virtualised lists over the page
- * caches. On >= 600 dp the list and a detail pane sit side by side; on phones details are routes.
+ * The sort button of a library list: the orders that list offers (songs have more) and "descending".
+ * The chosen order is announced as "selected", the descending toggle as on / off.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(nav: NavHostController, initialTab: Int = 0) {
-    val client = LocalCoreClient.current
-    val wide = LocalWideLayout.current
-    val server by client.server.collectAsStateWithLifecycle()
-    val serverId = server?.id ?: return
-    val tabs = listOf(R.string.library_albums, R.string.library_artists, R.string.library_playlists, R.string.library_songs, R.string.library_genres)
-    val pager = rememberPagerState(initialPage = initialTab.coerceIn(0, tabs.lastIndex)) { tabs.size }
-    val scope = rememberCoroutineScope()
-    var sort by rememberSaveable { mutableStateOf(SortOrder.Default) }
-    var descending by rememberSaveable { mutableStateOf(false) }
-    var offlineOnly by rememberSaveable { mutableStateOf(false) }
-    var sortMenu by remember { mutableStateOf(false) }
-    var jobs by remember { mutableStateOf(false) }
-    var detail by rememberSaveable(stateSaver = detailSaver) { mutableStateOf<DetailTarget?>(null) }
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+internal fun SortMenuButton(sort: SortOrder, descending: Boolean, songs: Boolean, onSort: (SortOrder) -> Unit, onDescending: (Boolean) -> Unit) {
+    var open by remember { mutableStateOf(false) }
     val onLabel = stringResource(R.string.settings_on)
     val offLabel = stringResource(R.string.settings_off)
-    fun open(target: DetailTarget) {
-        if (wide) detail = target else when (target) {
-            is DetailTarget.Album -> nav.navigate(Route.Album(target.id))
-            is DetailTarget.Artist -> nav.navigate(Route.Artist(target.id))
-            is DetailTarget.Playlist -> nav.navigate(Route.Playlist(target.id))
-            is DetailTarget.Genre -> nav.navigate(Route.Genre(target.name))
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.testTag("library.sort")) { Icon(HocketIcons.Filled.Sort, stringResource(R.string.action_sort)) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            val options = if (songs) listOf(SortOrder.Title, SortOrder.Artist, SortOrder.Album, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Duration, SortOrder.Bpm, SortOrder.Energy, SortOrder.Random)
+            else listOf(SortOrder.Default, SortOrder.Artist, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Random)
+            options.forEach { o ->
+                // The check mark is drawn only; the chosen order is announced as "selected".
+                DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(HocketIcons.Filled.Check, null) }, onClick = { onSort(o); open = false },
+                    modifier = Modifier.semantics { selected = sort == o })
+            }
+            DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(HocketIcons.Filled.Check, null) }, onClick = { onDescending(!descending); open = false },
+                modifier = Modifier.semantics { stateDescription = if (descending) onLabel else offLabel })
         }
     }
-    Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = {
-            // The lists scroll under the whole header, so the link chips and tabs share the bar's
-            // (scroll-tinted) colour as one opaque surface rather than letting rows show through.
-            val defaults = TopAppBarDefaults.topAppBarColors()
-            val header = lerp(defaults.containerColor, defaults.scrolledContainerColor, FastOutLinearInEasing.transform(scroll.state.collapsedFraction))
-            Column(Modifier.background(header)) {
-                MediumFlexibleTopAppBar(
-                    title = { Text(stringResource(R.string.nav_library), modifier = Modifier.semantics { heading() }) },
-                    actions = {
-                        Box {
-                            IconButton(onClick = { sortMenu = true }) { Icon(HocketIcons.Filled.Sort, stringResource(R.string.action_sort)) }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                val options = if (pager.currentPage == 3) listOf(SortOrder.Title, SortOrder.Artist, SortOrder.Album, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Duration, SortOrder.Bpm, SortOrder.Energy, SortOrder.Random)
-                                else listOf(SortOrder.Default, SortOrder.Artist, SortOrder.Year, SortOrder.DateAdded, SortOrder.Rating, SortOrder.PlayCount, SortOrder.Random)
-                                options.forEach { o ->
-                                    // The check mark is drawn only; the chosen order is announced as "selected".
-                                    DropdownMenuItem(text = { Text(sortLabel(o)) }, trailingIcon = { if (sort == o) Icon(HocketIcons.Filled.Check, null) }, onClick = { sort = o; sortMenu = false },
-                                        modifier = Modifier.semantics { selected = sort == o })
-                                }
-                                DropdownMenuItem(text = { Text(stringResource(R.string.sort_descending)) }, trailingIcon = { if (descending) Icon(HocketIcons.Filled.Check, null) }, onClick = { descending = !descending; sortMenu = false },
-                                    modifier = Modifier.semantics { stateDescription = if (descending) onLabel else offLabel })
-                            }
-                        }
-                        JobsIndicator(onClick = { jobs = true })
-                        AccountButton()
-                    },
-                    scrollBehavior = scroll,
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = header, scrolledContainerColor = header),
-                )
-                // The places beyond the tabs, so each stays reachable when it is not in the bottom bar.
-                LibraryLinks(nav)
-                PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = 8.dp, containerColor = header) {
-                    tabs.forEachIndexed { i, res ->
-                        Tab(selected = pager.currentPage == i, onClick = { scope.launch { pager.animateScrollToPage(i) } }, text = { Text(stringResource(res)) })
-                    }
-                }
-            }
-        },
-    ) { padding ->
-        // The lists scroll under the bar: its height goes in as content padding, not as a layout
-        // offset, so collapsing it does not shift the page (design: lists).
-        val top = padding.calculateTopPadding()
-        Row(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxSize()) {
-                ShimmerHost {
-                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
-                        when (page) {
-                            0 -> AlbumsTab(serverId, sort, descending, ::open, top)
-                            1 -> ArtistsTab(serverId, ::open, top)
-                            2 -> PlaylistsTab(serverId, ::open, top)
-                            3 -> SongsTab(serverId, sort, descending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top)
-                            else -> GenresTab(serverId, ::open, top)
-                        }
-                    }
-                }
-                SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), onSelectAll = {
-                    scope.launch {
-                        when (pager.currentPage) {
-                            0 -> (client.query(Queries.albumCount(serverId)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Albums, it.toInt()) }
-                            3 -> (client.query(Queries.trackCount(serverId, if (offlineOnly) availableOfflineFilter(client.filters.value).root else null)) as? QueryResult.Count)?.data?.let { client.selectAll(SelectionKind.Tracks, it.toInt()) }
-                            else -> Unit
-                        }
-                    }
-                })
-            }
-            if (wide) {
-                Box(Modifier.weight(1.3f).fillMaxSize().padding(top = top)) {
-                    DetailPane(nav, detail)
-                }
-            }
-        }
-    }
-    if (jobs) JobsSheet { jobs = false }
 }
-
-private val detailSaver = androidx.compose.runtime.saveable.Saver<DetailTarget?, List<String>>(
-    save = { t -> when (t) { is DetailTarget.Album -> listOf("album", t.id); is DetailTarget.Artist -> listOf("artist", t.id); is DetailTarget.Playlist -> listOf("playlist", t.id); is DetailTarget.Genre -> listOf("genre", t.name); null -> emptyList() } },
-    restore = { l -> when (l.getOrNull(0)) { "album" -> DetailTarget.Album(l[1]); "artist" -> DetailTarget.Artist(l[1]); "playlist" -> DetailTarget.Playlist(l[1]); "genre" -> DetailTarget.Genre(l[1]); else -> null } },
-)
 
 /** How many skeleton rows a paged list shows before its total is known. */
 private const val SKELETON_COUNT = 12
@@ -424,18 +329,27 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    var sort by rememberSaveable { mutableStateOf(SortOrder.Default) }
+    var descending by rememberSaveable { mutableStateOf(false) }
     fun open(target: DetailTarget) = when (target) {
         is DetailTarget.Album -> nav.navigate(Route.Album(target.id))
         is DetailTarget.Artist -> nav.navigate(Route.Artist(target.id))
         is DetailTarget.Playlist -> nav.navigate(Route.Playlist(target.id))
         is DetailTarget.Genre -> nav.navigate(Route.Genre(target.name))
     }
+    // A bottom-bar place of its own is top level; opened from the Library, it has a way back.
+    val barItems = app.hocket.ui.nav.LocalShellNavigator.current?.items.orEmpty()
+    val fromLibrary = barItems.none { it.name == list.name }
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("libraryList.${list.name.lowercase()}"),
         topBar = {
             MediumFlexibleTopAppBar(
                 title = { Text(stringResource(list.title), modifier = Modifier.semantics { heading() }) },
-                actions = { AccountButton() },
+                navigationIcon = { if (fromLibrary) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                actions = {
+                    if (list == LibraryList.Albums || list == LibraryList.Songs) SortMenuButton(sort, descending, songs = list == LibraryList.Songs, onSort = { sort = it }, onDescending = { descending = it })
+                    AccountButton()
+                },
                 scrollBehavior = scroll,
             )
         },
@@ -444,12 +358,12 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
         Box(Modifier.fillMaxSize()) {
             ShimmerHost {
                 when (list) {
-                    LibraryList.Albums -> AlbumsTab(serverId, SortOrder.Default, false, ::open, top)
+                    LibraryList.Albums -> AlbumsTab(serverId, sort, descending, ::open, top)
                     LibraryList.Artists -> ArtistsTab(serverId, ::open, top)
                     LibraryList.Playlists -> PlaylistsTab(serverId, ::open, top)
                     LibraryList.Songs -> {
                         var offlineOnly by rememberSaveable { mutableStateOf(false) }
-                        SongsTab(serverId, SortOrder.Default, false, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top)
+                        SongsTab(serverId, sort, descending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top)
                     }
                     LibraryList.Genres -> GenresTab(serverId, ::open, top)
                 }
@@ -459,20 +373,42 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     }
 }
 
-/** Links from the library to the places its tabs do not cover: recent queues, downloads, filters. */
+/**
+ * Links from the Library to the places its lists don't cover: recent queues, downloads, filters,
+ * statistics. An M3 Expressive connected group: four tonal tiles in a 2×2 block, large corners
+ * outside and tight ones where the tiles meet, each with its icon in a shape. [joinedAbove]: the
+ * group carries on from tiles above it (the Library's Browse), so only its bottom corners are large.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun LibraryLinks(nav: NavHostController) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp).testTag("library.links"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        listOf(NavItem.RecentQueues to Route.SavedQueues, NavItem.Downloads to Route.Downloads, NavItem.Filters to Route.Filters).forEach { (item, route) ->
-            AssistChip(
-                onClick = { nav.navigate(route) { launchSingleTop = true } },
-                label = { Text(item.label()) },
-                leadingIcon = { Icon(item.icon(false), null, Modifier.size(AssistChipDefaults.IconSize)) },
-                modifier = Modifier.testTag("library.link.${item.id}"),
-            )
+internal fun LibraryLinks(nav: NavHostController, joinedAbove: Boolean = false) {
+    val links = listOf(
+        Triple(NavItem.RecentQueues, Route.SavedQueues, MaterialShapes.Cookie6Sided),
+        Triple(NavItem.Downloads, Route.Downloads, MaterialShapes.Pill),
+        Triple(NavItem.Filters, Route.Filters, MaterialShapes.Clover4Leaf),
+        Triple(NavItem.Stats, Route.Stats, MaterialShapes.Sunny),
+    )
+    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+        links.chunked(2).forEachIndexed { r, row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                row.forEachIndexed { c, (item, route, iconShape) ->
+                    val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == 1, start = c == 0, end = c == 1)
+                    Surface(
+                        onClick = { nav.navigate(route) { launchSingleTop = true } },
+                        shape = shape,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, iconShape.toShape()), contentAlignment = Alignment.Center) {
+                                Icon(item.icon(false), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -8,12 +8,12 @@ import { join, resolve } from "node:path";
 import type { Page } from "@playwright/test";
 import type { DeviceInfo } from "../src/core/api";
 import { encodePng } from "../src/main/png";
-import { completeSetup, expect, launchFake, playFirstAlbum, resizeWindow, test } from "./fixtures";
+import { completeSetup, expect, launchFake, playFirstAlbum, resizeWindow, test, openPlace } from "./fixtures";
 import { readPng } from "./png-read";
 
 /** Plays the `nth` album from its page, as a user does (which keeps the outgoing queue in Recent). */
 async function playAlbum(page: Page, nth: number): Promise<string> {
-  await page.getByTestId("nav-albums").click();
+  await openPlace(page, "albums");
   await page.getByTestId("grid-tile").nth(nth).dblclick();
   await expect(page.getByTestId("view-album")).toBeVisible();
   const heading = page.getByTestId("view-album").locator("h1").first();
@@ -442,7 +442,7 @@ test.describe("the artist in the now playing subtitle", () => {
     await menu.getByTestId("artist-menu-artist").first().click();
     await expect(page.getByTestId("view-artist")).toBeVisible();
     // The fullscreen card: the artist alone; an artist leaves the player for the artist's page.
-    await page.getByTestId("nav-albums").click();
+    await openPlace(page, "albums");
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");
     await expect(fs.locator(".np-text .t2")).toHaveText(track.artist!);

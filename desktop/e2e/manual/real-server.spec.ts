@@ -10,6 +10,12 @@
 // display:
 //   set -a; . /path/to/creds.env; set +a; xvfb-run -a pnpm exec playwright test e2e/manual
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+
+/** Opens a place from the Library page (the sidebar lists Home and Library, plus pins). */
+async function openPlace(page: Page, place: "albums" | "songs"): Promise<void> {
+  await page.getByTestId("nav-library").click();
+  await page.getByTestId(`library-${place}`).click();
+}
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -70,7 +76,7 @@ test.describe("real server (manual)", () => {
       await expect(page.getByTestId("dev-banner")).toHaveCount(0);
 
       // Library sync: wait for albums to arrive and give the sync time to settle.
-      await page.getByTestId("nav-albums").click();
+      await openPlace(page, "albums");
       await expect(page.getByTestId("grid-tile").first()).toBeVisible({ timeout: 300_000 });
       await page.waitForTimeout(5000);
       await shot("library");
@@ -137,7 +143,7 @@ test.describe("real server (manual)", () => {
       await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
 
       // The songs table, with the track playing.
-      await page.getByTestId("nav-songs").click();
+      await openPlace(page, "songs");
       await page.waitForTimeout(2000);
       await shot("songs");
 

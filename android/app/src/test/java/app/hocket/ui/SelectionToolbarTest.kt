@@ -22,7 +22,10 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** Bulk rating from the selection toolbar: one "Set rating…" entry whose dialog rates every selected track. */
+/**
+ * The selected songs' menu (More on the selection toolbar): "3 songs · …", the rating starting
+ * "Mixed" while they differ and rating every selected song, love that loves them all.
+ */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -32,51 +35,56 @@ class SelectionToolbarTest {
 
     private fun present(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
 
+    /** Three songs, rated differently (the fake library's first ones, with the first re-rated). */
     private fun selectThree(core: TestCore): List<String> {
         compose.setThemedContent(core) { SelectionToolbar() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val ids = core.fake.library.tracks.take(3).map { it.id }
+        core.client.dispatch(app.hocket.core.Commands.rateTrack(ids[0], if (core.fake.library.track(ids[1])!!.rating.toInt() == 2) 3 else 2))
         compose.runOnIdle { ids.forEach { core.client.toggleSelected(SelectionKind.Tracks, it) } }
-        compose.waitUntil(5_000) { present("selection.action.${ActionIds.rate(5)}") || compose.onAllNodesWithContentDescription("More options").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { present("selection.more") }
+        compose.onNodeWithTag("selection.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("selectionMenu.header") }
+        compose.waitForIdle()
         return ids
-    }
-
-    private fun openSetRating() {
-        if (!present("selection.action.${ActionIds.rate(5)}")) compose.onAllNodesWithContentDescription("More options").onFirst().performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { present("selection.action.${ActionIds.rate(5)}") }
-        val entry = compose.onNodeWithTag("selection.action.${ActionIds.rate(5)}").fetchSemanticsNode().config
-        val text = (entry.getOrElseNullable(SemanticsProperties.Text) { null }?.joinToString { it.text } ?: "") + (entry.getOrElseNullable(SemanticsProperties.ContentDescription) { null }?.joinToString() ?: "")
-        // The fixed-value rateN entries are gone: the one entry sets any rating.
-        assertTrue(text, text.contains("Set rating…"))
-        assertTrue(compose.onAllNodesWithText("Rate 5 stars").fetchSemanticsNodes().isEmpty())
-        compose.onNodeWithTag("selection.action.${ActionIds.rate(5)}").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { present("rating") }
     }
 
     private fun ratings(core: TestCore, ids: List<String>) = ids.map { core.fake.library.track(it)!!.rating.toInt() }
 
     @Test
-    fun setRatingRatesEverySelectedTrack() {
+    fun theRatingStartsMixedAndRatesEverySelectedSong() {
         val core = TestCore(startPlaying = false)
         val ids = selectThree(core)
-        openSetRating()
+        assertTrue(compose.onAllNodesWithText("3 songs", substring = true).fetchSemanticsNodes().isNotEmpty())
+        val state = compose.onNodeWithTag("rating").fetchSemanticsNode().config[SemanticsProperties.StateDescription]
+        assertEquals("Mixed", state)
         compose.onNodeWithTag("rating").performSemanticsAction(SemanticsActions.SetProgress) { it(3f) }
         compose.waitUntil(5_000) { ratings(core, ids) == listOf(3, 3, 3) }
-        compose.waitUntil(5_000) { !present("rating") }
-        assertEquals(false, core.client.selection.value.active)
+        // A toggle: the menu stays, the selection too.
+        assertTrue(present("selectionMenu.header"))
+        assertEquals(true, core.client.selection.value.active)
     }
 
     @Test
-    fun theDialogCanClearTheRating() {
+    fun theStarsCanClearTheRatingAndLoveLovesThemAll() {
         val core = TestCore(startPlaying = false)
         val ids = selectThree(core)
-        openSetRating()
         compose.onNodeWithTag("rating").performSemanticsAction(SemanticsActions.SetProgress) { it(4f) }
         compose.waitUntil(5_000) { ratings(core, ids) == listOf(4, 4, 4) }
-        compose.runOnIdle { ids.forEach { core.client.toggleSelected(SelectionKind.Tracks, it) } }
-        openSetRating()
-        compose.onNodeWithTag("rating.clear").performSemanticsAction(SemanticsActions.OnClick)
+        val clear = compose.onNodeWithTag("rating").fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label == "Clear rating" }
+        compose.runOnIdle { clear.action() }
         compose.waitUntil(5_000) { ratings(core, ids) == listOf(0, 0, 0) }
+        compose.onNodeWithTag("selectionMenu.love").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { ids.all { core.fake.library.track(it)!!.loved } }
+    }
+
+    @Test
+    fun playingFromTheMenuActsOnAllAndClearsTheSelection() {
+        val core = TestCore(startPlaying = false)
+        val ids = selectThree(core)
+        compose.onNodeWithTag("selectionMenu.action.${ActionIds.PLAY}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+        compose.waitUntil(5_000) { core.client.queue.value.current?.track?.id in ids }
     }
 }

@@ -4,24 +4,30 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.theme.ArtworkColors
+import app.hocket.ui.theme.LocalDarkTheme
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
@@ -109,6 +115,19 @@ fun ArtworkPlaceholder(id: String?, modifier: Modifier = Modifier) {
         drawRect(Brush.linearGradient(listOf(seed.copy(alpha = 0.85f), second.copy(alpha = 0.7f))))
         drawCircle(Color.White.copy(alpha = 0.10f), radius = size.minDimension * 0.42f)
         drawCircle(Color.Black.copy(alpha = 0.18f), radius = size.minDimension * 0.08f)
+    }
+}
+
+/**
+ * Artwork for something with no cover (a filter, a genre, a coverless queue): its icon in [accent]
+ * on a soft, see-through tint of it (the desktop's `--accent-soft`), so it reads as tonal on any
+ * surface, a card's or the screen's, in either theme.
+ */
+@Composable
+fun IconArt(icon: ImageVector, shape: Shape, modifier: Modifier = Modifier, iconSize: Dp = 24.dp, accent: Color = MaterialTheme.colorScheme.primary) {
+    // A touch stronger in the dark theme, where the light accent over a dark card reads fainter.
+    Box(modifier.background(accent.copy(alpha = if (LocalDarkTheme.current) 0.28f else 0.2f), shape), contentAlignment = Alignment.Center) {
+        Icon(icon, null, Modifier.size(iconSize), tint = accent)
     }
 }
 

@@ -17,10 +17,6 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.ActionIds
-import app.hocket.core.api.ActionDescriptor
-import app.hocket.core.api.OfflineState
-import app.hocket.core.api.TrackSummary
-import app.hocket.ui.components.songMenuRows
 import app.hocket.ui.nav.AppRoot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -112,6 +108,10 @@ class SongMenuTest {
         assertTrue(present("rating"))
         assertTrue(!present("player.sleep"))
         val remove = "songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"
+        // The destructive row is under More.
+        assertTrue(!present(remove))
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present(remove) }
         assertTrue(top(remove) > top("songMenu.action.${ActionIds.PLAY_NEXT}"))
         compose.onNodeWithTag(remove).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
@@ -139,20 +139,50 @@ class SongMenuTest {
         assertTrue(present("rating"))
         assertTrue(present("songMenu.action.${ActionIds.PLAY_NEXT}"))
         assertTrue(!present("songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"))
+        // Go to album is in the short list; Go to artist under More.
+        assertTrue(present("songMenu.action.${ActionIds.GO_TO_ALBUM}"))
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("songMenu.action.${ActionIds.GO_TO_ARTIST}") }
         compose.onNodeWithTag("songMenu.action.${ActionIds.GO_TO_ARTIST}").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
         assertEquals(listOf("artist:${track.artistId}"), opened)
     }
 
+    /**
+     * Add to playlist from the song menu: the song's playlists come ticked, the one holding it twice
+     * with its ×2 badge; unticking that one asks, "Remove one" leaves one copy, and Done applies it.
+     */
     @Test
-    fun theRowsKeepTheRegistryOrderAndSplitOffTheContextActions() {
-        fun d(id: String) = ActionDescriptor(id, id, "x", "c", true, null, true, false)
-        val track = TrackSummary("t", "s", "T", albumId = "al", artistId = null, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None)
-        val ids = listOf(ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.rate(5), ActionIds.rate(0), ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST, ActionIds.DOWNLOAD)
-        val rows = songMenuRows(ids.map(::d), track, canNavigate = true)
-        assertEquals(listOf(ActionIds.PLAY_NEXT, ActionIds.GO_TO_ALBUM, ActionIds.DOWNLOAD), rows.common.map { it.id })
-        assertEquals(listOf(ActionIds.REMOVE_FROM_QUEUE), rows.context.map { it.id })
-        assertEquals(listOf(ActionIds.PLAY_NEXT, ActionIds.DOWNLOAD), songMenuRows(ids.map(::d), track, canNavigate = false).common.map { it.id })
+    fun addToPlaylistRemovesOneOfTwoCopies() {
+        val core = TestCore(startPlaying = false)
+        val lib = core.fake.library
+        val track = lib.playlistTracks.getValue("pl0").first()
+        val album = lib.track(track)!!.albumId!!
+        core.start()
+        compose.setThemedContent(core) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {})) {
+                app.hocket.ui.screens.detail.AlbumDetailScreen(androidx.navigation.compose.rememberNavController(), album)
+            }
+        }
+        val title = lib.track(track)!!.title
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for $title").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("More options for $title")[0].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("songMenu.header") }
+        compose.onNodeWithTag("songMenu.action.${ActionIds.ADD_TO_PLAYLIST}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("picker.row.pl2") }
+        compose.waitForIdle()
+        // The badge is part of its row's merged semantics ("2 copies").
+        fun badge(id: String) = compose.onAllNodesWithTag("picker.badge.$id", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        assertTrue(badge("pl2"))
+        assertTrue(!badge("pl0"))
+        compose.onNodeWithTag("picker.row.pl2").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("picker.removeOne") }
+        compose.onNodeWithTag("picker.removeOne").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !present("picker.removeOne") }
+        assertTrue(!badge("pl2"))
+        compose.onNodeWithTag("picker.done").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { lib.playlistTracks.getValue("pl2").count { it == track } == 1 }
+        assertEquals(1, lib.playlistTracks.getValue("pl0").count { it == track })
     }
 
     /** The sheet's height from the frame it first shows: it opens at its final size, never grows under the finger. */

@@ -8,6 +8,8 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -83,7 +85,8 @@ class NavBarLayoutTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.onNodeWithTag("navBar.library").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("library.album").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("library.grid").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
         compose.onAllNodesWithTag("library.album")[0].performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("detail.header").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("navBar.library").assertIsSelected()

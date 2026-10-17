@@ -22,11 +22,19 @@ async function activeAttr(page: Page, attr: string): Promise<string | null> {
   return page.evaluate((a) => document.activeElement?.getAttribute(a) ?? null, attr);
 }
 
+/** Keyboard only: the sidebar's Library, then the Library's `place` tile. */
+async function openPlaceByKeyboard(page: Page, place: "albums" | "songs"): Promise<void> {
+  await tabTo(page, byTestId("nav-library"), "the Library nav item");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("view-library")).toBeVisible();
+  await tabTo(page, byTestId(`library-${place}`), `the Library's ${place} tile`);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`view-${place}`)).toBeVisible();
+}
+
 /** Keyboard only: albums → first album → Play. */
 async function playFirstAlbumByKeyboard(page: Page): Promise<void> {
-  await tabTo(page, byTestId("nav-albums"), "the Albums nav item");
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("view-albums")).toBeVisible();
+  await openPlaceByKeyboard(page, "albums");
   await tabTo(page, (f) => f.role === "gridcell", "the album grid");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("view-album")).toBeVisible();
@@ -81,7 +89,7 @@ test.describe("keyboard only", () => {
     expect(stops.filter((f) => f.role === "row").length).toBe(1);
     expect(stops.filter((f) => f.role === "listbox").length).toBe(1);
     expect(stops.filter((f) => f.role === "radio").length).toBe(2); // album rating, player-bar rating
-    for (const id of ["search-input", "nav-albums", "seek-slider", "volume", "play-pause", "queue-timeline", "queue-selector", "queue-autoplay", "sidebar-back", "side-panel-resize", "toggle-side-panel", "toggle-lyrics", "toggle-queue", "connect-button", "sidebar-resize"]) {
+    for (const id of ["search-input", "nav-library", "seek-slider", "volume", "play-pause", "queue-timeline", "queue-selector", "queue-autoplay", "sidebar-back", "side-panel-resize", "toggle-side-panel", "toggle-lyrics", "toggle-queue", "connect-button", "sidebar-resize"]) {
       expect(stops.some((f) => f.testId === id), `${id} is reachable`).toBe(true);
     }
   });
@@ -89,8 +97,7 @@ test.describe("keyboard only", () => {
   test("album grid: one Tab stop, arrows rove, Home/End, Enter opens", async ({ hocket }) => {
     const { page } = hocket;
     await keyboardSetup(page);
-    await tabTo(page, byTestId("nav-albums"), "Albums");
-    await page.keyboard.press("Enter");
+    await openPlaceByKeyboard(page, "albums");
     const grid = page.getByTestId("albums-grid");
     await expect(grid.getByTestId("grid-tile").first()).toBeVisible();
     await tabTo(page, (f) => f.role === "gridcell", "the grid");
@@ -156,8 +163,7 @@ test.describe("keyboard only", () => {
   test("songs table: roving rows, Enter plays, digits rate, Shift+F10 and the menu key open the menu, Escape returns focus, dialogs trap Tab", async ({ hocket }) => {
     const { page } = hocket;
     await keyboardSetup(page);
-    await tabTo(page, byTestId("nav-songs"), "Songs");
-    await page.keyboard.press("Enter");
+    await openPlaceByKeyboard(page, "songs");
     await expect(page.getByTestId("track-row").first()).toBeVisible();
     await tabTo(page, (f) => f.role === "row", "the songs grid");
     expect(await activeAttr(page, "data-index")).toBe("0");
@@ -174,42 +180,65 @@ test.describe("keyboard only", () => {
     // A digit rates the row.
     await page.keyboard.press("4");
     await expect(row.getByRole("radio", { name: "4 stars" })).toHaveAttribute("aria-checked", "true");
-    // Shift+F10: the row's menu, first item active, focus inside.
+    // Shift+F10: the row's menu, first item active (the play strip's Play), focus inside.
     await page.keyboard.press("Shift+F10");
     const menu = page.getByTestId("context-menu");
+    const activeCell = async () => page.locator(`#${await menu.getAttribute("aria-activedescendant")}`);
     await expect(menu).toBeVisible();
     await expect(menu).toBeFocused();
     await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-0");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
+    // → moves along the strip; ↓ goes to the next line, the rating, landing on its current star.
+    await page.keyboard.press("ArrowRight");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Shuffle");
     await page.keyboard.press("ArrowDown");
-    await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-1");
+    await expect(await activeCell()).toHaveAttribute("data-star", "4");
+    await expect(await activeCell()).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(await activeCell()).toHaveAttribute("role", "menuitemcheckbox");
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(row).toBeFocused();
-    // The context-menu key does the same; run "Add to playlist…" from it.
+    // The context-menu key does the same; Add to playlist opens its submenu with the search focused.
     await page.keyboard.press("ContextMenu");
     await expect(menu).toBeVisible();
     for (let i = 0; i < 20; i++) {
-      const id = await menu.getAttribute("aria-activedescendant");
-      if (id && (await page.locator(`#${id}`).getAttribute("data-action")) === "addToPlaylist") break;
+      if ((await (await activeCell()).getAttribute("data-action")) === "addToPlaylist") break;
       await page.keyboard.press("ArrowDown");
     }
-    await page.keyboard.press("Enter");
-    const dialog = page.getByTestId("dialog-addToPlaylist");
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toHaveAttribute("aria-modal", "true");
-    // Focus is inside and stays inside, both directions.
-    for (const key of ["Tab", "Shift+Tab"]) {
-      for (let i = 0; i < 12; i++) {
-        await page.keyboard.press(key);
-        expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="dialog-addToPlaylist"]')), `${key} #${i}`).toBe(true);
-        expect(hasRing(await focused(page))).toBe(true);
-      }
-    }
-    // The rest of the window is inert while it is open.
-    expect(await page.getByTestId("app-body").getAttribute("inert")).not.toBeNull();
+    await page.keyboard.press("ArrowRight");
+    const search = page.getByTestId("playlist-search");
+    await expect(search).toBeFocused();
+    // ↓ walks the rows (New playlist first), Escape goes back to the menu, on Add to playlist.
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toHaveAttribute("aria-activedescendant", "pp-row-0");
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toHaveAttribute("aria-activedescendant", "pp-row-1");
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("playlist-submenu")).toHaveCount(0);
+    await expect(menu).toBeFocused();
+    expect(await (await activeCell()).getAttribute("data-action")).toBe("addToPlaylist");
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
     await expect(row).toBeFocused();
+    // Add to playlist for what's playing (the player bar's +) is the same picker as the menu's
+    // submenu, beside the button: focus goes to its search field, Tab or Escape closes it, and focus
+    // goes back to the +.
+    await tabTo(page, byTestId("bar-add"), "Add to playlist");
+    await page.keyboard.press("Enter");
+    const picker = page.getByTestId("playlist-submenu");
+    await expect(picker).toBeVisible();
+    await expect(page.getByTestId("playlist-search")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByTestId("playlist-search")).toHaveAttribute("aria-activedescendant", "pp-row-0");
+    await page.keyboard.press("Tab");
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByTestId("bar-add")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("playlist-search")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByTestId("bar-add")).toBeFocused();
   });
 
   test("queue listbox and selector, and the seek, volume and splitter sliders", async ({ hocket }) => {
@@ -292,7 +321,7 @@ test.describe("keyboard only", () => {
     const { page } = hocket;
     await keyboardSetup(page);
     await playFirstAlbumByKeyboard(page);
-    await tabTo(page, byTestId("nav-albums"), "Albums", { back: true });
+    await tabTo(page, byTestId("nav-library"), "Library", { back: true });
     await page.keyboard.press("f");
     const fs = page.getByTestId("fullscreen-player");
     await expect(fs).toBeVisible();
@@ -317,7 +346,7 @@ test.describe("keyboard only", () => {
     await expect(fs.getByTestId("queue-timeline")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(fs).toHaveCount(0);
-    await expect(page.getByTestId("nav-albums")).toBeFocused();
+    await expect(page.getByTestId("nav-library")).toBeFocused();
     // The palette.
     await page.keyboard.press("Control+k");
     await expect(page.getByTestId("palette-input")).toBeFocused();
@@ -331,6 +360,6 @@ test.describe("keyboard only", () => {
     expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="palette"]'))).toBe(true);
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("palette")).toHaveCount(0);
-    await expect(page.getByTestId("nav-albums")).toBeFocused();
+    await expect(page.getByTestId("nav-library")).toBeFocused();
   });
 });

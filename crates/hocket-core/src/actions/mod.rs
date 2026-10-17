@@ -133,6 +133,38 @@ pub struct StateView {
     /// Another device plays and hasn't reported its volume: a relative step
     /// would have nothing to step from.
     pub volume_unknown: bool,
+    /// What's pinned to the Library (`library.pins`), in order.
+    pub library_pins: Vec<LibraryPin>,
+}
+
+/// One entry of `library.pins`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LibraryPin {
+    pub kind: String,
+    pub id: String,
+    #[serde(default = "LibraryPin::default_tap")]
+    pub tap: String,
+    /// Fields a newer device added, written back untouched.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl LibraryPin {
+    fn default_tap() -> String {
+        "open".into()
+    }
+
+    /// The setting's value as pins; entries that don't parse are dropped.
+    pub fn list_from(value: &serde_json::Value) -> Vec<LibraryPin> {
+        value
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Resolves what handlers need from the mirror. The actor implements it;
@@ -205,6 +237,37 @@ pub struct ActionCustomisation {
 
 fn customisation_version() -> u32 {
     1
+}
+
+/// The customisation version this build writes. 2: the Library holds the places the sidebar used to
+/// list, and things can be pinned to it (see [`migrate_order`]).
+const CUSTOMISATION_VERSION: u32 = 2;
+
+/// Brings an order saved by an older build up to date: a version-1 sidebar gains the Library (after
+/// Home), whose page now holds the places it used to list, and a version-1 context menu gains Pin /
+/// Unpin to Library (after Go to artist). Done once; the user can remove them again.
+fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<String> {
+    if version >= 2 {
+        return ids;
+    }
+    let mut insert_after = |anchor: &str, new: &[&str]| {
+        let missing: Vec<String> = new
+            .iter()
+            .filter(|n| !ids.iter().any(|id| id == *n))
+            .map(|n| n.to_string())
+            .collect();
+        let at = ids
+            .iter()
+            .position(|id| id == anchor)
+            .map_or(ids.len(), |i| i + 1);
+        ids.splice(at..at, missing);
+    };
+    match surface {
+        Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
+        Surface::ContextMenu => insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"]),
+        _ => {}
+    }
+    ids
 }
 
 pub struct ActionRegistry {
@@ -505,7 +568,7 @@ impl ActionRegistry {
 
     pub fn customisation(&self) -> ActionCustomisation {
         ActionCustomisation {
-            version: 1,
+            version: CUSTOMISATION_VERSION,
             orders: self
                 .orders
                 .iter()
@@ -531,7 +594,7 @@ impl ActionRegistry {
         self.overrides.clear();
         for (surface, ids) in &c.orders {
             if let Some(s) = Surface::parse(surface) {
-                self.set_order(s, ids.clone());
+                self.set_order(s, migrate_order(s, c.version, ids.clone()));
             }
         }
         for (id, chord) in &c.shortcuts {

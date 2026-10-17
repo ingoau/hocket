@@ -1826,6 +1826,8 @@ export class FakeCore implements CoreHandle {
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
       ["nav.mobileBar", [], "accountSynced"],
+      ["home.sections", [], "accountSynced"],
+      ["library.pins", [], "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],
@@ -1850,6 +1852,29 @@ export class FakeCore implements CoreHandle {
       this.settings.set(key, setting);
       if (onlyKey) this.emit({ type: "settingChanged", data: { setting } });
     }
+  }
+
+  /** `library.pins` as stored (entries that don't parse are dropped). */
+  private libraryPins(): { kind: string; id: string; tap: string }[] {
+    try {
+      const v = JSON.parse(this.settings.get("library.pins")?.value ?? "[]");
+      return Array.isArray(v) ? v.filter((p) => p && typeof p.kind === "string" && typeof p.id === "string").map((p) => ({ kind: p.kind, id: p.id, tap: typeof p.tap === "string" ? p.tap : "open" })) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private libraryPinOf(target: ActionTarget): { kind: string; id: string } | undefined {
+    if (target.type !== "albums" && target.type !== "artists" && target.type !== "playlists" && target.type !== "tracks") return undefined;
+    const kind = target.type === "albums" ? "album" : target.type === "artists" ? "artist" : target.type === "playlists" ? "playlist" : "track";
+    const ids = target.data.ids;
+    const id = ids.length === 1 ? ids[0] : undefined;
+    return id ? { kind, id } : undefined;
+  }
+
+  private libraryPinned(target: ActionTarget): boolean | undefined {
+    const pin = this.libraryPinOf(target);
+    return pin ? this.libraryPins().some((p) => p.kind === pin.kind && p.id === pin.id) : undefined;
   }
 
   private setSettingValue(key: string, value: string): void {
@@ -2068,6 +2093,17 @@ export class FakeCore implements CoreHandle {
       case "deleteSavedQueue":
         if (target.type === "savedQueue") this.handle({ type: "deleteSavedQueue", data: { id: target.data.id } });
         return;
+      case "pinToLibrary":
+      case "unpinFromLibrary": {
+        const pin = this.libraryPinOf(target);
+        if (!pin) return;
+        const pins = this.libraryPins();
+        const others = pins.filter((p) => !(p.kind === pin.kind && p.id === pin.id));
+        if (actionId === "pinToLibrary" && (others.length < pins.length || pins.length >= 200)) return;
+        const next = actionId === "pinToLibrary" ? [...others, { ...pin, tap: pin.kind === "track" ? "play" : "open" }] : others;
+        this.setSettingValue("library.pins", JSON.stringify(next));
+        return;
+      }
       case "togglePlay":
         this.handle({ type: "togglePlay" });
         return;
@@ -2302,6 +2338,16 @@ export class FakeCore implements CoreHandle {
         const items = ids.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit).map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t);
         return { type: "tracks", data: { items, offset: q.data.page.offset, total: ids.length } };
       }
+      case "playlistMembership": {
+        // Like the core: every playlist (name order) with the indices where it holds any of the tracks.
+        const wanted = new Set(q.data.track_ids);
+        const data = [...(lib?.playlists ?? [])].sort((a, b) => a.playlist.name.localeCompare(b.playlist.name)).map((p) => ({
+          playlistId: p.playlist.id,
+          entries: p.trackIds.flatMap((trackId, index) => (wanted.has(trackId) ? [{ trackId, index }] : [])),
+          synced: true,
+        }));
+        return { type: "membership", data };
+      }
       case "search":
         return { type: "search", data: this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) };
       case "queue":
@@ -2385,6 +2431,8 @@ export class FakeCore implements CoreHandle {
       anyDownloaded,
       savedQueuePinned: sq?.pinned,
       inPlaylist: true,
+      libraryPinned: this.libraryPinned(target),
+      libraryFull: this.libraryPins().length >= 200,
     });
   }
 

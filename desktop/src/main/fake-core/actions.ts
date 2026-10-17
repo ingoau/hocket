@@ -23,7 +23,7 @@ export interface RegistryEntry {
 export const REGISTRY: RegistryEntry[] = [
   // Item actions
   { id: "play", label: "Play", icon: "play", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
-  { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["albums", "artists", "playlists"], surfaces: ["contextMenu"] },
+  { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
   { id: "playNext", label: "Play next", icon: "playNext", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "playLater", label: "Play later", icon: "playLater", category: "queue", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"], undoable: true },
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },
@@ -38,6 +38,8 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "download", label: "Download", icon: "download", category: "offline", targets: ["tracks", "albums", "playlists"], surfaces: ["contextMenu"] },
   { id: "unpin", label: "Remove download", icon: "downloadOff", category: "offline", targets: ["tracks", "albums", "playlists"], surfaces: ["contextMenu"], destructive: true },
   { id: "goToAlbum", label: "Go to album", icon: "album", category: "navigate", targets: ["tracks", "queueItems"], surfaces: ["contextMenu"] },
+  { id: "pinToLibrary", label: "Pin to Library", icon: "push_pin", category: "library", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu", "palette"] },
+  { id: "unpinFromLibrary", label: "Unpin from Library", icon: "keep_off", category: "library", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu", "palette"] },
   { id: "goToArtist", label: "Go to artist", icon: "artist", category: "navigate", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"] },
   { id: "ui.info", label: "Details", icon: "info", category: "navigate", targets: ["tracks"], surfaces: ["contextMenu"] },
   { id: "removeFromQueue", label: "Remove from queue", icon: "remove", category: "queue", targets: ["queueItems"], surfaces: ["contextMenu"], undoable: true },
@@ -99,9 +101,9 @@ export const REGISTRY: RegistryEntry[] = [
 ];
 
 export const DEFAULT_ORDERS: Record<string, string[]> = {
-  sidebar: ["navigateHome", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres", "navigateFilters", "navigateDownloads", "navigateStats"],
+  sidebar: ["navigateHome", "navigateLibrary"],
   mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
-  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
+  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
 };
 
 export interface ActionContext {
@@ -115,6 +117,10 @@ export interface ActionContext {
   anyDownloaded?: boolean;
   savedQueuePinned?: boolean;
   inPlaylist?: boolean;
+  /** One album, artist, playlist or song: whether it's pinned to the Library (undefined otherwise). */
+  libraryPinned?: boolean;
+  /** `library.pins` is at its limit (the core's LIBRARY_PINS_MAX). */
+  libraryFull?: boolean;
 }
 
 export function describeActions(surface: string, target: ActionTarget, order: string[] | undefined, ctx: ActionContext): ActionDescriptor[] {
@@ -143,6 +149,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       if (e.id === "pinSavedQueue" && ctx.savedQueuePinned) return false;
       if (e.id === "unpinSavedQueue" && !ctx.savedQueuePinned) return false;
       if (e.id === "removeFromPlaylist" && !ctx.inPlaylist) return false;
+      // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
+      if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;
       return true;
     })
@@ -163,6 +171,8 @@ function enabledFor(id: string, ctx: ActionContext): boolean {
   if (id === "togglePlay") return true;
   if (id === "undo") return ctx.canUndo;
   if (id === "redo") return ctx.canRedo;
+  if (id === "pinToLibrary") return ctx.libraryPinned === false && !ctx.libraryFull;
+  if (id === "unpinFromLibrary") return ctx.libraryPinned === true;
   return true;
 }
 

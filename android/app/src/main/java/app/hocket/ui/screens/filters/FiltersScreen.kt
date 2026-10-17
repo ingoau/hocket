@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -44,11 +47,21 @@ fun FiltersScreen(nav: NavHostController) {
     val filters by client.filters.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     var deleting by remember { mutableStateOf<Filter?>(null) }
+    var menu by remember { mutableStateOf<Filter?>(null) }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.filters_title)) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
-        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate(Route.FilterBuilder()) }, modifier = Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset - 16.dp)) { Icon(HocketIcons.Filled.Add, stringResource(R.string.filters_new)) } },
+        floatingActionButton = {
+            val newLabel = stringResource(R.string.filters_new)
+            androidx.compose.material3.ExtendedFloatingActionButton(
+                onClick = { nav.navigate(Route.FilterBuilder()) },
+                icon = { Icon(HocketIcons.Filled.Add, null) },
+                text = { Text(newLabel, Modifier.clearAndSetSemantics {}) },
+                // The text is the label; said once, as the button's name.
+                modifier = Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset - 16.dp).testTag("filters.new").semantics(mergeDescendants = true) { contentDescription = newLabel },
+            )
+        },
     ) { padding ->
         if (filters.isEmpty()) {
             EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
@@ -63,7 +76,7 @@ fun FiltersScreen(nav: NavHostController) {
                     trailingContent = {
                         androidx.compose.foundation.layout.Row {
                             IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.filter_play)) }
-                            IconButton(onClick = { deleting = f }) { Icon(HocketIcons.Filled.Delete, stringResource(R.string.action_delete)) }
+                            IconButton(onClick = { menu = f }, modifier = Modifier.testTag("filters.more")) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) }
                         }
                     },
                     modifier = Modifier.clickable { nav.navigate(Route.FilterBuilder(f.id)) },
@@ -71,6 +84,7 @@ fun FiltersScreen(nav: NavHostController) {
             }
         }
     }
+    menu?.let { f -> server?.id?.let { sid -> app.hocket.ui.screens.library.FilterMenuSheet(f, nav, sid, onDismiss = { menu = null }, onDelete = { deleting = f }) } }
     deleting?.let { f -> ConfirmDialog(stringResource(R.string.filter_delete_confirm, f.name), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.deleteFilter(f.id)) }, onDismiss = { deleting = null }) }
 }
 

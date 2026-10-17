@@ -706,7 +706,7 @@ async fn settings_persist_export_and_import() {
         })
         .await
     {
-        QueryResult::Actions(a) => assert!(a.iter().any(|a| a.id == "navigateFilters")),
+        QueryResult::Actions(a) => assert!(a.iter().any(|a| a.id == "navigateLibrary")),
         other => panic!("{other:?}"),
     }
     t.run(Command::SetShortcut {

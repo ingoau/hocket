@@ -15,6 +15,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -90,10 +92,14 @@ class AccessibilityChecksTest {
         check("home")
         compose.onNodeWithTag("navBar.library").performClick()
         compose.waitForIdle()
-        check("library: albums")
-        for (tab in listOf("Artists", "Playlists", "Genres", "Tracks")) {
-            val node = runCatching { compose.onNodeWithText(tab).performClick() }
-            if (node.isSuccess) check("library: $tab")
+        check("library")
+        for (list in listOf("albums", "artists", "playlists", "genres", "songs")) {
+            compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.$list"))
+            compose.onNodeWithTag("library.browse.$list").performClick()
+            compose.waitForIdle()
+            check("library: $list")
+            compose.onNodeWithTag("navBar.library").performClick()
+            compose.waitForIdle()
         }
         compose.onNodeWithTag("navBar.search").performClick()
         check("search")
@@ -104,7 +110,9 @@ class AccessibilityChecksTest {
         start()
         compose.onNodeWithTag("navBar.library").performClick()
         compose.waitForIdle()
-        compose.onAllNodesWithTag("library.album")[0].performClick()
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
+        // Scrolled in, the first album can sit under the mini player: click it through its action.
+        compose.onAllNodesWithTag("library.album")[0].performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { displayed("detail.header") }
         check("album detail")
     }
@@ -214,6 +222,13 @@ class AccessibilityChecksTest {
         compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         check("track menu")
+        // Expanded, then its add to playlist sheet.
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("track menu, expanded")
+        compose.onNodeWithTag("songMenu.action.addToPlaylist").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("picker.done").fetchSemanticsNodes().isNotEmpty() && compose.onAllNodesWithTag("picker.list").fetchSemanticsNodes().isNotEmpty() }
+        check("add to playlist")
         back()
         expanded()
         // The sleep timer is an entry in the track menu.

@@ -51,10 +51,21 @@ test.describe("exit animations", () => {
     await page.keyboard.press("Escape");
     await expectExiting(menu);
 
-    // Dialog: the sheet and its scrim leave together; the shell is live again from the first frame.
+    // With its Add to playlist submenu open, the two leave together.
     await page.getByTestId("track-row").first().click({ button: "right" });
-    await menu.locator('[data-action="addToPlaylist"]').click();
-    const dialog = page.getByTestId("dialog-addToPlaylist");
+    await menu.locator('[data-action="addToPlaylist"]').hover();
+    const sub = page.getByTestId("playlist-submenu");
+    await expect(page.getByTestId("playlist-search")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect.poll(() => exitState(sub)).toEqual({ closing: true, inert: true, animating: true });
+    await expectExiting(menu);
+    await expect(sub).toHaveCount(0);
+
+    // Dialog: the sheet and its scrim leave together; the shell is live again from the first frame.
+    // (The toast's Undo above stopped playback, so this is Song info from the menu.)
+    await page.getByTestId("track-row").first().click({ button: "right" });
+    await menu.locator('[data-action="ui.info"]').click();
+    const dialog = page.getByTestId("dialog-trackInfo");
     await expect(dialog).toBeVisible();
     expect(await page.getByTestId("app-body").getAttribute("inert")).not.toBeNull();
     await page.keyboard.press("Escape");
