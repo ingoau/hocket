@@ -27,4 +27,10 @@ class ConnectSyncTest {
         assertTrue(connectSyncing(conn(), CONNECT_SYNC_TIMEOUT_MS - 1))
         assertFalse(connectSyncing(conn(), CONNECT_SYNC_TIMEOUT_MS))
     }
+
+    @Test
+    fun waitsBeforeTheFirstSnapshotButOnlyUntilTheTimeout() {
+        assertTrue(connectSyncing(null, 0))
+        assertFalse(connectSyncing(null, CONNECT_SYNC_TIMEOUT_MS))
+    }
 }

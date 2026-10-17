@@ -22,9 +22,11 @@ internal const val CONNECT_SYNC_ALPHA = 0.45f
  * Whether the Connect controls (the device playing, the position) are still waiting for the room's
  * state: a coordinator is configured, not yet reached, with no error, and not for long. Offline or
  * unreachable, local state is all there is, so after [CONNECT_SYNC_TIMEOUT_MS] it shows as is.
+ * [c] is null before the first snapshot: there's no telling yet whether a coordinator is
+ * configured, so they wait (only until the timeout, too).
  */
-internal fun connectSyncing(c: ConnectionState, elapsedMs: Long): Boolean =
-    c.coordinatorUrl != null && !c.connected && c.error == null && elapsedMs < CONNECT_SYNC_TIMEOUT_MS
+internal fun connectSyncing(c: ConnectionState?, elapsedMs: Long): Boolean =
+    elapsedMs < CONNECT_SYNC_TIMEOUT_MS && (c == null || (c.coordinatorUrl != null && !c.connected && c.error == null))
 
 /** When the UI first asked, and whether the room has answered (or we gave up) since. */
 private object ConnectSync {
@@ -39,14 +41,14 @@ private object ConnectSync {
  */
 @Composable
 internal fun rememberConnectSyncing(): Boolean {
+    // Settled: stop collecting, so the callers don't recompose on every ping for nothing.
+    if (ConnectSync.settled) return false
     val client = LocalCoreClient.current
     val started by client.started.collectAsStateWithLifecycle()
     val connection by client.connection.collectAsStateWithLifecycle()
     if (ConnectSync.startedAt < 0) ConnectSync.startedAt = SystemClock.elapsedRealtime()
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    val elapsed = now - ConnectSync.startedAt
-    // Before the first snapshot there's no telling whether a coordinator is configured: wait.
-    val syncing = !ConnectSync.settled && (if (started) connectSyncing(connection, elapsed) else elapsed < CONNECT_SYNC_TIMEOUT_MS)
+    val syncing = connectSyncing(connection.takeIf { started }, now - ConnectSync.startedAt)
     if (!syncing) ConnectSync.settled = true
     LaunchedEffect(syncing) {
         if (syncing) {
