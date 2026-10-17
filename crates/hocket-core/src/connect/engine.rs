@@ -2878,6 +2878,10 @@ impl Engine {
             self.lease = rep.transport_lease.clone();
             self.remote_transport = rep.document.transport.clone();
             self.remote_transport.lease = self.lease.clone();
+            // The room's transport (the owner's position and volume) shows at
+            // once, not only from the owner's next stamp.
+            let t = self.transport();
+            self.out.push(Output::TransportChanged { transport: t });
             if let Some(stamp) = &rep.last_stamp {
                 if stamp.device_id != self.cfg.device.id {
                     self.last_remote_stamp = Some(stamp.clone());
@@ -4444,6 +4448,28 @@ mod tests {
 
     fn replica_with(doc: SessionDocument) -> ReplicaState {
         crate::connect::replica::new_replica(doc, 0.0)
+    }
+
+    #[test]
+    fn joining_shows_the_owners_volume_before_its_next_stamp() {
+        let (mut e, _) = engine("a");
+        let mut doc = crate::session::new_document("scope", "s".into(), 0.0);
+        doc.transport.volume = 0.36;
+        doc.transport.volume_device = Some("phone".into());
+        let mut rep = replica_with(doc);
+        rep.transport_lease.owner = Some("phone".into());
+        rep.transport_lease.epoch = 7;
+        let outs = attach(&mut e, Some(rep), vec![]);
+        let t = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::TransportChanged { transport } => Some(transport.clone()),
+                _ => None,
+            })
+            .expect("the room's transport is emitted on welcome");
+        assert_eq!(t.volume, 0.36);
+        assert_eq!(t.volume_device.as_deref(), Some("phone"));
+        assert_eq!(t.lease.owner.as_deref(), Some("phone"));
     }
 
     #[test]
