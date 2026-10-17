@@ -812,7 +812,6 @@
     <string name="kind_saved_queue">Saved queue</string>
     <!-- Library pins (library.pins) -->
     <string name="library_pins_edit">Edit pins</string>
-    <string name="library_pins_done">Done editing pins</string>
     <string name="library_recently_added">Recently added</string>
     <string name="library_newest_first">Newest first</string>
     <string name="library_pin_empty">Pin albums, artists, playlists, songs, genres or filters from their menus to keep them here.</string>
@@ -828,6 +827,22 @@
     <string name="library_pin_remove">Unpin from Library</string>
     <string name="library_unpinned">Unpinned %1$s</string>
     <string name="library_pinned_toast">Pinned to Library</string>
+    <!-- The pin editor (the Library's Edit) -->
+    <string name="library_pins_cancel">Cancel editing</string>
+    <string name="library_pins_done">Done</string>
+    <string name="library_pins_hint">Drag to reorder. Tap the chip to choose what a tap does.</string>
+    <plurals name="library_pins_count">
+        <item quantity="one">%1$d pin · Pin more from any item\'s menu</item>
+        <item quantity="other">%1$d pins · Pin more from any item\'s menu</item>
+    </plurals>
+    <string name="library_pin_reorder">Reorder %1$s</string>
+    <string name="library_pin_unpin_named">Unpin %1$s</string>
+    <string name="library_pin_chip_opens">Opens</string>
+    <string name="library_pin_chip_plays">Plays</string>
+    <string name="library_pin_chip_shuffles">Shuffles</string>
+    <string name="library_pin_chip_opens_named">Tap opens %1$s. Change</string>
+    <string name="library_pin_chip_plays_named">Tap plays %1$s. Change</string>
+    <string name="library_pin_chip_shuffles_named">Tap shuffles %1$s. Change</string>
     <string name="library_statistics">Statistics</string>
     <string name="filter_edit">Edit filter</string>
     <!-- Song, album and selection menus (the compact sheet) -->

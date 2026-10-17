@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.IconButton
@@ -95,7 +94,7 @@ private const val RECENT_ALBUMS = 60
  * The Library: what's pinned (`library.pins`, synced) as two-column shortcuts, the places to
  * browse (each list, plus queues, downloads, filters and statistics), then Recently added as a grid
  * that keeps going as you scroll. A pin's tap opens it unless its menu (press and hold) says to play
- * or shuffle it instead; Edit takes pins out.
+ * or shuffle it instead; Edit opens the pin editor ([PinEditor]: reorder, unpin, what a tap does).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,7 +116,6 @@ fun LibraryScreen(nav: NavHostController) {
             if (snackbar.showSnackbar(unpinnedLabel.replace("%s", title), undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) LibraryPins.restore(client, entry, at)
         }
     }
-    LaunchedEffect(pins?.isEmpty()) { if (pins?.isEmpty() == true) editing = false }
     val key = remember(serverId) { AlbumListKey(serverId, SortOrder.DateAdded, true) }
     val recent by client.albumPages.state(key).collectAsStateWithLifecycle()
     LaunchedEffect(key, recent.generation) { client.albumPages.ensure(key, 0) }
@@ -128,8 +126,8 @@ fun LibraryScreen(nav: NavHostController) {
                 title = { Text(stringResource(R.string.nav_library), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                 actions = {
                     // No "Pinned" heading (the pins speak for themselves): editing them lives up here.
-                    if (!pins.isNullOrEmpty()) IconButton(onClick = { editing = !editing }, modifier = Modifier.testTag("library.pins.edit")) {
-                        Icon(if (editing) HocketIcons.Filled.Check else HocketIcons.Filled.Edit, stringResource(if (editing) R.string.library_pins_done else R.string.library_pins_edit))
+                    if (!pins.isNullOrEmpty()) IconButton(onClick = { editing = true }, modifier = Modifier.testTag("library.pins.edit")) {
+                        Icon(HocketIcons.Filled.Edit, stringResource(R.string.library_pins_edit))
                     }
                     JobsIndicator(onClick = { jobs = true }); AccountButton()
                 },
@@ -151,16 +149,12 @@ fun LibraryScreen(nav: NavHostController) {
                                 Text(stringResource(R.string.library_pin_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
                             }
                             else -> Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP), modifier = Modifier.testTag("library.pins")) {
-                                val rows = pins.chunked(2)
-                                rows.forEachIndexed { r, row ->
+                                pins.chunked(2).forEachIndexed { r, row ->
                                     Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
                                         row.forEachIndexed { c, pin ->
-                                            // A pin with nothing under it (the last row, or above a lone last pin) takes the group's outer corner.
-                                            val bottom = r == rows.lastIndex || (r == rows.lastIndex - 1 && c >= rows.last().size)
-                                            PinCard(pin, editing, Modifier.weight(1f), groupShape(top = r == 0, bottom = bottom, start = c == 0, end = c == 1 || row.size == 1, outer = 20.dp),
+                                            PinCard(pin, Modifier.weight(1f), pinGroupEdges(r * 2 + c, pins.size).shape(outer = 20.dp),
                                                 onTap = { performPin(client, nav, serverId, pin) },
-                                                onMenu = { pinMenu = pin },
-                                                onRemove = { val at = LibraryPins.remove(client, pin.entry); if (at >= 0) unpinned(pin.entry, at, pin.title) })
+                                                onMenu = { pinMenu = pin })
                                         }
                                         if (row.size == 1) Spacer(Modifier.weight(1f))
                                     }
@@ -194,15 +188,15 @@ fun LibraryScreen(nav: NavHostController) {
         PinMenuSheet(pin, pins.orEmpty().map { it.entry }, nav, serverId, onUnpinned = { entry, at -> unpinned(entry, at, pin.title) }, onDismiss = { pinMenu = null })
     }
     if (jobs) JobsSheet { jobs = false }
+    if (editing) PinEditor(pins.orEmpty(), onClose = { editing = false })
 }
 
-/** One pin: shaped artwork, title and kind (and "Tap plays" when it does); Edit shows its remove button. */
+/** One pin: shaped artwork, title and kind (and "Tap plays" when it does). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PinCard(pin: ResolvedPin, editing: Boolean, modifier: Modifier, shape: Shape, onTap: () -> Unit, onMenu: () -> Unit, onRemove: () -> Unit) {
+private fun PinCard(pin: ResolvedPin, modifier: Modifier, shape: Shape, onTap: () -> Unit, onMenu: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val more = stringResource(R.string.action_more)
-    val removeLabel = stringResource(R.string.library_pin_remove)
     val a11y = remember(pin, more) { listOf(CustomAccessibilityAction(more) { onMenu(); true }) }
     val sub = buildString {
         append(stringResource(pin.kind.label))
@@ -214,13 +208,13 @@ private fun PinCard(pin: ResolvedPin, editing: Boolean, modifier: Modifier, shap
     }
     Surface(
         shape = shape,
-        color = if (editing) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.heightIn(min = 64.dp).testTag("library.pin"),
     ) {
         Row(
             Modifier
-                .combinedClickable(enabled = !editing, onClick = onTap, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() })
-                .semantics(mergeDescendants = true) { if (!editing) customActions = a11y }
+                .combinedClickable(onClick = onTap, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() })
+                .semantics(mergeDescendants = true) { customActions = a11y }
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -230,21 +224,18 @@ private fun PinCard(pin: ResolvedPin, editing: Boolean, modifier: Modifier, shap
                 Text(pin.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (editing) FilledTonalIconButton(onClick = onRemove, modifier = Modifier.size(40.dp).testTag("library.pin.remove")) {
-                Icon(HocketIcons.Filled.Close, "$removeLabel: ${pin.title}", Modifier.size(18.dp))
-            }
         }
     }
 }
 
 /** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. */
 @Composable
-internal fun PinArt(pin: ResolvedPin, modifier: Modifier) {
+internal fun PinArt(pin: ResolvedPin, modifier: Modifier, artSize: Int = ArtworkSizes.THUMB, iconSize: Dp = 22.dp) {
     val shape = pinShape(pin.kind)
     when (pin.kind) {
-        PinKind.Genre -> IconArt(HocketIcons.Filled.Category, shape, modifier, iconSize = 22.dp, accent = MaterialTheme.colorScheme.tertiary)
-        PinKind.Filter -> IconArt(HocketIcons.Filled.FilterAlt, shape, modifier, iconSize = 22.dp)
-        else -> Artwork(pin.coverArt, ArtworkSizes.THUMB, null, modifier, shape)
+        PinKind.Genre -> IconArt(HocketIcons.Filled.Category, shape, modifier, iconSize = iconSize, accent = MaterialTheme.colorScheme.tertiary)
+        PinKind.Filter -> IconArt(HocketIcons.Filled.FilterAlt, shape, modifier, iconSize = iconSize)
+        else -> Artwork(pin.coverArt, artSize, null, modifier, shape)
     }
 }
 
@@ -293,6 +284,29 @@ private fun BrowseTiles(nav: NavHostController) {
             Tile(stringResource(R.string.library_genres), HocketIcons.Filled.Category, Route.Genres, "genres", Modifier.weight(1f), MaterialShapes.Flower.toShape(), inner)
         }
     }
+}
+
+/** Which of a tile's sides are on its connected group's edge (see [groupShape]). */
+internal data class GroupEdges(val top: Boolean, val bottom: Boolean, val start: Boolean, val end: Boolean) {
+    fun shape(outer: Dp = 24.dp, inner: Dp = 6.dp) = groupShape(top, bottom, start, end, outer, inner)
+}
+
+/**
+ * The edges of the tile at [index] of [count] in a [columns]-wide group: a tile with nothing under
+ * it (the last row, or above an empty cell of a short last row) takes the group's bottom corner, and
+ * a lone last tile its end corners.
+ */
+internal fun pinGroupEdges(index: Int, count: Int, columns: Int = 2): GroupEdges {
+    val row = index / columns
+    val col = index % columns
+    val lastRow = (count - 1) / columns
+    val lastRowSize = count - lastRow * columns
+    return GroupEdges(
+        top = row == 0,
+        bottom = row == lastRow || (row == lastRow - 1 && col >= lastRowSize),
+        start = col == 0,
+        end = col == columns - 1 || index == count - 1,
+    )
 }
 
 /** The gap between tiles in a connected group. */

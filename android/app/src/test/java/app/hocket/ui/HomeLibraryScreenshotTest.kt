@@ -3,6 +3,7 @@ package app.hocket.ui
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
@@ -29,8 +30,8 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
- * Renders the customisable Home and the Library hub (pins, browse, recently added) to PNGs on the
- * fake core, for visual review. Like [AppScreenshotTest], it only runs with an output directory:
+ * Renders the customisable Home, the Library hub (pins, browse, recently added) and its pin editor
+ * to PNGs on the fake core, for visual review. Like [AppScreenshotTest], it only runs with an output directory:
  *
  *     HOCKET_SCREENSHOT_DIR=/tmp/shots ./gradlew :app:testDebugUnitTest --tests '*HomeLibraryScreenshotTest*' --rerun
  */
@@ -105,6 +106,29 @@ class HomeLibraryScreenshotTest {
             compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
             settle()
             shot(dir, "$prefix-06-library-recent")
+        }
+        // The pin editor (Edit in the Library's top bar): at rest, a tile held mid-drag, a pin unpinned.
+        step {
+            compose.onNodeWithTag("library.pins.edit").performClick()
+            awaitTag("library.pins.editor")
+            settle()
+            shot(dir, "$prefix-07-pin-editor")
+        }
+        step {
+            val handle = compose.onAllNodesWithTag("library.pins.editor.handle")[1]
+            handle.performTouchInput { down(center); moveBy(Offset(0f, 30f)); moveBy(Offset(0f, 30f)) }
+            settle()
+            shot(dir, "$prefix-08-pin-editor-drag")
+            handle.performTouchInput { up() }
+            settle()
+        }
+        step {
+            compose.onAllNodesWithTag("library.pins.editor.unpin")[3].performClick()
+            compose.mainClock.advanceTimeBy(600)
+            compose.waitForIdle()
+            shot(dir, "$prefix-09-pin-editor-unpinned")
+            compose.onNodeWithTag("library.pins.editor.cancel").performClick()
+            settle()
         }
     }
 

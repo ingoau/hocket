@@ -91,6 +91,14 @@ class MenuScreenshotTest {
         step {
             openSongMenu()
             shot(dir, "$prefix-01-song-menu")
+            // Held part way through a swipe up: the rest opening with the finger, More folding away.
+            compose.mainClock.autoAdvance = false
+            compose.onNodeWithTag("songMenu.header").performTouchInput { down(center); repeat(4) { moveBy(androidx.compose.ui.geometry.Offset(0f, -40f)) } }
+            compose.mainClock.advanceTimeBy(100)
+            shot(dir, "$prefix-01b-song-menu-swiping")
+            compose.onNodeWithTag("songMenu.header").performTouchInput { up() }
+            compose.mainClock.autoAdvance = true
+            settle()
             compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-02-song-menu-expanded")

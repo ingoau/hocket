@@ -80,6 +80,45 @@ class SongMenuTest {
 
     private fun top(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
 
+    private fun height(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.height
+
+    /**
+     * Swiping up on the menu opens the rest of it with the finger: part way, the rest shows part of
+     * its height and More is still folding away; let go short of half and it settles back; a full
+     * swipe opens it, and a swipe down (the list at its top) closes it again before the sheet moves.
+     */
+    @Test
+    fun swipingUpOpensTheRestOfTheMenuWithTheFinger() {
+        val core = TestCore()
+        openPlayer(core)
+        openMenu()
+        assertTrue(!present("songMenu.showLess"))
+        val moreHeight = height("songMenu.more")
+        // Held part way: both the folding More and the opening rest are there, More shorter than it was.
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("songMenu.header").performTouchInput { down(center); moveBy(Offset(0f, -40f)); moveBy(Offset(0f, -40f)); moveBy(Offset(0f, -40f)) }
+        compose.mainClock.advanceTimeBy(100)
+        assertTrue(present("songMenu.showLess"))
+        assertTrue(present("songMenu.more"))
+        assertTrue("More didn't fold with the drag", height("songMenu.more") < moreHeight - 1f)
+        // Let go slowly, short of half: it settles closed again.
+        compose.onNodeWithTag("songMenu.header").performTouchInput { up() }
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertTrue(!present("songMenu.showLess"))
+        assertTrue(present("songMenu.more"))
+        // A full swipe up opens it.
+        swipeMenu(-900f, 600)
+        compose.waitUntil(5_000) { !present("songMenu.more") }
+        assertTrue(present("songMenu.showLess"))
+        // A swipe down closes the rest first, and the menu stays.
+        swipeMenu(500f, 900)
+        compose.waitForIdle()
+        assertTrue(present("songMenu.header"))
+        assertTrue(!present("songMenu.showLess"))
+        assertTrue(present("songMenu.more"))
+    }
+
     /**
      * The player's menu and a queue row's menu are one menu: the same header and star row, the
      * common actions, and the context's own rows (the queue's remove, the player's sleep timer)
