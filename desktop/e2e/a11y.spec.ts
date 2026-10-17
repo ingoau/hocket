@@ -250,6 +250,42 @@ test.describe("axe: no violations anywhere", () => {
     }
   });
 
+  test("edit pins panel, light and dark", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    // One of each kind, the album playing and the playlist shuffling (every chip colour).
+    const sid = await serverId(page);
+    const genres = (await page.evaluate((s) => window.hocket.query({ type: "genres", data: { server_id: s } }), sid)) as { data?: { name: string }[] };
+    const pins = [
+      { kind: "album", id: "al-2", tap: "play" }, { kind: "playlist", id: "pl-1", tap: "shuffle" }, { kind: "artist", id: "ar-1", tap: "open" },
+      { kind: "track", id: "tr-1", tap: "play" }, { kind: "genre", id: genres.data?.[0]?.name ?? "Ambient", tap: "open" },
+    ];
+    await page.evaluate((value) => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify(value) } }), pins);
+    await expect(page.getByTestId("sidebar-pin")).toHaveCount(pins.length);
+    await page.getByTestId("sidebar-pin").first().click({ button: "right" });
+    await page.getByTestId("context-menu").getByRole("menuitem", { name: "Edit pins…" }).click();
+    const panel = page.getByTestId("edit-pins-panel");
+    await expect(panel.getByTestId("edit-pin")).toHaveCount(pins.length);
+    for (const theme of THEMES) {
+      await setTheme(page, theme);
+      await page.waitForTimeout(400);
+      await expectNoViolations(page, `${theme} edit pins`);
+      // The Unpinned toast with its Undo, and a tile picked up.
+      await panel.getByTestId("edit-pin-unpin").last().click();
+      await expect(page.getByTestId("toast").first()).toBeVisible();
+      const handle = panel.getByTestId("edit-pin-handle").first();
+      await handle.focus();
+      await page.keyboard.press("Space");
+      await expect(handle).toHaveAttribute("aria-pressed", "true");
+      await page.waitForTimeout(400);
+      await expectNoViolations(page, `${theme} edit pins, unpinned and picked up`);
+      await page.keyboard.press("Escape");
+      await expect(handle).toHaveAttribute("aria-pressed", "false");
+      await page.getByTestId("toast").first().getByTestId("toast-action").click();
+      await expect(panel.getByTestId("edit-pin")).toHaveCount(pins.length);
+    }
+  });
+
   test("the always-on-top mini player, light and dark", async ({ hocket }) => {
     const { app, page } = hocket;
     await completeSetup(page);

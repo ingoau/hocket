@@ -108,6 +108,10 @@ export interface UiState {
   prefs: AppPrefs;
   /** Narrow windows (and 200% zoom) show the side panel as a drawer, closed until asked for. */
   drawerOpen: boolean;
+  /** The Edit pins panel is open (beside the sidebar, over any page). */
+  editingPins: boolean;
+  /** The pin (kind:id) whose menu opened it, where focus goes back to. */
+  editPinsFrom: string | undefined;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -138,6 +142,7 @@ export interface AppStore extends CoreState, UiState {
   setNowPlayingMode(mode: NowPlayingMode): void;
   setPrefs(patch: Partial<AppPrefs>): void;
   setDrawerOpen(open: boolean): void;
+  setEditingPins(open: boolean, from?: string): void;
   setting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
   runAction(actionId: string, target?: ActionTarget): void;
@@ -180,6 +185,8 @@ export const useApp = create<AppStore>((set, get) => ({
   nowPlayingMode: loadNowPlayingMode(),
   prefs: { closeToTray: true },
   drawerOpen: false,
+  editingPins: false,
+  editPinsFrom: undefined,
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -273,6 +280,9 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setDrawerOpen(drawerOpen) {
     set({ drawerOpen });
+  },
+  setEditingPins(editingPins, from) {
+    set({ editingPins, editPinsFrom: editingPins ? from : undefined });
   },
   setting<T>(key: string, fallback: T): T {
     return settingValue(get(), key, fallback);

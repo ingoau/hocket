@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECTIONS, HOME_SECTIONS, moveBefore, moveShown, parseSections, sectionsValue } from "./home-sections";
-import { LIBRARY_PINS_MAX, movePin, parsePins, pinTap, restorePin, shownNeighbour, togglePin, type LibraryPin } from "./library-pins";
+import { LIBRARY_PINS_MAX, choosesTap, movePin, parsePins, pinTap, restorePin, shownNeighbour, togglePin, type LibraryPin } from "./library-pins";
 
 describe("home sections", () => {
   // The phone's HomeLibraryLogicTest checks the same list, so the two platforms stay in step.
@@ -43,10 +43,13 @@ describe("library pins", () => {
     expect(pins).toEqual([{ kind: "station", id: "s1", tap: "playNext", serverId: "srv" }, { kind: "album", id: "a1", tap: "open" }]);
   });
 
-  it("plays or shuffles on click only for albums, artists and playlists", () => {
+  it("plays or shuffles on click for albums, artists, playlists, genres and filters", () => {
     expect(pinTap(pin("album", "a", "shuffle"))).toBe("shuffle");
-    expect(pinTap(pin("genre", "g", "shuffle"))).toBe("open");
+    expect(pinTap(pin("genre", "g", "shuffle"))).toBe("shuffle");
+    expect(pinTap(pin("filter", "f", "play"))).toBe("play");
     expect(pinTap(pin("playlist", "p", "dance"))).toBe("open");
+    expect(pinTap(pin("station", "s", "play"))).toBe("open");
+    expect(choosesTap("track")).toBe(false);
   });
 
   it("refuses to pin past the limit, still unpins", () => {

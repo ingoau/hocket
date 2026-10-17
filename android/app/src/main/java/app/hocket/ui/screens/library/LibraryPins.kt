@@ -35,6 +35,9 @@ enum class PinTap(val id: String, @StringRes val label: Int) {
     Play("play", R.string.library_pin_tap_play),
     Shuffle("shuffle", R.string.library_pin_tap_shuffle);
 
+    /** The next choice round Open → Play → Shuffle (the pin editor's chip steps through them). */
+    val next: PinTap get() = entries[(ordinal + 1) % entries.size]
+
     companion object {
         fun of(id: String?) = entries.firstOrNull { it.id == id } ?: Open
     }
@@ -49,8 +52,8 @@ enum class PinKind(val id: String, @StringRes val label: Int) {
     Genre("genre", R.string.kind_genre),
     Filter("filter", R.string.kind_filter);
 
-    /** Play and Shuffle are offered as the tap for albums, artists and playlists only. */
-    val choosesTap: Boolean get() = this == Album || this == Artist || this == Playlist
+    /** Play and Shuffle are offered as the tap for everything but songs (a song always plays). */
+    val choosesTap: Boolean get() = this != Track
 
     companion object {
         fun of(id: String) = entries.firstOrNull { it.id == id }
@@ -107,13 +110,53 @@ object LibraryPins {
      */
     fun moved(pins: List<PinEntry>, pin: PinEntry, by: Int, shown: List<PinEntry> = pins): List<PinEntry> {
         val other = shownNeighbour(shown, pin, by) ?: return pins
+        return movedPast(pins, pin, other, later = by > 0)
+    }
+
+    /** [pin] moved to just after [other] ([later]) or just before it; the rest keep their order. */
+    fun movedPast(pins: List<PinEntry>, pin: PinEntry, other: PinEntry, later: Boolean): List<PinEntry> {
+        if (pin.same(other)) return pins
         val moving = pins.firstOrNull { it.same(pin) } ?: return pins
         val list = pins.filterNot { it.same(pin) }.toMutableList()
         val j = list.indexOfFirst { it.same(other) }
         if (j < 0) return pins
-        list.add(if (by < 0) j else j + 1, moving)
+        list.add(if (later) j + 1 else j, moving)
         return list
     }
+
+    /** [pins] without [pin], and where it was (-1 when it wasn't pinned), for Undo. */
+    fun unpinned(pins: List<PinEntry>, pin: PinEntry): Pair<List<PinEntry>, Int> {
+        val at = pins.indexOfFirst { it.same(pin) }
+        return (if (at < 0) pins else pins.filterIndexed { i, _ -> i != at }) to at
+    }
+
+    /** Whether the pin editor's [draft] differs from the [saved] pins (Done saves only then). */
+    fun changed(saved: List<PinEntry>, draft: List<PinEntry>) = saved != draft
+
+    /**
+     * The pin editor's [draft] merged with the pins as they are at Done ([current]), against the pins
+     * when it opened ([original]): the draft's order and edits win, but a pin unpinned elsewhere
+     * meanwhile stays unpinned, one pinned elsewhere is added at the end, and a tap changed
+     * elsewhere is kept where the draft left that tap alone. Unknown kinds and extra fields pass
+     * through untouched.
+     */
+    fun merged(original: List<PinEntry>, draft: List<PinEntry>, current: List<PinEntry>): List<PinEntry> {
+        fun List<PinEntry>.find(p: PinEntry) = firstOrNull { it.same(p) }
+        val kept = draft.mapNotNull { d ->
+            val o = original.find(d)
+            val c = current.find(d)
+            when {
+                o != null && c == null -> null
+                o != null && c != null && d.tap == o.tap -> d.copy(tap = c.tap, extra = c.extra)
+                else -> d
+            }
+        }
+        val added = current.filter { c -> original.find(c) == null && kept.find(c) == null }
+        return (kept + added).take(MAX)
+    }
+
+    /** [pins] with [pin]'s tap set to [tap]. */
+    fun withTap(pins: List<PinEntry>, pin: PinEntry, tap: PinTap): List<PinEntry> = pins.map { if (it.same(pin)) it.copy(tap = tap.id) else it }
 
     /** [pin] put back at [at], for Undo; the rest of the list stays as it is now. */
     fun restored(pins: List<PinEntry>, pin: PinEntry, at: Int): List<PinEntry> {
@@ -131,17 +174,15 @@ object LibraryPins {
     fun toggle(client: CoreClient, kind: PinKind, id: String) = save(client, toggled(current(client), kind, id))
 
     fun remove(client: CoreClient, pin: PinEntry): Int {
-        val pins = current(client)
-        val at = pins.indexOfFirst { it.kind == pin.kind && it.id == pin.id }
-        if (at >= 0) save(client, pins.filterIndexed { i, _ -> i != at })
+        val (pins, at) = unpinned(current(client), pin)
+        if (at >= 0) save(client, pins)
         return at
     }
 
     /** Puts [pin] back where it was ([at]), for Undo. */
     fun restore(client: CoreClient, pin: PinEntry, at: Int) = save(client, restored(current(client), pin, at))
 
-    fun setTap(client: CoreClient, pin: PinEntry, tap: PinTap) =
-        save(client, current(client).map { if (it.kind == pin.kind && it.id == pin.id) it.copy(tap = tap.id) else it })
+    fun setTap(client: CoreClient, pin: PinEntry, tap: PinTap) = save(client, withTap(current(client), pin, tap))
 
     fun move(client: CoreClient, pin: PinEntry, by: Int, shown: List<PinEntry>) = save(client, moved(current(client), pin, by, shown))
 }
@@ -191,12 +232,18 @@ fun pinShape(kind: PinKind): Shape = when (kind) {
 /** Performs a pin's tap: open it, or play / shuffle it. */
 fun performPin(client: CoreClient, nav: NavHostController, serverId: String, pin: ResolvedPin, tap: PinTap = pin.entry.pinTap) {
     val id = pin.entry.id
+    val shuffle = tap == PinTap.Shuffle
     when (pin.kind) {
         PinKind.Track -> client.dispatch(Commands.playTracks(serverId, listOf(id), 0, pin.title))
-        PinKind.Album -> if (tap == PinTap.Open) nav.navigate(Route.Album(id)) else client.dispatch(Commands.playContext(Commands.albumContext(serverId, id, pin.title), shuffle = tap == PinTap.Shuffle))
-        PinKind.Artist -> if (tap == PinTap.Open) nav.navigate(Route.Artist(id)) else client.dispatch(Commands.playContext(Commands.artistContext(serverId, id, pin.title), shuffle = tap == PinTap.Shuffle))
-        PinKind.Playlist -> if (tap == PinTap.Open) nav.navigate(Route.Playlist(id)) else client.dispatch(Commands.playContext(Commands.playlistContext(serverId, id, pin.title), shuffle = tap == PinTap.Shuffle))
-        PinKind.Genre -> nav.navigate(Route.Genre(id))
-        PinKind.Filter -> nav.navigate(Route.FilterBuilder(id))
+        PinKind.Album -> if (tap == PinTap.Open) nav.navigate(Route.Album(id)) else client.dispatch(Commands.playContext(Commands.albumContext(serverId, id, pin.title), shuffle = shuffle))
+        PinKind.Artist -> if (tap == PinTap.Open) nav.navigate(Route.Artist(id)) else client.dispatch(Commands.playContext(Commands.artistContext(serverId, id, pin.title), shuffle = shuffle))
+        PinKind.Playlist -> if (tap == PinTap.Open) nav.navigate(Route.Playlist(id)) else client.dispatch(Commands.playContext(Commands.playlistContext(serverId, id, pin.title), shuffle = shuffle))
+        PinKind.Genre -> if (tap == PinTap.Open) nav.navigate(Route.Genre(id)) else client.dispatch(Commands.playContext(Commands.genreContext(serverId, id), shuffle = shuffle))
+        // A filter that isn't loaded (yet) can't be played: its pin opens it instead.
+        PinKind.Filter -> {
+            val filter = client.filters.value.firstOrNull { it.id == id }
+            if (tap == PinTap.Open || filter == null) nav.navigate(Route.FilterBuilder(id))
+            else client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter), shuffle = shuffle))
+        }
     }
 }

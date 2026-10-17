@@ -1,5 +1,5 @@
 // Screenshots of the context menu and its add to playlist submenu (one song from a playlist, three
-// songs, an album; the submenu, searching, Remove both / Remove one, the hover +), in both themes,
+// songs, an album; the submenu, searching, Remove both / Remove one, the hover +) and Edit pins, in both themes,
 // for reviewing by eye against the menu design. Not an assertion test: it runs only with an output folder.
 //
 //   pnpm build && HOCKET_SCREENSHOT_DIR=/tmp/shots xvfb-run -a -s "-screen 0 2000x1600x24" pnpm test:e2e menu-screenshots
@@ -134,6 +134,48 @@ test("context menu and add to playlist", async () => {
         await shot("12-filter-menu");
         await page.keyboard.press("Escape");
       }
+
+      // Edit pins (the phone's pin edit mode): from a pin's menu, a chip cycled, a tile picked up, one unpinned.
+      const genres = (await page.evaluate(async () => {
+        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+        return window.hocket.query({ type: "genres", data: { server_id: s.data[0]!.id } });
+      })) as { data?: { name: string }[] };
+      await setSetting(page, "library.pins", [
+        { kind: "album", id: "al-2", tap: "play" },
+        { kind: "playlist", id: "pl-1", tap: "shuffle" },
+        { kind: "artist", id: "ar-1", tap: "open" },
+        { kind: "track", id: "tr-1", tap: "play" },
+        { kind: "genre", id: genres.data?.[0]?.name ?? "Ambient", tap: "shuffle" },
+        { kind: "filter", id: "builtin:available-offline", tap: "open" },
+      ]);
+      await page.getByTestId("nav-library").click();
+      const pinRow = page.getByTestId("sidebar-pin").first();
+      await expect(pinRow).toBeVisible();
+      await pinRow.click({ button: "right" });
+      await expect(menu).toBeVisible();
+      await page.mouse.move(5, 5);
+      await shot("13-pin-menu-edit-pins");
+      await menu.getByRole("menuitem", { name: "Edit pins…" }).click();
+      const editor = page.getByTestId("edit-pins-panel");
+      await expect(editor.getByTestId("edit-pin").first()).toBeVisible();
+      await shot("14-edit-pins");
+      await editor.getByTestId("edit-pin-chip").nth(2).click();
+      await editor.getByTestId("edit-pin-chip").nth(2).hover();
+      await shot("15-edit-pins-chip-cycled");
+      await editor.getByTestId("edit-pin-handle").nth(1).focus();
+      await page.keyboard.press("Space");
+      await page.keyboard.press("ArrowRight");
+      await page.mouse.move(5, 5);
+      await shot("16-edit-pins-picked-up");
+      await page.keyboard.press("Enter");
+      await editor.getByTestId("edit-pin-unpin").nth(3).click();
+      await expect(page.getByTestId("toast").filter({ hasText: "Unpinned" })).toBeVisible();
+      await page.mouse.move(5, 5);
+      await shot("17-edit-pins-unpinned");
+      await resizeWindow(app, page, 760, 820);
+      await shot("18-edit-pins-narrow");
+      await resizeWindow(app, page, 1280, 820);
+      await editor.getByRole("button", { name: "Cancel editing" }).click();
     } finally {
       await app.close();
       rmSync(userData, { recursive: true, force: true });

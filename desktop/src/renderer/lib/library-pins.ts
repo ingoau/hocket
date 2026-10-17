@@ -1,6 +1,6 @@
 // What's pinned to the Library (`library.pins`, synced), shown in the sidebar under Home and the
 // Library. Each pin is an album, artist, playlist, song, genre or filter, with what clicking it
-// does: open it, or play / shuffle it (those two for albums, artists and playlists only).
+// does: open it, or play / shuffle it (anything but a song, which always plays).
 import { SK } from "@shared/settings-keys";
 
 export type PinKind = "album" | "artist" | "playlist" | "track" | "genre" | "filter";
@@ -24,9 +24,9 @@ export function isPinKind(kind: string): kind is PinKind {
   return (PIN_KINDS as readonly string[]).includes(kind);
 }
 
-/** Play and Shuffle are offered as the click for albums, artists and playlists only. */
+/** Open, Play and Shuffle are offered as the click for albums, artists, playlists, genres and filters (a song always plays). */
 export function choosesTap(kind: string): boolean {
-  return kind === "album" || kind === "artist" || kind === "playlist";
+  return kind === "album" || kind === "artist" || kind === "playlist" || kind === "genre" || kind === "filter";
 }
 
 export function pinTap(p: LibraryPin): PinTap {
