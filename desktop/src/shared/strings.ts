@@ -125,7 +125,7 @@ const STRINGS = {
   "connect.noDevices": "No other devices are connected. Open Hocket on another device signed in to the same server.",
   "connect.tier.local": "Not connected",
   "connect.tier.lan": "Connected on this network",
-  "connect.tier.coordinator": "Connected through coordinator",
+  "connect.tier.coordinator": "Connected over the internet",
   "connect.peers": "{count} devices",
 
   // Queue
@@ -429,7 +429,7 @@ const STRINGS = {
   "filters.descending": "Descending",
   "filters.limit": "Limit",
   "filters.delete": "Delete filter",
-  "filters.smartUnavailable": "Needs the native API (behind a capability flag)",
+  "filters.smartUnavailable": "This server doesn't support smart playlists",
   "filters.sample": "Sample",
 
   // Settings
@@ -481,7 +481,7 @@ const STRINGS = {
   "settings.storageUsage": "Space used",
   "settings.storageUsageDetail": "Downloads {downloads} · Images {images}",
   "settings.cacheUsage": "Stream cache",
-  "settings.cacheUsageDetail": "{total} of {budget}: {complete} complete songs, {partial} partial (seeks, skips and primed starts)",
+  "settings.cacheUsageDetail": "{total} of {budget}: {complete} complete songs, {partial} partial",
   "settings.cacheBudget": "Stream cache size",
   "settings.cacheBudgetDesc": "Songs you play are kept here so they start instantly and play offline. The least useful go first when it's full.",
   "settings.cacheBudgetAuto": "Automatic (currently {size})",
@@ -490,12 +490,12 @@ const STRINGS = {
   "settings.cacheBudgetGb": "GB",
   "settings.dataSaved": "Data saved",
   "settings.dataSavedDetail": "{served} played from this device · {fetched} fetched from the server",
-  "settings.prefetchMobile": "Prefetch upcoming songs on mobile data",
-  "settings.prefetchMobileDesc": "Also cache the next two songs in the queue on metered or cellular connections.",
+  "settings.prefetchMobile": "Load upcoming songs ahead on mobile data",
+  "settings.prefetchMobileDesc": "Also save the next two songs in the queue on metered or cellular connections.",
   "settings.savedQueueCap": "Keep up to {n} recent queues",
   "settings.batterySaver": "Battery saver mode",
   "settings.batterySaverAuto": "Engage automatically on battery",
-  "settings.batterySaverNow": "Battery saver is on: static background, lyrics at 30 fps, small artwork, prefetch paused.",
+  "settings.batterySaverNow": "Battery saver is on: still background, simpler lyrics animation, small artwork, no loading songs ahead.",
   "settings.externalLyrics": "Fetch lyrics from external sources",
   "settings.externalLyricsPrivacy": "Off by default: enabling this sends the title and artist of what you're listening to to a third-party lyrics service. Everything fetched is cached.",
   "settings.theme": "Theme",
@@ -534,7 +534,7 @@ const STRINGS = {
   "config.importConfirm": "Import",
   "config.importServers": "The file also carries {n} server password(s); those servers will be added and signed in.",
   "config.importInvalid": "That file isn't a Hocket configuration export.",
-  "settings.about": "Hocket {version} · Core {core} · Electron {electron}",
+  "settings.about": "Hocket {version}",
   "settings.licence": "Licensed under the GNU Affero General Public License v3.0. The lyric renderer (AMLL) is AGPL-3.0; Kawarp is MIT; playwire is MIT OR Apache-2.0; Symphonia is MPL-2.0.",
   "settings.licenceOpen": "View licence",
   "settings.sourceOpen": "Source code",
@@ -708,7 +708,7 @@ const STRINGS = {
   "dialog.exportConfig": "Export configuration",
   "dialog.importConfig": "Import configuration",
   "dialog.saveQueueAsPlaylist": "Save queue as playlist",
-  "dialog.removeServer": "Remove “{name}”? Downloads and the local library mirror for it are deleted.",
+  "dialog.removeServer": "Remove “{name}”? Downloads and the library stored on this device for it are deleted.",
 
   // Toasts and undo
   "toast.undo": "Undo",

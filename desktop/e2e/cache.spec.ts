@@ -271,7 +271,7 @@ test.describe("settings: storage", () => {
     await expect(mode).toHaveAttribute("data-value", "auto");
     await expect(mode).toHaveText("Automatic (currently 2.0 GB)");
     await expect(page.getByTestId("data-saved")).toHaveText(/\d/);
-    const prefetch = page.getByRole("switch", { name: "Prefetch upcoming songs on mobile data" });
+    const prefetch = page.getByRole("switch", { name: "Load upcoming songs ahead on mobile data" });
     await expect(prefetch).not.toBeChecked();
     await prefetch.check();
     await expect(prefetch).toBeChecked();

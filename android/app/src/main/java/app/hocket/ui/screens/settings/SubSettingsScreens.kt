@@ -54,7 +54,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.MapSerializer
 import app.hocket.core.HocketJson
-import app.hocket.core.NativeCore
 import app.hocket.core.api.Command
 import app.hocket.core.api.EqBand
 import app.hocket.core.api.ReplayGainMode
@@ -353,10 +352,9 @@ internal fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled
 fun AboutScreen(nav: NavHostController) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?" }
-    val coreVersion = remember { NativeCore.version() ?: "fake" }
     SubScreen(nav, stringResource(R.string.settings_section_about)) {
         Column(Modifier.padding(16.dp)) {
-            Text(stringResource(R.string.settings_version, version, coreVersion), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.settings_version, version), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.settings_licence), style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(16.dp))
