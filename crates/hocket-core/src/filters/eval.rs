@@ -262,7 +262,9 @@ fn sort_key_cmp(sort: SortOrder, a: &Track, b: &Track) -> std::cmp::Ordering {
         }
     };
     match sort {
-        SortOrder::Default | SortOrder::Title => text(Some(&a.title), Some(&b.title)),
+        SortOrder::Default | SortOrder::Title | SortOrder::AlbumCount | SortOrder::SongCount => {
+            text(Some(&a.title), Some(&b.title))
+        }
         SortOrder::Artist => text(a.artist.as_deref(), b.artist.as_deref())
             .then_with(|| text(a.album.as_deref(), b.album.as_deref()))
             .then_with(|| num(a.disc_number.map(f64::from), b.disc_number.map(f64::from)))

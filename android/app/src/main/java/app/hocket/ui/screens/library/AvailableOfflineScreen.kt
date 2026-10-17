@@ -47,7 +47,7 @@ fun AvailableOfflineScreen(nav: NavHostController) {
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("availableOffline.screen"),
         topBar = {
             MediumFlexibleTopAppBar(
-                title = { Text(stringResource(R.string.available_offline), modifier = Modifier.semantics { heading() }) },
+                title = { Text(stringResource(R.string.available_offline), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                 subtitle = { Text(stringResource(R.string.settings_available_offline_body)) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,

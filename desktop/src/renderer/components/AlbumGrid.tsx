@@ -1,5 +1,5 @@
 // Virtualised album/artist/playlist grid with keyboard navigation and selection.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
@@ -33,10 +33,17 @@ export interface AlbumGridProps {
   testId?: string;
   /** Accessible name of the grid. */
   label: string;
+  /** Drawn above the grid in the same scroller (a list page's Pinned and Recent groups and its header). */
+  header?: ReactNode;
 }
 
-export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onNeedRange, tileWidth = 160, emptyMessage, testId, label }: AlbumGridProps) {
+export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onNeedRange, tileWidth = 160, emptyMessage, testId, label, header }: AlbumGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  // Where the grid starts in the scroller (below the header): the virtualiser's scroll margin.
+  const [margin, setMargin] = useState(0);
+  const hasHeader = !!header;
   const [cols, setCols] = useState(4);
   const [colW, setColW] = useState(tileWidth);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
@@ -74,12 +81,24 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
     const f = focusRow.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const virt = useVirtualizer({ count: rowCount, getScrollElement: () => parentRef.current, estimateSize: () => rowH, overscan: 3, rangeExtractor });
+  useLayoutEffect(() => {
+    const el = parentRef.current;
+    const grid = gridRef.current;
+    if (!el || !grid) return;
+    const measure = () => setMargin(Math.max(0, Math.round(grid.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - (Number.parseFloat(getComputedStyle(el).paddingTop) || 0))));
+    measure();
+    const head = headRef.current;
+    if (!head) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(head);
+    return () => ro.disconnect();
+  }, [hasHeader]);
+  const virt = useVirtualizer({ count: rowCount, getScrollElement: () => parentRef.current, estimateSize: () => rowH, overscan: 3, rangeExtractor, scrollMargin: margin });
   const pendingFocus = useRef<number | undefined>(undefined);
   useEffect(() => {
     const i = pendingFocus.current;
     if (i === undefined) return;
-    const el = parentRef.current?.querySelector<HTMLElement>(`[data-index="${i}"]`);
+    const el = gridRef.current?.querySelector<HTMLElement>(`[data-index="${i}"]`);
     if (!el) return;
     pendingFocus.current = undefined;
     el.focus({ preventScroll: true });
@@ -137,46 +156,49 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   };
 
   return (
-    <div ref={parentRef} className="view-body" role="grid" aria-label={label} aria-multiselectable="true" aria-rowcount={rowCount} aria-colcount={cols} onKeyDown={onKey} data-testid={testId ?? "grid"} style={{ "--tile-w": `${tileWidth}px` } as React.CSSProperties}>
-      {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name={targetKind === "albums" ? "album" : targetKind === "artists" ? "artist" : "playlist"} size={32} /></span>{emptyMessage}</div></div> : null}
-      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
-        {vrows.map((vr) => (
-          <div key={vr.key} role="row" aria-rowindex={vr.index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px 14px", padding: "4px 0" }}>
-            {Array.from({ length: cols }, (_, c) => {
-              const i = vr.index * cols + c;
-              if (i >= total) return <div key={c} role="presentation" />;
-              const it = items[i];
-              if (!it) return <div key={c} className="tile" role="gridcell" aria-busy="true" tabIndex={focusIdx === i ? 0 : -1} data-index={i}><div className="art" /><div className="t1 faint">…</div></div>;
-              const selected = isSelected(selection, it.id);
-              return (
-                <div
-                  // Keyed by column, like the placeholder it replaces, so a tile that loads while focused keeps focus.
-                  key={c}
-                  className={`tile ${selected ? "selected" : ""} ${focusIdx === i ? "focused" : ""}`}
-                  role="gridcell"
-                  aria-selected={selected}
-                  aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title}
-                  aria-colindex={c + 1}
-                  tabIndex={focusIdx === i ? 0 : -1}
-                  data-index={i}
-                  onFocus={(e) => { if (e.target === e.currentTarget && focusIdx !== i) setFocusIdx(i); }}
-                  onClick={(e) => click(e, i, it)}
-                  onDoubleClick={() => onOpen(it)}
-                  onContextMenu={(e) => { if (!isSelected(selection, it.id)) publish(selectOnly(it.id)); void openContextMenu(e, targetFor(it)); }}
-                  data-testid="grid-tile"
-                  data-id={it.id}
-                >
-                  <Artwork id={it.coverArt} size={300} round={it.round} alt="" />
-                  <div className="t1" title={it.title}>{it.title}</div>
-                  {it.subtitle ? <div className="t2" title={it.subtitle}>{it.subtitle}</div> : null}
-                  {it.badge ? <span className="badge tile-badge" style={{ position: "absolute", top: 10, left: 10 }}><Icon name={it.badge} size={11} title={t("a11y.downloaded")} /></span> : null}
-                  {/* Not a Tab stop: Enter opens, Shift+F10 has Play; the pointer gets the shortcut button. */}
-                  {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={22} filled /></button> : null}
-                </div>
-              );
-            })}
-          </div>
-        ))}
+    <div ref={parentRef} className="view-body" data-testid={`${testId ?? "grid"}-scroller`} style={{ "--tile-w": `${tileWidth}px` } as React.CSSProperties}>
+      {hasHeader ? <div ref={headRef} className="grid-header">{header}</div> : null}
+      <div ref={gridRef} role="grid" aria-label={label} aria-multiselectable="true" aria-rowcount={rowCount} aria-colcount={cols} onKeyDown={onKey} data-testid={testId ?? "grid"} className="album-grid">
+        {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name={targetKind === "albums" ? "album" : targetKind === "artists" ? "artist" : "playlist"} size={32} /></span>{emptyMessage}</div></div> : null}
+        <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+          {vrows.map((vr) => (
+            <div key={vr.key} role="row" aria-rowindex={vr.index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start - margin}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px 14px", padding: "4px 0" }}>
+              {Array.from({ length: cols }, (_, c) => {
+                const i = vr.index * cols + c;
+                if (i >= total) return <div key={c} role="presentation" />;
+                const it = items[i];
+                if (!it) return <div key={c} className="tile" role="gridcell" aria-busy="true" tabIndex={focusIdx === i ? 0 : -1} data-index={i}><div className="art" /><div className="t1 faint">…</div></div>;
+                const selected = isSelected(selection, it.id);
+                return (
+                  <div
+                    // Keyed by column, like the placeholder it replaces, so a tile that loads while focused keeps focus.
+                    key={c}
+                    className={`tile ${selected ? "selected" : ""} ${focusIdx === i ? "focused" : ""}`}
+                    role="gridcell"
+                    aria-selected={selected}
+                    aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title}
+                    aria-colindex={c + 1}
+                    tabIndex={focusIdx === i ? 0 : -1}
+                    data-index={i}
+                    onFocus={(e) => { if (e.target === e.currentTarget && focusIdx !== i) setFocusIdx(i); }}
+                    onClick={(e) => click(e, i, it)}
+                    onDoubleClick={() => onOpen(it)}
+                    onContextMenu={(e) => { if (!isSelected(selection, it.id)) publish(selectOnly(it.id)); void openContextMenu(e, targetFor(it)); }}
+                    data-testid="grid-tile"
+                    data-id={it.id}
+                  >
+                    <Artwork id={it.coverArt} size={300} round={it.round} alt="" />
+                    <div className="t1" title={it.title}>{it.title}</div>
+                    {it.subtitle ? <div className="t2" title={it.subtitle}>{it.subtitle}</div> : null}
+                    {it.badge ? <span className="badge tile-badge" style={{ position: "absolute", top: 10, left: 10 }}><Icon name={it.badge} size={11} title={t("a11y.downloaded")} /></span> : null}
+                    {/* Not a Tab stop: Enter opens, Shift+F10 has Play; the pointer gets the shortcut button. */}
+                    {onPlay ? <button type="button" className="play" tabIndex={-1} aria-label={t("a11y.playItem", { title: it.title })} onClick={(e) => { e.stopPropagation(); onPlay(it); }} {...intent(it.id)}><Icon name="play" size={22} filled /></button> : null}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -229,7 +229,9 @@ pub fn track_order(sort: SortOrder, descending: bool, seed: i64) -> String {
     let dir = if descending { "DESC" } else { "ASC" };
     let tail = "album COLLATE NOCASE ASC, disc_number ASC, track_number ASC, id ASC";
     match sort {
-        SortOrder::Default => format!("album_artist COLLATE NOCASE {dir}, year {dir}, {tail}"),
+        SortOrder::Default | SortOrder::AlbumCount | SortOrder::SongCount => {
+            format!("album_artist COLLATE NOCASE {dir}, year {dir}, {tail}")
+        }
         SortOrder::Title => format!("title COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Artist => format!("artist COLLATE NOCASE {dir}, {tail}"),
         SortOrder::Album => {
@@ -250,9 +252,11 @@ pub fn track_order(sort: SortOrder, descending: bool, seed: i64) -> String {
 pub fn album_order(sort: SortOrder, descending: bool, seed: i64) -> String {
     let dir = if descending { "DESC" } else { "ASC" };
     match sort {
-        SortOrder::Default | SortOrder::Album | SortOrder::Title => {
-            format!("name COLLATE NOCASE {dir}, id ASC")
-        }
+        SortOrder::Default
+        | SortOrder::Album
+        | SortOrder::Title
+        | SortOrder::AlbumCount
+        | SortOrder::SongCount => format!("name COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Artist => {
             format!("artist COLLATE NOCASE {dir}, year ASC, name COLLATE NOCASE ASC, id ASC")
         }
@@ -263,6 +267,29 @@ pub fn album_order(sort: SortOrder, descending: bool, seed: i64) -> String {
         SortOrder::Duration => format!("duration_ms {dir}, id ASC"),
         SortOrder::Bpm | SortOrder::Energy => format!("name COLLATE NOCASE {dir}, id ASC"),
         SortOrder::Random => format!("((rowid * 2654435761 + {seed}) % 2147483647) {dir}, id ASC"),
+    }
+}
+
+/// ORDER BY for artists: by name unless asked for counts, plays or when their newest album was
+/// added (both summed over the albums they are the album artist of, through
+/// `idx_albums_artist_sort`), or a stable shuffle. An artist with nothing to go by (no albums) sorts
+/// last either way; ties break on name.
+pub fn artist_order(sort: SortOrder, descending: bool, seed: i64) -> String {
+    let dir = if descending { "DESC" } else { "ASC" };
+    let tail = "name COLLATE NOCASE ASC, id ASC";
+    let by_albums = |of: &str| {
+        let key = format!(
+            "(SELECT {of} FROM albums al WHERE al.server_id = artists.server_id AND al.artist_id = artists.id)"
+        );
+        format!("{key} IS NULL, {key} {dir}, {tail}")
+    };
+    match sort {
+        SortOrder::AlbumCount => format!("album_count {dir}, {tail}"),
+        SortOrder::SongCount => format!("song_count {dir}, {tail}"),
+        SortOrder::PlayCount => by_albums("SUM(al.play_count)"),
+        SortOrder::DateAdded => by_albums("MAX(al.created)"),
+        SortOrder::Random => format!("((rowid * 2654435761 + {seed}) % 2147483647) {dir}, id ASC"),
+        _ => format!("name COLLATE NOCASE {dir}, id ASC"),
     }
 }
 
@@ -593,8 +620,23 @@ impl Db {
     // -- artists ------------------------------------------------------------
 
     pub fn artists(&self, server_id: &str, page: Option<Page>) -> DbResult<Vec<Artist>> {
+        self.artists_sorted(server_id, page, SortOrder::Default, false)
+    }
+
+    pub fn artists_sorted(
+        &self,
+        server_id: &str,
+        page: Option<Page>,
+        sort: SortOrder,
+        descending: bool,
+    ) -> DbResult<Vec<Artist>> {
+        let seed = self.random_seed();
         self.with_conn(|c| {
-            let sql = format!("SELECT {ARTIST_COLUMNS} FROM artists WHERE server_id = ?1 ORDER BY name COLLATE NOCASE ASC, id ASC{}", page_sql(&page));
+            let sql = format!(
+                "SELECT {ARTIST_COLUMNS} FROM artists WHERE server_id = ?1 ORDER BY {}{}",
+                artist_order(sort, descending, seed),
+                page_sql(&page)
+            );
             let mut st = c.prepare_cached(&sql)?;
             let rows = st.query_map([server_id], artist_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -602,7 +644,17 @@ impl Db {
     }
 
     pub fn artist_page(&self, server_id: &str, page: Page) -> DbResult<api::ArtistPage> {
-        let items = self.artists(server_id, Some(page.clone()))?;
+        self.artist_page_sorted(server_id, page, SortOrder::Default, false)
+    }
+
+    pub fn artist_page_sorted(
+        &self,
+        server_id: &str,
+        page: Page,
+        sort: SortOrder,
+        descending: bool,
+    ) -> DbResult<api::ArtistPage> {
+        let items = self.artists_sorted(server_id, Some(page.clone()), sort, descending)?;
         let total = self.artist_count(server_id)?;
         Ok(api::ArtistPage {
             items,
@@ -1439,6 +1491,86 @@ mod tests {
         assert_eq!(back.artists[0].name, "Marlowe Reed feat. Juno");
     }
 
+    /// Artists by plays and by newest album go by the albums they are the album artist of; one
+    /// with no albums sorts last in both directions; the shuffle pages consistently.
+    #[test]
+    fn artists_sort_by_their_albums_with_album_less_artists_last() {
+        let db = Db::open_in_memory().unwrap();
+        let album = |id: &str, artist: &str, created: f64, plays: u32| Album {
+            id: id.into(),
+            server_id: "s".into(),
+            name: id.into(),
+            artist_id: Some(artist.into()),
+            created: Some(created),
+            play_count: plays,
+            ..Default::default()
+        };
+        db.upsert_albums(
+            &[
+                album("a1", "ar-old", 100.0, 5),
+                album("a2", "ar-new", 300.0, 1),
+                album("a3", "ar-new", 200.0, 1),
+            ],
+            &[None, None, None],
+            1,
+        )
+        .unwrap();
+        let artist = |id: &str, name: &str| Artist {
+            id: id.into(),
+            server_id: "s".into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        db.upsert_artists(
+            &[
+                artist("ar-old", "Old"),
+                artist("ar-new", "New"),
+                artist("ar-none", "Albumless"),
+            ],
+            1,
+        )
+        .unwrap();
+        let all = Page {
+            offset: 0,
+            limit: 10,
+        };
+        let ids = |sort, desc| -> Vec<String> {
+            db.artist_page_sorted("s", all.clone(), sort, desc)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|a| a.id)
+                .collect()
+        };
+        assert_eq!(
+            ids(SortOrder::PlayCount, true),
+            ["ar-old", "ar-new", "ar-none"]
+        );
+        assert_eq!(
+            ids(SortOrder::PlayCount, false),
+            ["ar-new", "ar-old", "ar-none"]
+        );
+        assert_eq!(
+            ids(SortOrder::DateAdded, true),
+            ["ar-new", "ar-old", "ar-none"]
+        );
+        assert_eq!(
+            ids(SortOrder::DateAdded, false),
+            ["ar-old", "ar-new", "ar-none"]
+        );
+        // The shuffle is the same order page by page as in one go.
+        let whole = ids(SortOrder::Random, false);
+        let paged: Vec<String> = (0..3)
+            .flat_map(|offset| {
+                db.artist_page_sorted("s", Page { offset, limit: 1 }, SortOrder::Random, false)
+                    .unwrap()
+                    .items
+            })
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(paged, whole);
+    }
+
     fn seeded() -> Db {
         let db = Db::open_in_memory().unwrap();
         let mut a = t("1", "Roygbiv", "Music Has the Right", "Boards of Canada");
@@ -1854,6 +1986,38 @@ mod tests {
             .unwrap();
         assert_eq!(artists.total, 2);
         assert_eq!(artists.items[0].name, "Boards of Canada");
+        // Sorted by name and counts (plays, dates and the shuffle have a test of their own). Each
+        // case puts the alphabetically later Sade first one way, so none passes on the name
+        // tie-break alone: Sade has fewer albums but more songs.
+        db.with_conn(|c| {
+            c.execute_batch(
+                "UPDATE artists SET album_count = 2, song_count = 5 WHERE id = 'ar-Boards of Canada';
+                 UPDATE artists SET album_count = 1, song_count = 9 WHERE id = 'ar-Sade';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let all = Page {
+            offset: 0,
+            limit: 10,
+        };
+        let names = |sort, desc| -> Vec<String> {
+            db.artist_page_sorted("s", all.clone(), sort, desc)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|a| a.name)
+                .collect()
+        };
+        let (boc, sade) = ("Boards of Canada", "Sade");
+        assert_eq!(names(SortOrder::Default, false), vec![boc, sade]);
+        assert_eq!(names(SortOrder::Default, true), vec![sade, boc]);
+        assert_eq!(names(SortOrder::AlbumCount, true), vec![boc, sade]);
+        assert_eq!(names(SortOrder::AlbumCount, false), vec![sade, boc]);
+        assert_eq!(names(SortOrder::SongCount, true), vec![sade, boc]);
+        assert_eq!(names(SortOrder::SongCount, false), vec![boc, sade]);
+        // An order artists don't have is by name.
+        assert_eq!(names(SortOrder::Bpm, true), vec![sade, boc]);
         db.set_artist_biography("ar-Sade", Some("bio")).unwrap();
         assert_eq!(
             db.artist("ar-Sade").unwrap().unwrap().biography.as_deref(),

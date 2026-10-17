@@ -37,6 +37,8 @@ const MAP = {
   arrowOutward: "arrow_outward",
   // Settings sections, setup and stats (m3-pages).
   tune: "tune", equalizer: "graphic_eq", transcode: "swap_horiz", connectCast: "cast", palette: "palette", keyboard: "keyboard", backup: "backup", customise: "dashboard_customize", headphones: "headphones", schedule: "schedule", dns: "dns", key: "key",
+  // The library lists' sort popover: one leading icon per sort.
+  sortAlpha: "sort_by_alpha", calendar: "calendar_today", update: "update", timer: "timer", speed: "speed",
 };
 
 function body(name) {

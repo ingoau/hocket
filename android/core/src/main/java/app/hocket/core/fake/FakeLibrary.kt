@@ -147,36 +147,62 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
             coverArt = ids.firstOrNull()?.let { track(it)?.coverArt }, changed = 1_758_000_000_000.0)
     }
 
+    /** Tracks in [sort]'s order; [descending] is the core's plain direction (largest, newest, Z first), as for albums and artists. */
     fun sorted(list: List<Track>, sort: SortOrder, descending: Boolean): List<Track> {
         val s = when (sort) {
             SortOrder.Default, SortOrder.Title -> list.sortedBy { it.title.lowercase() }
             SortOrder.Artist -> list.sortedWith(compareBy({ it.artist?.lowercase() }, { it.album }, { it.trackNumber }))
             SortOrder.Album -> list.sortedWith(compareBy({ it.album?.lowercase() }, { it.discNumber }, { it.trackNumber }))
             SortOrder.Year -> list.sortedBy { it.year }
-            SortOrder.DateAdded -> list.sortedByDescending { it.created }
-            SortOrder.Rating -> list.sortedByDescending { it.rating }
-            SortOrder.PlayCount -> list.sortedByDescending { it.playCount }
+            SortOrder.DateAdded -> list.sortedBy { it.created }
+            SortOrder.Rating -> list.sortedBy { it.rating }
+            SortOrder.PlayCount -> list.sortedBy { it.playCount }
             SortOrder.Duration -> list.sortedBy { it.durationMs }
             SortOrder.Random -> list.shuffled(Random(7))
             SortOrder.Bpm -> list.sortedBy { it.sonic?.bpm }
             SortOrder.Energy -> list.sortedBy { it.sonic?.energy }
+            // Artist-only orders: the default elsewhere, as in the core.
+            SortOrder.AlbumCount, SortOrder.SongCount -> list.sortedBy { it.title.lowercase() }
         }
         return if (descending) s.reversed() else s
     }
 
     fun sortedAlbums(list: List<Album>, sort: SortOrder, descending: Boolean): List<Album> {
         val s = when (sort) {
-            SortOrder.Default, SortOrder.Title, SortOrder.Album -> list.sortedBy { it.name.lowercase() }
+            SortOrder.Default, SortOrder.Title, SortOrder.Album, SortOrder.AlbumCount, SortOrder.SongCount -> list.sortedBy { it.name.lowercase() }
             SortOrder.Artist -> list.sortedWith(compareBy({ it.artist?.lowercase() }, { it.year }))
             SortOrder.Year -> list.sortedBy { it.year }
-            SortOrder.DateAdded -> list.sortedByDescending { it.created }
-            SortOrder.Rating -> list.sortedByDescending { it.rating }
-            SortOrder.PlayCount -> list.sortedByDescending { it.playCount }
+            SortOrder.DateAdded -> list.sortedBy { it.created }
+            SortOrder.Rating -> list.sortedBy { it.rating }
+            SortOrder.PlayCount -> list.sortedBy { it.playCount }
             SortOrder.Duration -> list.sortedBy { it.durationMs }
             SortOrder.Random -> list.shuffled(Random(7))
             SortOrder.Bpm, SortOrder.Energy -> list
         }
         return if (descending) s.reversed() else s
+    }
+
+    /**
+     * Artists as the core orders them: by name unless asked for album or song count, plays or when
+     * their newest album was added (both over the albums they are the album artist of; an artist
+     * with no albums last either way), or a stable shuffle; ties on name.
+     */
+    fun sortedArtists(list: List<Artist>, sort: SortOrder, descending: Boolean): List<Artist> {
+        val byName = compareBy<Artist> { it.name.lowercase() }.thenBy { it.id }
+        if (sort == SortOrder.Random) return list.shuffled(Random(7)).let { if (descending) it.reversed() else it }
+        val key: (Artist) -> Comparable<*>? = when (sort) {
+            SortOrder.AlbumCount -> { a -> a.albumCount }
+            SortOrder.SongCount -> { a -> a.songCount }
+            SortOrder.PlayCount -> { a -> artistAlbums(a.id).takeIf { it.isNotEmpty() }?.sumOf { it.playCount.toLong() } }
+            SortOrder.DateAdded -> { a -> artistAlbums(a.id).mapNotNull { it.created }.maxOrNull() }
+            else -> return list.sortedWith(if (descending) byName.reversed() else byName)
+        }
+        val keys = list.associate { it.id to key(it) }
+        @Suppress("UNCHECKED_CAST")
+        val byKey = Comparator<Artist> { x, y -> compareValues(keys[x.id] as Comparable<Any>?, keys[y.id] as Comparable<Any>?) }
+        // Nothing to go by (no albums, or none dated) goes last either way, as in the core.
+        val undatedLast = compareBy<Artist> { keys[it.id] == null }
+        return list.sortedWith(undatedLast.then(if (descending) byKey.reversed() else byKey).then(byName))
     }
 
     // -- generators ---------------------------------------------------------------------------------

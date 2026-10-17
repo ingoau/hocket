@@ -452,6 +452,10 @@ pub enum SortOrder {
     Random,
     Bpm,
     Energy,
+    /// Artists: how many albums they have. Elsewhere, the default order.
+    AlbumCount,
+    /// Artists: how many songs they have. Elsewhere, the default order.
+    SongCount,
 }
 
 /// What is being played. The visible queue is derived from this plus the cursor,
@@ -2192,6 +2196,11 @@ pub enum Query {
     Artists {
         server_id: ServerId,
         page: Page,
+        /// Name (default), album or song count, plays, date added or random.
+        #[serde(default)]
+        sort: SortOrder,
+        #[serde(default)]
+        descending: bool,
     },
     Artist {
         id: ArtistId,

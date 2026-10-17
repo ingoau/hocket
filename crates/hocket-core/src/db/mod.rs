@@ -50,10 +50,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0005_track_artists",
         include_str!("migrations/0005_track_artists.sql"),
     ),
+    (
+        6,
+        "0006_artist_sort_index",
+        include_str!("migrations/0006_artist_sort_index.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[

@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 /** Identifies a track list for the page cache. */
 data class TrackListKey(val serverId: ServerId, val sort: SortOrder, val descending: Boolean, val filter: FilterNode? = null)
 data class AlbumListKey(val serverId: ServerId, val sort: SortOrder, val descending: Boolean, val artistId: ArtistId? = null, val genre: String? = null)
-data class ArtistListKey(val serverId: ServerId)
+data class ArtistListKey(val serverId: ServerId, val sort: SortOrder = SortOrder.Default, val descending: Boolean = false)
 data class PlaylistTracksKey(val playlistId: PlaylistId)
 
 /** The handoff picker as the UI sees it. */
@@ -187,7 +187,7 @@ class CoreClient(
         }
     }
     val artistPages = PageCache<ArtistListKey, Artist>(scope, pageSize = 100) { key, offset, limit ->
-        when (val r = query(Queries.artists(key.serverId, Page(offset.toUInt(), limit.toUInt())))) {
+        when (val r = query(Queries.artists(key.serverId, Page(offset.toUInt(), limit.toUInt()), key.sort, key.descending))) {
             is QueryResult.Artists -> PageCache.Page(r.data.items, r.data.offset.toInt(), r.data.total.toInt())
             null -> unavailable() // leave the page absent; the next ensure() retries
             else -> PageCache.Page(emptyList(), offset, 0)

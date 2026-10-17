@@ -169,10 +169,8 @@ fun LibraryScreen(nav: NavHostController) {
                     Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) { BrowseTiles(nav); LibraryLinks(nav, joinedAbove = true) }
                 }
                 item(key = "recent.h", span = full, contentType = "header") {
-                    Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 24.dp, bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
-                        Text(stringResource(R.string.library_recently_added), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
-                        Text(stringResource(R.string.library_newest_first), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    Text(stringResource(R.string.library_recently_added), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 24.dp, bottom = 4.dp).semantics { heading() })
                 }
                 val count = if (recent.known) minOf(recent.total, RECENT_ALBUMS) else 6
                 items(count, key = { "recent.$it" }, contentType = { "album" }) { i ->

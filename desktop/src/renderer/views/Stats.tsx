@@ -16,7 +16,7 @@ export function Stats() {
   return (
     <div className="view page-stats" data-testid="view-stats">
       <div className="view-header">
-        <h1>{t("stats.title")}</h1>
+        <h1 className="brand-type">{t("stats.title")}</h1>
         <div className="actions">
           <Select value={days} aria-label={t("stats.title")} onChange={(e) => setDays(Number(e.target.value))}>{[7, 30, 90, 365].map((d) => <option key={d} value={d}>{t("stats.period", { days: d })}</option>)}</Select>
         </div>

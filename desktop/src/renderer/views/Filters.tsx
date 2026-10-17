@@ -18,7 +18,7 @@ export function Filters() {
   return (
     <div className="view page-filters" data-testid="view-filters">
       <div className="view-header">
-        <h1>{t("filters.title")}</h1>
+        <h1 className="brand-type">{t("filters.title")}</h1>
         <div className="actions"><button type="button" className="btn primary" onClick={() => navigate({ view: "filter", id: "new" })} data-testid="new-filter"><Icon name="plus" size={14} /> {t("filters.new")}</button></div>
       </div>
       <div className="view-body">

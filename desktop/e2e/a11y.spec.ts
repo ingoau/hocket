@@ -45,15 +45,29 @@ test.describe("axe: no violations anywhere", () => {
     const { page } = hocket;
     await completeSetup(page);
     await populate(page);
+    // Pins of every list's kind, so the lists show their Pinned groups (Recent comes from the history).
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify([
+      { kind: "playlist", id: "pl-2", tap: "open" }, { kind: "album", id: "al-3", tap: "open" }, { kind: "artist", id: "ar-2", tap: "open" }, { kind: "track", id: "tr-4", tap: "play" },
+    ]) } }));
     for (const theme of THEMES) {
       await setTheme(page, theme);
       for (const view of ["home", "library", "albums", "artists", "songs", "playlists", "genres", "downloads", "filters", "stats"] as const) {
         if (view === "home" || view === "library") await page.getByTestId(`nav-${view}`).click();
         else await openPlace(page, view);
         await expect(page.getByTestId(`view-${view}`)).toBeVisible();
+        if (view === "playlists" || view === "albums" || view === "artists" || view === "songs") await expect(page.getByTestId(`${view}-pinned`)).toBeVisible();
+        if (view === "playlists" || view === "albums" || view === "genres") await expect(page.getByTestId(`${view}-recent`)).toBeVisible();
         await page.waitForTimeout(250);
         await expectNoViolations(page, `${theme} ${view}`);
       }
+      // The sort popover, open over its list.
+      await openPlace(page, "artists");
+      await page.getByTestId("artists-sort").click();
+      await expect(page.getByTestId("artists-sort-menu")).toBeVisible();
+      await page.waitForTimeout(250);
+      await expectNoViolations(page, `${theme} sort popover`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("artists-sort-menu")).toHaveCount(0);
       await openPlace(page, "albums");
       await page.getByTestId("grid-tile").first().dblclick();
       await expect(page.getByTestId("view-album")).toBeVisible();
