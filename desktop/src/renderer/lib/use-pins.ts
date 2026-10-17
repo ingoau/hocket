@@ -3,6 +3,7 @@
 // after a sync).
 import { useEffect, useMemo, useState } from "react";
 import type { ActionTarget } from "@core/api";
+import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
 import { useApp, useJsonSetting } from "../store/app";
 import { filterName } from "./filters";
@@ -14,6 +15,8 @@ export interface ResolvedPin {
   kind: PinKind;
   title: string;
   coverArt?: string;
+  /** A line under the title where a list draws the pin as a tile (the album's artist and so on). */
+  subtitle?: string;
   /** The registry's target (albums, artists, playlists, songs); genres and filters have none. */
   target?: ActionTarget;
 }
@@ -35,10 +38,10 @@ export function useResolvedPins(): ResolvedPin[] | undefined {
       if (!isPinKind(p.kind)) return undefined;
       try {
         switch (p.kind) {
-          case "album": { const r = await bridge().query({ type: "album", data: { id: p.id } }); return r.type === "albumDetail" && r.data ? { pin: p, kind: "album", title: r.data.name, coverArt: r.data.coverArt, target: { type: "albums", data: { ids: [p.id] } } } : undefined; }
-          case "artist": { const r = await bridge().query({ type: "artist", data: { id: p.id } }); return r.type === "artistDetail" && r.data ? { pin: p, kind: "artist", title: r.data.name, coverArt: r.data.coverArt, target: { type: "artists", data: { ids: [p.id] } } } : undefined; }
-          case "playlist": { const r = await bridge().query({ type: "playlist", data: { id: p.id } }); return r.type === "playlistDetail" && r.data ? { pin: p, kind: "playlist", title: r.data.name, coverArt: r.data.coverArt, target: { type: "playlists", data: { ids: [p.id] } } } : undefined; }
-          case "track": { const r = await bridge().query({ type: "track", data: { id: p.id } }); return r.type === "trackDetail" && r.data ? { pin: p, kind: "track", title: r.data.title, coverArt: r.data.coverArt, target: { type: "tracks", data: { ids: [p.id] } } } : undefined; }
+          case "album": { const r = await bridge().query({ type: "album", data: { id: p.id } }); return r.type === "albumDetail" && r.data ? { pin: p, kind: "album", title: r.data.name, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "albums", data: { ids: [p.id] } } } : undefined; }
+          case "artist": { const r = await bridge().query({ type: "artist", data: { id: p.id } }); return r.type === "artistDetail" && r.data ? { pin: p, kind: "artist", title: r.data.name, coverArt: r.data.coverArt, subtitle: t("artist.albumsCount", { albums: r.data.albumCount, songs: r.data.songCount }), target: { type: "artists", data: { ids: [p.id] } } } : undefined; }
+          case "playlist": { const r = await bridge().query({ type: "playlist", data: { id: p.id } }); return r.type === "playlistDetail" && r.data ? { pin: p, kind: "playlist", title: r.data.name, coverArt: r.data.coverArt, subtitle: t("misc.tracks", { count: r.data.songCount }), target: { type: "playlists", data: { ids: [p.id] } } } : undefined; }
+          case "track": { const r = await bridge().query({ type: "track", data: { id: p.id } }); return r.type === "trackDetail" && r.data ? { pin: p, kind: "track", title: r.data.title, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "tracks", data: { ids: [p.id] } } } : undefined; }
           case "genre": return { pin: p, kind: "genre", title: p.id };
           case "filter": { const f = filters.find((x) => x.id === p.id); return f ? { pin: p, kind: "filter", title: filterName(f) } : undefined; }
         }

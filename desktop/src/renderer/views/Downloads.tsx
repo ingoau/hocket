@@ -26,7 +26,7 @@ export function Downloads({ tab }: { tab?: string }) {
   return (
     <div className="view page-downloads" data-testid="view-downloads">
       <div className="view-header">
-        <h1>{t("downloads.title")}</h1>
+        <h1 className="brand-type">{t("downloads.title")}</h1>
         <div className="actions">
           <button type="button" className="btn tonal" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
         </div>

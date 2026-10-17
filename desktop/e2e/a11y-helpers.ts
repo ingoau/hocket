@@ -22,6 +22,11 @@ export const EXEMPT: { rule: string; within: string; why: string }[] = [
     within: '[data-testid="playlist-submenu"]',
     why: "The context menu's Add to playlist submenu: the same transient popup as the menu it opens from.",
   },
+  {
+    rule: "region",
+    within: ".sort-pop",
+    why: "A list's sort popover: a transient menu rendered at the end of the document like the context menu, belonging to the sort button that opened it.",
+  },
 ];
 
 /** Elements excluded from every scan, with the reason. Empty: nothing is excluded. */

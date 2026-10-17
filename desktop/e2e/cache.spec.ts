@@ -142,7 +142,7 @@ test.describe("album priming", () => {
     });
     const steps = 12;
     for (let i = 1; i <= steps; i++) {
-      await page.getByTestId("albums-grid").evaluate((el, y) => { el.scrollTop = y; }, Math.round((pitch * i) / steps));
+      await page.getByTestId("albums-grid-scroller").evaluate((el, y) => { el.scrollTop = y; }, Math.round((pitch * i) / steps));
       await page.waitForTimeout(40);
     }
     // Long enough for the browser's post-scroll hover update and the dwell after it.

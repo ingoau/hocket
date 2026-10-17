@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, Artist, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -2317,7 +2317,7 @@ export class FakeCore implements CoreHandle {
       case "albumTracks":
         return { type: "trackList", data: (lib?.albumTracks.get(q.data.id) ?? []).map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t) };
       case "artists": {
-        const items = [...(lib?.artists ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+        const items = this.sortArtists(lib?.artists ?? [], q.data.sort ?? "default", q.data.descending ?? false);
         return { type: "artists", data: { items: items.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit), offset: q.data.page.offset, total: items.length } };
       }
       case "artist":
@@ -2648,6 +2648,27 @@ export class FakeCore implements CoreHandle {
     };
     arr.sort((a, b) => (desc ? -cmp(a, b) : cmp(a, b)));
     return arr;
+  }
+
+  /** Like the core's artist_order: name unless asked for counts, plays (summed over their songs), when their newest album was added, or a stable shuffle; ties by name. */
+  private sortArtists(artists: Artist[], sort: SortOrder, desc: boolean): Artist[] {
+    const lib = this.lib;
+    const plays = (a: Artist) => (lib?.artistAlbums.get(a.id) ?? []).flatMap((al) => lib?.albumTracks.get(al) ?? []).reduce((n, id) => n + (lib?.tracksById.get(id)?.playCount ?? 0), 0);
+    const added = (a: Artist) => Math.max(0, ...(lib?.albums ?? []).filter((al) => al.artistId === a.id).map((al) => al.created ?? 0));
+    const key = (a: Artist): number | undefined => {
+      switch (sort) {
+        case "albumCount": return a.albumCount;
+        case "songCount": return a.songCount;
+        case "playCount": return plays(a);
+        case "dateAdded": return added(a);
+        case "random": return hash32(a.id + "r");
+        default: return undefined;
+      }
+    };
+    const dir = desc ? -1 : 1;
+    const keyed = artists.map((a) => ({ a, k: key(a) }));
+    keyed.sort((x, y) => (x.k === undefined || y.k === undefined ? dir * x.a.name.localeCompare(y.a.name) : dir * (x.k - y.k) || x.a.name.localeCompare(y.a.name)));
+    return keyed.map((x) => x.a);
   }
 
   private evaluateFilter(f: Filter): Track[] {

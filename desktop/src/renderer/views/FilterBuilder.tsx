@@ -8,6 +8,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { Icon } from "../components/Icon";
 import { filterName, isBuiltinFilter } from "../lib/filters";
+import { ARTIST_ONLY_SORTS } from "../lib/list-sort";
 import { Artwork } from "../components/Artwork";
 import { Select, Switch } from "../components/controls";
 
@@ -90,7 +91,7 @@ export function FilterBuilder({ id }: { id: string }) {
           <div className="rules"><GroupEditor node={filter.root} onChange={(root) => setFilter({ ...filter, root })} root /></div>
           <div className="row">
             <label className="row"><span className="small muted">{t("filters.sort")}</span>
-              <Select value={filter.sort} onChange={(e) => setFilter({ ...filter, sort: e.target.value as SortOrder })}>{SortOrderValues.map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}</Select>
+              <Select value={filter.sort} onChange={(e) => setFilter({ ...filter, sort: e.target.value as SortOrder })}>{SortOrderValues.filter((s) => !ARTIST_ONLY_SORTS.includes(s)).map((s) => <option key={s} value={s}>{t(`sort.${s}` as never)}</option>)}</Select>
             </label>
             <label className="switch"><Switch checked={filter.descending} onChange={(checked) => setFilter({ ...filter, descending: checked })} /> {t("filters.descending")}</label>
             <label className="row"><span className="small muted">{t("filters.limit")}</span><input className="input" type="number" min={0} style={{ width: 80 }} value={filter.limit ?? ""} onChange={(e) => setFilter({ ...filter, limit: e.target.value ? Number(e.target.value) : undefined })} /></label>

@@ -64,7 +64,6 @@ export function Library() {
         </nav>
         <div className="lib-recent-head">
           <h2 className="section-heading">{t("library.recentlyAdded")}</h2>
-          <span className="small muted">{t("library.newestFirst")}</span>
         </div>
         <TileList label={t("library.recentlyAdded")} className="grid" testId="library-recent">
           {(recent.data?.items ?? []).map((a) => (

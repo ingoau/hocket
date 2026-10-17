@@ -31,23 +31,78 @@
 .view-header .actions .btn:not(.icon) { height: var(--btn-h-lg); padding: 0 20px 0 16px; font-size: var(--fs-md); font-weight: 600; }
 .view-header .actions .btn.tonal { color: var(--fg); }
 
-/* Sort: a connected button group — a pill select joined to the direction
-   toggle, each end fully round, the inner corners tight (M3 Expressive). */
-.sort-group { display: inline-flex; align-items: center; gap: 2px; }
-.sort-group :is(.select, .m3-select) {
-  height: var(--btn-h-lg); padding: 0 14px 0 18px; border-radius: var(--shape-full) var(--shape-xs) var(--shape-xs) var(--shape-full);
-  background: var(--accent-soft); box-shadow: none; border-color: transparent; font-weight: 600; color: var(--fg);
+/* ---- Library lists: Pinned, Recent, then the whole list ------------------------
+   Each group is a titled single row (tiles, genre cards or compact song rows) that scrolls sideways
+   when it doesn't fit; the whole list's header carries the sort button (components/SortMenu.tsx). */
+.list-section { margin-bottom: 16px; min-width: 0; }
+.list-groups { display: flex; flex-wrap: wrap; column-gap: 28px; }
+.list-groups > .pinned { flex: 0 1 auto; max-width: 100%; }
+.list-groups > .recent { flex: 1 1 380px; }
+.list-section-head { display: flex; align-items: center; gap: 12px; min-height: var(--btn-h-lg); margin: 0 0 10px; }
+.list-section-head .section-heading { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
+.list-section-actions { display: flex; align-items: center; gap: 8px; margin-right: var(--page-title-inset); }
+.list-top { padding: 0 var(--page-gutter); flex: 0 0 auto; }
+.list-top .list-all { margin-bottom: 8px; }
+.list-top-groups { max-height: 30vh; overflow: hidden auto; padding-inline: 4px; margin-inline: -4px; }
+.grid-header .list-all { margin-top: 4px; }
+:is(.group-row, .genre-row, .group-songs) {
+  display: flex; gap: 6px; overflow-x: auto; padding: 6px 4px 10px; margin: -6px -4px 0;
+  scroll-snap-type: x proximity; scroll-padding-inline: 4px;
 }
-.sort-group :is(.select, .m3-select):hover { background: var(--selection); box-shadow: none; }
-.sort-group :is(.select, .m3-select):focus { border-color: transparent; }
-.sort-group :is(.select, .m3-select):active { border-radius: var(--shape-sm); }
-.sort-group .btn.icon:where(:not(.player *, .fullscreen *)) {
-  width: 44px; height: var(--btn-h-lg); border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs);
-  background: var(--accent-soft); color: var(--fg);
+:is(.group-row, .genre-row, .group-songs)::-webkit-scrollbar { height: 8px; }
+:is(.group-row, .genre-row, .group-songs)::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
+:is(.group-row, .genre-row, .group-songs):hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
+.group-row .tile { width: 148px; flex: 0 0 auto; scroll-snap-align: start; }
+.genre-row { gap: 12px; }
+.genre-row > li { width: 200px; flex: 0 0 auto; scroll-snap-align: start; }
+.genre-row .genre-tile { width: 100%; min-height: 92px; }
+.group-songs > li { flex: 0 0 auto; width: 260px; scroll-snap-align: start; }
+.group-song-main {
+  width: 100%; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 10px 0 8px; border: 0; border-radius: var(--shape-md);
+  background: var(--surface-tonal-sunken); color: var(--fg); text-align: left; font: inherit;
+  transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
-.sort-group .btn.icon:where(:not(.player *, .fullscreen *)):hover { background: var(--selection); }
-.sort-group .btn.icon[aria-pressed="true"]:where(:not(.player *, .fullscreen *)) { border-radius: var(--shape-xs) var(--shape-full) var(--shape-full) var(--shape-xs); color: var(--accent-text); }
-.sort-group .btn.icon:where(:not(.player *, .fullscreen *)):active { border-radius: var(--shape-sm); }
+.group-song-main:hover { background: var(--accent-soft); border-radius: var(--shape-lg); }
+.group-song-main:active { border-radius: var(--shape-sm); }
+.group-song-main .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }
+.group-song-main .text { display: flex; flex-direction: column; min-width: 0; }
+.group-song-main .t1, .group-song-main .t2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-song-main .t1 { font-weight: 600; }
+.group-song-main .t2 { color: var(--fg-muted); font-size: var(--fs-sm); }
+
+/* The sort button: one tonal pill naming the order, the arrow its direction. */
+.btn.tonal.sort-button { height: var(--btn-h-lg); padding: 0 14px 0 18px; gap: 8px; font-size: var(--fs-md); font-weight: 600; color: var(--fg); }
+.btn.tonal.sort-button svg { color: var(--accent-text); }
+.btn.tonal.sort-button.open { background: var(--selection); border-radius: var(--shape-md); }
+
+/* The sort popover: a "Sort by" heading over the orders as a connected list (2px apart, the list's
+   ends round and the joins tight; the chosen row tonal with a check), then the direction as a
+   connected segmented pair (.seg). Its surface and highlights are the context menu's. */
+.menu.sort-pop { min-width: 0; max-width: calc(100vw - 16px); padding: 8px; border-radius: 20px; display: flex; flex-direction: column; gap: 10px; transform-origin: top right; }
+.menu.sort-pop.above { transform-origin: bottom right; }
+.sort-options, .sort-dir-block { display: flex; flex-direction: column; gap: 2px; }
+.sort-heading { padding: 4px 10px 6px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.sort-row {
+  --start: 4px; --end: 4px;
+  display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px 0 8px; border: 0; width: 100%;
+  border-radius: var(--start) var(--start) var(--end) var(--end); background: var(--bg-elev); color: var(--fg); font: inherit; text-align: left;
+  transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized);
+}
+.sort-heading + .sort-row { --start: 14px; }
+.sort-row:last-child { --end: 14px; }
+.sort-row:hover, .sort-row:focus-visible { background: var(--state-selected); --start: 10px; --end: 10px; }
+.sort-heading + .sort-row:hover, .sort-heading + .sort-row:focus-visible { --start: 14px; }
+.sort-row:last-child:hover, .sort-row:last-child:focus-visible { --end: 14px; }
+.sort-row:active { --start: 2px; --end: 2px; }
+.sort-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.sort-row.on { background: var(--accent-soft); font-weight: 600; }
+.sort-row.on:hover, .sort-row.on:focus-visible { background: var(--selection); }
+.sort-row-icon { width: 28px; height: 28px; flex: 0 0 auto; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--fg-muted); }
+.sort-row.on .sort-row-icon { background: var(--accent); color: var(--accent-fg); }
+.sort-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sort-row-check { width: 18px; flex: 0 0 auto; display: inline-flex; color: var(--accent-text); }
+.sort-dir .seg { height: 36px; }
+.sort-dir .seg:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* ---- Grids and tiles ------------------------------------------------------ */
 .tile {
@@ -206,6 +261,12 @@
 
 /* ---- Narrow windows and 200% zoom ----------------------------------------- */
 @media (max-width: 900px) {
+  /* Narrow (or zoomed): the groups wrap instead of scrolling sideways, as Home's rows do. */
+  :is(.group-row, .genre-row, .group-songs) { display: grid; overflow-x: visible; margin: 0; padding: 0 0 6px; }
+  .group-row { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .genre-row { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .group-songs { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  :is(.group-row .tile, .genre-row > li, .group-songs > li) { width: auto; }
   .view-header .actions { margin-left: 0; }
   .detail-head { margin: 8px var(--page-gutter); padding: 16px; gap: 16px; align-items: flex-start; }
   .detail-head .art, .detail-head .art.round { width: 128px; height: 128px; border-radius: 32px; }
@@ -235,6 +296,10 @@
   .detail-head .meta .actions .btn.icon { width: 40px; }
   .view:has(> .detail-head) { overflow-y: auto; }
   .view:has(> .detail-head) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
+  /* Songs, likewise: the page scrolls past its groups to a table that keeps a usable height. */
+  .view:has(> .list-top) { overflow-y: auto; }
+  .view:has(> .list-top) > .list-top .list-top-groups { max-height: none; overflow: visible; }
+  .view:has(> .list-top) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
 }
 
 /* ---- Reduced motion: no lifts, spins or pops (colour changes stay) ------- */
@@ -249,7 +314,9 @@
     forced-color-adjust: none; background: Highlight; color: HighlightText;
   }
   .tr.playing:not(.selected) { outline: 1px solid CanvasText; outline-offset: -1px; }
-  .detail-head, .genre-tile, .table-head, .view-header .count-chip, .sort-group :is(.select, .m3-select) { border: 1px solid CanvasText; }
+  .detail-head, .genre-tile, .table-head, .view-header .count-chip, .sort-button, .sort-row, .group-song-main { border: 1px solid CanvasText; }
+  .sort-row.on, .sort-row:hover, .sort-row:focus-visible { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .sort-row.on .sort-row-icon, .sort-row-check { forced-color-adjust: none; color: inherit; background: transparent; }
   .genre-tile::after, .section-icon, .empty-icon { forced-color-adjust: none; background: GrayText; color: Canvas; }
   .tr, .tile, .genre-tile, .tile .art { transition: none; }
 }
