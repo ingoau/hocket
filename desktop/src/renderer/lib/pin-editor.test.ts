@@ -49,6 +49,24 @@ describe("pin editor draft", () => {
     const added = pin("track", "t", "play");
     expect(ids(draftToSave([a, b, c], [c, a], [a, b, c, added]))).toEqual(["c", "a", "t"]);
   });
+
+  it("keeps a pin unpinned elsewhere unpinned, whatever the draft did with it", () => {
+    expect(ids(draftToSave([a, b, c], [c, b, a], [a, c]))).toEqual(["c", "a"]);
+    expect(ids(draftToSave([a, b, c], [b, pin("album", "a", "play")], [b, c]))).toEqual(["b"]);
+  });
+
+  it("takes a click changed elsewhere unless the draft changed it too", () => {
+    const saved = draftToSave([a, b], [b, a], [pin("album", "a", "shuffle"), pin("playlist", "b", "play")]);
+    expect(saved).toEqual([pin("playlist", "b", "play"), pin("album", "a", "shuffle")]);
+    expect(draftToSave([a], [pin("album", "a", "play")], [pin("album", "a", "shuffle")])).toEqual([pin("album", "a", "play")]);
+  });
+
+  it("carries unknown kinds and their fields through a reorder", () => {
+    const station: LibraryPin = { kind: "station", id: "x", tap: "open", future: 1 };
+    const saved = draftToSave([a, station, b], moveShownBy([a, station, b], a, 1, [a, b]), [a, station, b]);
+    expect(saved).toEqual([station, b, a]);
+    expect(saved[0]).toBe(station);
+  });
 });
 
 describe("tile corners", () => {

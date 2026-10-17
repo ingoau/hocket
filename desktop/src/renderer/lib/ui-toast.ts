@@ -10,7 +10,8 @@ const undos = new Map<string, () => void>();
 /** The marker a renderer toast carries in place of a core command. */
 export const UI_UNDO = "ui-undo";
 
-export function showToast(message: string, undo?: () => void): void {
+/** Returns the toast's id, for taking it down early (the store's dismissToast). */
+export function showToast(message: string, undo?: () => void): string {
   const id = `ui-${Date.now()}-${++seq}`;
   if (undo) undos.set(id, undo);
   // Forget it after the toast could have gone (held toasts last longer, so be generous).
@@ -19,6 +20,7 @@ export function showToast(message: string, undo?: () => void): void {
     type: "toast",
     data: { toast: { id, message, actionLabel: undo ? t("toast.undo") : undefined, actionCommand: undo ? UI_UNDO : undefined, durationMs: 5000 } },
   } as never);
+  return id;
 }
 
 /** Runs a renderer toast's Undo; false when [id] is not one (its action is a core command). */

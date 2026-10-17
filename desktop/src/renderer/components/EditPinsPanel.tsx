@@ -35,6 +35,7 @@ function PinsEditor() {
   draftRef.current = draft;
   // How editing ended, for an Unpinned toast's Undo pressed after the panel has closed.
   const ended = useRef<"open" | "saved" | "cancelled">("open");
+  const toasts = useRef<string[]>([]);
   const heading = useRef<HTMLHeadingElement>(null);
   const handles = useRef(new Map<string, HTMLButtonElement>());
   const unpins = useRef(new Map<string, HTMLButtonElement>());
@@ -71,6 +72,8 @@ function PinsEditor() {
   const close = (save: boolean) => {
     if (save && draftChanged(original, draftRef.current)) savePins(draftToSave(original, draftRef.current, currentPins()));
     ended.current = save ? "saved" : "cancelled";
+    // Cancelled, nothing was unpinned: its Unpinned toasts (and their Undo) go too.
+    if (!save) for (const id of toasts.current) useApp.getState().dismissToast(id);
     // Opened from a pin's menu: focus goes back to that pin, wherever it is now (unless it was unpinned).
     const from = useApp.getState().editPinsFrom;
     setEditing(false);
@@ -91,10 +94,10 @@ function PinsEditor() {
     setDraft(pins);
     if (lifted?.key === pinKey(p)) setLifted(undefined);
     // Undo puts it back where it was: in the draft while editing, in the Library once Done saved it.
-    showToast(t("library.unpinned", { title }), () => {
+    toasts.current.push(showToast(t("library.unpinned", { title }), () => {
       if (ended.current === "open") setDraft((d) => restorePin(d, p, at));
       else if (ended.current === "saved") savePins(restorePin(currentPins(), p, at));
-    });
+    }));
   };
 
   const toggleLift = (p: LibraryPin) => {
@@ -202,7 +205,8 @@ function PinsEditor() {
                     aria-describedby={keysId}
                     aria-pressed={lifted?.key === key}
                     ref={(el) => { if (el) handles.current.set(key, el); else handles.current.delete(key); }}
-                    onClick={() => toggleLift(p)}
+                    // Picked up from the keyboard only (Space / Enter: a click with no pointer detail); the mouse drags.
+                    onClick={(e) => { if (e.detail === 0) toggleLift(p); }}
                     onKeyDown={(e) => onHandleKey(e, p)}
                     // Focus leaving for something else drops it where it is (a move re-focuses it, with no target).
                     onBlur={(e) => { if (lifted?.key === key && e.relatedTarget) setLifted(undefined); }}

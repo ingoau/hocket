@@ -50,12 +50,22 @@ export function draftChanged(original: readonly LibraryPin[], draft: readonly Li
 }
 
 /**
- * What Done stores: the draft, then anything pinned elsewhere while editing (from a menu here, or on
- * another device) that the draft never had, so Done doesn't quietly unpin it.
+ * What Done stores: a three-way merge of [original] (when editing began), the [draft] and [current]
+ * (stored now; the panel isn't modal, so a pin's own menu, or another device, may have changed it).
+ * The draft's order wins; a pin unpinned elsewhere stays unpinned, one pinned elsewhere goes at the
+ * end, and a click changed elsewhere is kept unless the draft changed it too. Unknown kinds and
+ * fields are carried through as they are.
  */
 export function draftToSave(original: readonly LibraryPin[], draft: readonly LibraryPin[], current: readonly LibraryPin[]): LibraryPin[] {
-  const added = current.filter((c) => !original.some((o) => same(o, c)) && !draft.some((d) => same(d, c)));
-  return [...draft, ...added];
+  const find = (list: readonly LibraryPin[], p: LibraryPin) => list.find((x) => same(x, p));
+  const kept = draft.flatMap((d) => {
+    const o = find(original, d);
+    const c = find(current, d);
+    if (o && !c) return [];
+    return [c && o && d.tap === o.tap && c.tap !== d.tap ? { ...d, tap: c.tap } : d];
+  });
+  const added = current.filter((c) => !find(original, c) && !find(draft, c));
+  return [...kept, ...added];
 }
 
 /** How large each of a tile's corners is: large on the group's outer edges, small inside. */

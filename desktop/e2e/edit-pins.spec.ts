@@ -3,7 +3,7 @@
 import type { Page } from "@playwright/test";
 import { completeSetup, expect, test } from "./fixtures";
 
-async function seedPins(page: Page): Promise<string> {
+async function seedPins(page: Page, hidden: object[] = []): Promise<string> {
   const genres = (await page.evaluate(async () => {
     const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
     return window.hocket.query({ type: "genres", data: { server_id: s.data[0]!.id } });
@@ -16,7 +16,7 @@ async function seedPins(page: Page): Promise<string> {
     { kind: "genre", id: genre, tap: "open" },
     { kind: "track", id: "tr-1", tap: "play" },
   ];
-  await page.evaluate((value) => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify(value) } }), pins);
+  await page.evaluate((value) => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify(value) } }), [...pins, ...hidden]);
   await expect(page.getByTestId("sidebar-pin")).toHaveCount(pins.length);
   return genre;
 }
@@ -132,13 +132,13 @@ test.describe("edit pins", () => {
     await expect(tiles.nth(2)).toContainText(before[0]!);
     await panel.getByRole("button", { name: `Unpin ${before[1]}` }).click();
     await panel.getByTestId("edit-pin-chip").first().click();
+    const toast = page.getByTestId("toast").filter({ hasText: `Unpinned ${before[1]}` });
+    await expect(toast).toBeVisible();
     await panel.getByRole("button", { name: "Cancel editing" }).click();
     await expect(panel).toHaveCount(0);
     expect(await sidebarTitles(page)).toEqual(before);
-    // Undo of an unpin from a cancelled edit does nothing.
-    const toast = page.getByTestId("toast").filter({ hasText: `Unpinned ${before[1]}` });
-    if (await toast.count()) await toast.getByTestId("toast-action").click();
-    expect(await sidebarTitles(page)).toEqual(before);
+    // Nothing was unpinned, so its toast (and Undo) goes with the panel.
+    await expect(toast).toHaveCount(0);
 
     // Escape drops it too; unchanged, Done just closes.
     await page.getByTestId("sidebar-pin").nth(1).click({ button: "right" });
@@ -153,6 +153,39 @@ test.describe("edit pins", () => {
     await panel.getByRole("button", { name: "Done" }).click();
     await expect(panel).toHaveCount(0);
     expect(await sidebarTitles(page)).toEqual(before);
+  });
+
+  test("Done merges what changed elsewhere meanwhile, keeps unknown pins, and the mouse doesn't pick up", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    const station = { kind: "station", id: "x", tap: "open", future: 1 };
+    const genre = await seedPins(page, [station]);
+    const before = await sidebarTitles(page);
+    await page.getByTestId("sidebar-pin").first().click({ button: "right" });
+    await page.getByTestId("context-menu").getByRole("menuitem", { name: "Edit pins…" }).click();
+    const panel = page.getByTestId("edit-pins-panel");
+    const tiles = panel.getByTestId("edit-pin");
+    await expect(tiles).toHaveCount(5);
+    // A mouse click on the handle doesn't pick the tile up (that's the keyboard's); dragging is the mouse's.
+    const handle = panel.getByTestId("edit-pin-handle").first();
+    await handle.click();
+    await expect(handle).toHaveAttribute("aria-pressed", "false");
+    // Reorder in the panel, and meanwhile unpin the genre from its sidebar menu.
+    await handle.focus();
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await expect(tiles.nth(1)).toContainText(before[0]!);
+    await page.getByTestId("sidebar-pin").filter({ hasText: genre }).click({ button: "right" });
+    await page.getByTestId("context-menu").getByRole("menuitem", { name: "Unpin from Library" }).click();
+    await expect(page.getByTestId("sidebar-pin")).toHaveCount(4);
+    await panel.getByRole("button", { name: "Done" }).click();
+    await expect(panel).toHaveCount(0);
+    // The genre stays unpinned, the reorder is saved, and the station (unknown here) is kept as it was.
+    await expect.poll(() => sidebarTitles(page)).toEqual([before[1], before[0], before[2], before[4]]);
+    const saved = await storedPins(page);
+    expect(saved.some((p) => p.kind === "genre")).toBe(false);
+    expect(saved).toContainEqual(station);
   });
 
   test("a genre's pin menu offers what a click does", async ({ hocket }) => {
