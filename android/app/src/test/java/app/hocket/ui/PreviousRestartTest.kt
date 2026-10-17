@@ -55,7 +55,7 @@ class PreviousRestartTest : PlayerRulesTestBase() {
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        // Something to go back to, and far enough into the track that playing here would restart it.
+        // Something to go back to, and far enough into the track to restart it.
         core.client.dispatch(Command.Next)
         compose.waitUntil(5_000) { core.client.queue.value.history.isNotEmpty() }
         clock += 10_000.0
@@ -68,5 +68,6 @@ class PreviousRestartTest : PlayerRulesTestBase() {
         core.client.requestSnapshot()
         compose.waitForIdle()
         assertEquals("restarted rather than going back", before, core.client.queue.value.current?.item?.key)
+        assertTrue("from the top", core.client.positionNow() < 3_000)
     }
 }

@@ -834,19 +834,16 @@ impl Actor {
 
     pub(crate) fn previous(&mut self) {
         // The track is loaded here, or another device plays it and the
-        // room's position stamp says how far in it is.
-        let remote = !self.playback.loaded
-            && !self.owns_transport()
-            && self.last_transport.lease.owner.is_some();
+        // room's position stamp says how far in it is. The engine's lease,
+        // not `last_transport` (not refreshed when a lease lapses), as
+        // `transport_command` drops the seek when nobody holds it.
         let position = if self.playback.loaded {
             Some(self.playback.position_now(self.now()))
-        } else if remote {
-            Some(crate::connect::clock::extrapolate(
-                &self.last_transport.position,
-                self.session_now(),
-            ))
         } else {
-            None
+            self.engine
+                .as_ref()
+                .filter(|e| !e.owns_transport() && e.lease().owner.is_some())
+                .map(|e| e.position_ms())
         };
         if position.is_some_and(crate::session::previous_should_restart) {
             // Previous after a few seconds restarts the track (Symfonium's behaviour).

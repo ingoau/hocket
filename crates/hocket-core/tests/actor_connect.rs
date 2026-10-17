@@ -676,3 +676,20 @@ async fn previous_from_another_device_restarts_a_track_well_under_way() {
     assert_eq!(a.current_track_id().await.as_deref(), Some("t1"));
     assert!(a.backend.current().unwrap().1 < 2_000);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_goes_back_once_the_playing_devices_lease_lapses() {
+    let (a, b) = pair().await;
+    play_on(&b, &a).await;
+    b.run(Command::Next).await;
+    TestCore::run_all_for(&[&a, &b], 6_000.0).await;
+    b.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    // b goes quiet 6 s into t1: its lease lapses and nobody plays, though
+    // the room's last stamp was well into the track.
+    a.run_for(30_000.0).await;
+    assert!(a.snapshot().await.transport.lease.owner.is_none());
+    a.run(Command::Previous).await;
+    a.run_for(1_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t0"));
+}
