@@ -12,6 +12,11 @@
 .menu.cm .menu-heading { padding: 6px 8px 2px; }
 .cm-lead { width: 14px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--accent-text); }
 .cm-lead svg { stroke: currentColor; }
+/* An app menu's icon (lib/menu-model "item" rows): muted, the danger colour on a destructive row. */
+.cm-lead.cm-icon { width: 16px; color: var(--fg-muted); }
+.cm-lead.cm-icon svg { stroke: none; }
+.menu.cm .mi.destructive .cm-icon { color: var(--danger); }
+.menu.cm .mi.disabled .cm-icon { opacity: 0.5; }
 .menu.cm .kbd { flex: 0 0 auto; margin-left: 0; min-width: 0; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; font-size: 10.5px; line-height: 16px; color: var(--fg-muted); }
 .menu.cm .mi.destructive .kbd { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .cm-note { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--fg-muted); }

@@ -85,7 +85,8 @@ export function nextRating(n: number, current: { value: number; mixed: boolean }
   return !current.mixed && current.value === n ? 0 : n;
 }
 
-export function buildMenu(actions: readonly ActionDescriptor[], items: readonly MenuItem[], facts: MenuFacts | undefined, opts: { inPlaylist?: boolean } = {}): MenuRow[] {
+export function buildMenu(registry: readonly ActionDescriptor[], items: readonly MenuItem[], facts: MenuFacts | undefined, opts: { inPlaylist?: boolean } = {}): MenuRow[] {
+  let actions = registry;
   const byId = new Map(actions.map((a) => [a.id, a]));
   const used = new Set<string>();
   const rows: MenuRow[] = [];
@@ -148,6 +149,15 @@ export function buildMenu(actions: readonly ActionDescriptor[], items: readonly 
   }
   check("pin", undefined, (on) => t(on === true ? "menu.pinned" : "menu.pin"));
 
+  // Song info / Album info is the app's own (the core's registry has no details action): after the
+  // navigation rows, for one song or one album.
+  const infoKind = facts?.count === 1 && (facts.kind === "song" || facts.kind === "album");
+  if (infoKind && !byId.has("ui.info")) {
+    const info: ActionDescriptor = { id: "ui.info", label: "", icon: "info", category: "navigate", enabled: true, undoable: false, destructive: false };
+    const after = Math.max(actions.findIndex((a) => a.id === "goToArtist"), actions.findIndex((a) => a.id === "goToAlbum"));
+    actions = after >= 0 ? [...actions.slice(0, after + 1), info, ...actions.slice(after + 1)] : [...actions, info];
+  }
+
   // Remove from playlist only where the songs are listed in one.
   if (!opts.inPlaylist) used.add("removeFromPlaylist");
   const rest = actions.filter((a) => !used.has(a.id));
@@ -171,6 +181,7 @@ export function buildMenu(actions: readonly ActionDescriptor[], items: readonly 
 export function labelFor(a: ActionDescriptor, facts: MenuFacts | undefined): string {
   const count = facts?.count ?? 1;
   if (a.id === "ui.info" && facts?.kind === "song") return t("menu.songInfo");
+  if (a.id === "ui.info" && facts?.kind === "album") return t("menu.albumInfo");
   if (a.id === "removeFromPlaylist" && facts?.playlistName) return count > 1 ? t("menu.removeSomeFrom", { n: count, playlist: facts.playlistName }) : t("menu.removeFrom", { playlist: facts.playlistName });
   return a.label;
 }

@@ -172,4 +172,67 @@ test.describe("context menu", () => {
     await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(0);
     await page.keyboard.press("Escape");
   });
+
+  test("an album's menu has Album info; the app's own menus keep their icons", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlace(page, "albums");
+    const menu = page.getByTestId("context-menu");
+    await page.getByTestId("grid-tile").first().click({ button: "right" });
+    await expect(menu).toBeVisible();
+    // After the navigation rows, with no icon (the item menu design).
+    const info = menu.getByRole("menuitem", { name: "Album info", exact: true });
+    await expect(info).toBeVisible();
+    await expect(info.locator("svg")).toHaveCount(0);
+    await info.click();
+    const dialog = page.getByTestId("dialog-albumInfo");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Songs");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    // A Home section's menu: every row has its icon.
+    await page.getByTestId("nav-home").click();
+    await page.locator('[data-testid^="home-section-head-"]').first().click({ button: "right" });
+    await expect(menu).toBeVisible();
+    for (const id of ["moveDown", "hide", "customise"]) await expect(menu.locator(`[data-action="${id}"] .cm-icon svg`)).toHaveCount(1);
+    await page.keyboard.press("Escape");
+  });
+
+  test("the player's + buttons open the same picker beside them", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlace(page, "albums");
+    await page.getByTestId("grid-tile").first().dblclick();
+    await page.getByTestId("album-play").click();
+    const picker = page.getByTestId("playlist-submenu");
+    const bar = page.getByTestId("bar-add");
+    await bar.click();
+    await expect(picker).toBeVisible();
+    // Above the player bar, its left edge at the button's.
+    // (Once its entrance has played: it opens scaled.)
+    await page.waitForTimeout(400);
+    const p = (await picker.boundingBox())!;
+    const b = (await bar.boundingBox())!;
+    expect(p.y + p.height).toBeLessThanOrEqual(b.y);
+    expect(Math.abs(p.x - b.x)).toBeLessThan(2);
+    // Ticking a playlist adds what's playing, with Undo.
+    await picker.getByTestId("playlist-row").filter({ hasText: "Party starters" }).click();
+    await expect(page.getByTestId("toast").filter({ hasText: "Added to Party starters" })).toBeVisible();
+    // The + again closes it; so does a click elsewhere.
+    await bar.click();
+    await expect(picker).toHaveCount(0);
+    await bar.click();
+    await expect(picker).toBeVisible();
+    await page.mouse.click(700, 120);
+    await expect(picker).toHaveCount(0);
+    // The full-screen player's + opens it too.
+    await page.getByTestId("toggle-fullscreen").click();
+    await expect(page.getByTestId("fullscreen-player")).toBeVisible();
+    const np = page.getByTestId("np-add");
+    await np.click();
+    await expect(picker).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(np).toBeFocused();
+  });
 });

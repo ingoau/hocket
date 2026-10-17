@@ -204,13 +204,12 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("playlist-submenu")).toHaveCount(0);
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("context-menu")).toHaveCount(0);
-      // Add to playlist for what's playing (the player bar's +) is a list dialog.
+      // Add to playlist for what's playing (the player bar's +): the same picker, beside the button.
       await page.getByTestId("bar-add").click();
-      await expect(page.getByTestId("dialog-addToPlaylist")).toBeVisible();
-      await expectNoViolations(page, `${theme} add-to-playlist dialog`);
+      await expect(page.getByTestId("playlist-submenu")).toBeVisible();
+      await expectNoViolations(page, `${theme} add-to-playlist picker`);
       await page.keyboard.press("Escape");
-      // Gone, exit animation included: its "New playlist…" row would match the button below.
-      await expect(page.getByTestId("dialog-addToPlaylist")).toHaveCount(0);
+      await expect(page.getByTestId("playlist-submenu")).toHaveCount(0);
       // Prompt dialog (new playlist), confirmation dialog (remove server), sleep timer, Connect, track info.
       await openPlace(page, "playlists");
       await page.getByRole("button", { name: "New playlist" }).click();

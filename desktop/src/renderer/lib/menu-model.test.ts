@@ -64,7 +64,7 @@ describe("context menu layout", () => {
     const item = (id: string, extra: Partial<MenuItem> = {}): MenuItem => ({ id, label: id, icon: "", enabled: true, run: () => {}, ...extra });
     const items = [item("whenClicked", { heading: true, enabled: false }), item("tap-open", { checked: true }), item("tap-play", { checked: false }), item("pinUp"), item("pinDown")];
     const rows = buildMenu([d("play", "playback"), d("unpinFromLibrary", "library")], items, { kind: "album", count: 1 });
-    expect(shape(rows)).toEqual(["choices", "sep", "item:pinUp", "item:pinDown", "sep", "strip", "pin:true"]);
+    expect(shape(rows)).toEqual(["choices", "sep", "item:pinUp", "item:pinDown", "sep", "strip", "pin:true", "sep", "ui.info"]);
     expect(rows[0]).toMatchObject({ kind: "choices", items: [{ id: "tap-open" }, { id: "tap-play" }] });
     // Items alone (a Home section's menu): no separators.
     expect(shape(buildMenu([], [item("a"), item("b")], undefined))).toEqual(["item:a", "item:b"]);
@@ -102,6 +102,16 @@ describe("menu states", () => {
     expect(rateToast(three, 0)).toBe("Cleared rating on 3 songs");
     expect(removeToast(three)).toBe("Removed 3 songs from Late night");
     expect(removeToast({ kind: "song", count: 1, playlistName: "Late night" })).toBe("Removed from Late night");
-    expect(labelFor(d("ui.info", "navigate", { label: "Details" }), { kind: "album", count: 1 })).toBe("Details");
+    expect(labelFor(d("ui.info", "navigate", { label: "Details" }), { kind: "album", count: 1 })).toBe("Album info");
+  });
+
+  it("adds the app's own Song info / Album info after the navigation rows when the registry has none", () => {
+    const registry = songActions.filter((a) => a.id !== "ui.info");
+    expect(shape(buildMenu(registry, [], song))).toEqual(["strip", "rating", "love:true", "download:false", "submenu", "pin:false", "sep", "goToAlbum", "goToArtist", "ui.info"]);
+    const album = buildMenu([d("play", "playback"), d("goToArtist", "navigate"), d("pinToLibrary", "library")], [], { kind: "album", count: 1 });
+    expect(album.flatMap((r) => (r.kind === "action" ? [r.label] : []))).toEqual(["goToArtist", "Album info"]);
+    // Not for several songs, artists or playlists.
+    expect(shape(buildMenu(registry, [], { kind: "song", count: 3 }))).not.toContain("ui.info");
+    expect(shape(buildMenu([d("play", "playback")], [], { kind: "artist", count: 1 }))).not.toContain("ui.info");
   });
 });

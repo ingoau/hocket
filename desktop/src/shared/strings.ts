@@ -613,6 +613,7 @@ const STRINGS = {
   "menu.pinned": "Pinned",
   "menu.addToPlaylist": "Add to playlist",
   "menu.songInfo": "Song info",
+  "menu.albumInfo": "Album info",
   "menu.removeFrom": "Remove from {playlist}",
   "menu.removeSomeFrom": "Remove {n} from {playlist}",
   "menu.songs.one": "1 song",

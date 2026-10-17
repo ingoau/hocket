@@ -14,6 +14,8 @@ export interface ActionContext {
   /** Row indices for PlaylistRemove. */
   indices?: number[];
   savedQueueId?: string;
+  /** The button that ran it, for surfaces that open beside it (the playlist picker). */
+  anchor?: HTMLElement;
 }
 
 /** Ids the renderer executes itself (they need UI); everything else is RunAction. */
@@ -118,13 +120,22 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     }
     case "ui.info": {
+      if (target.type === "albums") {
+        if (target.data.ids[0]) app.openDialog({ kind: "albumInfo", albumId: target.data.ids[0] });
+        return;
+      }
       const ids = await resolveTrackIds(target);
       if (ids[0]) app.openDialog({ kind: "trackInfo", trackId: ids[0] });
       return;
     }
     case "addToPlaylist": {
+      // The + again closes the picker it opened.
+      if (ctx.anchor && app.playlistPicker) {
+        app.closePlaylistPicker();
+        return;
+      }
       const ids = target.type === "none" && app.nowPlaying ? [app.nowPlaying.track.id] : await resolveTrackIds(target);
-      if (ids.length) app.openDialog({ kind: "addToPlaylist", trackIds: ids });
+      if (ids.length) app.openPlaylistPicker({ trackIds: ids, anchor: pickerAnchor(ctx.anchor) });
       return;
     }
     case "ui.newPlaylist": {
@@ -232,4 +243,20 @@ export function selectionTarget(kind: "tracks" | "albums" | "artists" | "playlis
   if (ids && ids.length) return { type: kind, data: { ids } } as ActionTarget;
   if (fallbackId) return { type: kind, data: { ids: [fallbackId] } } as ActionTarget;
   return undefined;
+}
+
+/**
+ * Where the playlist picker opens: beside the button that ran it, else the focused item (a shortcut
+ * on a row), else the player bar's own +, else the middle of the window.
+ */
+function pickerAnchor(el?: HTMLElement) {
+  const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+  const from = [el, focused, document.querySelector<HTMLElement>('[data-testid="bar-add"]')].find((e) => e?.isConnected && e.getClientRects().length);
+  if (from) {
+    const r = from.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  }
+  const x = window.innerWidth / 2;
+  const y = window.innerHeight / 3;
+  return { left: x, right: x, top: y, bottom: y };
 }

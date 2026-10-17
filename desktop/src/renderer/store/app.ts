@@ -70,10 +70,17 @@ export interface ContextMenuState {
 export type DialogState =
   | { kind: "prompt"; title: string; label: string; initial?: string; confirmLabel?: string; onConfirm: (value: string) => void }
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
-  | { kind: "addToPlaylist"; trackIds: string[] }
   | { kind: "sleepTimer" }
   | { kind: "connect" }
-  | { kind: "trackInfo"; trackId: string };
+  | { kind: "trackInfo"; trackId: string }
+  | { kind: "albumInfo"; albumId: string };
+
+/** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
+export interface PlaylistPickerState {
+  trackIds: string[];
+  /** The button (or focused item) it opens from, in window coordinates. */
+  anchor: { left: number; right: number; top: number; bottom: number };
+}
 
 export interface UiState {
   meta: AppMeta | undefined;
@@ -85,6 +92,7 @@ export interface UiState {
   fullscreen: boolean;
   paletteOpen: boolean;
   contextMenu: ContextMenuState | undefined;
+  playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
@@ -115,6 +123,8 @@ export interface AppStore extends CoreState, UiState {
   setPaletteOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
+  openPlaylistPicker(picker: PlaylistPickerState): void;
+  closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
   setSelection(selection: Selection, scope: string): void;
@@ -158,6 +168,7 @@ export const useApp = create<AppStore>((set, get) => ({
   fullscreen: false,
   paletteOpen: false,
   contextMenu: undefined,
+  playlistPicker: undefined,
   dialog: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
@@ -184,7 +195,7 @@ export const useApp = create<AppStore>((set, get) => ({
   navigate(route, replace = false) {
     const cur = get().route;
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined, playlistPicker: undefined }));
   },
   back() {
     const { history, route } = get();
@@ -204,19 +215,25 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ panels });
   },
   setFullscreen(on) {
-    set({ fullscreen: on, contextMenu: undefined });
+    set({ fullscreen: on, contextMenu: undefined, playlistPicker: undefined });
   },
   setPaletteOpen(open) {
-    set({ paletteOpen: open, contextMenu: undefined });
+    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
   },
   openContextMenu(menu) {
-    set({ contextMenu: menu });
+    set({ contextMenu: menu, playlistPicker: undefined });
   },
   closeContextMenu() {
     if (get().contextMenu) set({ contextMenu: undefined });
   },
+  openPlaylistPicker(picker) {
+    set({ playlistPicker: picker, contextMenu: undefined });
+  },
+  closePlaylistPicker() {
+    if (get().playlistPicker) set({ playlistPicker: undefined });
+  },
   openDialog(dialog) {
-    set({ dialog, contextMenu: undefined });
+    set({ dialog, contextMenu: undefined, playlistPicker: undefined });
   },
   closeDialog() {
     set({ dialog: undefined });

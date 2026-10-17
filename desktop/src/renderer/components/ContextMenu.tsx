@@ -446,7 +446,8 @@ export function ContextMenu() {
     return (
       <div key={`i-${item.id}`} {...cellProps(i)} role={radio ? "menuitemradio" : "menuitem"} aria-checked={radio ? !!item.checked : undefined} className={`mi ${item.enabled ? "" : "disabled"} ${item.destructive ? "destructive" : ""} ${active === i ? "active" : ""}`} data-action={item.id}>
         {/* A choice is drawn as a radio, so it can't be mistaken for an action with the same name. */}
-        {radio ? <span className={`mi-radio ${item.checked ? "on" : ""}`} aria-hidden="true" /> : <span className="cm-lead" aria-hidden="true" />}
+        {/* The app's own menus (a pin's, a filter's, a Home section's) keep their icons; the item rows below a pin's follow the item menu design. */}
+        {radio ? <span className={`mi-radio ${item.checked ? "on" : ""}`} aria-hidden="true" /> : <span className="cm-lead cm-icon" aria-hidden="true">{item.icon ? <Icon name={item.icon} size={15} /> : null}</span>}
         <span className="grow truncate">{item.label}</span>
       </div>
     );

@@ -360,8 +360,8 @@ test.describe("motion, contrast and zoom", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("context-menu")).toHaveCount(0);
     await page.getByTestId("bar-add").click();
-    await expect(page.getByTestId("dialog-addToPlaylist")).toBeVisible();
-    await check("200% dialog");
+    await expect(page.getByTestId("playlist-submenu")).toBeVisible();
+    await check("200% add to playlist picker");
     await page.keyboard.press("Escape");
     await setZoom(app, 1);
   });

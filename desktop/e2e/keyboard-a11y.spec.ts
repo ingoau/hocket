@@ -221,23 +221,23 @@ test.describe("keyboard only", () => {
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(row).toBeFocused();
-    // Add to playlist for what's playing (the player bar's +) is a dialog: focus is inside and stays inside, both directions.
+    // Add to playlist for what's playing (the player bar's +) is the same picker as the menu's
+    // submenu, beside the button: focus goes to its search field, Tab or Escape closes it, and focus
+    // goes back to the +.
     await tabTo(page, byTestId("bar-add"), "Add to playlist");
     await page.keyboard.press("Enter");
-    const dialog = page.getByTestId("dialog-addToPlaylist");
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toHaveAttribute("aria-modal", "true");
-    for (const key of ["Tab", "Shift+Tab"]) {
-      for (let i = 0; i < 12; i++) {
-        await page.keyboard.press(key);
-        expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="dialog-addToPlaylist"]')), `${key} #${i}`).toBe(true);
-        expect(hasRing(await focused(page))).toBe(true);
-      }
-    }
-    // The rest of the window is inert while it is open.
-    expect(await page.getByTestId("app-body").getAttribute("inert")).not.toBeNull();
+    const picker = page.getByTestId("playlist-submenu");
+    await expect(picker).toBeVisible();
+    await expect(page.getByTestId("playlist-search")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByTestId("playlist-search")).toHaveAttribute("aria-activedescendant", "pp-row-0");
+    await page.keyboard.press("Tab");
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByTestId("bar-add")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("playlist-search")).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(picker).toHaveCount(0);
     await expect(page.getByTestId("bar-add")).toBeFocused();
   });
 

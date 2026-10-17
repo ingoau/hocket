@@ -10,6 +10,7 @@
 // of the field or Escape goes back to the menu, Tab closes both.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget, Playlist } from "@core/api";
+import type { ExitProps } from "../lib/presence";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -23,20 +24,25 @@ const GROUP_LABEL: Record<PickerGroupId, Parameters<typeof t>[0]> = { pinned: "p
 
 interface Props {
   trackIds: string[];
-  /** The menu's left/right edges and the Add to playlist row's top, in window coordinates. */
-  anchor: { left: number; right: number; top: number };
+  /**
+   * Beside a menu: its left/right edges and the Add to playlist row's top. Opened on its own (with
+   * [bottom]): the button it opens from, in window coordinates.
+   */
+  anchor: { left: number; right: number; top: number; bottom?: number };
   /** The menu is on its way out: the submenu leaves with it, inert. */
   closing: boolean;
   motion: string;
-  /** Back to the menu (← or Escape). */
+  /** Back to the menu (← or Escape); on its own, close. */
   onBack: () => void;
   /** Close the menu and the submenu, then run [then] (opening a dialog, say). */
   onClose: (then?: () => void) => void;
+  /** On its own, the picker carries its own exit animation (lib/presence). */
+  exitProps?: ExitProps<HTMLDivElement>;
 }
 
 type Row = { kind: "new" } | { kind: "playlist"; playlist: Playlist; state: RowState };
 
-export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onClose }: Props) {
+export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onClose, exitProps }: Props) {
   const serverId = useApp((s) => s.servers[0]?.id);
   const dispatch = useApp((s) => s.dispatch);
   const pins = usePins();
@@ -49,7 +55,8 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
   /** The playlist whose Remove both / Remove one is open, and which of the two is active. */
   const [asking, setAsking] = useState<{ id: string; active: number } | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | undefined>(undefined);
-  const ref = useRef<HTMLDivElement>(null);
+  const own = useRef<HTMLDivElement>(null);
+  const ref = exitProps?.ref ?? own;
   const input = useRef<HTMLInputElement>(null);
 
   // The order is taken when the submenu opens and kept while it is open (keepLayout).
@@ -72,7 +79,13 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
     if (!ready || !ref.current) return;
     const w = ref.current.offsetWidth;
     const h = ref.current.offsetHeight;
-    if (!pos) {
+    if (!pos && anchor.bottom !== undefined) {
+      // From a button: under it, else above it (the player bar's), lined up with the button's left
+      // edge, or its right edge when there's no room to the right.
+      const x = Math.max(4, anchor.left + w <= window.innerWidth - 6 ? anchor.left : Math.min(anchor.right - w, window.innerWidth - w - 6));
+      const y = anchor.bottom + 6 + h <= window.innerHeight - 6 ? anchor.bottom + 6 : Math.max(4, anchor.top - h - 6);
+      setPos({ x, y });
+    } else if (!pos) {
       const x = anchor.right - 4 + w <= window.innerWidth - 6 ? anchor.right - 4 : Math.max(4, anchor.left - w + 4);
       setPos({ x, y: Math.max(4, Math.min(anchor.top - 6, window.innerHeight - h - 6)) });
     } else if (pos.y + h > window.innerHeight - 6) {
@@ -211,6 +224,9 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
       className={`menu cm cm-sub ${motion}`}
       style={{ left: pos?.x ?? -9999, top: pos?.y ?? 0, visibility: pos ? undefined : "hidden" }}
       inert={closing || undefined}
+      onAnimationEnd={exitProps?.onAnimationEnd}
+      role={anchor.bottom !== undefined ? "dialog" : undefined}
+      aria-label={anchor.bottom !== undefined ? t("menu.addToPlaylist") : undefined}
       data-context-layer=""
       data-testid="playlist-submenu"
       // Clicks on rows keep the focus in the field.

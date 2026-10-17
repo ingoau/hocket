@@ -181,7 +181,7 @@ function Overview() {
           <h2 className="side-title" title={track.title}>{track.albumId ? <button type="button" className="side-text-link" onClick={() => navigate({ view: "album", id: track.albumId as string })}>{track.title}</button> : track.title}</h2>
           <div className="side-artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="sidebar-artist" /></div>
         </div>
-        <button type="button" className="side-icon-btn" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={() => void executeAction("addToPlaylist")} data-testid="sidebar-add"><Icon name="playlistAdd" size={22} /></button>
+        <button type="button" className="side-icon-btn" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="sidebar-add"><Icon name="playlistAdd" size={22} /></button>
         <button type="button" className="side-icon-btn" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="sidebar-more"><Icon name="more" size={22} /></button>
       </div>
       <LyricsCard trackId={track.id} durationMs={track.durationMs} />

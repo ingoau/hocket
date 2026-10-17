@@ -13,6 +13,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
 import { NowPlayingSidebar } from "./components/NowPlayingSidebar";
+import { PlaylistPicker } from "./components/PlaylistPicker";
 import { ContextMenu } from "./components/ContextMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toasts } from "./components/Toasts";
@@ -69,6 +70,7 @@ export function App() {
       {/* Covers the whole window (sidebar, panels and player bar included). */}
       <FullscreenPlayer />
       <ContextMenu />
+      <PlaylistPicker />
       <CommandPalette />
       <Dialogs />
       <Toasts />

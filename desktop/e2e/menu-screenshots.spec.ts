@@ -104,7 +104,36 @@ test("context menu and add to playlist", async () => {
       await expect(menu).toBeVisible();
       await page.mouse.move(5, 5);
       await shot("08-album-menu");
+      await menu.getByRole("menuitem", { name: "Album info", exact: true }).click();
+      await expect(page.getByTestId("dialog-albumInfo")).toBeVisible();
+      await shot("09-album-info");
       await page.keyboard.press("Escape");
+
+      // The player bar's + opens the same picker, beside it.
+      await page.getByTestId("grid-tile").nth(1).dblclick();
+      await page.getByTestId("album-play").click();
+      await page.getByTestId("bar-add").click();
+      await expect(page.getByTestId("playlist-submenu")).toBeVisible();
+      await page.mouse.move(640, 5);
+      await shot("10-player-bar-picker");
+      await page.keyboard.press("Escape");
+
+      // The app's own menus keep their icons: a Home section's, a filter's.
+      await page.getByTestId("nav-home").click();
+      await page.locator('[data-testid^="home-section-head-"]').first().click({ button: "right" });
+      await expect(menu).toBeVisible();
+      await page.mouse.move(5, 5);
+      await shot("11-home-section-menu");
+      await page.keyboard.press("Escape");
+      await openPlace(page, "filters");
+      const filter = page.getByTestId("filter-row").first();
+      if (await filter.count()) {
+        await filter.click({ button: "right" });
+        await expect(menu).toBeVisible();
+        await page.mouse.move(5, 5);
+        await shot("12-filter-menu");
+        await page.keyboard.press("Escape");
+      }
     } finally {
       await app.close();
       rmSync(userData, { recursive: true, force: true });

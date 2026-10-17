@@ -383,7 +383,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
               {track ? (
                 <div className="np-actions">
                   <button type="button" className={`np-icon-btn np-round heart ${track.loved ? "on" : ""}`} aria-pressed={track.loved} aria-label={t("player.love")} title={track.loved ? t("player.unlove") : t("player.love")} onClick={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} data-testid="np-love"><Icon name="heart" size={20} filled={track.loved} /></button>
-                  <button type="button" className="np-icon-btn np-round" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={() => void executeAction("addToPlaylist")} data-testid="np-add"><Icon name="playlistAdd" size={20} /></button>
+                  <button type="button" className="np-icon-btn np-round" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="np-add"><Icon name="playlistAdd" size={20} /></button>
                   <button type="button" className="np-icon-btn np-round" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => now && openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="np-more"><Icon name="more" size={20} /></button>
                 </div>
               ) : null}
