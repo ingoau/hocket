@@ -2338,6 +2338,12 @@ export class FakeCore implements CoreHandle {
         const items = ids.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit).map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t);
         return { type: "tracks", data: { items, offset: q.data.page.offset, total: ids.length } };
       }
+      case "playlistMembership": {
+        // Every playlist, with the indices at which it holds any of the tracks (all synced here).
+        const want = new Set(q.data.track_ids);
+        const data = (lib?.playlists ?? []).map((p) => ({ playlistId: p.playlist.id, entries: p.trackIds.flatMap((id, index) => (want.has(id) ? [{ trackId: id, index }] : [])), synced: true }));
+        return { type: "membership", data };
+      }
       case "search":
         return { type: "search", data: this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) };
       case "queue":

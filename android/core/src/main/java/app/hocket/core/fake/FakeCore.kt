@@ -1367,6 +1367,14 @@ class FakeCore(
             val off = q.data.page.offset.toInt()
             QueryResult.Tracks(TrackPage(ids.drop(off).take(q.data.page.limit.toInt()).mapNotNull { library.track(it) }, off.toUInt(), ids.size.toUInt()))
         }
+        // Every playlist, with the indices at which it holds any of the tracks (all synced here).
+        is Query.PlaylistMembership -> {
+            val want = q.data.track_ids.toSet()
+            QueryResult.Membership(library.playlists.map { p ->
+                val ids = library.playlistTracks[p.id] ?: emptyList()
+                PlaylistMembership(p.id, ids.withIndex().filter { it.value in want }.map { PlaylistEntryRef(it.value, it.index.toUInt()) }, true)
+            })
+        }
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
