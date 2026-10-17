@@ -279,6 +279,28 @@ pub struct Artist {
     pub biography: Option<String>,
 }
 
+/// One entry of a playlist holding one of the tracks a [`Query::PlaylistMembership`] asked about.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntryRef {
+    pub track_id: TrackId,
+    /// The entry's index in the playlist's current order (what [`Command::PlaylistRemove`] takes).
+    pub index: u32,
+}
+
+/// Where the asked-about tracks sit in one playlist. `entries` is empty when it holds none of them;
+/// a track listed twice is in the playlist twice.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistMembership {
+    pub playlist_id: PlaylistId,
+    pub entries: Vec<PlaylistEntryRef>,
+    /// False until the playlist's tracks have been synced: `entries` may then be incomplete.
+    pub synced: bool,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2191,6 +2213,12 @@ pub enum Query {
         id: PlaylistId,
         page: Page,
     },
+    /// Which of the server's playlists hold any of `track_ids`, and at which indices: the add to
+    /// playlist picker's ticks, ×2 badges and "Remove one". Every playlist is listed, in name order.
+    PlaylistMembership {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+    },
     /// Local-first; server results, when requested, arrive in a second [`Event::SearchResults`].
     Search {
         server_id: ServerId,
@@ -2365,6 +2393,7 @@ pub enum QueryResult {
     Genres(Vec<Genre>),
     Playlists(Vec<Playlist>),
     PlaylistDetail(Option<Playlist>),
+    Membership(Vec<PlaylistMembership>),
     Search(SearchResults),
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),

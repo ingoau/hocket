@@ -116,6 +116,14 @@ impl Actor {
                     },
                 ))
             }
+            Query::PlaylistMembership {
+                server_id,
+                track_ids,
+            } => QueryResult::Membership(
+                self.db
+                    .playlist_membership(&server_id, &track_ids)
+                    .unwrap_or_default(),
+            ),
             Query::Search {
                 server_id,
                 query,

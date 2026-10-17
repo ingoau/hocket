@@ -757,6 +757,54 @@ impl Db {
         })
     }
 
+    /// Every playlist of `server_id` (name order) with the indices at which it holds any of
+    /// `track_ids`. Indices count the playlist's current order from 0, whatever gaps `position` has.
+    pub fn playlist_membership(
+        &self,
+        server_id: &str,
+        track_ids: &[String],
+    ) -> DbResult<Vec<api::PlaylistMembership>> {
+        let playlists = self.playlists(server_id)?;
+        let wanted: std::collections::HashSet<&str> =
+            track_ids.iter().map(String::as_str).collect();
+        let mut entries: std::collections::HashMap<String, Vec<api::PlaylistEntryRef>> =
+            std::collections::HashMap::new();
+        if !wanted.is_empty() {
+            self.with_conn(|c| {
+                let mut st = c.prepare_cached(
+                    "SELECT playlist_id, track_id, ROW_NUMBER() OVER (PARTITION BY playlist_id ORDER BY position) - 1 \
+                     FROM playlist_tracks WHERE server_id = ?1",
+                )?;
+                let rows = st.query_map([server_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                })?;
+                for row in rows {
+                    let (playlist, track, index) = row?;
+                    if wanted.contains(track.as_str()) {
+                        entries.entry(playlist).or_default().push(api::PlaylistEntryRef {
+                            track_id: track,
+                            index: index.max(0) as u32,
+                        });
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        playlists
+            .into_iter()
+            .map(|p| {
+                let synced = self.playlist_tracks_synced(&p.id)?;
+                let mut list = entries.remove(&p.id).unwrap_or_default();
+                list.sort_by_key(|e| e.index);
+                Ok(api::PlaylistMembership {
+                    playlist_id: p.id,
+                    entries: list,
+                    synced,
+                })
+            })
+            .collect()
+    }
+
     /// Whether the playlist's membership has been synced at least once.
     pub fn playlist_tracks_synced(&self, playlist_id: &str) -> DbResult<bool> {
         self.with_conn(|c| {
@@ -1722,6 +1770,42 @@ mod tests {
             .collect();
         assert_eq!(got, vec!["3", "1"]);
         assert_eq!(db.summaries_by_ids(&ids).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn playlist_membership_lists_every_copy_by_index() {
+        let db = seeded();
+        db.upsert_playlists(
+            &[Playlist {
+                id: "pl2".into(),
+                server_id: "s".into(),
+                name: "Another".into(),
+                is_mine: true,
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+        db.set_playlist_tracks("s", "pl2", &["1".into(), "2".into(), "1".into()])
+            .unwrap();
+        // A gap in the stored positions (a local edit) doesn't skew the indices.
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE playlist_tracks SET position = position * 5 WHERE playlist_id = 'pl2'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let m = db.playlist_membership("s", &["1".into()]).unwrap();
+        let by = |id: &str| m.iter().find(|p| p.playlist_id == id).unwrap();
+        assert_eq!(m.len(), 2, "every playlist, holding the track or not");
+        let idx = |id: &str| by(id).entries.iter().map(|e| e.index).collect::<Vec<_>>();
+        assert_eq!(idx("pl"), vec![1]);
+        assert_eq!(idx("pl2"), vec![0, 2], "twice: both copies, by index");
+        assert!(by("pl2").synced);
+        let none = db.playlist_membership("s", &["9".into()]).unwrap();
+        assert!(none.iter().all(|p| p.entries.is_empty()));
     }
 
     #[test]
