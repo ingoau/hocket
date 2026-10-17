@@ -835,7 +835,7 @@
         <item quantity="one">%1$d pin · Pin more from any item\'s menu</item>
         <item quantity="other">%1$d pins · Pin more from any item\'s menu</item>
     </plurals>
-    <string name="library_pin_reorder">Reorder %1$s</string>
+    <string name="library_pin_moved">Moved to position %1$d of %2$d</string>
     <string name="library_pin_unpin_named">Unpin %1$s</string>
     <string name="library_pin_chip_opens">Opens</string>
     <string name="library_pin_chip_plays">Plays</string>

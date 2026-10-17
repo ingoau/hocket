@@ -165,4 +165,45 @@ class HomeLibraryLogicTest {
         assertEquals(listOf(false, false, true, true), edges(4).map { it.bottom })
         assertEquals(listOf(false, true, false, true), edges(4).map { it.end })
     }
+
+    @Test
+    fun doneKeepsPinsUnpinnedElsewhereUnpinned() {
+        val a = PinEntry("album", "a")
+        val b = PinEntry("album", "b")
+        val c = PinEntry("album", "c")
+        // Reordered here; b unpinned on another device meanwhile.
+        assertEquals(listOf(c, a), LibraryPins.merged(listOf(a, b, c), listOf(c, b, a), listOf(a, c)))
+    }
+
+    @Test
+    fun donePutsPinsAddedElsewhereAtTheEnd() {
+        val a = PinEntry("album", "a")
+        val b = PinEntry("album", "b")
+        val n = PinEntry("playlist", "new", "play")
+        // b unpinned here, n pinned elsewhere.
+        assertEquals(listOf(a, n), LibraryPins.merged(listOf(a, b), listOf(a), listOf(n, a, b)))
+        // Pinned elsewhere and also back here (Undo) only once.
+        assertEquals(listOf(a, b), LibraryPins.merged(listOf(a), listOf(a, b), listOf(a, b)))
+    }
+
+    @Test
+    fun doneKeepsATapChangedElsewhereUnlessTheDraftChangedIt() {
+        val a = PinEntry("album", "a", "open")
+        val b = PinEntry("artist", "b", "open")
+        val draft = listOf(b, a.copy(tap = "play"))
+        val current = listOf(a.copy(tap = "shuffle"), b.copy(tap = "shuffle"))
+        // a's tap was changed here, so the draft's wins; b's wasn't, so the other device's does.
+        assertEquals(listOf(b.copy(tap = "shuffle"), a.copy(tap = "play")), LibraryPins.merged(listOf(a, b), draft, current))
+    }
+
+    @Test
+    fun doneKeepsUnknownKindsAndTheirFields() {
+        val station = LibraryPins.parse("""[{"kind":"station","id":"x","tap":"open","future":1}]""").single()
+        val a = PinEntry("album", "a")
+        val b = PinEntry("album", "b")
+        val original = listOf(station, a, b)
+        val merged = LibraryPins.merged(original, listOf(station, b, a), original)
+        assertEquals(listOf(station, b, a), merged)
+        assertEquals("""[{"future":1,"kind":"station","id":"x","tap":"open"},{"kind":"album","id":"b","tap":"open"},{"kind":"album","id":"a","tap":"open"}]""", LibraryPins.encode(merged))
+    }
 }

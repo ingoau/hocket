@@ -125,6 +125,10 @@ class PinEditorTest {
         compose.onAllNodesWithTag("library.pins.editor.pin")[4].performCustomAction(compose, "Move earlier")
         compose.waitForIdle()
         assertEquals(listOf(playlist, album, lib.artists[0].name, lib.genres.first().name, lib.tracks[3].title), tiles())
+        // TalkBack hears where the last moved pin landed.
+        assertEquals("Moved to position 4 of 5", compose.onNodeWithTag("library.pins.editor.announce").fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single())
+        // The moves are on the tile only, not repeated on its handle.
+        assertFalse(compose.onAllNodesWithTag("library.pins.editor.handle", useUnmergedTree = true)[0].fetchSemanticsNode().config.contains(SemanticsActions.CustomActions))
         // The first tile can't move earlier, nor the last later.
         val firstActions = compose.onAllNodesWithTag("library.pins.editor.pin")[0].fetchSemanticsNode().config[SemanticsActions.CustomActions].map { it.label }
         assertEquals(listOf("Move later"), firstActions)
@@ -199,6 +203,31 @@ class PinEditorTest {
         compose.waitUntil(5_000) { core.client.queue.value.contextLabel == "Loved, not played lately" }
         // Played in place: the Library is still the page shown.
         assertTrue(exists("library.screen"))
+    }
+
+    @Test
+    fun doneKeepsAPinOfAKindThisBuildDoesntKnow() {
+        core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        await("navBar")
+        val a = lib.albums[1].id
+        val b = lib.artists[0].id
+        val raw = """[{"kind":"album","id":"$a","tap":"open"},{"kind":"station","id":"x","tap":"open","future":1},{"kind":"artist","id":"$b","tap":"open"}]"""
+        core.client.dispatch(Commands.setSetting(SettingKeys.LIBRARY_PINS, raw))
+        click("navBar.library")
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("library.pin").fetchSemanticsNodes().size == 2 }
+        click("library.pins.edit")
+        await("library.pins.editor")
+        compose.waitUntil(5_000) { tiles().size == 2 }
+        compose.onAllNodesWithTag("library.pins.editor.pin")[0].performCustomAction(compose, "Move later")
+        click("library.pins.editor.done")
+        compose.waitUntil(5_000) { !exists("library.pins.editor") }
+        // The album moved past the artist (and so past the station, which keeps its place before the artist).
+        assertEquals(
+            """[{"future":1,"kind":"station","id":"x","tap":"open"},{"kind":"artist","id":"$b","tap":"open"},{"kind":"album","id":"$a","tap":"open"}]""",
+            core.client.settings.value[SettingKeys.LIBRARY_PINS]?.value,
+        )
     }
 
     /** Back, sent to the window on top (the editor's dialog). */

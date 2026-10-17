@@ -67,7 +67,9 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -101,9 +103,10 @@ import sh.calvin.reorderable.rememberReorderableLazyGridState
 @Composable
 fun PinEditor(pins: List<ResolvedPin>, onClose: () -> Unit) {
     val client = LocalCoreClient.current
-    val saved = remember { LibraryPins.current(client) }
-    // The draft, as `library.pins` JSON so it survives rotation.
-    var draftJson by rememberSaveable { mutableStateOf(LibraryPins.encode(saved)) }
+    // The pins as they were when the editor opened (Done merges against them) and the draft, both
+    // as `library.pins` JSON so they survive rotation.
+    val originalJson = rememberSaveable { LibraryPins.encode(LibraryPins.current(client)) }
+    var draftJson by rememberSaveable { mutableStateOf(originalJson) }
     val draft = remember(draftJson) { LibraryPins.parse(draftJson) }
     // Event handlers read the draft as it is now, not as it was when they were made.
     fun draftNow() = LibraryPins.parse(draftJson)
@@ -111,16 +114,28 @@ fun PinEditor(pins: List<ResolvedPin>, onClose: () -> Unit) {
     val byKey = remember(pins) { pins.associateBy { it.entry.kind to it.entry.id } }
     // What's drawn: the draft's pins this build can show, with the draft's tap.
     val shown = remember(draft, byKey) { draft.mapNotNull { e -> byKey[e.kind to e.id]?.copy(entry = e) } }
-    val shownEntries = remember(shown) { shown.map { it.entry } }
     val details by rememberPinDetails(pins)
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val resources = LocalResources.current
     val undoLabel = stringResource(R.string.action_undo)
+    var announcement by remember { mutableStateOf("") }
+    /** Says where [pin] now is among the shown pins, for TalkBack (the live region below). */
+    fun announcePosition(pin: PinEntry) {
+        val now = draftNow().filter { e -> byKey.containsKey(e.kind to e.id) }
+        val at = now.indexOfFirst { it.same(pin) }
+        if (at >= 0) announcement = resources.getString(R.string.library_pin_moved, at + 1, now.size)
+    }
+    fun move(pin: PinEntry, by: Int) {
+        edit(LibraryPins.moved(draftNow(), pin, by, draftNow().filter { e -> byKey.containsKey(e.kind to e.id) }))
+        announcePosition(pin)
+    }
     fun done() {
-        val final = draftNow()
-        if (LibraryPins.changed(saved, final)) LibraryPins.save(client, final)
+        // Changes made elsewhere while the editor was open (another device) are kept, not overwritten.
+        val current = LibraryPins.current(client)
+        val final = LibraryPins.merged(LibraryPins.parse(originalJson), draftNow(), current)
+        if (LibraryPins.changed(current, final)) LibraryPins.save(client, final)
         onClose()
     }
     fun unpin(pin: ResolvedPin) {
@@ -204,18 +219,21 @@ fun PinEditor(pins: List<ResolvedPin>, onClose: () -> Unit) {
                                 val moveEarlier = stringResource(R.string.library_pin_move_earlier)
                                 val moveLater = stringResource(R.string.library_pin_move_later)
                                 val actions = buildList {
-                                    if (i > 0) add(CustomAccessibilityAction(moveEarlier) { edit(LibraryPins.moved(draftNow(), pin.entry, -1, shownEntries)); true })
-                                    if (i < shown.lastIndex) add(CustomAccessibilityAction(moveLater) { edit(LibraryPins.moved(draftNow(), pin.entry, 1, shownEntries)); true })
+                                    if (i > 0) add(CustomAccessibilityAction(moveEarlier) { move(pin.entry, -1); true })
+                                    if (i < shown.lastIndex) add(CustomAccessibilityAction(moveLater) { move(pin.entry, 1); true })
                                 }
                                 PinEditTile(
                                     pin, details[pin.entry.kind to pin.entry.id], pinGroupEdges(i, shown.size), dragging, actions,
                                     onCycle = { edit(LibraryPins.withTap(draftNow(), pin.entry, pin.entry.pinTap.next)) },
                                     onUnpin = { unpin(pin) },
+                                    onDropped = { announcePosition(pin.entry) },
                                 )
                             }
                         }
                     }
                 }
+                // Where a moved pin landed, read out politely after a move.
+                Box(Modifier.size(1.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = announcement }.testTag("library.pins.editor.announce"))
                 if (snackbar.currentSnackbarData == null) {
                     Text(
                         pluralStringResource(R.plurals.library_pins_count, shown.size, shown.size),
@@ -249,6 +267,7 @@ private fun ReorderableCollectionItemScope.PinEditTile(
     actions: List<CustomAccessibilityAction>,
     onCycle: () -> Unit,
     onUnpin: () -> Unit,
+    onDropped: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val lift by animateFloatAsState(if (dragging) 1f else 0f, label = "pinLift")
@@ -271,15 +290,14 @@ private fun ReorderableCollectionItemScope.PinEditTile(
     ) {
         Column(Modifier.padding(start = 2.dp, end = 2.dp, bottom = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                val reorderLabel = stringResource(R.string.library_pin_reorder, pin.title)
-                // Its own stop for TalkBack, with the moves (a drag needs a finger on it).
+                // Not a TalkBack stop of its own: the tile carries Move earlier / later.
                 Box(
                     Modifier
                         .draggableHandle(
                             onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                            onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd) },
+                            onDragStopped = { haptics.performHapticFeedback(HapticFeedbackType.GestureEnd); onDropped() },
                         )
-                        .size(48.dp).semantics(mergeDescendants = true) { contentDescription = reorderLabel; customActions = actions }.testTag("library.pins.editor.handle"),
+                        .size(48.dp).testTag("library.pins.editor.handle"),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(DragIndicator, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)

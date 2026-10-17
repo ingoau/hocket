@@ -133,6 +133,28 @@ object LibraryPins {
     /** Whether the pin editor's [draft] differs from the [saved] pins (Done saves only then). */
     fun changed(saved: List<PinEntry>, draft: List<PinEntry>) = saved != draft
 
+    /**
+     * The pin editor's [draft] merged with the pins as they are at Done ([current]), against the pins
+     * when it opened ([original]): the draft's order and edits win, but a pin unpinned elsewhere
+     * meanwhile stays unpinned, one pinned elsewhere is added at the end, and a tap changed
+     * elsewhere is kept where the draft left that tap alone. Unknown kinds and extra fields pass
+     * through untouched.
+     */
+    fun merged(original: List<PinEntry>, draft: List<PinEntry>, current: List<PinEntry>): List<PinEntry> {
+        fun List<PinEntry>.find(p: PinEntry) = firstOrNull { it.same(p) }
+        val kept = draft.mapNotNull { d ->
+            val o = original.find(d)
+            val c = current.find(d)
+            when {
+                o != null && c == null -> null
+                o != null && c != null && d.tap == o.tap -> d.copy(tap = c.tap, extra = c.extra)
+                else -> d
+            }
+        }
+        val added = current.filter { c -> original.find(c) == null && kept.find(c) == null }
+        return (kept + added).take(MAX)
+    }
+
     /** [pins] with [pin]'s tap set to [tap]. */
     fun withTap(pins: List<PinEntry>, pin: PinEntry, tap: PinTap): List<PinEntry> = pins.map { if (it.same(pin)) it.copy(tap = tap.id) else it }
 

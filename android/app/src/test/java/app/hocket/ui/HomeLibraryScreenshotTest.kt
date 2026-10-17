@@ -115,7 +115,7 @@ class HomeLibraryScreenshotTest {
             shot(dir, "$prefix-07-pin-editor")
         }
         step {
-            val handle = compose.onAllNodesWithTag("library.pins.editor.handle")[1]
+            val handle = compose.onAllNodesWithTag("library.pins.editor.handle", useUnmergedTree = true)[1]
             handle.performTouchInput { down(center); moveBy(Offset(0f, 30f)); moveBy(Offset(0f, 30f)) }
             settle()
             shot(dir, "$prefix-08-pin-editor-drag")
