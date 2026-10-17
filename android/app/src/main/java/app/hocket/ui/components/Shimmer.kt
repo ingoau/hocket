@@ -142,6 +142,20 @@ fun AlbumCardSkeleton(modifier: Modifier = Modifier) {
     }
 }
 
+/** An [ArtistCard]'s skeleton: a round image and two centred lines. */
+@Composable
+fun ArtistCardSkeleton(modifier: Modifier = Modifier) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val titleH = with(density) { GridTitleStyle.lineHeight.toDp() }
+    val subH = with(density) { MaterialTheme.typography.bodySmall.lineHeight.toDp() }
+    Column(modifier.fillMaxWidth().padding(6.dp).clearAndSetSemantics { }, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).skeleton(androidx.compose.foundation.shape.CircleShape))
+        Spacer(Modifier.height(8.dp))
+        Box(Modifier.height(titleH), contentAlignment = androidx.compose.ui.Alignment.Center) { SkeletonLine(Modifier.fillMaxWidth(0.7f), (titleH * 0.7f).coerceAtMost(14.dp)) }
+        Box(Modifier.height(subH), contentAlignment = androidx.compose.ui.Alignment.Center) { SkeletonLine(Modifier.fillMaxWidth(0.4f), (subH * 0.7f).coerceAtMost(12.dp)) }
+    }
+}
+
 /**
  * The text block under a grid cell, as tall as [GridCellText] at the current font scale (a
  * two-line title and a one-line subtitle), so a loaded cell takes exactly the skeleton's place.

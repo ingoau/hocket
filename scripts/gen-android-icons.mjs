@@ -42,6 +42,8 @@ const SYMBOLS = {
   SkipPrevious: "skip_previous", Sort: "sort", Speaker: "speaker", Star: "star", StarOutline: "star:outline", Stop: "stop",
   Sync: "sync", Tune: "tune", Undo: "undo", Visibility: "visibility", VisibilityOff: "visibility_off", VolumeOff: "volume_off", VolumeUp: "volume_up",
   Watch: "watch",
+  ArrowDownward: "arrow_downward", ArrowUpward: "arrow_upward", Bolt: "bolt", CalendarToday: "calendar_today", Schedule: "schedule",
+  SortByAlpha: "sort_by_alpha", Speed: "speed", Timer: "timer", TrendingUp: "trending_up", Update: "update",
 };
 
 /** Which glyphs each group emits. AutoMirrored ones flip in right-to-left layouts. */
@@ -55,6 +57,7 @@ const GROUPS = [
     "PushPin", "QueueMusic", "Refresh", "Remove", "RemoveCircleOutline", "Repeat", "RepeatOne", "RestartAlt", "Save", "Search",
     "SelectAll", "Settings", "SettingsBackupRestore", "Share", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
     "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeOff", "VolumeUp", "Watch",
+    "ArrowDownward", "ArrowUpward", "Bolt", "CalendarToday", "Schedule", "SortByAlpha", "Speed", "Timer", "TrendingUp", "Update",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",

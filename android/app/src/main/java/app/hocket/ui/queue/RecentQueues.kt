@@ -143,7 +143,7 @@ fun SavedQueuesScreen(nav: NavHostController) {
     var undoHistory by remember { mutableStateOf(false) }
     Scaffold(topBar = {
         TopAppBar(
-            title = { Text(stringResource(R.string.home_saved_queues)) },
+            title = { Text(stringResource(R.string.home_saved_queues), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
             actions = {
                 IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(HocketIcons.Filled.History, stringResource(R.string.queue_undo_history)) }
                 AccountButton()

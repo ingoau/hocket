@@ -144,7 +144,8 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
             item {
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    EnumPicker(stringResource(R.string.filter_sort), sortLabel(filter.sort), SortOrder.entries.map { it to sortLabel(it) }) { filter = filter.copy(sort = it) }
+                    // Album and song counts order artists only (for songs they are the default order).
+                    EnumPicker(stringResource(R.string.filter_sort), sortLabel(filter.sort), SortOrder.entries.filter { it != SortOrder.AlbumCount && it != SortOrder.SongCount }.map { it to sortLabel(it) }) { filter = filter.copy(sort = it) }
                     Spacer(Modifier.width(8.dp))
                     Checkbox(checked = filter.descending, onCheckedChange = { filter = filter.copy(descending = it) }); Text(stringResource(R.string.sort_descending))
                     Spacer(Modifier.width(8.dp))

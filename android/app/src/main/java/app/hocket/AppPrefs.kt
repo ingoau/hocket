@@ -88,3 +88,18 @@ class InMemoryNavBarPrefs(initial: List<String> = emptyList()) : NavBarPrefs {
     override val navItems: Flow<List<String>> = state
     override suspend fun setNavItems(ids: List<String>) { state.value = ids }
 }
+
+/**
+ * Each library list's last sort (order and direction), one entry per list: a view preference of this
+ * phone, so device-local rather than a synced core setting. SharedPreferences rather than
+ * [AppPrefs]' DataStore because it reads synchronously: a list opens with its sort on the first
+ * frame instead of querying the default first. Works on any Context (tests run on a bare Application).
+ */
+class ListSortPrefs(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("hocket-list-sort", Context.MODE_PRIVATE)
+
+    /** The stored sort of [list] (as the list encodes it), or null when never chosen. */
+    fun get(list: String): String? = prefs.getString(list, null)
+
+    fun set(list: String, sort: String) = prefs.edit().putString(list, sort).apply()
+}

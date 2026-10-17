@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hocket.R
@@ -288,6 +289,8 @@ fun AlbumCard(
     selected: Boolean = false,
     selectionActive: Boolean = false,
     onToggleSelect: () -> Unit = {},
+    /** 1 in a carousel row, where cells needn't line up with a row below. */
+    titleLines: Int = 2,
 ) {
     val artist = album.artist ?: stringResource(R.string.unknown_artist)
     val label = stringResource(R.string.row_album_a11y, album.name, artist)
@@ -302,7 +305,7 @@ fun AlbumCard(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            GridCellText(album.name, artist)
+            GridCellText(album.name, artist, titleLines)
         }
     }
 }
@@ -312,13 +315,45 @@ fun AlbumCard(
  * tall, so cells in a row and their loading skeletons line up) and a one-line subtitle.
  */
 @Composable
-fun GridCellText(title: String, subtitle: String) {
-    Text(title, style = GridTitleStyle, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+fun GridCellText(title: String, subtitle: String, titleLines: Int = 2) {
+    Text(title, style = GridTitleStyle, minLines = titleLines, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 internal val GridTitleStyle: androidx.compose.ui.text.TextStyle
     @Composable get() = MaterialTheme.typography.titleSmallEmphasized
+
+/**
+ * An artist in a grid: the round artist image, the name under it on one line and the album count
+ * under that, centred. Selection works as on [AlbumCard] (long-press selects, the ripple stays on
+ * the image).
+ */
+@Composable
+fun ArtistCard(
+    artist: Artist,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    selectionActive: Boolean = false,
+    onToggleSelect: () -> Unit = {},
+) {
+    val label = stringResource(R.string.row_artist_a11y, artist.name, artist.albumCount.toInt())
+    val interaction = remember { MutableInteractionSource() }
+    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
+        Column(Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box {
+                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape).indication(interaction, ripple()), CircleShape)
+                if (selected) Box(Modifier.padding(8.dp)) {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(artist.name, style = GridTitleStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Text(stringResource(R.string.library_count_albums, artist.albumCount.toInt()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        }
+    }
+}
 
 @Composable
 fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {

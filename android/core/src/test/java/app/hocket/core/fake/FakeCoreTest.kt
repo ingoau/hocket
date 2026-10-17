@@ -311,4 +311,24 @@ class FakeCoreTest {
         core.dispatchAndWait(Command.RequestSnapshot)
         assertEquals(offline, replay.await().data.network)
     }
+
+    /** Artists honour the core's sort and plain direction; the default (no sort) is by name. */
+    @Test
+    fun artistsSortByTheQuerysOrderAndDirection() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        val server = core.snapshot().servers.first().id
+        suspend fun artists(sort: SortOrder? = null, descending: Boolean? = null): List<Artist> =
+            (core.query(Query.Artists(QueryArtistsInner(server, Page(0u, 500u), sort, descending))) as QueryResult.Artists).data.items
+        val byName = artists()
+        assertEquals(byName.map { it.name.lowercase() }.sorted(), byName.map { it.name.lowercase() })
+        assertEquals(byName.reversed().map { it.name }, artists(SortOrder.Default, true).map { it.name })
+        val most = artists(SortOrder.AlbumCount, true).map { it.albumCount }
+        assertEquals(most.sortedDescending(), most)
+        val fewest = artists(SortOrder.SongCount, false).map { it.songCount }
+        assertEquals(fewest.sorted(), fewest)
+        // Through the client's query helper too.
+        val helper = (core.query(Queries.artists(server, Page(0u, 500u), SortOrder.AlbumCount, true)) as QueryResult.Artists).data.items
+        assertEquals(artists(SortOrder.AlbumCount, true), helper)
+    }
 }

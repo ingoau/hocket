@@ -152,7 +152,9 @@ object Queries {
         Query.AlbumCount(QueryAlbumCountInner(serverId, artistId, genre))
     fun album(id: AlbumId) = Query.Album(QueryAlbumInner(id))
     fun albumTracks(id: AlbumId) = Query.AlbumTracks(QueryAlbumTracksInner(id))
-    fun artists(serverId: ServerId, page: Page) = Query.Artists(QueryArtistsInner(serverId, page))
+    /** Artists by name unless [sort] says album or song count, plays, date added or random. */
+    fun artists(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false) =
+        Query.Artists(QueryArtistsInner(serverId, page, sort, descending))
     fun artist(id: ArtistId) = Query.Artist(QueryArtistInner(id))
     fun artistTopSongs(id: ArtistId, count: Int) = Query.ArtistTopSongs(QueryArtistTopSongsInner(id, count.toUInt()))
     fun genres(serverId: ServerId) = Query.Genres(QueryGenresInner(serverId))

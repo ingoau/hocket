@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -129,6 +130,35 @@ class HomeLibraryScreenshotTest {
             shot(dir, "$prefix-09-pin-editor-unpinned")
             compose.onNodeWithTag("library.pins.editor.cancel").performClick()
             settle()
+        }
+        // The lists, each opened from the Library's Browse: Pinned, Recent, then the sorted full list.
+        listOf("albums", "artists", "playlists", "songs", "genres").forEachIndexed { i, list ->
+            step {
+                compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.$list"))
+                compose.onNodeWithTag("library.browse.$list").performClick()
+                awaitTag("libraryList.$list")
+                settle()
+                shot(dir, "$prefix-${10 + i * 2}-list-$list")
+                if (list == "artists") {
+                    // Further down: the full list as a grid of round images.
+                    compose.onNodeWithTag("library.artists").performScrollToNode(hasTestTag("library.group.all"))
+                    compose.onNodeWithTag("library.artists").performTouchInput { swipeUp(startY = centerY, endY = top) }
+                    settle()
+                    shot(dir, "$prefix-${11 + i * 2}-list-artists-grid")
+                }
+                if (list == "albums") {
+                    compose.onNodeWithTag("library.sort").performClick()
+                    awaitTag("library.sortSheet")
+                    settle()
+                    shot(dir, "$prefix-11-sort-sheet")
+                    dismissSheet()
+                }
+            }
+            step {
+                compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+                awaitTag("library.grid")
+                settle()
+            }
         }
     }
 

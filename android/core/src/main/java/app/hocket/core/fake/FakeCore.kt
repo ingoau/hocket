@@ -1351,7 +1351,7 @@ class FakeCore(
         is Query.Album -> QueryResult.AlbumDetail(library.album(q.data.id))
         is Query.AlbumTracks -> QueryResult.TrackList(library.albumTracks(q.data.id))
         is Query.Artists -> {
-            val sorted = library.artists.sortedBy { it.name.lowercase() }
+            val sorted = library.sortedArtists(library.artists, q.data.sort ?: SortOrder.Default, q.data.descending ?: false)
             val off = q.data.page.offset.toInt()
             QueryResult.Artists(ArtistPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
