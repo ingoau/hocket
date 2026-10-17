@@ -58,6 +58,7 @@ import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.Album
@@ -356,7 +357,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Tracks
     val songMenu = app.hocket.ui.components.rememberSongMenu()
-    val removeFromPlaylist = stringResource(R.string.action_remove_from_playlist)
+    val resources = androidx.compose.ui.platform.LocalResources.current
     var playlistSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
@@ -423,9 +424,10 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                         ReorderableItem(reorderable, key = e.key, enabled = editable) { dragging ->
                             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = {
                                 // The playlist's own extra: remove this entry (by its position).
-                                val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(removeFromPlaylist, HocketIcons.Filled.PlaylistRemove,
-                                    onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))) }, destructive = true, testTag = "songMenu.removeFromPlaylist")) else emptyList()
-                                songMenu.open(t.toSummary(), extras = extras)
+                                val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(resources.getString(R.string.menu_remove_from, p.name), HocketIcons.Filled.PlaylistRemove,
+                                    onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))) }, destructive = true, testTag = "songMenu.removeFromPlaylist",
+                                    replaces = ActionIds.REMOVE_FROM_PLAYLIST)) else emptyList()
+                                songMenu.open(t.toSummary(), extras = extras, context = p.name)
                             },
                                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
                                 nowPlaying = nowPlaying?.track?.id == t.id,
@@ -444,7 +446,13 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                     }
                 }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p?.name,
+                onRemoveFromContext = p?.takeIf { !it.isSmart && it.isMine }?.let { pl -> {
+                    // The selected songs' entries, by position (highest first, so each index stays valid).
+                    val sel = client.selection.value
+                    val indices = entries.orEmpty().mapIndexedNotNull { i, e -> i.takeIf { sel.contains(e.track.id) } }.sortedDescending()
+                    if (indices.isNotEmpty()) client.dispatch(Commands.playlistRemove(pl.id, indices))
+                } })
         }
     }
     if (p != null) {

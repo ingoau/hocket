@@ -764,7 +764,6 @@ class FakeCore(
                 library.refreshPlaylist(c.data.playlist_id)
                 pushUndo("Add to playlist") { list.clear(); list.addAll(prior); library.refreshPlaylist(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists") }
                 emitLibrary(listOf(c.data.playlist_id), "playlists")
-                toast(if (c.data.track_ids.size == 1) "Added to ${library.playlist(c.data.playlist_id)?.name}" else "Added ${c.data.track_ids.size} tracks to ${library.playlist(c.data.playlist_id)?.name}", "Undo", Command.Undo)
             }
             is Command.PlaylistRemove -> {
                 val list = library.playlistTracks[c.data.playlist_id] ?: return
@@ -773,7 +772,6 @@ class FakeCore(
                 library.refreshPlaylist(c.data.playlist_id)
                 pushUndo("Remove from playlist") { list.clear(); list.addAll(prior); library.refreshPlaylist(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists") }
                 emitLibrary(listOf(c.data.playlist_id), "playlists")
-                toast("Removed from playlist", "Undo", Command.Undo)
             }
             is Command.PlaylistMove -> {
                 val list = library.playlistTracks[c.data.playlist_id] ?: return
@@ -1367,14 +1365,7 @@ class FakeCore(
             val off = q.data.page.offset.toInt()
             QueryResult.Tracks(TrackPage(ids.drop(off).take(q.data.page.limit.toInt()).mapNotNull { library.track(it) }, off.toUInt(), ids.size.toUInt()))
         }
-        // Every playlist, with the indices at which it holds any of the tracks (all synced here).
-        is Query.PlaylistMembership -> {
-            val want = q.data.track_ids.toSet()
-            QueryResult.Membership(library.playlists.map { p ->
-                val ids = library.playlistTracks[p.id] ?: emptyList()
-                PlaylistMembership(p.id, ids.withIndex().filter { it.value in want }.map { PlaylistEntryRef(it.value, it.index.toUInt()) }, true)
-            })
-        }
+        is Query.PlaylistMembership -> QueryResult.Membership(playlistMembership(q.data.track_ids))
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
@@ -1411,6 +1402,15 @@ class FakeCore(
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
+    }
+
+    /** As the native core: every playlist, in name order, with the indices holding any of [trackIds]. */
+    private fun playlistMembership(trackIds: List<TrackId>): List<PlaylistMembership> {
+        val wanted = trackIds.toSet()
+        return library.playlists.sortedBy { it.name.lowercase() }.map { p ->
+            val entries = library.playlistTracks[p.id].orEmpty().withIndex().filter { it.value in wanted }.map { PlaylistEntryRef(it.value, it.index.toUInt()) }
+            PlaylistMembership(p.id, entries, synced = true)
+        }
     }
 
     private fun search(q: QuerySearchInner): QueryResult {

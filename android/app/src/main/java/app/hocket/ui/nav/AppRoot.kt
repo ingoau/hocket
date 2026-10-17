@@ -150,12 +150,15 @@ fun AppRoot(
         val loginKeys by logins.collectAsStateWithLifecycle()
         val unreadable by unreadableLogins.collectAsStateWithLifecycle()
         val snackbar = remember { SnackbarHostState() }
+        val snackbarScope = rememberCoroutineScope()
+        val appSnackbar = remember(snackbar, snackbarScope) { app.hocket.ui.components.AppSnackbar(snackbar, snackbarScope) }
         ToastCollector(snackbar)
         val server = servers.firstOrNull()
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
         val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor
+        CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides appSnackbar) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
             // the status-bar inset and consumes it, so the screens below do not pad for it again.
@@ -172,6 +175,7 @@ fun AppRoot(
             // The main shell places its own host (above the mini player and the bar); setup and
             // loading keep one just above the system navigation bar.
             if (!inShell) SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp)) { data -> Snackbar(data) }
+        }
         }
     }
 }
@@ -396,7 +400,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // Content runs to the bottom of the screen: the transparent navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }) }
+                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }, { nav.navigate(Route.Playlist(it)) }) }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
                         AppNavHost(nav, transitions, Modifier.fillMaxSize())
                     }
@@ -409,6 +413,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 app.hocket.ui.DetailNavigator(
                     openAlbum = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
                     openArtist = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Artist(id)) },
+                    openPlaylist = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Playlist(id)) },
                 )
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {

@@ -32,7 +32,9 @@ import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
+import app.hocket.core.api.Album
 import app.hocket.core.api.Track
+import app.hocket.core.api.TrackSummary
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.RatingStars
 import app.hocket.ui.components.formatBytes
@@ -50,10 +52,18 @@ import java.util.Locale
  * rows go to their pages ([onOpenAlbum], [onOpenArtist]) when given.
  */
 @Composable
-internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), onOpenAlbum: ((String) -> Unit)? = null, onOpenArtist: ((String) -> Unit)? = null) {
+internal fun PlayerAbout(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(),
+    onOpenAlbum: ((String) -> Unit)? = null,
+    onOpenArtist: ((String) -> Unit)? = null,
+    track: TrackSummary? = null,
+    title: String = stringResource(R.string.player_about_title),
+) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val summary = entry?.track
+    // [track] when given (a song menu's "Song info"), otherwise the song playing.
+    val summary = track ?: entry?.track
     val id = summary?.id
     val detail by produceState<Track?>(initialValue = null, id) {
         value = null
@@ -93,7 +103,7 @@ internal fun PlayerAbout(modifier: Modifier = Modifier, contentPadding: PaddingV
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "title") {
-            Text(stringResource(R.string.player_about_title), style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(title, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, modifier = Modifier.semantics { heading() })
         }
         if (summary != null) item(key = "rating") {
             Surface(shape = RoundedCornerShape(24.dp), color = card, modifier = Modifier.fillMaxWidth()) {
@@ -132,6 +142,47 @@ private fun DetailRow(label: String, value: String, link: Pair<String, () -> Uni
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.4f))
         Text(value, style = MaterialTheme.typography.bodyLarge, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(0.6f))
         if (link != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+    }
+}
+
+/**
+ * An album's details ("Album info" in its menu) on the same tonal card as [PlayerAbout]: artist,
+ * year, genre, songs and length, plays, added and last played. The artist row goes to its page.
+ */
+@Composable
+internal fun AlbumAbout(album: Album, title: String, modifier: Modifier = Modifier, onOpenArtist: ((String) -> Unit)? = null) {
+    val date = DateFormat.getDateInstance(DateFormat.MEDIUM)
+    val artistLabel = stringResource(R.string.player_about_artist)
+    val artistLink = album.artistId?.takeIf { onOpenArtist != null }?.let { id -> stringResource(R.string.action_go_to_artist) to { onOpenArtist!!(id) } }
+    val rows = buildList {
+        album.artist?.let { add(artistLabel to it) }
+        album.year?.takeIf { it > 0u }?.let { add(stringResource(R.string.player_about_year) to it.toString()) }
+        album.genre?.takeIf { it.isNotBlank() }?.let { add(stringResource(R.string.player_about_genre) to it) }
+        add(stringResource(R.string.library_songs) to album.songCount.toString())
+        add(stringResource(R.string.player_about_duration) to formatClock(album.durationMs.toLong()))
+        add(stringResource(R.string.player_about_play_count) to album.playCount.toString())
+        album.created?.let { add(stringResource(R.string.album_info_added) to date.format(Date(it.toLong()))) }
+        album.lastPlayed?.let { add(stringResource(R.string.player_about_last_played) to date.format(Date(it.toLong()))) }
+    }
+    val card = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
+    LazyColumn(
+        modifier.testTag("album.about"),
+        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item(key = "title") {
+            Text(title, style = MaterialTheme.typography.titleLargeEmphasized, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, modifier = Modifier.semantics { heading() })
+        }
+        item(key = "details") {
+            Surface(shape = RoundedCornerShape(24.dp), color = card, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    rows.forEachIndexed { i, (label, value) ->
+                        if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        DetailRow(label, value, artistLink.takeIf { label == artistLabel })
+                    }
+                }
+            }
+        }
     }
 }
 

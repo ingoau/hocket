@@ -222,6 +222,13 @@ class AccessibilityChecksTest {
         compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         check("track menu")
+        // Expanded, then its add to playlist sheet.
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check("track menu, expanded")
+        compose.onNodeWithTag("songMenu.action.addToPlaylist").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("picker.done").fetchSemanticsNodes().isNotEmpty() && compose.onAllNodesWithTag("picker.list").fetchSemanticsNodes().isNotEmpty() }
+        check("add to playlist")
         back()
         expanded()
         // The sleep timer is an entry in the track menu.

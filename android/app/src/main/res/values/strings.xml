@@ -830,4 +830,82 @@
     <string name="library_pinned_toast">Pinned to Library</string>
     <string name="library_statistics">Statistics</string>
     <string name="filter_edit">Edit filter</string>
+    <!-- Song, album and selection menus (the compact sheet) -->
+    <string name="menu_song">Song menu</string>
+    <string name="menu_album">Album menu</string>
+    <string name="menu_play_group">Play</string>
+    <string name="menu_loved">Loved</string>
+    <string name="menu_loved_some">%1$d of %2$d loved</string>
+    <string name="menu_downloaded">Downloaded</string>
+    <string name="menu_pinned">Pinned</string>
+    <string name="menu_song_info">Song info</string>
+    <string name="menu_album_info">Album info</string>
+    <string name="menu_remove_from">Remove from %1$s</string>
+    <string name="menu_remove_n_from">Remove %1$d from %2$s</string>
+    <string name="menu_queue">queue</string>
+    <string name="menu_more">More</string>
+    <string name="menu_handle">Drag handle</string>
+    <string name="menu_more_count">%1$d more</string>
+    <string name="menu_show_less">Show less</string>
+    <string name="menu_rating_mixed">Mixed</string>
+    <string name="album_info_added">Added</string>
+    <plurals name="menu_songs">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
+    <plurals name="menu_download_songs">
+        <item quantity="one">Download %1$d song</item>
+        <item quantity="other">Download %1$d songs</item>
+    </plurals>
+    <plurals name="menu_downloaded_songs">
+        <item quantity="one">Downloaded %1$d song</item>
+        <item quantity="other">Downloaded %1$d songs</item>
+    </plurals>
+    <!-- Add to playlist -->
+    <string name="picker_search">Search playlists</string>
+    <string name="picker_new_named">New playlist \"%1$s\"</string>
+    <string name="picker_create">Create</string>
+    <string name="picker_group_pinned">Pinned</string>
+    <string name="picker_group_recent">Recent</string>
+    <string name="picker_group_all">All playlists</string>
+    <string name="picker_group_matches">Matches</string>
+    <string name="picker_no_match">No playlists match \"%1$s\"</string>
+    <string name="picker_badge">×%1$d</string>
+    <plurals name="picker_copies">
+        <item quantity="one">%1$d copy</item>
+        <item quantity="other">%1$d copies</item>
+    </plurals>
+    <string name="picker_adding">Adding</string>
+    <string name="picker_removing">Removing</string>
+    <string name="picker_not_in_any">Not in any playlist</string>
+    <plurals name="picker_in_playlists">
+        <item quantity="one">In %1$d playlist</item>
+        <item quantity="other">In %1$d playlists</item>
+    </plurals>
+    <string name="picker_adding_count">%1$d adding</string>
+    <string name="picker_removing_count">%1$d removing</string>
+    <string name="picker_done">Done</string>
+    <string name="picker_in_twice">In %1$s twice</string>
+    <string name="picker_in_times">In %1$s %2$d times</string>
+    <string name="picker_remove_both">Remove both</string>
+    <string name="picker_remove_all">Remove all %1$d</string>
+    <string name="picker_remove_one">Remove one</string>
+    <string name="picker_add_copy">Add another copy</string>
+    <string name="picker_add">Add</string>
+    <string name="picker_open">Open playlist</string>
+    <string name="picker_hold_hint">More</string>
+    <string name="picker_added_to">Added to %1$s</string>
+    <string name="picker_added_again">Added again to %1$s</string>
+    <string name="picker_removed_from">Removed from %1$s</string>
+    <string name="picker_removed_one">Removed one from %1$s</string>
+    <string name="picker_removed_some">Removed %1$d from %2$s</string>
+    <plurals name="picker_added_to_many">
+        <item quantity="one">Added to %1$d playlist</item>
+        <item quantity="other">Added to %1$d playlists</item>
+    </plurals>
+    <plurals name="picker_removed_from_many">
+        <item quantity="one">Removed from %1$d playlist</item>
+        <item quantity="other">Removed from %1$d playlists</item>
+    </plurals>
+    <string name="picker_added_and_removed">Added to %1$d, removed from %2$d</string>
 </resources>

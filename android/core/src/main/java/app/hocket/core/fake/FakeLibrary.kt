@@ -101,6 +101,8 @@ class FakeLibrary(seed: Long = 42L, val serverId: ServerId = "fake-server") {
         playlistNames.forEachIndexed { i, name ->
             val id = "pl$i"
             val ids = (0 until 12 + rng.nextInt(30)).map { tracks[rng.nextInt(tracks.size)].id }.distinct().toMutableList()
+            // "Sunday morning" holds Late night's first song twice (the add to playlist sheet's ×2 and "Remove one").
+            if (i == 2) playlistTracks.getValue("pl0").first().let { twice -> ids.remove(twice); ids += listOf(twice, twice) }
             playlistTracks[id] = ids
             val dur = ids.sumOf { track(it)!!.durationMs.toLong() }.toUInt()
             playlists += Playlist(id, serverId, name, if (i == 1) "Keep the pace up" else null, "me", i % 3 == 0, ids.size.toUInt(), dur,

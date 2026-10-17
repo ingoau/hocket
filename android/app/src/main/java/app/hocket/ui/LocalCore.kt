@@ -12,9 +12,10 @@ val LocalWideLayout = staticCompositionLocalOf { false }
 
 /**
  * Opens library detail screens from anywhere in the tree (list rows' accessibility actions "Go to
- * album" / "Go to artist"). Null outside the main shell: the actions are then not offered.
+ * album" / "Go to artist", the add to playlist sheet's "Open playlist"). Null outside the main
+ * shell: the actions are then not offered.
  */
-class DetailNavigator(val openAlbum: (String) -> Unit, val openArtist: (String) -> Unit)
+class DetailNavigator(val openAlbum: (String) -> Unit, val openArtist: (String) -> Unit, val openPlaylist: ((String) -> Unit)? = null)
 val LocalDetailNavigator = staticCompositionLocalOf<DetailNavigator?> { null }
 
 @Composable
