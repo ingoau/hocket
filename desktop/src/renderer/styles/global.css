@@ -528,6 +528,9 @@ h3 { font-size: var(--fs-lg); }
 .connect-pill.remote:hover { background: var(--accent); filter: brightness(1.08); }
 .connect-pill .connect-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .connect-pill:focus-visible { border-radius: var(--shape-full); }
+/* The Connect controls before the room's state arrives (lib/connect-sync.ts): still usable, visibly not current.
+   A glass popover dims its contents (-within) instead of itself, so its blur still sees what is behind it. */
+.connect-syncing, .connect-syncing-within > * { opacity: 0.45; filter: saturate(0.4); }
 .player .notice { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 10px; font-size: var(--fs-xs); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; box-shadow: var(--shadow); white-space: nowrap; max-width: 90%; }
 .player .notice .btn { height: 20px; padding: 0 6px; font-size: var(--fs-xs); }
 .player .notice .btn.icon { width: 20px; border-radius: 10px; }

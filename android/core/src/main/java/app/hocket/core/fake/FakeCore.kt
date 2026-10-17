@@ -452,8 +452,9 @@ class FakeCore(
 
     private fun previous() {
         // The core's rule (handlers::session::previous with session::previous_should_restart): from
-        // 3 s into a track loaded here, or with nothing before it, Previous restarts the track.
-        if (transportOwner == deviceId && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
+        // 3 s into a track some device plays (here or another), or with nothing before it, Previous
+        // restarts the track.
+        if (transportOwner != null && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
         val prev = history.removeLastOrNull() ?: run { startPlayback(0, stamp.isPlaying); return }
         current?.let { cur ->
             when (cur.source) {

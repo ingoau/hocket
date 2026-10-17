@@ -26,6 +26,7 @@ import { bridge } from "../core/bridge";
 import { fmtTime } from "../lib/format";
 import { seekKeyTarget, seekValueText } from "../lib/a11y";
 import { usePrefersReducedMotion } from "../lib/media";
+import { useConnectSyncing } from "../lib/connect-sync";
 
 export const WAVE = {
   wavelength: 44,
@@ -77,6 +78,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   const ids = variant === "bar" ? { root: "seek", slider: "seek-slider", position: "seek-position" } : { root: "fs-seek", slider: "fs-seek-slider", position: "fs-seek-position" };
   const stamp = useApp((s) => s.transport.position);
   const offset = useApp((s) => s.connection.clockOffsetMs);
+  const syncing = useConnectSyncing();
   // The player bar's wave moves only while the window has focus and the battery saver is off (it
   // is always on screen, unlike the fullscreen player's); otherwise it holds still, like with
   // reduced motion. The fullscreen one stops only with the window hidden.
@@ -203,7 +205,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   );
   if (variant === "bar") {
     return (
-      <div className="np-seek bar-seek" data-testid={ids.root}>
+      <div className={`np-seek bar-seek ${syncing ? "connect-syncing" : ""}`} aria-busy={syncing || undefined} data-testid={ids.root}>
         <span className="time" data-testid={ids.position} aria-hidden="true">{fmtTime(shown)}</span>
         {slider}
         <span className="time" aria-hidden="true">{fmtTime(dur)}</span>
@@ -211,7 +213,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
     );
   }
   return (
-    <div className="np-seek" data-testid={ids.root}>
+    <div className={`np-seek ${syncing ? "connect-syncing" : ""}`} aria-busy={syncing || undefined} data-testid={ids.root}>
       {slider}
       <div className="np-seek-times" aria-hidden="true">
         <span className="time" data-testid={ids.position}>{fmtTime(shown)}</span>

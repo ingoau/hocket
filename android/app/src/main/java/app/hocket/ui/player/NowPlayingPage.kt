@@ -569,7 +569,8 @@ private fun PlayerSeek(position: () -> Long) {
     val playing by client.isPlaying.collectAsStateWithLifecycle()
     val reducedMotion = LocalReducedMotion.current
     val track = entry?.track ?: return
-    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING)) {
+    val syncing = rememberConnectSyncing()
+    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }) {
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, centre = { SeekStatus() })
     }
 }
@@ -962,6 +963,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val devices by client.devices.collectAsStateWithLifecycle()
     val remote = remoteDevice()
     val elsewhere = remote != null
+    val syncing = rememberConnectSyncing()
     val haptics = LocalHapticFeedback.current
     val takeOverLabel = stringResource(R.string.player_take_over)
     val interaction = remember { MutableInteractionSource() }
@@ -974,7 +976,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
     Box(
         Modifier
             .size(48.dp)
-            .graphicsLayer { shape = RoundedCornerShape(percent = (corner * 100).roundToInt()); clip = true }
+            .graphicsLayer { shape = RoundedCornerShape(percent = (corner * 100).roundToInt()); clip = true; alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }
             .background(container)
             .combinedClickable(
                 interactionSource = interaction,

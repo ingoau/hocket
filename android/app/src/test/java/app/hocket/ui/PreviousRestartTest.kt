@@ -37,36 +37,37 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-/** Previous restarts only a track loaded here, as in the core. */
+/** Previous restarts a track some device plays, as in the core. */
 class PreviousRestartTest : PlayerRulesTestBase() {
 
     @Test
-    fun previousRestartsOnlyATrackPlayingHere() {
-        assertTrue(previousRestarts(ownsTransport = true, positionMs = 5_000, historyEmpty = false))
-        assertFalse("another device plays (or nothing loaded here)", previousRestarts(ownsTransport = false, positionMs = 5_000, historyEmpty = false))
-        assertFalse(previousRestarts(ownsTransport = true, positionMs = 1_000, historyEmpty = false))
-        assertTrue("nothing before it", previousRestarts(ownsTransport = false, positionMs = 0, historyEmpty = true))
+    fun previousRestartsATrackPlayingAnywhere() {
+        assertTrue(previousRestarts(leaseHeld = true, positionMs = 5_000, historyEmpty = false))
+        assertFalse("nobody plays (nothing loaded yet)", previousRestarts(leaseHeld = false, positionMs = 5_000, historyEmpty = false))
+        assertFalse(previousRestarts(leaseHeld = true, positionMs = 1_000, historyEmpty = false))
+        assertTrue("nothing before it", previousRestarts(leaseHeld = false, positionMs = 0, historyEmpty = true))
     }
 
     @Test
-    fun theFakeGoesBackWhileAnotherDevicePlays() {
+    fun theFakeRestartsWhileAnotherDevicePlays() {
         var clock = 1_000_000.0
         val core = TestCore(now = { clock })
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        // Something to go back to, and far enough into the track that playing here would restart it.
+        // Something to go back to, and far enough into the track to restart it.
         core.client.dispatch(Command.Next)
         compose.waitUntil(5_000) { core.client.queue.value.history.isNotEmpty() }
         clock += 10_000.0
         core.client.requestSnapshot()
         compose.waitForIdle()
-        assertTrue("far enough in to restart here", core.client.positionNow() >= 3_000)
+        assertTrue("far enough in to restart", core.client.positionNow() >= 3_000)
         val before = core.client.queue.value.current?.item?.key
         core.client.dispatch(Commands.handoffTo("laptop"))
         core.client.dispatch(Command.Previous)
         core.client.requestSnapshot()
         compose.waitForIdle()
-        assertTrue("went back rather than restarting", core.client.queue.value.current?.item?.key != before)
+        assertEquals("restarted rather than going back", before, core.client.queue.value.current?.item?.key)
+        assertTrue("from the top", core.client.positionNow() < 3_000)
     }
 }
