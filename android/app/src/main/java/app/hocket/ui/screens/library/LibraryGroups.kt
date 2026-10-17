@@ -27,6 +27,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.PlayHistoryEntry
@@ -48,12 +54,32 @@ internal fun rememberPinnedIds(kind: PinKind): List<String> {
     return remember(raw, kind) { pinnedIds(LibraryPins.parse(raw), kind) }
 }
 
+/** How long the library generation must stay put before the groups reload (a sync bumps it in bursts). */
+private const val GENERATION_SETTLE_MS = 500L
+
+/**
+ * The library generation, settled: it bumps on every play and sync batch, and the groups re-query on
+ * it, so a burst of bumps reloads them once, [GENERATION_SETTLE_MS] after the last. -1 until read
+ * (callers wait for it, so they don't query twice on opening).
+ */
+@OptIn(FlowPreview::class)
+@Composable
+internal fun rememberSettledGeneration(): Int {
+    val client = LocalCoreClient.current
+    val generation by produceState(-1, client) {
+        value = client.libraryGeneration.value
+        client.libraryGeneration.drop(1).debounce(GENERATION_SETTLE_MS).collect { value = it }
+    }
+    return generation
+}
+
 /** This account's latest plays, newest first (as Home's Recently played reads them); null while loading. */
 @Composable
 internal fun rememberRecentHistory(): List<PlayHistoryEntry>? {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
-    val history by produceState<List<PlayHistoryEntry>?>(null, libraryGen) {
+    val generation = rememberSettledGeneration()
+    val history by produceState<List<PlayHistoryEntry>?>(null, generation) {
+        if (generation < 0) return@produceState
         value = (client.query(Queries.recentlyPlayed(RECENT_HISTORY)) as? QueryResult.History)?.data.orEmpty()
     }
     return history
@@ -61,7 +87,9 @@ internal fun rememberRecentHistory(): List<PlayHistoryEntry>? {
 
 /**
  * A paged list's groups: its pins of [kind] (at most [PINNED_LIMIT]) and the ids [recentIds] picks
- * from the play history (pinned ones excluded), each resolved by [resolve]; gone items are left out.
+ * from the play history (pinned ones excluded), each resolved by [resolve] (all at once; there is
+ * no batch query for albums or artists); gone items are left out. Loaded once the history is, and
+ * again only when it or the pins change.
  */
 @Composable
 internal fun <T : Any> rememberGroups(
@@ -69,12 +97,15 @@ internal fun <T : Any> rememberGroups(
     recentIds: (List<PlayHistoryEntry>, Collection<String>) -> List<String>,
     resolve: suspend (String) -> T?,
 ): ListGroups<T> {
-    val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val pinned = rememberPinnedIds(kind)
     val history = rememberRecentHistory()
-    val groups by produceState(ListGroups<T>(emptyList(), emptyList()), pinned, history, libraryGen) {
-        value = ListGroups(pinned.take(PINNED_LIMIT).mapNotNull { resolve(it) }, recentIds(history.orEmpty(), pinned).mapNotNull { resolve(it) })
+    val groups by produceState(ListGroups<T>(emptyList(), emptyList()), pinned, history) {
+        if (history == null) return@produceState
+        value = coroutineScope {
+            val pins = pinned.take(PINNED_LIMIT).map { async { resolve(it) } }
+            val recent = recentIds(history, pinned).map { async { resolve(it) } }
+            ListGroups(pins.awaitAll().filterNotNull(), recent.awaitAll().filterNotNull())
+        }
     }
     return groups
 }

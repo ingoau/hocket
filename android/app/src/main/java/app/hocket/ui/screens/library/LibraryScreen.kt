@@ -306,9 +306,13 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     val groups = if (control == null) ListGroups(emptyList(), emptyList()) else {
         val pinnedIds = rememberPinnedIds(PinKind.Track)
         val history = rememberRecentHistory()
-        val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
-        val pinned by produceState(emptyList<TrackSummary>(), pinnedIds, libraryGen) {
-            value = pinnedIds.take(PINNED_LIMIT).mapNotNull { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.toSummary() }
+        val generation = rememberSettledGeneration()
+        val pinned by produceState(emptyList<TrackSummary>(), pinnedIds, generation) {
+            if (generation < 0) return@produceState
+            // One batch lookup, back in pin order.
+            val ids = pinnedIds.take(PINNED_LIMIT)
+            val byId = (client.query(Queries.tracksByIds(ids)) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
+            value = ids.mapNotNull { byId[it]?.toSummary() }
         }
         // With the Available offline chip on, the groups too keep only what plays offline.
         fun List<TrackSummary>.shown() = if (offlineOnly) filter { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached } else this
@@ -377,6 +381,7 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
     val history = rememberRecentHistory()
     // The history's songs carry no genre: the most recent ones are looked up whole.
     val played by produceState(emptyList<Track>(), history) {
+        if (history == null) return@produceState
         val ids = recentTracks(history.orEmpty(), RECENT_GENRE_SONGS).map { it.id }
         val byId = (client.query(Queries.tracksByIds(ids)) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
         value = ids.mapNotNull { byId[it] }

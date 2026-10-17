@@ -48,7 +48,9 @@ class LibrarySortTest {
         assertEquals(listOf(SortKey.Name, SortKey.AlbumCount, SortKey.SongCount, SortKey.MostPlayed, SortKey.RecentlyAdded, SortKey.Random), LibraryList.Artists.sortKeys)
         assertEquals(listOf(SortKey.Name, SortKey.Updated, SortKey.Created, SortKey.SongCount, SortKey.Duration), LibraryList.Playlists.sortKeys)
         assertEquals(listOf(SortKey.Name, SortKey.SongCount, SortKey.AlbumCount), LibraryList.Genres.sortKeys)
+        assertEquals(listOf(SortKey.Title, SortKey.Artist, SortKey.Year, SortKey.RecentlyAdded, SortKey.Rating, SortKey.MostPlayed, SortKey.Random), LibraryList.Albums.sortKeys)
         assertEquals(ListSort(SortKey.Title, false), LibraryList.Songs.defaultSort)
+        assertEquals(ListSort(SortKey.Title, false), LibraryList.Albums.defaultSort)
         LibraryList.entries.forEach { assertFalse(it.defaultSort.descending) }
         // The artist orders reach the core as its new artist-only values.
         assertEquals(SortOrder.AlbumCount, SortKey.AlbumCount.core)
@@ -73,8 +75,11 @@ class LibrarySortTest {
         assertEquals(ListSort(SortKey.RecentlyAdded, true), byName.choose(SortKey.RecentlyAdded))
         assertEquals(ListSort(SortKey.Artist, false), byName.choose(SortKey.Artist))
         assertEquals(byName, byName.choose(SortKey.Name))
-        // A shuffle has no direction: the core is always asked ascending.
+        // A shuffle has no direction: the core is always asked ascending, and none is stored.
         assertFalse(ListSort(SortKey.Random, true).coreDescending)
+        assertEquals(ListSort(SortKey.Random, false), ListSort(SortKey.Random, true).normalized())
+        assertEquals(ListSort(SortKey.Random, false), LibraryList.Songs.decodeSort("random:desc"))
+        assertEquals(ListSort(SortKey.Random, false), byName.choose(SortKey.Random))
         assertTrue(ListSort(SortKey.MostPlayed, true).coreDescending)
     }
 
@@ -127,6 +132,19 @@ class LibrarySortTest {
         assertEquals(listOf("ar1", "ar2", "ar3"), recentArtistIds(history, 6))
         assertEquals(listOf("t1", "t2", "t3"), recentTracks(history, 3).map { it.id })
         assertEquals(listOf("t2", "t3", "t4"), recentTracks(history, 3, exclude = setOf("t1")).map { it.id })
+    }
+
+    @Test
+    fun recentGroupsLeaveOutSongsGoneFromTheLibrary() {
+        // The core keeps a gone song's plays with a placeholder: its id for a title, no album.
+        val gone = TrackSummary("t9", "s", "t9", null, null, null, null, 1u, null, 0u, false, OfflineState.None, null)
+        val history = played(gone, summary("t1", album = "al1", artist = "ar1"), gone)
+        assertEquals(listOf("t1"), recentTracks(history, 3).map { it.id })
+        assertEquals(listOf("al1"), recentAlbumIds(history, 3))
+        assertEquals(listOf("ar1"), recentArtistIds(history, 3))
+        // A real song titled like its id, but on an album, stays.
+        val odd = TrackSummary("x", "s", "x", null, "Album", "alx", null, 1u, null, 0u, false, OfflineState.None, null)
+        assertEquals(listOf("x"), recentTracks(played(odd), 3).map { it.id })
     }
 
     @Test

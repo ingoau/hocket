@@ -25,6 +25,7 @@ enum class SortWords(@StringRes val ascending: Int, @StringRes val descending: I
     Count(R.string.sort_dir_fewest, R.string.sort_dir_most),
     Length(R.string.sort_dir_shortest, R.string.sort_dir_longest),
     Level(R.string.sort_dir_lowest, R.string.sort_dir_highest),
+    Tempo(R.string.sort_dir_slowest, R.string.sort_dir_fastest),
     Plain(R.string.sort_ascending, R.string.sort_descending),
 }
 
@@ -48,7 +49,7 @@ enum class SortKey(val id: String, @StringRes val label: Int, val words: SortWor
     Rating("rating", R.string.sort_rating, SortWords.Level, true, SortOrder.Rating),
     MostPlayed("playCount", R.string.sort_most_played, SortWords.Count, true, SortOrder.PlayCount),
     Duration("duration", R.string.sort_duration, SortWords.Length, true, SortOrder.Duration),
-    Bpm("bpm", R.string.sort_bpm, SortWords.Level, false, SortOrder.Bpm),
+    Bpm("bpm", R.string.sort_bpm, SortWords.Tempo, false, SortOrder.Bpm),
     Energy("energy", R.string.sort_energy, SortWords.Level, false, SortOrder.Energy),
     Random("random", R.string.sort_random, SortWords.Plain, false, SortOrder.Random);
 
@@ -74,7 +75,7 @@ enum class SortKey(val id: String, @StringRes val label: Int, val words: SortWor
 
 /** A list's sort: its order and direction. */
 data class ListSort(val key: SortKey, val descending: Boolean = false) {
-    /** The core's order and direction (a shuffle is always asked for ascending, so it stays put). */
+    /** The core's order and direction (a shuffle has none: always asked for ascending, so it stays put). */
     val order: SortOrder get() = key.core
     val coreDescending: Boolean get() = descending && key.hasDirection
 
@@ -82,19 +83,25 @@ data class ListSort(val key: SortKey, val descending: Boolean = false) {
 
     /** [next] chosen: in its usual direction, or this sort unchanged when it already is [next]. */
     fun choose(next: SortKey): ListSort = if (next == key) this else ListSort(next, next.descendingFirst)
+
+    /** The same sort, minus a direction its order doesn't have. */
+    fun normalized(): ListSort = if (key.hasDirection || !descending) this else copy(descending = false)
 }
 
-/** The orders each list offers, the first its default. Songs and albums keep the core's sorts. */
+/**
+ * The orders each list offers, the first its default (A–Z): "Title" for albums and songs, "Name"
+ * for artists, playlists and genres. Songs and albums keep the core's sorts.
+ */
 val LibraryList.sortKeys: List<SortKey>
     get() = when (this) {
-        LibraryList.Albums -> listOf(SortKey.Name, SortKey.Artist, SortKey.Year, SortKey.RecentlyAdded, SortKey.Rating, SortKey.MostPlayed, SortKey.Random)
+        LibraryList.Albums -> listOf(SortKey.Title, SortKey.Artist, SortKey.Year, SortKey.RecentlyAdded, SortKey.Rating, SortKey.MostPlayed, SortKey.Random)
         LibraryList.Artists -> listOf(SortKey.Name, SortKey.AlbumCount, SortKey.SongCount, SortKey.MostPlayed, SortKey.RecentlyAdded, SortKey.Random)
         LibraryList.Playlists -> listOf(SortKey.Name, SortKey.Updated, SortKey.Created, SortKey.SongCount, SortKey.Duration)
         LibraryList.Songs -> listOf(SortKey.Title, SortKey.Artist, SortKey.Album, SortKey.Year, SortKey.RecentlyAdded, SortKey.Rating, SortKey.MostPlayed, SortKey.Duration, SortKey.Bpm, SortKey.Energy, SortKey.Random)
         LibraryList.Genres -> listOf(SortKey.Name, SortKey.SongCount, SortKey.AlbumCount)
     }
 
-/** Name (title for songs), A–Z. */
+/** Title or name, A–Z. */
 val LibraryList.defaultSort: ListSort get() = ListSort(sortKeys.first(), false)
 
 /** The preference key of this list's sort. */
@@ -104,7 +111,7 @@ val LibraryList.sortPrefKey: String get() = "sort.${name.lowercase()}"
 fun LibraryList.decodeSort(raw: String?): ListSort {
     val parts = raw?.split(':') ?: return defaultSort
     val key = sortKeys.firstOrNull { it.id == parts.getOrNull(0) } ?: return defaultSort
-    return ListSort(key, parts.getOrNull(1) == "desc")
+    return ListSort(key, parts.getOrNull(1) == "desc").normalized()
 }
 
 /** The list's sort, restored from this device's preferences and saved on each change. */
@@ -113,7 +120,7 @@ fun rememberListSort(list: LibraryList): Pair<ListSort, (ListSort) -> Unit> {
     val context = LocalContext.current
     val prefs = remember(context) { ListSortPrefs(context) }
     var sort by remember(list) { mutableStateOf(list.decodeSort(prefs.get(list.sortPrefKey))) }
-    return sort to { next -> sort = next; prefs.set(list.sortPrefKey, next.encode()) }
+    return sort to { next -> next.normalized().let { sort = it; prefs.set(list.sortPrefKey, it.encode()) } }
 }
 
 /**
@@ -170,15 +177,21 @@ fun pinnedIds(pins: List<PinEntry>, kind: PinKind): List<String> = pins.filter {
 
 /** The albums of the songs played last (newest first), each once, [exclude]d ones left out. */
 fun recentAlbumIds(history: List<PlayHistoryEntry>, limit: Int, exclude: Collection<String> = emptySet()): List<String> =
-    history.mapNotNull { it.track.albumId }.distinct().filter { it !in exclude }.take(limit)
+    history.filterNot { it.isGone() }.mapNotNull { it.track.albumId }.distinct().filter { it !in exclude }.take(limit)
 
 /** The artists of the songs played last (a song's own artist, else its first credited one), each once. */
 fun recentArtistIds(history: List<PlayHistoryEntry>, limit: Int, exclude: Collection<String> = emptySet()): List<String> =
-    history.mapNotNull { e -> e.track.artistId ?: e.track.artists?.firstNotNullOfOrNull { it.id } }.distinct().filter { it !in exclude }.take(limit)
+    history.filterNot { it.isGone() }.mapNotNull { e -> e.track.artistId ?: e.track.artists?.firstNotNullOfOrNull { it.id } }.distinct().filter { it !in exclude }.take(limit)
 
-/** The songs played last, each once. */
+/**
+ * A history entry whose song is gone from the library: the core still lists the play, with a
+ * placeholder summary (the id for a title, no album). Left out of the Recent groups.
+ */
+fun PlayHistoryEntry.isGone(): Boolean = track.title == track.id && track.album == null
+
+/** The songs played last, each once, leaving out songs no longer in the library. */
 fun recentTracks(history: List<PlayHistoryEntry>, limit: Int, exclude: Collection<String> = emptySet()): List<TrackSummary> =
-    history.map { it.track }.distinctBy { it.id }.filter { it.id !in exclude }.take(limit)
+    history.filterNot { it.isGone() }.map { it.track }.distinctBy { it.id }.filter { it.id !in exclude }.take(limit)
 
 /** The genres of [played] (songs, newest play first), each once, as the library lists them. */
 fun recentGenres(played: List<Track>, genres: List<Genre>, limit: Int, exclude: Collection<String> = emptySet()): List<Genre> {

@@ -1,6 +1,9 @@
 package app.hocket.ui.screens.library
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,15 +20,11 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,11 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,13 +60,14 @@ fun directionLabel(sort: ListSort): String = stringResource(if (sort.descending)
 internal fun SortChip(sort: ListSort, options: List<SortKey>, onSort: (ListSort) -> Unit, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
     val label = stringResource(sort.key.label)
-    val spoken = stringResource(R.string.sort_chip_a11y, label, directionLabel(sort))
+    // A shuffle has no direction to speak of (nor an arrow).
+    val spoken = if (sort.key.hasDirection) stringResource(R.string.sort_chip_a11y, label, directionLabel(sort)) else stringResource(R.string.sort_chip_a11y_no_direction, label)
     Surface(
         onClick = { open = true },
         shape = CircleShape,
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = modifier.testTag("library.sort").semantics { contentDescription = spoken; role = Role.Button },
+        modifier = modifier.testTag("library.sort").semantics { contentDescription = spoken },
     ) {
         Row(Modifier.heightIn(min = 36.dp).padding(start = 14.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -90,7 +87,6 @@ internal fun SortChip(sort: ListSort, options: List<SortKey>, onSort: (ListSort)
  * stays open, so an order and its direction can be picked in one visit. Tags: `library.sortSheet`,
  * `library.sort.option.<id>`, `library.sort.ascending`, `library.sort.descending`.
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun SortSheet(sort: ListSort, options: List<SortKey>, onSort: (ListSort) -> Unit, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -135,32 +131,44 @@ private fun SortOptionRow(key: SortKey, selected: Boolean, shape: androidx.compo
 }
 
 /**
- * Ascending / descending as two connected toggle buttons with arrows, labelled for the order. A
- * shuffle has no direction: the group stays, greyed out, so the sheet doesn't jump.
+ * Ascending / descending as two connected buttons with arrows, labelled for the order: one choice,
+ * so each is a radio button in a selectable group (the chosen one filled and fully rounded, as an
+ * M3 Expressive connected toggle). A shuffle has no direction: the group stays, greyed out and
+ * with nothing chosen, so the sheet doesn't jump.
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun DirectionGroup(sort: ListSort, onSort: (ListSort) -> Unit, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
     val groupLabel = stringResource(R.string.sort_direction)
+    val enabled = sort.key.hasDirection
     Row(
         modifier.fillMaxWidth().selectableGroup().semantics { contentDescription = groupLabel },
-        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         listOf(false, true).forEach { descending ->
-            val words = sort.key.words
-            val checked = sort.key.hasDirection && sort.descending == descending
-            ToggleButton(
-                checked = checked,
-                onCheckedChange = { onSort(sort.copy(descending = descending)) },
-                enabled = sort.key.hasDirection,
-                shapes = if (descending) ButtonGroupDefaults.connectedTrailingButtonShapes() else ButtonGroupDefaults.connectedLeadingButtonShapes(),
-                // The unchecked fill a step up from the sheet's, as the item menu's rows are.
-                colors = ToggleButtonDefaults.colors(containerColor = menuRowColor()),
-                modifier = Modifier.weight(1f).heightIn(min = 56.dp).semantics { role = Role.RadioButton; selected = checked }.testTag(if (descending) "library.sort.descending" else "library.sort.ascending"),
+            val chosen = enabled && sort.descending == descending
+            // The outer end always round; the inner end tight unless chosen.
+            val inner by animateDpAsState(if (chosen) 28.dp else 8.dp, label = "directionCorner")
+            val shape = if (descending) RoundedCornerShape(topStart = inner, bottomStart = inner, topEnd = 28.dp, bottomEnd = 28.dp)
+            else RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp, topEnd = inner, bottomEnd = inner)
+            val content = if (chosen) scheme.onPrimary else scheme.onSurface
+            Row(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 56.dp)
+                    .clip(shape)
+                    .background(if (chosen) scheme.primary else menuRowColor())
+                    .selectable(selected = chosen, enabled = enabled, role = Role.RadioButton) { onSort(sort.copy(descending = descending)) }
+                    .alpha(if (enabled) 1f else 0.38f)
+                    .padding(horizontal = 12.dp)
+                    .testTag(if (descending) "library.sort.descending" else "library.sort.ascending"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
             ) {
-                Icon(if (descending) HocketIcons.Filled.ArrowDownward else HocketIcons.Filled.ArrowUpward, null, Modifier.size(20.dp).clearAndSetSemantics { })
+                Icon(if (descending) HocketIcons.Filled.ArrowDownward else HocketIcons.Filled.ArrowUpward, null, Modifier.size(20.dp), tint = content)
                 Spacer(Modifier.width(8.dp))
-                Text(stringResource(if (descending) words.descending else words.ascending), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(stringResource(if (descending) sort.key.words.descending else sort.key.words.ascending), style = MaterialTheme.typography.labelLarge, color = content,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

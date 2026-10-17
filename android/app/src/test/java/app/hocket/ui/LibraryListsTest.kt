@@ -104,10 +104,10 @@ class LibraryListsTest {
     fun theSortSheetAppliesAtOnceAndTheListRemembersIt() {
         start()
         openList("albums")
-        assertEquals("Sort: Name, A–Z", chip())
+        assertEquals("Sort: Title, A–Z", chip())
         click("library.sort")
         await("library.sortSheet")
-        assertTrue(selected("library.sort.option.name"))
+        assertTrue(selected("library.sort.option.title"))
         assertTrue(selected("library.sort.ascending"))
         app.hocket.ui.a11y.A11yChecks.assertAccessible(compose, "sort sheet")
 
@@ -115,7 +115,7 @@ class LibraryListsTest {
         click("library.sort.option.dateAdded")
         assertEquals("Sort: Recently added, Newest", chip())
         assertTrue(selected("library.sort.option.dateAdded"))
-        assertFalse(selected("library.sort.option.name"))
+        assertFalse(selected("library.sort.option.title"))
         assertTrue(selected("library.sort.descending"))
         click("library.sort.ascending")
         assertEquals("Sort: Recently added, Oldest", chip())

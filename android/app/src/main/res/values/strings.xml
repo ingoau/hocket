@@ -162,10 +162,14 @@
     <string name="sort_dir_longest">Longest</string>
     <string name="sort_dir_lowest">Lowest</string>
     <string name="sort_dir_highest">Highest</string>
+    <string name="sort_dir_slowest">Slowest</string>
+    <string name="sort_dir_fastest">Fastest</string>
     <string name="sort_by">Sort by</string>
     <string name="sort_direction">Direction</string>
     <!-- The sort chip over a library list, spoken: "Sort: Recently added, Newest". -->
     <string name="sort_chip_a11y">Sort: %1$s, %2$s</string>
+    <!-- The sort chip for an order without a direction (Random): "Sort: Random". -->
+    <string name="sort_chip_a11y_no_direction">Sort: %1$s</string>
     <string name="library_group_pinned">Pinned</string>
     <string name="library_group_recent">Recent</string>
     <string name="library_all_albums">All albums</string>
