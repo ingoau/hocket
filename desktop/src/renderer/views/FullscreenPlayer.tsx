@@ -514,11 +514,13 @@ function NpVolume({ open, setOpen }: { open: boolean; setOpen: (open: boolean) =
     window.addEventListener("mousedown", down, true);
     return () => window.removeEventListener("mousedown", down, true);
   }, [open, setOpen]);
+  // The popover dims its contents, not itself: an ancestor's opacity would leave its glass see-through
+  // and cut its backdrop blur off from what is behind it.
   return (
-    <div ref={wrap} className={`np-volume-wrap ${syncing ? "connect-syncing" : ""}`} aria-busy={syncing || undefined} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
-      <button ref={button} type="button" className={`np-mode ${open ? "on" : ""}`} aria-expanded={open} aria-haspopup="dialog" aria-label={v.label} title={v.label} onClick={() => setOpen(!open)} data-testid="fs-pill-volume"><Icon name={silent ? "mute" : "volume"} size={22} /></button>
+    <div ref={wrap} className="np-volume-wrap" aria-busy={syncing || undefined} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
+      <button ref={button} type="button" className={`np-mode ${open ? "on" : ""} ${syncing ? "connect-syncing" : ""}`} aria-expanded={open} aria-haspopup="dialog" aria-label={v.label} title={v.label} onClick={() => setOpen(!open)} data-testid="fs-pill-volume"><Icon name={silent ? "mute" : "volume"} size={22} /></button>
       {pop.value ? (
-        <div {...pop.exitProps} className={`np-volume-pop ${pop.motion}`} role="dialog" aria-label={v.label} data-testid="fs-volume-popover">
+        <div {...pop.exitProps} className={`np-volume-pop ${pop.motion} ${syncing ? "connect-syncing-within" : ""}`} role="dialog" aria-label={v.label} data-testid="fs-volume-popover">
           {v.device ? <span className="np-volume-device" data-testid="fs-volume-device">{v.device}</span> : null}
           <button type="button" className="np-icon-btn sm" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute} data-testid="fs-mute"><Icon name={silent ? "mute" : "volume"} size={20} /></button>
           <Slider min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="fs-volume" />

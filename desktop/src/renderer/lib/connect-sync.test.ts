@@ -19,4 +19,9 @@ describe("connect controls waiting for the room", () => {
     expect(connectSyncing(conn({}), CONNECT_SYNC_TIMEOUT_MS - 1)).toBe(true);
     expect(connectSyncing(conn({}), CONNECT_SYNC_TIMEOUT_MS)).toBe(false);
   });
+
+  it("wait before the first snapshot, but only until the timeout", () => {
+    expect(connectSyncing(undefined, 0)).toBe(true);
+    expect(connectSyncing(undefined, CONNECT_SYNC_TIMEOUT_MS)).toBe(false);
+  });
 });
