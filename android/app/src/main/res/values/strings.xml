@@ -54,10 +54,10 @@
     <string name="loading">Loading…</string>
     <string name="connecting_to_core">Starting…</string>
     <string name="fatal_title">Hocket can’t start</string>
-    <string name="fatal_body">The core could not be started on this device, so nothing is loaded. Resetting removes the library mirror, downloads and the queue on this device; your server login is kept.</string>
+    <string name="fatal_body">Hocket couldn’t start on this device, so nothing is loaded. Resetting removes the library, downloads and the queue stored on this device; your server login is kept.</string>
     <string name="fatal_detail">Details: %1$s</string>
     <string name="fatal_reset">Reset app data</string>
-    <string name="fatal_reset_confirm">Delete the library mirror, downloads and queue on this device? Hocket closes afterwards; open it again to start fresh.</string>
+    <string name="fatal_reset_confirm">Delete the library, downloads and queue stored on this device? Hocket closes afterwards; open it again to start fresh.</string>
     <string name="empty_queue_title">Nothing is playing</string>
     <string name="empty_queue_body">Play an album, a playlist or a song and it shows up here.</string>
     <string name="empty_downloads_title">Nothing downloaded</string>
@@ -86,7 +86,7 @@
     <string name="empty_home_body">Open the Library and play something.</string>
     <string name="empty_devices_title">No other devices</string>
     <string name="empty_devices_body">Open Hocket on another device on this network or through the same coordinator.</string>
-    <string name="empty_recent_offline">Nothing to resume: this device was never part of a session and can’t reach a peer.</string>
+    <string name="empty_recent_offline">Nothing to resume yet. Go online to pick up where your other devices left off.</string>
 
     <!-- Server setup -->
     <string name="setup_title">Connect to Navidrome</string>
@@ -105,9 +105,7 @@
     <string name="setup_caps_version">Navidrome %1$s</string>
     <string name="setup_caps_lyrics">Synced lyrics</string>
     <string name="setup_caps_sonic">Sonic similarity</string>
-    <string name="setup_caps_transcoding">Transcoding extension</string>
-    <string name="setup_caps_native">Native API (smart playlists)</string>
-    <string name="setup_caps_apikey">API key auth</string>
+    <string name="setup_caps_native">Smart playlists</string>
     <string name="setup_syncing">Syncing library: %1$s</string>
     <string name="setup_continue">Continue</string>
     <string name="setup_remove_server">Use a different server</string>
@@ -300,10 +298,10 @@
     <string name="handoff_preparing">Preparing…</string>
     <string name="handoff_playing">Playing</string>
     <string name="handoff_last_seen">Seen %1$s ago</string>
-    <string name="handoff_hint">Devices pre-buffer while you decide. Playback keeps going here until you pick one. Long-press the Connect button to take over playback here.</string>
+    <string name="handoff_hint">Long-press the Connect button to take over playback here.</string>
     <string name="connection_local">Not connected</string>
-    <string name="connection_lan">LAN · %1$d peers</string>
-    <string name="connection_coordinator">Coordinator · %1$d peers</string>
+    <string name="connection_lan">On this network · %1$d devices</string>
+    <string name="connection_coordinator">Over the internet · %1$d devices</string>
 
     <!-- Queue -->
     <string name="queue_history">Played</string>
@@ -450,7 +448,7 @@
     <string name="filter_limit">Limit</string>
     <string name="filter_no_limit">No limit</string>
     <string name="filter_sample">Sample</string>
-    <string name="filter_smart_unavailable">Smart playlists need the native API, which this server doesn’t expose.</string>
+    <string name="filter_smart_unavailable">This server doesn’t support smart playlists.</string>
     <string name="filter_delete_confirm">Delete filter “%1$s”?</string>
 
     <!-- Stats -->
@@ -477,7 +475,7 @@
     <!-- Settings -->
     <string name="settings_title">Settings</string>
     <string name="settings_sync_master">Sync settings across devices</string>
-    <string name="settings_sync_master_body">Account-level settings ride along through the coordinator.</string>
+    <string name="settings_sync_master_body">Account-level settings sync to your other devices.</string>
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_theme">Theme</string>
     <string name="settings_theme_system">System</string>
@@ -510,7 +508,7 @@
     <string name="settings_eq_band_label">Equaliser band %1$s</string>
     <string name="settings_eq_reset">Flat</string>
     <string name="settings_db">%1$+.1f dB</string>
-    <string name="settings_transcoding_body">Per network. The server’s player profile should stay permissive.</string>
+    <string name="settings_transcoding_body">Choose a format and quality for each network.</string>
     <string name="settings_transcoding_wifi">Default (Wi‑Fi and other networks)</string>
     <string name="settings_transcoding_cellular">On cellular</string>
     <string name="settings_transcoding_current">On this network</string>
@@ -539,7 +537,7 @@
     <string name="settings_section_battery">Battery</string>
     <string name="settings_battery_saver">Battery saver mode</string>
     <string name="settings_battery_auto">Engage automatically on battery saver</string>
-    <string name="settings_battery_body">Animated background off, lyrics at 30 fps, smaller artwork, prefetch paused.</string>
+    <string name="settings_battery_body">Still background, simpler lyrics animation, smaller artwork, and no loading songs ahead.</string>
     <string name="settings_section_lyrics">Lyrics</string>
     <string name="settings_external_lyrics">Look up lyrics from external sources</string>
     <string name="settings_external_lyrics_privacy">Sends the artist and title of what you play to a third party. Off by default; everything fetched is cached.</string>
@@ -586,14 +584,14 @@
     <string name="settings_lyrics_translations">Show translations</string>
     <string name="settings_downloads_wifi_only">Download on Wi‑Fi only</string>
     <string name="settings_downloads_wifi_only_body">Downloads wait while the connection is metered.</string>
-    <string name="settings_version">Hocket %1$s · core %2$s</string>
+    <string name="settings_version">Hocket %1$s</string>
     <string name="settings_licence">Licensed under AGPL-3.0</string>
     <string name="settings_licences_title">Open-source licences</string>
     <string name="settings_licences_body">Hocket is free software under the GNU Affero General Public License v3.0. It uses Jetpack Compose, Media3, Coil, Kotlin coroutines and kotlinx.serialization (Apache-2.0), JNA (Apache-2.0 / LGPL-2.1), Reorderable (Apache-2.0), and a Rust core with UniFFI (MPL-2.0) and Symphonia (MPL-2.0).</string>
     <string name="settings_server">Server</string>
     <string name="settings_server_body">%1$s as %2$s</string>
     <string name="settings_remove_server">Sign out</string>
-    <string name="settings_remove_server_confirm">Sign out of %1$s? Downloads and the library mirror are removed.</string>
+    <string name="settings_remove_server_confirm">Sign out of %1$s? Downloads and the library stored on this device are removed.</string>
     <string name="settings_scope_synced">Synced</string>
     <string name="settings_scope_local">This device</string>
     <string name="settings_cache_images">Images: %1$s</string>
@@ -659,8 +657,8 @@
     <string name="settings_cache_budget_body">Automatic uses up to a tenth of the storage space, at most 2 GB.</string>
     <string name="settings_data_saved">Data saved</string>
     <string name="settings_data_saved_body">%1$s played from this device · %2$s fetched from the server</string>
-    <string name="settings_prefetch_mobile">Prefetch upcoming songs on mobile data</string>
-    <string name="settings_prefetch_mobile_body">Caches the next songs in the queue on metered or cellular connections too.</string>
+    <string name="settings_prefetch_mobile">Load upcoming songs ahead on mobile data</string>
+    <string name="settings_prefetch_mobile_body">Saves the next songs in the queue on metered or cellular connections too.</string>
     <string name="settings_available_offline_body">Downloads and fully cached songs</string>
     <string name="available_offline">Available offline</string>
     <string name="available_offline_empty_title">Nothing available offline</string>

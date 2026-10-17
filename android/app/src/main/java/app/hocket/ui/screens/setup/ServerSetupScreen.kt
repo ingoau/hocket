@@ -179,9 +179,7 @@ fun CapabilitySummary(server: ServerInfo) {
         }
         CapRow(stringResource(R.string.setup_caps_lyrics), caps.songLyrics)
         CapRow(stringResource(R.string.setup_caps_sonic), caps.sonicSimilarity)
-        CapRow(stringResource(R.string.setup_caps_transcoding), caps.transcodingExtension)
         CapRow(stringResource(R.string.setup_caps_native), caps.nativeApi)
-        CapRow(stringResource(R.string.setup_caps_apikey), caps.apiKeyAuthentication)
     }
 }
 

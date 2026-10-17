@@ -699,10 +699,9 @@ function Diagnostics() {
 
 function About() {
   const meta = useApp((s) => s.meta);
-  const ver = navigator.userAgent.match(/Electron\/([\d.]+)/)?.[1] ?? "";
   return (
     <>
-      <p>{t("settings.about", { version: meta?.version ?? "", core: meta?.coreKind ?? "", electron: ver })}</p>
+      <p>{t("settings.about", { version: meta?.version ?? "" })}</p>
       <p className="muted small">{t("settings.licence")}</p>
       <div className="row">
         <button type="button" className="btn" onClick={() => bridge().shell.openExternal("https://www.gnu.org/licenses/agpl-3.0.html")}><Icon name="external" size={13} /> {t("settings.licenceOpen")}</button>
