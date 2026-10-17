@@ -12,6 +12,7 @@ import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } 
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
 import { SK } from "@shared/settings-keys";
+import type { MenuFacts } from "../lib/menu-model";
 
 export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
 
@@ -62,6 +63,8 @@ export interface ContextMenuState {
   context?: { playlistId?: string; indices?: number[]; savedQueueId?: string };
   /** Opened with the context-menu key / Shift+F10: the first item starts active. */
   keyboard?: boolean;
+  /** The header, the checkboxes' and stars' state and the songs to add (lib/menu-facts). */
+  facts?: MenuFacts;
 }
 
 export type DialogState =

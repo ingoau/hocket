@@ -23,7 +23,7 @@ export interface RegistryEntry {
 export const REGISTRY: RegistryEntry[] = [
   // Item actions
   { id: "play", label: "Play", icon: "play", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
-  { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["albums", "artists", "playlists"], surfaces: ["contextMenu"] },
+  { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
   { id: "playNext", label: "Play next", icon: "playNext", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "playLater", label: "Play later", icon: "playLater", category: "queue", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"], undoable: true },
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },

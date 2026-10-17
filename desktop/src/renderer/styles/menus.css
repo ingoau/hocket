@@ -1,0 +1,118 @@
+/* ---- Context menu ---------------------------------------------------------
+   The final menu design: compact (256px), 16px corners, 28px rows with 9px corners and a 14px
+   leading slot that holds a check, a radio or nothing, so every label lines up. A header names the
+   item; the play actions are one connected strip (2px gaps, round outer and tight inner corners,
+   Play filled with the accent); the rating is a row of small stars. Highlights stay the opaque tonal
+   --state-selected, never a tint stacked on the tinted surface (see the menu notes in global.css). */
+.menu.cm { width: 256px; min-width: 0; max-width: calc(100vw - 8px); padding: 6px; border-radius: 16px; display: flex; flex-direction: column; gap: 1px; }
+.menu.cm .mi { flex: 0 0 auto; height: 28px; padding: 0 8px; gap: 8px; border-radius: 9px; }
+.menu.cm .mi:hover, .menu.cm .mi.active { border-radius: 9px; }
+.menu.cm .mi:active { border-radius: var(--shape-xs); }
+.menu.cm .sep { flex: 0 0 auto; margin: 4px 6px; }
+.menu.cm .menu-heading { padding: 6px 8px 2px; }
+.cm-lead { width: 14px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--accent-text); }
+.cm-lead svg { stroke: currentColor; }
+.menu.cm .kbd { flex: 0 0 auto; margin-left: 0; min-width: 0; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; font-size: 10.5px; line-height: 16px; color: var(--fg-muted); }
+.menu.cm .mi.destructive .kbd { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.cm-note { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--fg-muted); }
+.cm-chev { flex: 0 0 auto; color: var(--fg-muted); }
+
+/* Header: one cover, or the first three stacked (the first on top). */
+.cm-head { flex: 0 0 auto; height: 48px; display: flex; align-items: center; gap: 10px; padding: 2px 6px 8px; }
+.cm-covers { position: relative; width: 44px; height: 36px; flex: 0 0 auto; }
+.cm-covers .cm-cover { position: absolute; left: 0; top: 0; width: 36px; height: 36px; border-radius: 9px; object-fit: cover; }
+.cm-covers .cm-cover.placeholder { display: flex; align-items: center; justify-content: center; background: var(--bg-sunken); color: var(--fg-faint); }
+.cm-covers.round .cm-cover { border-radius: 50%; }
+.cm-covers.stacked .cm-cover { width: 26px; height: 26px; border-radius: 8px; box-shadow: 0 0 0 2px var(--surface-tonal); }
+.cm-covers.stacked.round .cm-cover { border-radius: 50%; }
+.cm-covers.stacked .cm-cover:nth-last-child(1) { left: 18px; top: 0; }
+.cm-covers.stacked .cm-cover:nth-last-child(2) { left: 9px; top: 5px; }
+.cm-covers.stacked .cm-cover:nth-last-child(3) { left: 0; top: 10px; }
+.cm-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.cm-head-title { font-weight: 600; }
+.cm-head-sub { font-size: var(--fs-sm); color: var(--fg-muted); }
+
+/* The play strip: an M3 Expressive connected group, as the style pickers (.seg) are. */
+.cm-strip { flex: 0 0 auto; display: flex; gap: 2px; margin-bottom: 5px; }
+.cm-strip-btn {
+  --start: 5px; --end: 5px;
+  flex: 1 1 0; min-width: 0; height: 34px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--start) var(--end) var(--end) var(--start); background: var(--state-selected); color: var(--fg);
+  transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized);
+}
+.cm-strip-btn:first-child { --start: 12px; }
+.cm-strip-btn:last-child { --end: 12px; }
+.cm-strip-btn.primary { flex-grow: 1.3; background: var(--accent); color: var(--accent-fg); }
+.cm-strip-btn:hover, .cm-strip-btn.active { background: color-mix(in srgb, var(--accent) 14%, var(--state-selected)); }
+.cm-strip-btn.primary:hover, .cm-strip-btn.primary.active { background: color-mix(in srgb, var(--accent-fg) 14%, var(--accent)); }
+.cm-strip-btn:hover:not(:first-child) { --start: 8px; }
+.cm-strip-btn:hover:not(:last-child) { --end: 8px; }
+.cm-strip-btn:active:not(:first-child) { --start: 2px; }
+.cm-strip-btn:active:not(:last-child) { --end: 2px; }
+.cm-strip-btn.disabled { opacity: 0.4; pointer-events: none; }
+/* Moving by keyboard rings the active button (the fill alone is too quiet on the accent). */
+.menu.cm.keys .cm-strip-btn.active, .menu.cm.keys .cm-star.active { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* Rating: small stars; on hover the stars up to the pointer preview the rating. */
+.cm-rating { flex: 0 0 auto; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 8px; }
+.cm-rating-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cm-chip { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 9px; background: var(--state-selected); font-size: var(--fs-xs); font-weight: 600; color: var(--fg); }
+.cm-stars { display: flex; flex: 0 0 auto; }
+.cm-star { width: 20px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.cm-star svg { fill: none; stroke: currentColor; }
+.cm-star.on { color: var(--accent-text); }
+.cm-star.on svg { fill: currentColor; }
+.cm-star.mixed svg { stroke-dasharray: 3 2.4; }
+.cm-star.active { background: var(--state-selected); }
+.cm-stars:hover .cm-star { color: var(--fg-muted); }
+.cm-stars:hover .cm-star svg { fill: none; stroke-dasharray: none; }
+.cm-stars:hover .cm-star:hover, .cm-stars:hover .cm-star:has(~ .cm-star:hover) { color: var(--accent-text); }
+.cm-stars:hover .cm-star:hover svg, .cm-stars:hover .cm-star:has(~ .cm-star:hover) svg { fill: currentColor; }
+.cm-star.disabled { pointer-events: none; opacity: 0.4; }
+
+/* ---- Add to playlist submenu ----------------------------------------------- */
+/* Its changes apply at once with a toast: the toasts (and their Undo) stay above it. */
+.menu.cm ~ .toasts { z-index: 101; }
+.menu.cm-sub { width: 260px; overflow: hidden; }
+.cm-search { flex: 0 0 auto; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px; margin-bottom: 4px; border-radius: 10px; background: var(--bg-elev); box-shadow: inset 0 0 0 1.5px var(--border-strong); color: var(--fg-muted); cursor: text; }
+/* The field is focused whenever the submenu is open: its 2px ring is drawn on its box. */
+.cm-search:focus-within { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.cm-search input { flex: 1 1 auto; min-width: 0; height: 100%; border: 0; padding: 0; background: transparent; font: inherit; color: var(--fg); outline: none; }
+.cm-search input::placeholder { color: var(--fg-muted); opacity: 1; }
+.cm-sub-list { display: flex; flex-direction: column; gap: 1px; min-height: 0; flex: 1 1 auto; overflow-y: auto; }
+.cm-sub-list > [role="group"] { display: flex; flex-direction: column; gap: 1px; }
+.menu.cm-sub .sep { margin: 3px 6px; }
+.menu.cm .mi.cm-new { height: 34px; padding: 0 10px; gap: 10px; color: var(--accent-text); font-weight: 600; }
+.cm-group-label { display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; font-size: var(--fs-xs); font-weight: 600; color: var(--fg-muted); }
+.cm-prow { position: relative; flex: 0 0 auto; display: flex; align-items: center; height: 34px; border-radius: 9px; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.cm-prow:hover, .cm-prow.active, .cm-prow.asking { background: var(--state-selected); }
+.cm-prow-main { flex: 1 1 auto; min-width: 0; height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 4px 0 10px; border-radius: 9px; white-space: nowrap; }
+.cm-box { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 5px; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
+.cm-box svg { stroke: transparent; }
+.cm-box.on, .cm-box.mixed { background: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.cm-box.on svg, .cm-box.mixed svg { stroke: var(--accent-fg); }
+.cm-badge { flex: 0 0 auto; font-size: var(--fs-xs); font-weight: 600; color: var(--accent-text); }
+/* Add another copy: its space is always there, the + shows on hover (or the keyboard's row). */
+.cm-plus { width: 28px; height: 28px; margin-right: 3px; flex: 0 0 auto; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized), background-color var(--dur-short) var(--ease-emphasized); }
+.cm-prow:hover .cm-plus, .cm-prow.active .cm-plus { opacity: 1; }
+.cm-plus:hover { background: color-mix(in srgb, var(--accent) 16%, var(--state-selected)); color: var(--fg); }
+.cm-empty { flex: 0 0 auto; height: 34px; display: flex; align-items: center; padding: 0 10px; color: var(--fg-muted); }
+/* Remove both / Remove one, under its row. */
+.menu.cm-ask { width: 150px; min-width: 0; padding: 6px; border-radius: 14px; z-index: 3; }
+.menu.cm-ask .mi { height: 32px; padding: 0 10px; }
+
+/* ---- Forced colours: the fills and inset rings above are dropped, so the states get system colours. */
+@media (forced-colors: active) {
+  .cm-strip-btn, .cm-search, .cm-chip { border: 1px solid ButtonText; }
+  .cm-box { border: 1.5px solid CanvasText; }
+  .cm-strip-btn:hover, .cm-strip-btn.active, .cm-star:hover, .cm-star.active, .cm-prow:hover, .cm-prow.active, .cm-prow.asking, .cm-plus:hover {
+    forced-color-adjust: none; background: Highlight; color: HighlightText;
+  }
+  :is(.cm-prow:hover, .cm-prow.active, .cm-prow.asking) :is(.cm-badge, .cm-plus) { forced-color-adjust: none; color: HighlightText; }
+  .cm-box.on, .cm-box.mixed { forced-color-adjust: none; background: CanvasText; border-color: CanvasText; }
+  .cm-box.on svg, .cm-box.mixed svg { stroke: Canvas; }
+  :is(.cm-prow:hover, .cm-prow.active, .cm-prow.asking) .cm-box { border-color: HighlightText; }
+  .cm-star.on svg { fill: CanvasText; }
+  .cm-search:focus-within { outline: 2px solid Highlight; }
+  .menu.cm .kbd { border-color: CanvasText; }
+}

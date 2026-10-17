@@ -6,6 +6,7 @@ import "./styles/m3-library.css";
 import "./styles/m3-pages.css";
 import "./styles/controls.css";
 import "./styles/now-playing.css";
+import "./styles/menus.css";
 import "@applemusic-like-lyrics/core/style.css";
 import { App } from "./App";
 import { MiniApp } from "./views/MiniApp";

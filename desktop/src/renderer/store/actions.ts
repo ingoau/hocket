@@ -186,7 +186,8 @@ export function deletePlaylistsDialog(ids: string[], names: string[], deleteOne:
   return { kind: "confirm", title: t("action.deletePlaylist"), message, confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => ids.forEach(deleteOne) };
 }
 
-async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
+/** The songs a target stands for (an album's, a playlist's, the queue items'). */
+export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
   const b = bridge();
   switch (target.type) {
     case "tracks":

@@ -29,3 +29,27 @@ export function runUiUndo(id: string): boolean {
   undo();
   return true;
 }
+
+/**
+ * A toast for a change the core records on its undo stack (a rating, a playlist edit): [apply] makes
+ * the change, and the toast's Undo undoes that entry. Most of the time it is still the newest one
+ * (the core's plain Undo); when something was done since, the core's UndoEntry walks back to it.
+ */
+export function toastUndoable(message: string, apply: () => void): void {
+  const before = useApp.getState().undo.history[0]?.id;
+  let mine: string | undefined;
+  const stop = useApp.subscribe((s) => {
+    const top = s.undo.history[0]?.id;
+    if (top && top !== before) {
+      mine = top;
+      stop();
+    }
+  });
+  setTimeout(stop, 10_000);
+  apply();
+  showToast(message, () => {
+    stop();
+    const top = useApp.getState().undo.history[0]?.id;
+    useApp.getState().dispatch(mine && top !== mine ? { type: "undoEntry", data: { id: mine } } : { type: "undo" });
+  });
+}

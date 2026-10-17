@@ -192,8 +192,20 @@ test.describe("axe: no violations anywhere", () => {
       await row.click({ button: "right" });
       await expect(page.getByTestId("context-menu")).toBeVisible();
       await expectNoViolations(page, `${theme} context menu`);
-      // Add to playlist (a list dialog), from the menu.
+      // Its Add to playlist submenu, then the same while searching and with Remove both / Remove one open.
       await page.locator('[data-testid="context-menu"] [data-action="addToPlaylist"]').click();
+      await expect(page.getByTestId("playlist-submenu")).toBeVisible();
+      await expect(page.getByTestId("playlist-search")).toBeFocused();
+      await expectNoViolations(page, `${theme} add-to-playlist submenu`);
+      await page.getByTestId("playlist-search").fill("zzz");
+      await expect(page.getByTestId("playlist-submenu").getByRole("status")).toHaveText('No playlists match "zzz"');
+      await expectNoViolations(page, `${theme} add-to-playlist submenu, no matches`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("playlist-submenu")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("context-menu")).toHaveCount(0);
+      // Add to playlist for what's playing (the player bar's +) is a list dialog.
+      await page.getByTestId("bar-add").click();
       await expect(page.getByTestId("dialog-addToPlaylist")).toBeVisible();
       await expectNoViolations(page, `${theme} add-to-playlist dialog`);
       await page.keyboard.press("Escape");

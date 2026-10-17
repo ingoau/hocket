@@ -180,30 +180,53 @@ test.describe("keyboard only", () => {
     // A digit rates the row.
     await page.keyboard.press("4");
     await expect(row.getByRole("radio", { name: "4 stars" })).toHaveAttribute("aria-checked", "true");
-    // Shift+F10: the row's menu, first item active, focus inside.
+    // Shift+F10: the row's menu, first item active (the play strip's Play), focus inside.
     await page.keyboard.press("Shift+F10");
     const menu = page.getByTestId("context-menu");
+    const activeCell = async () => page.locator(`#${await menu.getAttribute("aria-activedescendant")}`);
     await expect(menu).toBeVisible();
     await expect(menu).toBeFocused();
     await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-0");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
+    // → moves along the strip; ↓ goes to the next line, the rating, landing on its current star.
+    await page.keyboard.press("ArrowRight");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Shuffle");
     await page.keyboard.press("ArrowDown");
-    await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-1");
+    await expect(await activeCell()).toHaveAttribute("data-star", "4");
+    await expect(await activeCell()).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("ArrowDown");
+    await expect(await activeCell()).toHaveAttribute("role", "menuitemcheckbox");
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(row).toBeFocused();
-    // The context-menu key does the same; run "Add to playlist…" from it.
+    // The context-menu key does the same; Add to playlist opens its submenu with the search focused.
     await page.keyboard.press("ContextMenu");
     await expect(menu).toBeVisible();
     for (let i = 0; i < 20; i++) {
-      const id = await menu.getAttribute("aria-activedescendant");
-      if (id && (await page.locator(`#${id}`).getAttribute("data-action")) === "addToPlaylist") break;
+      if ((await (await activeCell()).getAttribute("data-action")) === "addToPlaylist") break;
       await page.keyboard.press("ArrowDown");
     }
+    await page.keyboard.press("ArrowRight");
+    const search = page.getByTestId("playlist-search");
+    await expect(search).toBeFocused();
+    // ↓ walks the rows (New playlist first), Escape goes back to the menu, on Add to playlist.
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toHaveAttribute("aria-activedescendant", "pp-row-0");
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toHaveAttribute("aria-activedescendant", "pp-row-1");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("playlist-submenu")).toHaveCount(0);
+    await expect(menu).toBeFocused();
+    expect(await (await activeCell()).getAttribute("data-action")).toBe("addToPlaylist");
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(row).toBeFocused();
+    // Add to playlist for what's playing (the player bar's +) is a dialog: focus is inside and stays inside, both directions.
+    await tabTo(page, byTestId("bar-add"), "Add to playlist");
     await page.keyboard.press("Enter");
     const dialog = page.getByTestId("dialog-addToPlaylist");
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute("aria-modal", "true");
-    // Focus is inside and stays inside, both directions.
     for (const key of ["Tab", "Shift+Tab"]) {
       for (let i = 0; i < 12; i++) {
         await page.keyboard.press(key);
@@ -215,7 +238,7 @@ test.describe("keyboard only", () => {
     expect(await page.getByTestId("app-body").getAttribute("inert")).not.toBeNull();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
-    await expect(row).toBeFocused();
+    await expect(page.getByTestId("bar-add")).toBeFocused();
   });
 
   test("queue listbox and selector, and the seek, volume and splitter sliders", async ({ hocket }) => {
