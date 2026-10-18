@@ -34,4 +34,13 @@ class PebbleProtocolTest {
         assertEquals(0xC0 or 0x03, art.palette[1].toInt() and 0xff)
         assertArrayEquals(byteArrayOf(0x01, 0x00), art.data)
     }
+
+    @Test
+    fun volumeArgIsAStepCountWithZeroMeaningOne() {
+        assertEquals(1, PebbleProtocol.volumeSteps(0))
+        assertEquals(1, PebbleProtocol.volumeSteps(1))
+        assertEquals(3, PebbleProtocol.volumeSteps(3))
+        assertEquals(PebbleProtocol.MAX_VOLUME_STEPS, PebbleProtocol.volumeSteps(1000))
+        assertEquals(1, PebbleProtocol.volumeSteps(-5))
+    }
 }

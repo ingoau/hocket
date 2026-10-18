@@ -230,8 +230,8 @@ class PebbleBridge(
             Cmd.PAUSE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Pause))
             Cmd.NEXT -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Next))
             Cmd.PREVIOUS -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Previous))
-            Cmd.VOLUME_UP -> changeVolume(up = true)
-            Cmd.VOLUME_DOWN -> changeVolume(up = false)
+            Cmd.VOLUME_UP -> changeVolume(up = true, PebbleProtocol.volumeSteps(arg))
+            Cmd.VOLUME_DOWN -> changeVolume(up = false, PebbleProtocol.volumeSteps(arg))
             Cmd.TOGGLE_LOVE -> trackId?.let { dispatch(Commands.loveTrack(it, !(s.metadata?.loved ?: false))) }
             Cmd.SET_RATING -> trackId?.let { dispatch(Commands.rateTrack(it, arg.coerceIn(0, 5))) }
             Cmd.TOGGLE_SHUFFLE -> dispatch(Commands.setShuffle(!(s?.shuffle ?: false)))
@@ -255,13 +255,15 @@ class PebbleBridge(
     /**
      * The watch's volume buttons drive the device playing, like every volume control: the core
      * routes the change (this phone's own volume is its music volume). 5 % a press, from silence
-     * when muted (a press unmutes).
+     * when muted (a press unmutes). [steps] > 1 when the watch merged presses queued behind a busy
+     * link (#73).
      */
-    private fun changeVolume(up: Boolean) {
+    private fun changeVolume(up: Boolean, steps: Int) {
         val s = session?.takeIf { volumeKnown } ?: return
         if (!up && s.muted == true) return
         val from = if (s.muted == true) 0.0 else s.volume
-        dispatch(Commands.setVolume((from + if (up) VOLUME_STEP else -VOLUME_STEP).coerceIn(0.0, 1.0)))
+        val delta = VOLUME_STEP * steps
+        dispatch(Commands.setVolume((from + if (up) delta else -delta).coerceIn(0.0, 1.0)))
     }
 
     /** The level [changeVolume] changes, 0..100 (255 = unknown). */

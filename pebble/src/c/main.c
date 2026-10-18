@@ -20,16 +20,47 @@ typedef struct {
   uint16_t offset;
   char path[96];
   char item[64];
+  uint8_t retries;  // resends left when the link is busy
 } OutMsg;
 
 #define OUT_QUEUE 8
+// A message the link refused (APP_MSG_BUSY: a send collided with the phone's own, which happens
+// right after every command as the phone pushes state back) is sent again shortly, up to this many
+// times. Other failures (not connected, timeouts) still drop it rather than replay stale presses.
+#define OUT_RETRIES 3
+#define OUT_RETRY_MS 100
 static OutMsg s_out[OUT_QUEUE];
 static int s_out_head, s_out_count;
 static bool s_out_busy;
+static AppTimer *s_out_retry_timer;
 
 static void prv_pump(void);
 
+static bool prv_is_volume(const OutMsg *m) {
+  return m->type == MsgCmd && (m->cmd == CmdVolumeUp || m->cmd == CmdVolumeDown);
+}
+
+static void prv_retry_fired(void *context) {
+  s_out_retry_timer = NULL;
+  prv_pump();
+}
+
+// Try again soon: nothing else would pump the queue until the next message is enqueued.
+static void prv_pump_later(void) {
+  if (!s_out_retry_timer) s_out_retry_timer = app_timer_register(OUT_RETRY_MS, prv_retry_fired, NULL);
+}
+
 static void prv_enqueue(const OutMsg *msg) {
+  if (prv_is_volume(msg) && s_out_count > (s_out_busy ? 1 : 0)) {
+    // Volume steps queued behind a busy link: add to the last one if it goes the same way, so a
+    // held button neither overflows the queue nor loses steps. Only the tail, to keep the order.
+    OutMsg *last = &s_out[(s_out_head + s_out_count - 1) % OUT_QUEUE];
+    if (last->type == MsgCmd && last->cmd == msg->cmd && last->arg < 20) {
+      last->arg += msg->arg > 0 ? msg->arg : 1;
+      prv_pump();
+      return;
+    }
+  }
   if (msg->type == MsgListReq || msg->type == MsgArtReq) {
     // Only the newest request of a kind matters: replace a queued one (not the one being sent).
     // List requests only replace one for the same path, so another list's request still goes.
@@ -37,6 +68,7 @@ static void prv_enqueue(const OutMsg *msg) {
       OutMsg *m = &s_out[(s_out_head + i) % OUT_QUEUE];
       if (m->type == msg->type && (msg->type != MsgListReq || !strcmp(m->path, msg->path))) {
         *m = *msg;
+        m->retries = OUT_RETRIES;
         prv_pump();
         return;
       }
@@ -48,6 +80,7 @@ static void prv_enqueue(const OutMsg *msg) {
     s_out_count--;
   }
   s_out[(s_out_head + s_out_count) % OUT_QUEUE] = *msg;
+  s_out[(s_out_head + s_out_count) % OUT_QUEUE].retries = OUT_RETRIES;
   s_out_count++;
   prv_pump();
 }
@@ -62,6 +95,7 @@ static void prv_pump(void) {
   }
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
+    prv_pump_later();
     return;
   }
   const OutMsg *m = &s_out[s_out_head];
@@ -89,6 +123,8 @@ static void prv_pump(void) {
   }
   if (app_message_outbox_send() == APP_MSG_OK) {
     s_out_busy = true;
+  } else {
+    prv_pump_later();
   }
 }
 
@@ -102,7 +138,14 @@ static void prv_outbox_sent(DictionaryIterator *iter, void *context) {
 }
 
 static void prv_outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
-  // Not connected or the phone is busy: drop it rather than replaying stale presses later.
+  if (reason == APP_MSG_BUSY && s_out_count && s_out[s_out_head].retries) {
+    // The link was busy (usually the phone's state push crossing ours): send it again shortly.
+    s_out[s_out_head].retries--;
+    s_out_busy = false;
+    prv_pump_later();
+    return;
+  }
+  // Not connected, timed out or refused: drop it rather than replaying stale presses later.
   prv_outbox_sent(iter, context);
 }
 

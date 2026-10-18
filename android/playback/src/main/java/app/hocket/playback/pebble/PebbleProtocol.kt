@@ -95,6 +95,15 @@ object PebbleProtocol {
         const val SEEK = 16
     }
 
+    /** Max volume steps one VOLUME_UP / VOLUME_DOWN applies (the watch caps its merged count too). */
+    const val MAX_VOLUME_STEPS = 20
+
+    /**
+     * Steps in a VOLUME_UP / VOLUME_DOWN: the watch sends Arg = presses (merged while its outbox was
+     * busy); an older watch sent 0, meaning one.
+     */
+    fun volumeSteps(arg: Int): Int = arg.coerceIn(1, MAX_VOLUME_STEPS)
+
     object RowFlag {
         const val BROWSABLE = 1
         const val CURRENT = 2

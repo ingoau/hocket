@@ -48,8 +48,8 @@ typedef enum {
   CmdPause = 3,
   CmdNext = 4,
   CmdPrevious = 5,
-  CmdVolumeUp = 6,
-  CmdVolumeDown = 7,
+  CmdVolumeUp = 6,    // Arg = steps (presses merged while the link was busy; 0 = 1)
+  CmdVolumeDown = 7,  // Arg = steps
   CmdToggleLove = 8,
   CmdSetRating = 9,   // Arg = 0..5
   CmdToggleShuffle = 10,

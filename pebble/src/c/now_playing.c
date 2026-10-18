@@ -534,7 +534,8 @@ static void prv_toggle_playing(void) {
 static void prv_change_volume(bool up) {
   if (!(g_now.flags & NowHasVolume)) return;
   prv_show_volume_image(up);
-  send_cmd(up ? CmdVolumeUp : CmdVolumeDown, 0, NULL, NULL);
+  // Arg = steps; the outbox merges steps queued behind a busy link instead of dropping them.
+  send_cmd(up ? CmdVolumeUp : CmdVolumeDown, 1, NULL, NULL);
 }
 
 static void prv_skip(ButtonId button) {
