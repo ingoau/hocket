@@ -1,5 +1,6 @@
 //! Property tests over the reducer (design.md "How it gets tested"): the
 //! reducer is total, revisions are monotonic, next∘previous is the identity,
+//! previous∘next returns to the same track with the same queue after it,
 //! keys are unique, the derived queue contains every non-history item exactly
 //! once, history never exceeds its cap and the shuffle permutation is a
 //! bijection.
@@ -54,7 +55,8 @@ fn item(n: usize) -> impl Strategy<Value = (QueueSource, bool)> {
     (source(n), prop::bool::weighted(0.15))
 }
 
-/// Insertion-list items never carry a context source.
+/// Generated insertion-list items never carry a context source (only
+/// Previous puts one there, which the op sequences below reach).
 fn insertion_item() -> impl Strategy<Value = (QueueSource, bool)> {
     (non_context_source(), prop::bool::weighted(0.15))
 }
@@ -275,6 +277,17 @@ fn check_invariants(doc: &SessionDocument) {
     );
     let p = Permutation::from_state(doc.shuffle.as_ref(), n);
     assert!(is_bijection(p.order()));
+    // A context item in Playing Next (put back by Previous) stands for a
+    // played position; one past the cursor would play twice.
+    for i in &doc.insertions {
+        if let QueueSource::Context { index } = i.source {
+            assert!(
+                p.to_position(index).is_some_and(|pos| pos < doc.cursor),
+                "context item {} in Playing Next is upcoming too",
+                i.key
+            );
+        }
+    }
     assert_eq!(p.len(), n);
     // The offline set only names stored items that are still marked.
     for key in crate::session::offline_skipped(doc) {
@@ -337,6 +350,48 @@ proptest! {
         }
         let (back, _) = reduce(&after_next, QueueOp::Previous, &ctx).unwrap();
         prop_assert!(same_state(&doc, &back), "next∘previous differs\nbefore: {doc:#?}\nafter: {back:#?}");
+    }
+
+    #[test]
+    fn previous_then_next_returns_to_the_same_track(doc in consistent_doc(), ops in prop::collection::vec(op(), 0..6)) {
+        let entropy = DeterministicEntropy::new(5);
+        let ctx = ReduceCtx { now: 1.0, position_ms: 0, history_cap: 1000, saved: SavedQueuePolicy::default(), entropy: &entropy };
+        // Start from reachable states too (Previous leaves context items in Playing Next).
+        let mut doc = doc;
+        for op in ops {
+            if let Ok((next, _)) = reduce(&doc, op, &ctx) {
+                doc = next;
+            }
+        }
+        // (Early returns rather than rejects: the op sequences make most
+        // inputs fall outside, which would exhaust the reject budget.)
+        if !doc.current.as_ref().map(|c| !c.unavailable).unwrap_or(false) {
+            return Ok(());
+        }
+        // Under Repeat All, Previous guesses from history whether the current
+        // item was reached by a wrap (see next_then_previous_is_identity).
+        if doc.repeat == RepeatMode::All {
+            return Ok(());
+        }
+        // Previous skips a flagged history item; a context one put back behind
+        // the cursor comes back fresh (unflagged) and Next tries it again.
+        if doc.history.iter().any(|h| h.unavailable) {
+            return Ok(());
+        }
+        let (back, fx) = reduce(&doc, QueueOp::Previous, &ctx).unwrap();
+        if !fx.iter().any(|f| matches!(f, Effect::CurrentChanged { .. })) {
+            return Ok(());
+        }
+        let (forward, _) = reduce(&back, QueueOp::Next, &ctx).unwrap();
+        // What plays from here on, skipping what Next would skip.
+        let plays = |d: &SessionDocument| {
+            let q = derive(d);
+            q.current.iter().chain(q.playing_next.iter()).chain(q.upcoming.iter())
+                .filter(|i| !i.unavailable)
+                .map(|i| i.track_id.clone())
+                .collect::<Vec<_>>()
+        };
+        prop_assert_eq!(plays(&forward), plays(&doc), "previous∘next changed the queue\nbefore: {:#?}\nback: {:#?}\nafter: {:#?}", doc, back, forward);
     }
 
     #[test]
