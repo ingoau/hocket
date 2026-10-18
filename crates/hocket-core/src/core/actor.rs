@@ -146,8 +146,9 @@ pub(crate) struct Actor {
     /// The queue ran out waiting on the autoplay batch in flight: play it
     /// when it lands. Unset while it is fetched ahead of the end (#13).
     pub autoplay_advance: bool,
-    /// The current item autoplay was last fetched ahead for, so a batch
-    /// that found nothing is not asked for again on every change.
+    /// The current item autoplay was last asked for (ahead of its end or at
+    /// it): a batch that found nothing is not asked for again on every
+    /// change, and one that lands after the queue moved on is dropped.
     pub autoplay_prefetched: Option<QueueKey>,
     pub reducer_policy: Arc<ReducerPolicy>,
     pub entropy: Arc<dyn Entropy>,

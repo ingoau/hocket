@@ -877,3 +877,31 @@ async fn autoplay_fetched_ahead_does_not_jump_a_new_queue() {
     );
     assert_eq!(q.upcoming.len(), 3);
 }
+
+/// Autoplay asked for when the queue ran out does not skip a song the user
+/// started before the batch landed: its `Next` was for the song that ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
+    let t = synced_core("autoplay-end-stale").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al1"),
+    })
+    .await;
+    t.run(Command::SetAutoplay { enabled: true }).await;
+    let mut args = album_args(&sid, "al0");
+    args.start_index = Some(3);
+    // The last song (fetching ahead), Next at its end (the queue ran out),
+    // then a single song, all queued ahead of the batch.
+    t.dispatch(Command::PlayContext { args });
+    t.dispatch(Command::Next);
+    t.dispatch(Command::PlayTracks {
+        server_id: sid.clone(),
+        track_ids: vec!["t5".into()],
+        start_index: 0,
+        label: "One".into(),
+        shuffle: false,
+    });
+    t.run_for(2000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));
+}

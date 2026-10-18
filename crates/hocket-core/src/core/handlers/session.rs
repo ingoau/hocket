@@ -618,6 +618,7 @@ impl Actor {
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
             self.autoplay_advance = true;
+            self.autoplay_prefetched = document.current.as_ref().map(|c| c.key.clone());
             if self.autoplay.is_some() {
                 self.request_autoplay();
             }
@@ -779,26 +780,25 @@ impl Actor {
         // Played as soon as it lands only when the queue ran out for it;
         // a batch fetched ahead joins the queue behind the playing item.
         let advance = std::mem::take(&mut self.autoplay_advance);
-        if !advance {
-            // Fetched ahead for the item that was last: the queue may have
-            // moved on since (another album played, songs queued, autoplay
-            // or Repeat All toggled). Autoplay items go to Playing Next, so a
-            // batch kept then would play ahead of the new queue. Dropped; the
-            // end of the queue asks again if it still needs to.
-            let still_last = self.doc().is_some_and(|d| {
-                d.autoplay
-                    && d.repeat == RepeatMode::Off
-                    && d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
-                    && derive(d).total_upcoming == 0
-            });
-            if !still_last {
-                // The engine is back: fetch ahead for whatever is last now.
-                self.autoplay_prefetched = None;
-                if let Some(doc) = self.doc().cloned().filter(|_| self.owns_transport()) {
-                    self.prefetch_autoplay(&doc);
-                }
-                return;
+        // The batch was asked for while `autoplay_prefetched` was current, at
+        // the end of the queue or ahead of it. The queue may have moved on
+        // since (another album or song played, songs queued, autoplay or
+        // Repeat All toggled). Autoplay items go to Playing Next, so a batch
+        // kept then would play ahead of the new queue, and the Next that
+        // follows one asked for at the end would skip the new current song.
+        // Dropped; the end of the queue asks again if it still needs to.
+        let wanted = self.doc().is_some_and(|d| {
+            d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
+                && (advance
+                    || (d.autoplay && d.repeat == RepeatMode::Off && derive(d).total_upcoming == 0))
+        });
+        if !wanted {
+            // The engine is back: fetch ahead for whatever is last now.
+            self.autoplay_prefetched = None;
+            if let Some(doc) = self.doc().cloned().filter(|_| self.owns_transport()) {
+                self.prefetch_autoplay(&doc);
             }
+            return;
         }
         if picks.is_empty() {
             if !advance {
