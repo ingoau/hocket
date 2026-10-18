@@ -792,6 +792,11 @@ impl Actor {
                     && derive(d).total_upcoming == 0
             });
             if !still_last {
+                // The engine is back: fetch ahead for whatever is last now.
+                self.autoplay_prefetched = None;
+                if let Some(doc) = self.doc().cloned().filter(|_| self.owns_transport()) {
+                    self.prefetch_autoplay(&doc);
+                }
                 return;
             }
         }
