@@ -278,7 +278,7 @@ class PebbleBridge(
         val path = resolve(rawPath) ?: return
         val (kind, id) = split(path)
         when (kind) {
-            "queue" -> dispatch(Commands.jumpToQueueItem(item))
+            "queue" -> queueEntry(item)?.let { dispatch(Commands.jumpToQueueItem(it.item.key)) }
             "devices" -> dispatch(Commands.handoffTo(item))
             "album" -> albumName(id)?.let { name -> playIn(Commands.albumContext(server, id, name), item) }
             "playlist" -> playlistName(id)?.let { name -> playIn(Commands.playlistContext(server, id, name), item) }
@@ -321,7 +321,7 @@ class PebbleBridge(
         val (kind, id) = split(path)
         val index = item.removePrefix("t:").toIntOrNull()
         return when {
-            kind == "queue" -> queueEntries().firstOrNull { it.item.key == item }?.let { listOf(it.track.id) }.orEmpty()
+            kind == "queue" -> listOfNotNull(queueEntry(item)?.track?.id)
             kind == "album" && index != null -> listOfNotNull(albumTracks(id).getOrNull(index)?.id)
             kind == "playlist" && index != null -> (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.map { it.id }.orEmpty()
             else -> emptyList()
@@ -432,13 +432,17 @@ class PebbleBridge(
     /** Recent history (enough to scroll back a little), the current track, Playing Next and the rest. */
     private fun queueEntries() = queue?.let { it.history.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.playingNext + it.upcoming }.orEmpty()
 
+    /** The queue entry a row id the watch sent back stands for ([PebbleProtocol.queueRowId]). */
+    private fun queueEntry(rowId: String) = queueEntries().firstOrNull { PebbleProtocol.queueRowId(it.item.key) == rowId }
+
     /** [queueEntries] as rows; the current one is in the first page, where the watch selects it. */
     private fun queueRows(): List<Row> {
         val q = queue ?: return emptyList()
         val current = q.current?.item?.key
         return queueEntries().map { e ->
-            if (e.item.key == current) Row(e.item.key, e.track.title, "Now playing", RowFlag.CURRENT or RowFlag.TRACK)
-            else Row(e.item.key, e.track.title, e.track.artist ?: "", RowFlag.TRACK)
+            val id = PebbleProtocol.queueRowId(e.item.key)
+            if (e.item.key == current) Row(id, e.track.title, "Now playing", RowFlag.CURRENT or RowFlag.TRACK)
+            else Row(id, e.track.title, e.track.artist ?: "", RowFlag.TRACK)
         }
     }
 

@@ -43,4 +43,14 @@ class PebbleProtocolTest {
         assertEquals(PebbleProtocol.MAX_VOLUME_STEPS, PebbleProtocol.volumeSteps(1000))
         assertEquals(1, PebbleProtocol.volumeSteps(-5))
     }
+
+    @Test
+    fun queueKeysTooLongForTheWatchGoAsAShortStableId() {
+        assertEquals("k1", PebbleProtocol.queueRowId("k1"))
+        val long = "0123456789abcdef0123456789abcdef-19a2b3c4d5e-123-4.17"
+        val id = PebbleProtocol.queueRowId(long)
+        assertEquals(id, PebbleProtocol.queueRowId(long))
+        assertEquals(true, id.startsWith("q:") && id.length <= 47)
+        assertEquals(false, id == PebbleProtocol.queueRowId(long.dropLast(1) + "8"))
+    }
 }
