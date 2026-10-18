@@ -39,7 +39,8 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const panels = useApp((s) => s.panels);
   const drawerOpen = useApp((s) => s.drawerOpen);
   const narrow = useMediaQuery(NARROW);
-  const sideOpen = narrow ? drawerOpen : panels.rightOpen;
+  const reveal = useApp((s) => s.queueDropReveal);
+  const sideOpen = (narrow ? drawerOpen : panels.rightOpen) || reveal;
   const fullscreen = useApp((s) => s.fullscreen);
   const setFullscreen = useApp((s) => s.setFullscreen);
   const navigate = useApp((s) => s.navigate);
@@ -49,10 +50,10 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const d = bridge().dispatch;
   const track = now?.track;
   const playing = transport.position.isPlaying;
-  const lyricsOn = sideOpen && panels.rightView === "lyrics";
+  const lyricsOn = sideOpen && panels.rightView === "lyrics" && !reveal;
   // A right-click (or the context-menu key, Shift+F10) on the lyrics toggle opens the lyrics options.
   const lyricsOptions = useLyricsOptionsTrigger("above");
-  const queueOn = sideOpen && (panels.rightView === "queue" || panels.rightView === "recent");
+  const queueOn = (sideOpen || reveal) && (reveal || panels.rightView === "queue" || panels.rightView === "recent");
 
   return (
     <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">

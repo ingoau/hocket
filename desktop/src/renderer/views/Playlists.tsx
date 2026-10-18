@@ -54,6 +54,7 @@ function PlaylistGroups({ playlists, play }: { playlists: Playlist[]; play: (id:
     open: () => navigate({ view: "playlist", id }),
     play: () => play(id, title),
     menu: (e) => void openContextMenu(e, { type: "playlists", data: { ids: [id] } }),
+    dragTarget: { type: "playlists", data: { ids: [id] } },
   });
   const pinned = pins.map((rp) => {
     const p = byId.get(rp.pin.id);

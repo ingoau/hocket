@@ -54,6 +54,7 @@ function AlbumGroups({ play }: { play: (id: string, label: string) => void }) {
     open: () => navigate({ view: "album", id }),
     play: () => play(id, title),
     menu: (e) => void openContextMenu(e, { type: "albums", data: { ids: [id] } }),
+    dragTarget: { type: "albums", data: { ids: [id] } },
   });
   return (
     <ListGroups list="albums" pinned={pins.map((p) => item(p.pin.id, p.title, p.subtitle, p.coverArt))} recent={recent.map((a) => item(a.id, a.name, a.artist, a.coverArt))}

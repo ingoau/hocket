@@ -27,7 +27,7 @@ export function SearchView({ query }: { query: string }) {
           <section className="home-section" aria-labelledby="search-albums">
             <h2 className="section-heading" id="search-albums"><span className="section-icon" aria-hidden="true"><Icon name="album" size={18} /></span>{t("search.albums")}</h2>
             <TileList label={t("search.albums")} className="scroller">{[...(local.data?.albums ?? []), ...(server?.albums ?? [])].map((a) => (
-              <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} />
+              <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} dragTarget={{ type: "albums", data: { ids: [a.id] } }} />
             ))}</TileList>
           </section>
         ) : null}

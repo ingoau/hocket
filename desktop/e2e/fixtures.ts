@@ -115,6 +115,57 @@ export async function showSideView(page: Page, view: "lyrics" | "queue"): Promis
   await expect(panel).toHaveAttribute("data-view", view);
 }
 
+/**
+ * HTML5 drag-and-drop. Playwright's pointer `dragTo` does not fire dragstart/drop,
+ * so library-to-queue drags have to be dispatched (the row's onDragStart fills the payload).
+ */
+export async function html5DragStart(page: Page, source: Locator): Promise<void> {
+  const el = await source.elementHandle();
+  if (!el) throw new Error("drag source missing");
+  await page.evaluate((src) => {
+    const dt = new DataTransfer();
+    (window as unknown as { __hocketLibraryDrag?: DataTransfer }).__hocketLibraryDrag = dt;
+    src.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+  }, el);
+}
+
+export async function html5DragOver(page: Page, target: Locator): Promise<void> {
+  const el = await target.elementHandle();
+  if (!el) throw new Error("drag over target missing");
+  await page.evaluate((dst) => {
+    const dt = (window as unknown as { __hocketLibraryDrag?: DataTransfer }).__hocketLibraryDrag;
+    const r = dst.getBoundingClientRect();
+    const clientX = r.left + r.width / 2;
+    const clientY = r.top + Math.min(8, r.height / 2);
+    const init: DragEventInit = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX, clientY };
+    document.dispatchEvent(new DragEvent("dragover", init));
+    dst.dispatchEvent(new DragEvent("dragenter", init));
+    dst.dispatchEvent(new DragEvent("dragover", init));
+  }, el);
+}
+
+export async function html5Drop(page: Page, target: Locator): Promise<void> {
+  const el = await target.elementHandle();
+  if (!el) throw new Error("drop target missing");
+  await page.evaluate((dst) => {
+    const w = window as unknown as { __hocketLibraryDrag?: DataTransfer };
+    const dt = w.__hocketLibraryDrag;
+    const r = dst.getBoundingClientRect();
+    const init: DragEventInit = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: r.left + r.width / 2, clientY: r.top + Math.min(8, r.height / 2) };
+    dst.dispatchEvent(new DragEvent("drop", init));
+    document.dispatchEvent(new DragEvent("dragend", init));
+    delete w.__hocketLibraryDrag;
+  }, el);
+}
+
+export async function html5DragEnd(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __hocketLibraryDrag?: DataTransfer };
+    document.dispatchEvent(new DragEvent("dragend", { bubbles: true, cancelable: true, composed: true, dataTransfer: w.__hocketLibraryDrag }));
+    delete w.__hocketLibraryDrag;
+  });
+}
+
 /** Pick `value` in one of the app's Select comboboxes (components/controls.tsx) by pointer, like a user. */
 export async function chooseOption(select: Locator, value: string): Promise<void> {
   await select.click();

@@ -2,7 +2,7 @@
 // couple of compact rows for songs), hidden when empty, then the whole list under its own header
 // with the sort control (lib/list-groups.ts has the rules, lib/list-sort.ts the sorts).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Album, Artist, PlayHistoryEntry } from "@core/api";
+import type { ActionTarget, Album, Artist, PlayHistoryEntry } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -12,6 +12,7 @@ import type { PinKind } from "../lib/library-pins";
 import { useRoving } from "../lib/roving";
 import { Tile, TileList } from "./Tile";
 import { Artwork } from "./Artwork";
+import { libraryDragProps } from "../lib/queue-drag";
 
 /** One item of a group, however its list draws it. */
 export interface GroupItem {
@@ -23,6 +24,8 @@ export interface GroupItem {
   open: () => void;
   play?: () => void;
   menu?: (e: React.MouseEvent) => void;
+  /** Drag onto the queue. */
+  dragTarget?: ActionTarget;
 }
 
 /** A list part's header: its title, and for the whole list the sort control. */
@@ -49,7 +52,7 @@ export function ListSection({ id, title, actions, children, testId, className = 
 export function TileRow({ items, label, testId }: { items: GroupItem[]; label: string; testId: string }) {
   return (
     <TileList label={label} className="scroller group-row">
-      {items.map((it) => <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} testId={testId} />)}
+      {items.map((it) => <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} dragTarget={it.dragTarget} testId={testId} />)}
     </TileList>
   );
 }
@@ -62,7 +65,7 @@ export function SongRows({ items, label, testId }: { items: GroupItem[]; label: 
     <ul ref={ref} className="plain-list group-songs" aria-label={label} {...roving}>
       {items.map((it) => (
         <li key={it.key} className="group-song" onContextMenu={it.menu} data-testid={testId}>
-          <button type="button" className="group-song-main" data-roving aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title} onClick={it.open}>
+          <button type="button" className="group-song-main" data-roving aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title} onClick={it.open} {...libraryDragProps(it.dragTarget)}>
             <Artwork id={it.coverArt} size={96} className="art" />
             <span className="text"><span className="t1">{it.title}</span>{it.subtitle ? <span className="t2">{it.subtitle}</span> : null}</span>
           </button>

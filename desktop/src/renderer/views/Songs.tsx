@@ -58,6 +58,7 @@ function SongGroups() {
     key: id, title, subtitle, coverArt,
     open: () => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [id], start_index: 0, label: title, shuffle: false } }),
     menu: (e) => void openContextMenu(e, { type: "tracks", data: { ids: [id] } }),
+    dragTarget: { type: "tracks", data: { ids: [id] } },
   });
   return (
     <ListGroups list="songs" pinned={pins.map((p) => item(p.pin.id, p.title, p.subtitle, p.coverArt))} recent={recent.map((tr) => item(tr.id, tr.title, tr.artist ?? t("misc.unknownArtist"), tr.coverArt))}

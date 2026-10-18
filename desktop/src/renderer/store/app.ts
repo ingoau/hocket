@@ -113,6 +113,12 @@ export interface UiState {
   editingPins: boolean;
   /** The pin (kind:id) whose menu opened it, where focus goes back to. */
   editPinsFrom: string | undefined;
+  /**
+   * A library drag is over the player: the side panel (and the fullscreen
+   * player) show the queue without writing the remembered view, and go back
+   * when the drag ends.
+   */
+  queueDropReveal: boolean;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -144,6 +150,7 @@ export interface AppStore extends CoreState, UiState {
   setPrefs(patch: Partial<AppPrefs>): void;
   setDrawerOpen(open: boolean): void;
   setEditingPins(open: boolean, from?: string): void;
+  setQueueDropReveal(on: boolean): void;
   setting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
   runAction(actionId: string, target?: ActionTarget): void;
@@ -188,6 +195,7 @@ export const useApp = create<AppStore>((set, get) => ({
   drawerOpen: false,
   editingPins: false,
   editPinsFrom: undefined,
+  queueDropReveal: false,
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -284,6 +292,10 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setEditingPins(editingPins, from) {
     set({ editingPins, editPinsFrom: editingPins ? from : undefined });
+  },
+  setQueueDropReveal(queueDropReveal) {
+    if (get().queueDropReveal === queueDropReveal) return;
+    set({ queueDropReveal });
   },
   setting<T>(key: string, fallback: T): T {
     return settingValue(get(), key, fallback);
