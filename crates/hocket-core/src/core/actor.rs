@@ -1,6 +1,6 @@
 //! The actor task: owns every subsystem and handles one message at a time.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -49,6 +49,10 @@ pub(crate) const LOAD_RETRIES: u32 = 1;
 /// How long an item adopted at a gapless boundary waits for the backend's
 /// `TransitionedToNext` before it is loaded explicitly.
 pub(crate) const ADOPTION_TIMEOUT_MS: f64 = 2_000.0;
+/// Skips this close together form a burst: the first loads at once, the
+/// rest only update the session, and the item the burst lands on loads
+/// once no skip came for this long.
+pub(crate) const SKIP_SETTLE_MS: f64 = 150.0;
 /// Consecutive unavailable items before playback stops trying.
 pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 3;
 /// Artwork size for the media session (small in battery saver).
@@ -143,6 +147,13 @@ pub(crate) struct Actor {
     pub autoplay: Option<Box<AutoplayEngine>>,
     pub autoplay_generation: u32,
     pub autoplay_wanted: bool,
+    /// The queue ran out waiting on the autoplay batch in flight: play it
+    /// when it lands. Unset while it is fetched ahead of the end (#13).
+    pub autoplay_advance: bool,
+    /// The current item autoplay was last asked for (ahead of its end or at
+    /// it): a batch that found nothing is not asked for again on every
+    /// change, and one that lands after the queue moved on is dropped.
+    pub autoplay_prefetched: Option<QueueKey>,
     pub reducer_policy: Arc<ReducerPolicy>,
     pub entropy: Arc<dyn Entropy>,
 
@@ -178,6 +189,17 @@ pub(crate) struct Actor {
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Track summaries already read from the mirror, for the queue view
+    /// (rebuilt on every queue change): see [`Actor::summaries`].
+    pub summary_cache: Mutex<super::state::SummaryCache>,
+    /// When the last skip (Next, Previous, a peer's queue jump) moved the
+    /// current item: a skip soon after it is part of a burst, whose loads
+    /// wait until the burst settles (see `Actor::defer_load`).
+    pub last_skip_at: Option<f64>,
+    /// The current local op is a skip (set around `local_op`).
+    pub skip_op: bool,
+    /// The settle deadline the pending-load timer was armed for.
+    pub pending_load_timer: Option<f64>,
     pub network: Option<NetworkState>,
     pub visible: bool,
     pub focused: bool,
@@ -203,6 +225,9 @@ pub(crate) struct Actor {
     pub last_outbox_retry: f64,
     pub last_sync_check: f64,
     pub last_meta_prune: f64,
+    /// Artists whose cached top songs are being refreshed in the background
+    /// (one `getTopSongs` at a time per artist, however often the page asks).
+    pub top_songs_refreshing: HashSet<ArtistId>,
     /// Local ops issued from this device (undo labels).
     pub open_report: crate::db::OpenReport,
 }
@@ -399,6 +424,8 @@ impl Actor {
             autoplay: Some(Box::new(autoplay)),
             autoplay_generation: 0,
             autoplay_wanted: false,
+            autoplay_advance: false,
+            autoplay_prefetched: None,
             reducer_policy,
             entropy,
             backend,
@@ -430,6 +457,10 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            summary_cache: Mutex::new(Default::default()),
+            last_skip_at: None,
+            skip_op: false,
+            pending_load_timer: None,
             network: None,
             visible: true,
             focused: true,
@@ -453,6 +484,7 @@ impl Actor {
             last_outbox_retry: now,
             last_sync_check: 0.0,
             last_meta_prune: now,
+            top_songs_refreshing: HashSet::new(),
             open_report,
         };
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
@@ -516,6 +548,7 @@ impl Actor {
         match internal {
             Internal::Tick => self.on_tick(),
             Internal::Backend(report) => self.on_backend_report(report),
+            Internal::PendingLoadDue => self.on_pending_load_due(),
             Internal::BackendCommand(command) => self.emit(Event::Backend { command }),
             Internal::Jobs(ev) => match ev {
                 QueueEvent::JobsChanged(jobs) => {
@@ -578,6 +611,11 @@ impl Actor {
                 lyrics,
                 announce,
             } => self.on_lyrics_fetched(server_id, track_id, lyrics, announce),
+            Internal::TopSongsRefreshed {
+                server_id,
+                artist_id,
+                changed,
+            } => self.on_top_songs_refreshed(server_id, artist_id, changed),
             Internal::Artwork { id, size, path } => self.on_artwork(id, size, path),
             Internal::OutboxFlushed { report } => self.on_outbox_flushed(report),
             Internal::CasResult { entry_id, result } => self.on_cas_result(entry_id, result),
@@ -864,6 +902,7 @@ impl Actor {
             self.engine_input(Input::Tick);
         }
         self.prefetch_tick(now);
+        self.flush_pending_load(false);
         self.playback_tick(now);
         self.remote_volume_tick(now);
         self.prime_next();

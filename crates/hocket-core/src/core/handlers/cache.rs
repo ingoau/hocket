@@ -69,31 +69,40 @@ impl Actor {
         transitioned: bool,
         play: bool,
     ) {
-        let now = self.now();
-        let leaving = self
-            .playback
-            .track
-            .clone()
-            .filter(|_| self.playback.loaded && !transitioned)
-            .filter(|_| self.playback.doc_key.as_deref() != Some(item.key.as_str()));
+        if self.playback.loaded
+            && !transitioned
+            && self.playback.doc_key.as_deref() != Some(item.key.as_str())
+        {
+            self.note_left_early();
+        }
         let dl = self.downloads.clone();
         let record = |sid: &str, tid: &str, s: CacheSignal| {
             if let Err(e) = dl.cache_signal(sid, tid, s) {
                 tracing::debug!(target: "hocket_core", error = %e, "cache signal");
             }
         };
-        if let Some(prev) = leaving {
-            let pos = self.playback.position_now(now);
-            let limit = EARLY_SKIP_MS.min(prev.duration_ms / 2);
-            if pos < limit {
-                record(&prev.server_id, &prev.id, CacheSignal::Skipped);
-            }
-        }
         if matches!(item.source, QueueSource::Autoplay { .. }) {
             record(&track.server_id, &track.id, CacheSignal::Autoplay);
         }
         if play {
             record(&track.server_id, &track.id, CacheSignal::Played);
+        }
+    }
+
+    /// The loaded track is being left: before [`EARLY_SKIP_MS`] (or half
+    /// its length) that is a skip.
+    pub(crate) fn note_left_early(&mut self) {
+        let Some(prev) = self.playback.track.as_ref() else {
+            return;
+        };
+        let pos = self.playback.position_now(self.now());
+        if pos < EARLY_SKIP_MS.min(prev.duration_ms / 2) {
+            if let Err(e) =
+                self.downloads
+                    .cache_signal(&prev.server_id, &prev.id, CacheSignal::Skipped)
+            {
+                tracing::debug!(target: "hocket_core", error = %e, "cache signal");
+            }
         }
     }
 

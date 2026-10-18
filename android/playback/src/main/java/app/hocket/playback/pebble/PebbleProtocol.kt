@@ -95,6 +95,15 @@ object PebbleProtocol {
         const val SEEK = 16
     }
 
+    /** Max volume steps one VOLUME_UP / VOLUME_DOWN applies (the watch caps its merged count too). */
+    const val MAX_VOLUME_STEPS = 20
+
+    /**
+     * Steps in a VOLUME_UP / VOLUME_DOWN: the watch sends Arg = presses (merged while its outbox was
+     * busy); an older watch sent 0, meaning one.
+     */
+    fun volumeSteps(arg: Int): Int = arg.coerceIn(1, MAX_VOLUME_STEPS)
+
     object RowFlag {
         const val BROWSABLE = 1
         const val CURRENT = 2
@@ -131,6 +140,24 @@ object PebbleProtocol {
         var end = maxBytes
         while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) end--
         return bytes.copyOf(end)
+    }
+
+    /**
+     * A queue item's row id. The watch keeps [ID_MAX] bytes of an id and sends back what it kept, but
+     * queue keys run longer (an op id with the device id in it, plus a slot number for an upcoming
+     * song, #97), so a cut key named nothing and tapping or holding the row did nothing. A key that
+     * fits goes as is; a longer one as `q:` and a 64-bit FNV-1a hash of it, which the bridge maps back
+     * by hashing the queue's keys.
+     */
+    fun queueRowId(key: String): String {
+        val bytes = key.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= ID_MAX && !key.startsWith("q:")) return key
+        var h = 0xcbf29ce484222325uL.toLong()
+        for (b in bytes) {
+            h = h xor (b.toLong() and 0xff)
+            h *= 0x100000001b3L
+        }
+        return "q:" + java.lang.Long.toHexString(h)
     }
 
     // -- Settings ----------------------------------------------------------------------------------

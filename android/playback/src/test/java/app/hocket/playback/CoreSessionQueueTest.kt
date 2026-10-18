@@ -99,6 +99,14 @@ class CoreSessionQueueTest {
     }
 
     @Test
+    fun upcomingIsCapped() {
+        val long = queue.copy(upcoming = (100 until 400).map(::entry))
+        val t = CoreSessionPlayer.timeline(long, "t2")
+        assertEquals(t.currentIndex + 1 + CoreSessionPlayer.UPCOMING_SHOWN, t.entries.size)
+        assertEquals("k3", t.entries[t.currentIndex + 1].item.key)
+    }
+
+    @Test
     fun pickingAnEntryJumpsToIt() {
         setUp()
         player.seekTo(4, 0)

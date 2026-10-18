@@ -50,7 +50,8 @@ function RouteView({ route }: { route: Route }) {
     case "album":
       return <AlbumDetail id={route.id ?? ""} />;
     case "artist":
-      return <ArtistDetail id={route.id ?? ""} />;
+      // Keyed so the next artist's page never shows this one's answers while its own load.
+      return <ArtistDetail key={route.id ?? ""} id={route.id ?? ""} />;
     case "playlist":
       return <PlaylistDetail id={route.id ?? ""} />;
     case "genre":

@@ -395,16 +395,25 @@ impl Db {
         if ids.is_empty() {
             return Ok(vec![]);
         }
+        // One statement per chunk rather than one per id: a long queue
+        // resolves in a handful of queries.
+        const CHUNK: usize = 256;
         self.with_conn(|c| {
-            let mut out = Vec::with_capacity(ids.len());
-            let mut st =
-                c.prepare_cached(&format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?1"))?;
-            for id in ids {
-                if let Some(t) = st.query_row([id], track_from_row).optional()? {
-                    out.push(t);
+            let mut found: std::collections::HashMap<String, Track> =
+                std::collections::HashMap::with_capacity(ids.len());
+            for chunk in ids.chunks(CHUNK) {
+                let marks = vec!["?"; chunk.len()].join(",");
+                // Not cached: chunk sizes vary and would churn the cache.
+                let mut st = c.prepare(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({marks})"
+                ))?;
+                let rows = st.query_map(params_from_iter(chunk), track_from_row)?;
+                for t in rows {
+                    let t = t?;
+                    found.entry(t.id.clone()).or_insert(t);
                 }
             }
-            Ok(out)
+            Ok(ids.iter().filter_map(|id| found.get(id).cloned()).collect())
         })
     }
 
@@ -1902,6 +1911,28 @@ mod tests {
             .collect();
         assert_eq!(got, vec!["3", "1"]);
         assert_eq!(db.summaries_by_ids(&ids).unwrap().len(), 2);
+        // Repeats are kept, across chunk boundaries too.
+        let many: Vec<String> = (0..600)
+            .map(|i| ["1", "2", "x"][i % 3].to_string())
+            .collect();
+        let got = db.tracks_by_ids(&many).unwrap();
+        assert_eq!(got.len(), 400);
+        assert_eq!(got[0].id, "1");
+        assert_eq!(got[399].id, "2");
+    }
+
+    #[test]
+    fn the_tracks_generation_moves_on_any_track_row_change() {
+        let db = seeded();
+        let g0 = db.tracks_generation();
+        db.saved_state_set_raw("k", "{}", &WallClock).unwrap();
+        assert_eq!(db.tracks_generation(), g0, "other tables do not count");
+        db.set_track_offline("1", OfflineState::Downloaded).unwrap();
+        let g1 = db.tracks_generation();
+        assert!(g1 > g0);
+        db.with_conn(|c| Ok(c.execute("DELETE FROM tracks WHERE id = '2'", [])?))
+            .unwrap();
+        assert!(db.tracks_generation() > g1);
     }
 
     #[test]

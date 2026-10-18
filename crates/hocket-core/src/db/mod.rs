@@ -133,6 +133,8 @@ struct Inner {
     path: Option<PathBuf>,
     random_seed: i64,
     open_report: OpenReport,
+    /// Bumped on every row change to `tracks` (see [`Db::tracks_generation`]).
+    tracks_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Handle to the database. Cheap to clone; all access is serialised through
@@ -180,14 +182,33 @@ impl Db {
 
     fn wrap(conn: Connection, path: Option<PathBuf>, open_report: OpenReport) -> Db {
         let random_seed = (now_ms() as i64) ^ 0x5DEE_CE66;
+        let tracks_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let generation = tracks_generation.clone();
+        conn.update_hook(Some(
+            move |_: rusqlite::hooks::Action, _: &str, table: &str, _: i64| {
+                if table == "tracks" {
+                    generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        ));
         Db {
             inner: Arc::new(Inner {
                 conn: Mutex::new(conn),
                 path,
                 random_seed,
                 open_report,
+                tracks_generation,
             }),
         }
+    }
+
+    /// Changes whenever a row of `tracks` is inserted, updated or deleted
+    /// (rolled-back changes included), whoever made it: what an in-memory
+    /// copy of track rows checks to know it is still current.
+    pub fn tracks_generation(&self) -> u64 {
+        self.inner
+            .tracks_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn path(&self) -> Option<&Path> {

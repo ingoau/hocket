@@ -276,10 +276,13 @@ mod tests {
         assert_eq!(a.revision, 1);
         assert!(a.shuffle.is_some());
         let ctx2 = op_context("op-2", 11.0, 0);
+        let shown_next = crate::session::derive(&a).upcoming[0].key.clone();
         let a2 = apply_op(&r, &a, &SessionOp::Next, &ctx2, 2).unwrap();
         let b2 = apply_op(&r, &b, &SessionOp::Next, &ctx2, 2).unwrap();
         assert_eq!(a2, b2);
-        assert_eq!(a2.current.as_ref().unwrap().key, "op-2-1");
+        // The item keeps the key it showed as upcoming (#97).
+        assert_eq!(a2.current.as_ref().unwrap().key, shown_next);
+        assert!(shown_next.starts_with("op-1-"));
     }
 
     #[test]

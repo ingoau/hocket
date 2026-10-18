@@ -253,10 +253,10 @@ private sealed interface Line {
 
 /**
  * A drag in progress (or just dropped): the movable keys (playing next + upcoming) in the order the
- * finger has put them, over the queue as it was when the drag started. The core re-keys an item
- * that moves (a context item's `ctx-<index>` follows the context list; one moved into playing next
- * gets a new key), so sending a move per slot lost the dragged item after the first one. The list
- * reorders this local copy while the finger is down and the core gets ONE move when it lifts;
+ * finger has put them, over the queue as it was when the drag started. Older cores re-keyed an
+ * item that moved (a context item's key was its `ctx-<index>`), so sending a move per slot lost the
+ * dragged item after the first one; keys are stable now (#97), and one move still keeps the queue
+ * from reshuffling under the finger. The list reorders this local copy while the finger is down and the core gets ONE move when it lifts;
  * [dropped] keeps the new order on screen until the core's queue arrives.
  */
 private data class QueueDrag(val base: QueueView, val key: QueueKey, val order: List<QueueKey>, val dropped: Boolean = false)
@@ -415,13 +415,17 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
         LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize().testTag("queue.list")) {
             items(rows, key = { r -> when (r) { is Line.Header -> "hdr:" + r.id; is Line.Item -> r.entry.item.key; Line.Footer -> FOOTER_KEY } }) { row ->
                 when (row) {
-                    is Line.Header -> SectionTitle(row.title, row.subtitle, clear = row.clear?.let { c ->
-                        when (c) {
-                            Line.Clear.History -> stringResource(R.string.queue_clear_history) to { client.dispatch(Commands.removeQueueItems(queue.history.map { it.item.key })) }
-                            Line.Clear.Next -> stringResource(R.string.queue_clear_insertions) to { client.dispatch(Command.ClearInsertions) }
-                        }
-                    })
-                    Line.Footer -> Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    // Headers and the footer move with the rows (ReorderableItem animates those), so a
+                    // section appearing or the current track moving on slides rather than snaps (#27).
+                    is Line.Header -> Box(Modifier.animateItem()) {
+                        SectionTitle(row.title, row.subtitle, clear = row.clear?.let { c ->
+                            when (c) {
+                                Line.Clear.History -> stringResource(R.string.queue_clear_history) to { client.dispatch(Commands.removeQueueItems(queue.history.map { it.item.key })) }
+                                Line.Clear.Next -> stringResource(R.string.queue_clear_insertions) to { client.dispatch(Command.ClearInsertions) }
+                            }
+                        })
+                    }
+                    Line.Footer -> Column(Modifier.animateItem().fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                         if (queue.totalUpcoming.toInt() > queue.upcoming.size) Text(stringResource(R.string.queue_more_upcoming, queue.totalUpcoming.toInt() - queue.upcoming.size), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         TextButton(onClick = { client.dispatch(Command.ClearQueue) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.queue_clear)) }
                         Spacer(Modifier.height(24.dp))

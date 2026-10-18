@@ -1067,3 +1067,82 @@ async fn import_config_broadcasts_synced_keys_and_keeps_device_local_unless_aske
         "the re-import (stamped now) is newer than b's edit and reaches b"
     );
 }
+
+fn track_ids(r: QueryResult) -> Vec<String> {
+    match r {
+        QueryResult::TrackList(list) => list.into_iter().map(|t| t.id).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artist_top_songs_are_cached_and_refreshed_in_the_background() {
+    let server = seeded_server(12, 180.0);
+    let t = synced("top-songs", server.clone()).await;
+    let top = |count: u32| Query::ArtistTopSongs {
+        id: "ar0".into(),
+        count,
+    };
+    let calls = server.calls_to("getTopSongs");
+
+    // A failed first fetch answers from the mirror and caches nothing.
+    server.fail_next(
+        hocket_core::subsonic::SubsonicError::Network("down".into()),
+        1,
+    );
+    assert_eq!(track_ids(t.query(top(10)).await).len(), 10);
+    let calls = calls + 1;
+    assert_eq!(server.calls_to("getTopSongs"), calls);
+
+    // First visit asks the server and caches the answer.
+    let first = track_ids(t.query(top(10)).await);
+    assert_eq!(first.len(), 10);
+    assert_eq!(server.calls_to("getTopSongs"), calls + 1);
+
+    // Later visits (and smaller lists) are answered from the cache.
+    assert_eq!(track_ids(t.query(top(10)).await), first);
+    assert_eq!(track_ids(t.query(top(5)).await), first[..5]);
+    t.core.settle().await;
+    assert_eq!(server.calls_to("getTopSongs"), calls + 1);
+
+    // Offline, the cached list still answers (not the most-played fallback).
+    server.set_offline(true);
+    assert_eq!(track_ids(t.query(top(10)).await), first);
+    server.set_offline(false);
+
+    // The server's list changes; once the cache is stale the old list is
+    // still served at once, refreshed behind it, and UIs are told to refetch.
+    server.add_song(FakeServer::song("a-new", "New hit", "al9", "ar0", 100.0));
+    t.clock
+        .advance(hocket_core::cache::TOP_SONGS_REFRESH_MS + 1.0);
+    t.events.clear();
+    assert_eq!(track_ids(t.query(top(10)).await), first);
+    // A second ask while the refresh runs does not start another. The
+    // refresh may already have landed, so either list is a valid answer.
+    let second = track_ids(t.query(top(10)).await);
+    assert!(second == first || second[0] == "a-new", "{second:?}");
+    t.core.settle().await;
+    assert_eq!(server.calls_to("getTopSongs"), calls + 2);
+    assert!(t.events.all().iter().any(|e| matches!(
+        e,
+        Event::LibraryChanged { tables, ids, .. }
+            if tables == &["artistTopSongs".to_string()] && ids == &["ar0".to_string()]
+    )));
+    let refreshed = track_ids(t.query(top(10)).await);
+    assert_eq!(refreshed[0], "a-new");
+    t.core.settle().await;
+    assert_eq!(server.calls_to("getTopSongs"), calls + 2);
+
+    // A refresh that finds the same list says nothing.
+    t.clock
+        .advance(hocket_core::cache::TOP_SONGS_REFRESH_MS + 1.0);
+    t.events.clear();
+    t.query(top(10)).await;
+    t.core.settle().await;
+    assert_eq!(server.calls_to("getTopSongs"), calls + 3);
+    assert!(!t
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::LibraryChanged { .. })));
+}

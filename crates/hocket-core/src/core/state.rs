@@ -102,6 +102,12 @@ pub(crate) struct Playback {
     /// Silenced by a transient audio-focus loss: the backend still means to
     /// play and resumes on its own (reporting `Playing`) when focus returns.
     pub focus_suspended: bool,
+    /// A skip in a burst moved to this item but the backend has not been
+    /// given it yet: it is loaded once no further skip arrived by this local
+    /// time (see `Actor::defer_load`). Until then the item shows as loading
+    /// (`buffering`), the backend holds the old item paused, and
+    /// `backend_key` is unset so the old item's reports are ignored.
+    pub pending_load: Option<EpochMs>,
 }
 
 impl Playback {
@@ -177,4 +183,17 @@ pub(crate) struct PendingCas {
     pub redo: bool,
     /// Rated or loved items the undo touches, announced once it completes.
     pub items: Vec<(crate::api::LibraryItemKind, String)>,
+}
+
+/// Track summaries read from the mirror, valid while the mirror's
+/// `tracks` generation is unchanged ([`crate::db::Db::tracks_generation`]).
+#[derive(Debug, Default)]
+pub(crate) struct SummaryCache {
+    pub generation: u64,
+    pub map: std::collections::HashMap<TrackId, TrackSummary>,
+}
+
+impl SummaryCache {
+    /// Upper bound on cached summaries (a few MB at most).
+    pub const CAP: usize = 20_000;
 }

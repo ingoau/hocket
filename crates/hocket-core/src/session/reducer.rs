@@ -8,8 +8,11 @@
 //! context and its unshuffled track list, a shuffle permutation over it (see
 //! [`super::shuffle`]), the insertion list, and the cursor. History and the
 //! current item are stored [`QueueItem`]s; upcoming context items are derived
-//! on demand and carry a synthetic key (`ctx-<index>`) until they become
-//! current, at which point they get a real key from the [`Entropy`] source.
+//! on demand. Their keys are kept per context index beside the context (see
+//! [`super::context_keys`]) and follow the song through edits, shuffle and
+//! becoming current, so a key names the same song for as long as it is
+//! queued (#97). Without them (a document an older peer edited) upcoming
+//! items fall back to a synthetic `ctx-<index>`, still accepted on input.
 //!
 //! **Cursor semantics.** `doc.cursor` is the permuted position of the *next*
 //! context item to play — the boundary between what has played and what will.
@@ -50,6 +53,7 @@ use crate::api::{
     ShuffleState, SortOrder, TrackId, TrackSummary,
 };
 
+use super::context_keys::{self, ContextKeys};
 use super::document::{bump_revision, same_state};
 use super::saved::{self, SavedQueuePolicy};
 use super::shuffle::{order_insert_index, order_remove_index, Permutation};
@@ -390,10 +394,16 @@ pub fn derive(doc: &SessionDocument) -> DerivedQueue {
     let n = p.len();
     let start = (doc.cursor as usize).min(n);
     let ts = tracks(doc);
+    let keys = context_keys::read(doc);
+    let key = |index: u32| {
+        keys.as_ref()
+            .and_then(|k| k.key(index as usize))
+            .unwrap_or_else(|| context_key(index))
+    };
     let upcoming: Vec<QueueItem> = (start..n)
         .filter_map(|pos| p.to_context(pos as u32))
         .map(|index| QueueItem {
-            key: context_key(index),
+            key: key(index),
             track_id: ts.get(index as usize).cloned().unwrap_or_default(),
             source: QueueSource::Context { index },
             unavailable: false,
@@ -406,7 +416,7 @@ pub fn derive(doc: &SessionDocument) -> DerivedQueue {
             .flatten()
             .and_then(|index| {
                 Some(QueueItem {
-                    key: context_key(index),
+                    key: key(index),
                     track_id: ts.get(index as usize)?.clone(),
                     source: QueueSource::Context { index },
                     unavailable: false,
@@ -487,6 +497,7 @@ pub fn reduce(
         start_position: &mut start_position,
     };
     r.repair_duplicate_keys();
+    context_keys::ensure(r.doc, ctx.entropy);
     r.apply(op)?;
     r.drop_upcoming_returned();
     prune_offline_skipped(&mut next);
@@ -666,10 +677,20 @@ impl Reducer<'_, '_> {
             }
             QueueOp::RestoreSavedQueue { id, tracks } => self.restore(&id, tracks),
             QueueOp::SetContextTracks { tracks } => {
-                if let Some(c) = self.doc.context.as_mut() {
-                    c.tracks = tracks;
-                    self.reconcile();
-                }
+                let old_keys = self.keys();
+                let Some(c) = self.doc.context.as_mut() else {
+                    return Ok(());
+                };
+                // Each track keeps its key where it is still in the list.
+                let keys = match old_keys {
+                    Some(k) if k.len() == c.tracks.len() => {
+                        k.realign(&c.tracks, &tracks, self.ctx.entropy)
+                    }
+                    _ => ContextKeys::fresh(self.ctx.entropy, tracks.len()),
+                };
+                c.tracks = tracks;
+                self.put_keys(keys);
+                self.reconcile();
                 Ok(())
             }
             QueueOp::SaveCurrentQueue { pinned } => {
@@ -741,14 +762,57 @@ impl Reducer<'_, '_> {
         perm(self.doc)
     }
 
-    fn fresh_context_item(&self, index: u32) -> Option<QueueItem> {
+    /// The context's key slots (kept in step with the track list by every
+    /// helper here; [`context_keys::ensure`] ran before the op).
+    fn keys(&self) -> Option<ContextKeys> {
+        context_keys::read_unchecked(self.doc)
+    }
+
+    fn put_keys(&mut self, keys: ContextKeys) {
+        context_keys::write(self.doc, keys);
+    }
+
+    fn with_keys(&mut self, f: impl FnOnce(&mut ContextKeys, &dyn Entropy)) {
+        if let Some(mut k) = self.keys() {
+            f(&mut k, self.ctx.entropy);
+            self.put_keys(k);
+        }
+    }
+
+    /// Unshuffled index of the context item `key` names: its slot, or a
+    /// synthetic `ctx-<index>` (older peers still send those).
+    fn context_index_of(&self, key: &str) -> Option<u32> {
+        self.keys()
+            .and_then(|k| k.index_of(key))
+            .or_else(|| parse_context_key(key))
+    }
+
+    /// The key an upcoming context item at `index` shows.
+    fn slot_key(&self, index: u32) -> QueueKey {
+        self.keys()
+            .and_then(|k| k.key(index as usize))
+            .unwrap_or_else(|| context_key(index))
+    }
+
+    /// The context item at `index`, made current: it takes its slot's key.
+    fn fresh_context_item(&mut self, index: u32) -> Option<QueueItem> {
         let track_id = tracks(self.doc).get(index as usize)?.clone();
+        let mut key = None;
+        self.with_keys(|k, e| key = k.take(index as usize, e));
         Some(QueueItem {
-            key: self.ctx.entropy.next_key(),
+            key: key.unwrap_or_else(|| self.ctx.entropy.next_key()),
             track_id,
             source: QueueSource::Context { index },
             unavailable: false,
         })
+    }
+
+    /// A context item going back to the context's future gives its key back
+    /// to its slot, so it shows (and is addressed) as before.
+    fn return_key_to_slot(&mut self, item: &QueueItem) {
+        if let QueueSource::Context { index } = item.source {
+            self.with_keys(|k, _| k.set(index as usize, &item.key));
+        }
     }
 
     fn push_history(&mut self, item: QueueItem) {
@@ -834,6 +898,7 @@ impl Reducer<'_, '_> {
         if let Some(c) = self.doc.context.as_mut() {
             c.tracks.remove(index as usize);
         }
+        self.with_keys(|k, _| k.remove(index as usize));
         self.shift_refs(index + 1, -1, Some(index));
         if let Some(p) = position {
             if p < self.doc.cursor {
@@ -843,8 +908,15 @@ impl Reducer<'_, '_> {
         self.clamp_cursor();
     }
 
-    /// Insert a track at unshuffled `index`, showing at permuted `position`.
-    fn insert_context_track(&mut self, index: u32, position: u32, track_id: TrackId) {
+    /// Insert a track at unshuffled `index`, showing at permuted `position`,
+    /// under `key` (an item moved here keeps its own) or a new one.
+    fn insert_context_track(
+        &mut self,
+        index: u32,
+        position: u32,
+        track_id: TrackId,
+        key: Option<QueueKey>,
+    ) {
         let n = self.n() as u32;
         let index = index.min(n);
         let position = position.min(n);
@@ -864,6 +936,7 @@ impl Reducer<'_, '_> {
         if let Some(c) = self.doc.context.as_mut() {
             c.tracks.insert(index as usize, track_id);
         }
+        self.with_keys(|k, e| k.insert(index as usize, key.as_deref(), e));
         self.shift_refs(index, 1, None);
         if position < self.doc.cursor {
             self.doc.cursor += 1;
@@ -936,6 +1009,7 @@ impl Reducer<'_, '_> {
         let n = context.tracks.len() as u32;
         let start = start_index.map(|s| if n == 0 { 0 } else { s.min(n - 1) });
         self.doc.context = Some(context);
+        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n as usize));
         self.doc.history.clear();
         self.doc.insertions.clear();
         self.doc.current = None;
@@ -996,6 +1070,8 @@ impl Reducer<'_, '_> {
                 self.doc.cursor = 0;
             }
         }
+        let n = self.n();
+        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n));
         self.effects.push(Effect::ContextReplaced);
         Ok(())
     }
@@ -1032,6 +1108,8 @@ impl Reducer<'_, '_> {
         self.doc.shuffle = saved_entry.shuffle.clone();
         self.doc.repeat = saved_entry.repeat;
         self.dedupe_keys();
+        let n = self.n();
+        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n));
         if unresolved {
             self.effects.push(Effect::ResolveContext { context });
         } else {
@@ -1156,7 +1234,7 @@ impl Reducer<'_, '_> {
                     } else {
                         (n, n)
                     };
-                    self.insert_context_track(index, position, t);
+                    self.insert_context_track(index, position, t, None);
                 }
             }
         }
@@ -1198,7 +1276,7 @@ impl Reducer<'_, '_> {
             } else {
                 n
             };
-            self.insert_context_track(index, position, item.track_id);
+            self.insert_context_track(index, position, item.track_id, Some(item.key));
         }
     }
 
@@ -1208,9 +1286,13 @@ impl Reducer<'_, '_> {
     /// [`Self::push_current_to_future`]) are part of the context's future; a
     /// new play order replaces that future, so they go (else they'd play twice).
     fn drop_returned_context_items(&mut self) {
-        self.doc
-            .insertions
-            .retain(|i| !matches!(i.source, QueueSource::Context { .. }));
+        let (returned, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doc.insertions)
+            .into_iter()
+            .partition(|i| matches!(i.source, QueueSource::Context { .. }));
+        self.doc.insertions = rest;
+        for item in &returned {
+            self.return_key_to_slot(item);
+        }
     }
 
     /// A context item Previous put back in Playing Next stands for a played
@@ -1221,10 +1303,18 @@ impl Reducer<'_, '_> {
     fn drop_upcoming_returned(&mut self) {
         let p = self.perm();
         let cursor = self.doc.cursor;
-        self.doc.insertions.retain(|i| match i.source {
-            QueueSource::Context { index } => p.to_position(index).is_some_and(|pos| pos < cursor),
-            _ => true,
-        });
+        let (keep, upcoming): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doc.insertions)
+            .into_iter()
+            .partition(|i| match i.source {
+                QueueSource::Context { index } => {
+                    p.to_position(index).is_some_and(|pos| pos < cursor)
+                }
+                _ => true,
+            });
+        self.doc.insertions = keep;
+        for item in &upcoming {
+            self.return_key_to_slot(item);
+        }
     }
 
     fn shuffle_on(&mut self) {
@@ -1366,6 +1456,7 @@ impl Reducer<'_, '_> {
                         let wrapped = self.doc.repeat == RepeatMode::All
                             && last_played.map(|q| q >= pos).unwrap_or(false);
                         self.doc.cursor = if wrapped { p.len() as u32 } else { pos };
+                        self.return_key_to_slot(&cur);
                     }
                     _ => self.doc.insertions.insert(0, cur),
                 }
@@ -1435,7 +1526,9 @@ impl Reducer<'_, '_> {
                             p.to_context(q - 1).and_then(|i| self.fresh_context_item(i))
                         {
                             if self.doc.insertions.is_empty() && q + 1 == self.doc.cursor {
-                                self.doc.current = Some(item);
+                                if let Some(cur) = self.doc.current.replace(item) {
+                                    self.return_key_to_slot(&cur);
+                                }
                                 self.doc.cursor = q;
                             } else if let Some(cur) = self.doc.current.replace(item) {
                                 // As in `push_current_to_future`.
@@ -1486,7 +1579,7 @@ impl Reducer<'_, '_> {
             self.doc.current = Some(item);
             return Ok(());
         }
-        if let Some(index) = parse_context_key(key) {
+        if let Some(index) = self.context_index_of(key) {
             let p = self.perm();
             if let Some(position) = p.to_position(index) {
                 if position >= self.doc.cursor {
@@ -1536,7 +1629,7 @@ impl Reducer<'_, '_> {
             i.unavailable = true;
             return Ok(());
         }
-        if let Some(index) = parse_context_key(key) {
+        if let Some(index) = self.context_index_of(key) {
             // Not materialised, so nowhere to keep the flag: drop it from the queue.
             if (index as usize) < self.n() {
                 self.remove_context_index(index);
@@ -1563,8 +1656,10 @@ impl Reducer<'_, '_> {
             .retain(|i| !wanted.contains(i.key.as_str()));
         found |= self.doc.insertions.len() != before;
 
-        let mut context_indices: Vec<u32> =
-            keys.iter().filter_map(|k| parse_context_key(k)).collect();
+        let mut context_indices: Vec<u32> = keys
+            .iter()
+            .filter_map(|k| self.context_index_of(k))
+            .collect();
         let n = self.n();
         let p = self.perm();
         // Only items actually visible as upcoming are removable this way.
@@ -1616,13 +1711,14 @@ impl Reducer<'_, '_> {
     fn move_item(&mut self, key: &str, to_index: usize) -> Result<(), ReduceError> {
         // Take the item out. `returned`: a context item Previous put back in
         // Playing Next, whose index is still its own (behind the cursor).
+        // The item keeps its key wherever it goes (#97).
         let mut returned = false;
-        let (track_id, source): (TrackId, QueueSource) =
+        let (track_id, source, key): (TrackId, QueueSource, QueueKey) =
             if let Some(i) = self.doc.insertions.iter().position(|it| it.key == key) {
                 let it = self.doc.insertions.remove(i);
                 returned = matches!(it.source, QueueSource::Context { .. });
-                (it.track_id, it.source)
-            } else if let Some(index) = parse_context_key(key) {
+                (it.track_id, it.source, it.key)
+            } else if let Some(index) = self.context_index_of(key) {
                 let p = self.perm();
                 let visible = (index as usize) < self.n()
                     && p.to_position(index)
@@ -1632,8 +1728,9 @@ impl Reducer<'_, '_> {
                     return Err(ReduceError::UnknownKey(key.into()));
                 }
                 let track_id = tracks(self.doc)[index as usize].clone();
+                let key = self.slot_key(index);
                 self.remove_context_index(index);
-                (track_id, QueueSource::Context { index })
+                (track_id, QueueSource::Context { index }, key)
             } else {
                 return Err(ReduceError::UnknownKey(key.into()));
             };
@@ -1652,7 +1749,7 @@ impl Reducer<'_, '_> {
             self.doc.insertions.insert(
                 at,
                 QueueItem {
-                    key: self.ctx.entropy.next_key(),
+                    key,
                     track_id,
                     source,
                     unavailable: false,
@@ -1670,7 +1767,7 @@ impl Reducer<'_, '_> {
             } else {
                 self.n() as u32
             };
-            self.insert_context_track(index, position, track_id);
+            self.insert_context_track(index, position, track_id, Some(key));
         }
         Ok(())
     }
@@ -2928,6 +3025,9 @@ mod tests {
         let mut b = b.clone();
         a.saved_queues.clear();
         b.saved_queues.clear();
+        // A restore keys the restored context afresh.
+        a.extra.remove(context_keys::CONTEXT_KEYS_FIELD);
+        b.extra.remove(context_keys::CONTEXT_KEYS_FIELD);
         same_state(&a, &b)
     }
 

@@ -4,7 +4,7 @@
 //! the engine reports `DocumentChanged`, and diffs documents for changes that
 //! arrive from peers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::actions::{Resolver, StateView};
 use crate::api::*;
@@ -342,7 +342,10 @@ impl Actor {
         ) {
             self.playback.want_playing = true;
         }
-        if !self.local_op(op) {
+        self.skip_op = matches!(op, SessionOp::Next | SessionOp::Previous);
+        let applied = self.local_op(op);
+        self.skip_op = false;
+        if !applied {
             return;
         }
         let after = self.doc().cloned().unwrap_or(before.clone());
@@ -532,6 +535,8 @@ impl Actor {
             .map(|e| e.lease().owner.is_none())
             .unwrap_or(true);
 
+        // The item to load, once the UI has the new state.
+        let mut load: Option<(QueueItem, Ms, bool)> = None;
         let mut restart = false;
         let mut stopped = false;
         let mut needs_autoplay = false;
@@ -577,7 +582,7 @@ impl Actor {
                             DocChange::Local => self.playback.want_playing || self.playback.playing,
                             _ => self.playback.playing || self.playback.awaiting_transition,
                         };
-                        self.load_item(&item, position, keep_playing, None);
+                        load = Some((item, position, keep_playing));
                     } else if nobody_owns && cause == DocChange::Local && self.playback.want_playing
                     {
                         // Nobody is playing and the user pressed play here.
@@ -617,7 +622,14 @@ impl Actor {
             .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
-            self.request_autoplay();
+            self.autoplay_advance = true;
+            self.autoplay_prefetched = document.current.as_ref().map(|c| c.key.clone());
+            if self.autoplay.is_some() {
+                self.request_autoplay();
+            }
+            // Else a batch fetched ahead is in flight: it plays when it lands.
+        } else if owns && resolve_tracks.is_none() {
+            self.prefetch_autoplay(&document);
         }
         // Saved queues ride the engine's LWW set too.
         if !same_saved_set(&document.saved_queues, &self.last_saved_queues) {
@@ -635,14 +647,48 @@ impl Actor {
             }
         }
         self.mark_doc_dirty();
+        // What the UIs render goes out before the backend is touched.
         self.emit(Event::SessionChanged { document });
-        self.emit_queue();
+        self.emit_queue_with(load.is_none());
+        if let Some((item, position, play)) = load {
+            // A skip soon after another is part of a burst: only the item
+            // it lands on is loaded (see `defer_load`). A peer's queue jump
+            // counts too; an item ending never does (that is a local
+            // `TrackEnded`, and it must stay gapless).
+            let skip = match cause {
+                DocChange::Local => self.skip_op,
+                DocChange::Remote => true,
+                _ => false,
+            };
+            let now = self.now();
+            let in_burst = skip
+                && position == 0
+                && (self.playback.pending_load.is_some()
+                    || self
+                        .last_skip_at
+                        .is_some_and(|t| now - t < crate::core::actor::SKIP_SETTLE_MS));
+            if skip {
+                self.last_skip_at = Some(now);
+            }
+            if in_burst {
+                self.defer_load(&item, position, play);
+            } else {
+                self.load_item(&item, position, play, None);
+            }
+            self.emit_media_session();
+        }
         if let Some(tracks) = resolve_tracks {
             self.local_op(SessionOp::SetContextTracks { tracks });
         }
     }
 
     pub(crate) fn emit_queue(&mut self) {
+        self.emit_queue_with(true);
+    }
+
+    /// `media_session: false` when the caller emits it itself, after the
+    /// playback state it carries has caught up.
+    fn emit_queue_with(&mut self, media_session: bool) {
         self.mark_prefetch_check();
         let queue = self.queue_view();
         self.emit(Event::NowPlayingChanged {
@@ -650,10 +696,33 @@ impl Actor {
         });
         self.lyrics_for_now_playing(&queue);
         self.emit(Event::QueueChanged { queue });
-        self.emit_media_session();
+        if media_session {
+            self.emit_media_session();
+        }
     }
 
     /// Ask the autoplay chain for a batch; `AppendAutoplay` + `Next` follow.
+    /// Fetch autoplay while the last item plays rather than once it has
+    /// ended, so its first pick can be preloaded for a gapless start (#13).
+    fn prefetch_autoplay(&mut self, doc: &SessionDocument) {
+        let Some(current) = doc.current.as_ref() else {
+            return;
+        };
+        let last = doc.autoplay
+            && doc.repeat == RepeatMode::Off
+            && self.playback.loaded
+            && derive(doc).total_upcoming == 0;
+        if !last
+            || self.autoplay.is_none()
+            || self.autoplay_prefetched.as_ref() == Some(&current.key)
+        {
+            return;
+        }
+        self.autoplay_prefetched = Some(current.key.clone());
+        self.autoplay_advance = false;
+        self.request_autoplay();
+    }
+
     pub(crate) fn request_autoplay(&mut self) {
         let Some(engine) = self.autoplay.take() else {
             self.autoplay_wanted = true;
@@ -749,7 +818,34 @@ impl Actor {
         if generation != self.autoplay_generation {
             return;
         }
+        // Played as soon as it lands only when the queue ran out for it;
+        // a batch fetched ahead joins the queue behind the playing item.
+        let advance = std::mem::take(&mut self.autoplay_advance);
+        // The batch was asked for while `autoplay_prefetched` was current, at
+        // the end of the queue or ahead of it. The queue may have moved on
+        // since (another album or song played, songs queued, autoplay or
+        // Repeat All toggled). Autoplay items go to Playing Next, so a batch
+        // kept then would play ahead of the new queue, and the Next that
+        // follows one asked for at the end would skip the new current song.
+        // Dropped; the end of the queue asks again if it still needs to.
+        let wanted = self.doc().is_some_and(|d| {
+            d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
+                && (advance
+                    || (d.autoplay && d.repeat == RepeatMode::Off && derive(d).total_upcoming == 0))
+        });
+        if !wanted {
+            // The engine is back: fetch ahead for whatever is last now.
+            self.autoplay_prefetched = None;
+            if let Some(doc) = self.doc().cloned().filter(|_| self.owns_transport()) {
+                self.prefetch_autoplay(&doc);
+            }
+            return;
+        }
         if picks.is_empty() {
+            if !advance {
+                // Fetched ahead: the end of the queue asks again, and says so.
+                return;
+            }
             self.player_notice(
                 PlayerNoticeCode::AutoplayFoundNothing,
                 "Autoplay found nothing to add",
@@ -776,10 +872,11 @@ impl Actor {
             let changed = vec![None; tracks.len()];
             let _ = self.db.upsert_tracks(&tracks, &changed, 0);
         }
-        let queue_ran_out = self
-            .doc()
-            .map(|d| derive(d).total_upcoming == 0)
-            .unwrap_or(false);
+        let queue_ran_out = advance
+            && self
+                .doc()
+                .map(|d| derive(d).total_upcoming == 0)
+                .unwrap_or(false);
         self.local_op(SessionOp::AppendAutoplay { items });
         if queue_ran_out && self.owns_transport() {
             self.playback.want_playing = true;
@@ -992,6 +1089,7 @@ impl Actor {
             return QueueView::default();
         };
         let derived = derive(doc);
+        let mut seen: HashSet<&TrackId> = HashSet::new();
         let mut ids: Vec<TrackId> = vec![];
         for i in derived
             .history
@@ -1001,7 +1099,7 @@ impl Actor {
             .chain(derived.upcoming.iter())
             .chain(derived.wrap_next.iter())
         {
-            if !ids.contains(&i.track_id) {
+            if seen.insert(&i.track_id) {
                 ids.push(i.track_id.clone());
             }
         }
@@ -1009,13 +1107,66 @@ impl Actor {
         derived.into_view(|id| map.get(id).cloned().unwrap_or_else(|| bare_summary(id)))
     }
 
+    /// The queue as far as the media session reads it (the current entry
+    /// and the modes), without resolving every row: it is rebuilt on every
+    /// position report and transport change.
+    pub(crate) fn queue_head_view(&self) -> QueueView {
+        let Some(doc) = self.doc() else {
+            return QueueView::default();
+        };
+        QueueView {
+            current: doc.current.as_ref().map(|item| QueueEntry {
+                track: self.summary_or_bare(&item.track_id),
+                item: item.clone(),
+            }),
+            shuffle: doc.shuffle.is_some(),
+            repeat: doc.repeat,
+            autoplay: doc.autoplay,
+            mode: doc.mode,
+            ..QueueView::default()
+        }
+    }
+
+    /// Summaries of `ids` from the mirror. The queue view resolves every
+    /// item on each change (a Next on a long playlist): rows read once are
+    /// kept until any track row changes, so only new ids hit the database.
+    /// Ids the mirror lacks are absent (and asked for again next time).
     pub(crate) fn summaries(&self, ids: &[TrackId]) -> HashMap<TrackId, TrackSummary> {
-        let mut map = HashMap::new();
+        let mut map = HashMap::with_capacity(ids.len());
         if ids.is_empty() {
             return map;
         }
-        if let Ok(list) = self.db.summaries_by_ids(ids) {
+        let generation = self.db.tracks_generation();
+        let mut missing: Vec<TrackId> = vec![];
+        {
+            let mut cache = self.summary_cache.lock();
+            if cache.generation != generation {
+                cache.map.clear();
+                cache.generation = generation;
+            }
+            for id in ids {
+                match cache.map.get(id) {
+                    Some(s) => {
+                        map.insert(id.clone(), s.clone());
+                    }
+                    None => missing.push(id.clone()),
+                }
+            }
+        }
+        if missing.is_empty() {
+            return map;
+        }
+        if let Ok(list) = self.db.summaries_by_ids(&missing) {
+            let mut cache = self.summary_cache.lock();
+            // A row changed while we read: keep the answer, not the copy.
+            let keep = cache.generation == generation;
+            if keep && cache.map.len() + list.len() > crate::core::state::SummaryCache::CAP {
+                cache.map.clear();
+            }
             for s in list {
+                if keep {
+                    cache.map.insert(s.id.clone(), s.clone());
+                }
                 map.insert(s.id.clone(), s);
             }
         }
@@ -1023,10 +1174,8 @@ impl Actor {
     }
 
     pub(crate) fn summary_or_bare(&self, id: &str) -> TrackSummary {
-        self.db
-            .summaries_by_ids(std::slice::from_ref(&id.to_string()))
-            .ok()
-            .and_then(|v| v.into_iter().next())
+        self.summaries(std::slice::from_ref(&id.to_string()))
+            .remove(id)
             .unwrap_or_else(|| bare_summary(id))
     }
 

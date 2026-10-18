@@ -8,6 +8,7 @@ use crate::actions::Surface;
 use crate::api::*;
 use crate::core::actor::Actor;
 use crate::core::handlers::library::DbAutoplaySource;
+use crate::core::{ActorMsg, Internal};
 use crate::db::queries::{AlbumQuery, TrackQuery, WhereClause};
 use crate::stats::StatsOptions;
 
@@ -272,36 +273,93 @@ impl Actor {
         });
     }
 
+    /// Top songs are served from the cache whenever it holds an answer, so
+    /// the artist page renders at once; a stale answer is refreshed in the
+    /// background and a `LibraryChanged` (table `artistTopSongs`) tells UIs
+    /// to refetch when the list changed. Only a first visit waits for the
+    /// server. Offline with nothing cached: the artist's most played tracks
+    /// from the mirror.
     fn artist_top_songs(&mut self, id: String, count: u32, reply: oneshot::Sender<QueryResult>) {
         let Some(artist) = self.db.artist(&id).ok().flatten() else {
             let _ = reply.send(QueryResult::TrackList(vec![]));
             return;
         };
-        let Some(api) = self.api() else {
-            // Offline: the artist's most played tracks from the mirror.
-            let mut tracks = self.db.artist_tracks(&id).unwrap_or_default();
-            tracks.sort_by_key(|t| std::cmp::Reverse(t.play_count));
-            tracks.truncate(count as usize);
+        let sid = self.server_id().unwrap_or_else(|| artist.server_id.clone());
+        let api = self.api();
+        let cached = match self.caches.top_songs_get(&sid, &id, count) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(target: "hocket_core", error = %e, "top songs cache");
+                None
+            }
+        };
+        if let Some(cached) = cached {
+            let tracks = with_mirror_state(&self.db, cached.tracks.clone());
             let _ = reply.send(QueryResult::TrackList(tracks));
+            if let Some(api) = api {
+                if cached.is_stale(self.now()) && self.top_songs_refreshing.insert(id.clone()) {
+                    let caches = self.caches.clone();
+                    let tx = self.tx.clone();
+                    let requested = cached.requested.max(count);
+                    self.spawn(async move {
+                        let changed = match api.top_songs(&artist.name, requested).await {
+                            Ok(children) => {
+                                let tracks = tracks_of(&sid, &children);
+                                caches
+                                    .top_songs_put(&sid, &id, requested, &tracks)
+                                    .unwrap_or(false)
+                            }
+                            Err(e) => {
+                                tracing::debug!(target: "hocket_core", error = %e, "top songs refresh");
+                                false
+                            }
+                        };
+                        let _ = tx.send(ActorMsg::Internal(Internal::TopSongsRefreshed {
+                            server_id: sid,
+                            artist_id: id,
+                            changed,
+                        }));
+                    });
+                }
+            }
+            return;
+        }
+        let Some(api) = api else {
+            let _ = reply.send(QueryResult::TrackList(most_played(&self.db, &id, count)));
             return;
         };
-        let sid = self.server_id().unwrap_or_default();
         let db = self.db.clone();
+        let caches = self.caches.clone();
         self.spawn(async move {
             let list = match api.top_songs(&artist.name, count).await {
-                Ok(children) => children
-                    .iter()
-                    .map(|c| {
-                        db.track(&c.id)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| crate::subsonic::convert::track_from_child(&sid, c))
-                    })
-                    .collect(),
-                Err(_) => vec![],
+                Ok(children) => {
+                    let tracks = tracks_of(&sid, &children);
+                    if let Err(e) = caches.top_songs_put(&sid, &id, count, &tracks) {
+                        tracing::debug!(target: "hocket_core", error = %e, "top songs cache");
+                    }
+                    with_mirror_state(&db, tracks)
+                }
+                // Not cached, so the next visit asks again.
+                Err(_) => most_played(&db, &id, count),
             };
             let _ = reply.send(QueryResult::TrackList(list));
         });
+    }
+
+    pub(crate) fn on_top_songs_refreshed(
+        &mut self,
+        server_id: ServerId,
+        artist_id: ArtistId,
+        changed: bool,
+    ) {
+        self.top_songs_refreshing.remove(&artist_id);
+        if changed {
+            self.emit(Event::LibraryChanged {
+                server_id,
+                tables: vec![TOP_SONGS_TABLE.into()],
+                ids: vec![artist_id],
+            });
+        }
     }
 
     fn diagnostics(&self) -> String {
@@ -386,4 +444,38 @@ impl Actor {
         }
         out
     }
+}
+
+/// The `LibraryChanged.tables` entry for a refreshed top songs list.
+pub(crate) const TOP_SONGS_TABLE: &str = "artistTopSongs";
+
+fn tracks_of(server_id: &str, children: &[crate::subsonic::types::Child]) -> Vec<Track> {
+    children
+        .iter()
+        .map(|c| crate::subsonic::convert::track_from_child(server_id, c))
+        .collect()
+}
+
+/// Cached tracks with the mirror's current copy where it has one (ratings,
+/// loves, play counts and offline state move on; the cached copy does not).
+fn with_mirror_state(db: &crate::db::Db, tracks: Vec<Track>) -> Vec<Track> {
+    let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+    let mut mirror: std::collections::HashMap<String, Track> = db
+        .tracks_by_ids(&ids)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.id.clone(), t))
+        .collect();
+    tracks
+        .into_iter()
+        .map(|t| mirror.remove(&t.id).unwrap_or(t))
+        .collect()
+}
+
+/// The artist's most played tracks from the mirror (offline answer).
+fn most_played(db: &crate::db::Db, artist_id: &str, count: u32) -> Vec<Track> {
+    let mut tracks = db.artist_tracks(artist_id).unwrap_or_default();
+    tracks.sort_by_key(|t| std::cmp::Reverse(t.play_count));
+    tracks.truncate(count as usize);
+    tracks
 }
