@@ -26,7 +26,8 @@ import { Windows } from "./windows";
 
 // Chromium must not grab the media keys or publish its own media session:
 // audio comes out of Rust and the OS session is playwire's (design.md).
-app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling,MediaSessionService");
+// Translate / back-forward cache are unused in this app and keep extra renderer work around.
+app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling,MediaSessionService,Translate,TranslateUI,BackForwardCache");
 
 const isDev = !app.isPackaged && process.env.HOCKET_DEV === "1";
 const appRoot = app.isPackaged ? app.getAppPath() : resolve(__dirname, "..", "..");
@@ -300,7 +301,6 @@ async function main(): Promise<void> {
   // Dev builds only: a packaged app has its icon in the bundle, and replacing it here would
   // swap the Liquid Glass icon for a flat one.
   if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(appIcon(512));
-  windows.ensureAnchor();
   windows.createMain();
   core.dispatch({ type: "start" });
 

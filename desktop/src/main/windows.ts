@@ -1,6 +1,6 @@
-// Window management: the main window, the always-on-top mini player and a
-// persistent hidden anchor window (Windows SMTC is tied to an HWND; the main
-// window is destroyed on close-to-tray, this one never is).
+// Window management: the main window, the always-on-top mini player and, on
+// Windows, a persistent hidden anchor window (SMTC is tied to an HWND; the main
+// window is destroyed on close-to-tray, this one never is). Linux and macOS skip it.
 import { BrowserWindow, app, screen } from "electron";
 import { join } from "node:path";
 import { APP_SCHEME, DEV_SERVER_URL } from "@shared/constants";
@@ -37,6 +37,7 @@ export class Windows {
       webSecurity: true,
       spellcheck: false,
       backgroundThrottling: true,
+      v8CacheOptions: "code" as const,
     };
   }
 
@@ -48,19 +49,24 @@ export class Windows {
     }
   }
 
-  ensureAnchor(): BrowserWindow {
+  /** Windows SMTC needs a persistent HWND; Linux and macOS never use this window. */
+  ensureAnchor(): BrowserWindow | undefined {
+    if (process.platform !== "win32") return undefined;
     if (this.anchor && !this.anchor.isDestroyed()) return this.anchor;
-    this.anchor = new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true, title: "Hocket", webPreferences: { sandbox: true, contextIsolation: true } });
+    this.anchor = new BrowserWindow({ show: false, width: 1, height: 1, skipTaskbar: true, title: "Hocket", webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: true } });
     this.anchor.on("close", (e) => {
       if (!this.quitting) e.preventDefault();
     });
     return this.anchor;
   }
 
-  /** HWND (or X11 window id) of the anchor as a number for the media session addon. */
+  /** HWND of the anchor as a number for the media session addon (Windows only). */
   anchorHandle(): number | undefined {
+    if (process.platform !== "win32") return undefined;
     try {
-      const buf = this.ensureAnchor().getNativeWindowHandle();
+      const win = this.ensureAnchor();
+      if (!win) return undefined;
+      const buf = win.getNativeWindowHandle();
       if (buf.length >= 8) {
         const big = buf.readBigUInt64LE(0);
         return big <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(big) : undefined;
