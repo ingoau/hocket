@@ -1,9 +1,10 @@
 // Always-on-top mini player: artwork thumbnail, title/artist, transport,
 // progress. No queue, no lyrics.
 import { t } from "@shared/strings";
+import { ARTWORK_SIZES } from "@shared/constants";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
-import { useTheme } from "../App";
+import { useTheme } from "../lib/theme";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { SeekBar } from "../components/PlayerBar";
@@ -19,7 +20,7 @@ export function MiniApp() {
   const playing = transport.position.isPlaying;
   return (
     <main className="mini" aria-label={t("mini.title")} data-testid="mini-player">
-      <div className="art-wrap"><Artwork id={track?.coverArt} size={300} className="art" /></div>
+      <div className="art-wrap"><Artwork id={track?.coverArt} size={ARTWORK_SIZES.grid} className="art" /></div>
       <div className="body">
         <h1 className="title">{track?.title ?? t("player.nothingPlaying")}</h1>
         <div className="artist">{track?.artist ?? ""}</div>

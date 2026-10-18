@@ -73,27 +73,53 @@ export function useFrameClock(): number {
 
 /**
  * Extrapolated position in ms for the given stamp, updating each frame while
- * mounted. `durationMs` clamps. Uses Date.now() at each frame so it is
- * comparable with `takenAt`.
+ * playing. Paused stamps do not subscribe to the ticker.
  */
 export function usePosition(stamp: PositionStamp, durationMs: number | undefined, clockOffsetMs = 0): number {
-  useFrameClock();
-  return extrapolate(stamp, Date.now(), clockOffsetMs, durationMs);
+  const [pos, setPos] = useState(() => extrapolate(stamp, Date.now(), clockOffsetMs, durationMs));
+  useEffect(() => {
+    const update = () => setPos(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs));
+    update();
+    if (!stamp.isPlaying) return;
+    return ticker.subscribe(update);
+  }, [stamp, durationMs, clockOffsetMs]);
+  return pos;
 }
 
 /** Same, but only re-renders when the whole-second value changes (labels). */
 export function useSecondsPosition(stamp: PositionStamp, durationMs: number | undefined, clockOffsetMs = 0): number {
-  const frame = useFrameClock();
   const [sec, setSec] = useState(() => Math.floor(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs) / 1000));
-  const ref = useRef(sec);
   useEffect(() => {
-    const s = Math.floor(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs) / 1000);
-    if (s !== ref.current) {
-      ref.current = s;
-      setSec(s);
-    }
-  }, [frame, stamp, durationMs, clockOffsetMs]);
+    const update = () => {
+      const s = Math.floor(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs) / 1000);
+      setSec((prev) => (prev === s ? prev : s));
+    };
+    update();
+    if (!stamp.isPlaying) return;
+    return ticker.subscribe(update);
+  }, [stamp, durationMs, clockOffsetMs]);
   return sec;
+}
+
+/**
+ * Drive a paint callback from the shared ticker without a React re-render per
+ * frame. Subscribes only while the stamp is playing and `active` holds.
+ */
+export function usePositionPaint(
+  stamp: PositionStamp,
+  durationMs: number | undefined,
+  clockOffsetMs: number,
+  paint: (positionMs: number) => void,
+  active = true,
+): void {
+  const paintRef = useRef(paint);
+  paintRef.current = paint;
+  useEffect(() => {
+    const run = () => paintRef.current(extrapolate(stamp, Date.now(), clockOffsetMs, durationMs));
+    run();
+    if (!stamp.isPlaying || !active) return;
+    return ticker.subscribe(run);
+  }, [stamp, durationMs, clockOffsetMs, active]);
 }
 
 /**

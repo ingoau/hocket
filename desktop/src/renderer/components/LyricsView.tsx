@@ -10,17 +10,33 @@
 // line or syllable). With reduced motion, more contrast or forced colours the
 // synced lyrics render as that same list, visible, with static highlighting:
 // no syllable sweep, blur, springs or scaling.
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { DomLyricPlayer, type LyricLineMouseEvent } from "@applemusic-like-lyrics/core";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
-import { extrapolate, ticker } from "../store/position";
+import { extrapolate, usePositionValue } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
 import { LYRICS_SCALE, LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 import { SK } from "@shared/settings-keys";
 import { usePlainLyrics } from "../lib/media";
+
+type AmllPlayer = {
+  setEnableBlur(on: boolean): void;
+  setEnableSpring(on: boolean): void;
+  setEnableScale(on: boolean): void;
+  setAlignPosition(v: number): void;
+  setWordFadeWidth(v: number): void;
+  getElement(): HTMLElement;
+  setLyricLines(lines: never, time: number): void;
+  setCurrentTime(time: number, seek?: boolean): void;
+  update(dt: number): void;
+  resume(): void;
+  pause(): void;
+  dispose(): void;
+  addEventListener(type: string, fn: (e: Event) => void): void;
+  removeEventListener(type: string, fn: (e: Event) => void): void;
+};
 
 export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "compact" | "large" }) {
   const stamp = useApp((s) => s.transport.position);
@@ -31,7 +47,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   const fpsCap = useApp((s) => Number(JSON.parse(s.settings[SK.displayLyricsFps]?.value ?? "60")) || 60);
   const batteryFps = useApp((s) => Number(JSON.parse(s.settings[SK.batteryLyricsFps]?.value ?? "30")) || 30);
   const host = useRef<HTMLDivElement>(null);
-  const player = useRef<DomLyricPlayer | undefined>(undefined);
+  const player = useRef<AmllPlayer | undefined>(undefined);
   const mapped = useMemo(() => mapLyrics(lyrics), [lyrics]);
   const size = useLyricsSize();
   const plain = usePlainLyrics();
@@ -40,33 +56,43 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   stampRef.current = stamp;
   const mappedRef = useRef(mapped);
   mappedRef.current = mapped;
+  const [playerGen, setPlayerGen] = useState(0);
 
-  // Create/destroy the DOM player for synced tiers.
+  // Create/destroy the DOM player for synced tiers. AMLL is loaded on demand so
+  // the main shell does not parse it until lyrics are actually shown.
   useEffect(() => {
     if (!animated || !host.current) return;
-    const p = new DomLyricPlayer();
-    p.setEnableBlur(variant === "large");
-    p.setEnableSpring(variant === "large" && !batterySaver);
-    p.setEnableScale(true);
-    // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
-    p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
-    p.setWordFadeWidth(0.5);
-    host.current.replaceChildren(p.getElement());
-    player.current = p;
-    // AMLL re-dispatches DOM clicks on a line as "line-click" (not "click").
+    let cancelled = false;
+    let p: AmllPlayer | undefined;
     const onClick = (e: Event) => {
-      const ev = e as LyricLineMouseEvent;
+      const ev = e as Event & { lineIndex: number };
       const m = mappedRef.current;
       const line = m.lines[ev.lineIndex];
       if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime - m.offsetMs) } });
     };
-    p.addEventListener("line-click", onClick);
+    void Promise.all([import("@applemusic-like-lyrics/core"), import("@applemusic-like-lyrics/core/style.css")]).then(([mod]) => {
+      if (cancelled || !host.current) return;
+      p = new mod.DomLyricPlayer() as AmllPlayer;
+      p.setEnableBlur(variant === "large");
+      p.setEnableSpring(variant === "large" && !batterySaver);
+      p.setEnableScale(true);
+      // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
+      p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
+      p.setWordFadeWidth(0.5);
+      host.current.replaceChildren(p.getElement());
+      player.current = p;
+      p.addEventListener("line-click", onClick);
+      setPlayerGen((n) => n + 1);
+    });
     return () => {
-      p.removeEventListener("line-click", onClick);
-      p.dispose();
+      cancelled = true;
+      if (p) {
+        p.removeEventListener("line-click", onClick);
+        p.dispose();
+      }
       player.current = undefined;
     };
-  }, [animated, variant]);
+  }, [animated, variant, batterySaver]);
 
   useEffect(() => {
     const p = player.current;
@@ -75,7 +101,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     p.setLyricLines(mapped.lines as never, extrapolate(stampRef.current, Date.now(), clockOffset, duration));
     p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration), true);
     p.update(0);
-  }, [mapped, batterySaver, animated]);
+  }, [mapped, batterySaver, animated, playerGen, variant, clockOffset, duration]);
 
   // Seek detection: a jump in the stamp means isSeek=true so AMLL relayouts.
   const lastStamp = useRef(stamp);
@@ -91,11 +117,11 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     }
     if (stamp.isPlaying) p.resume();
     else p.pause();
-  }, [stamp, clockOffset, duration]);
+  }, [stamp, clockOffset, duration, playerGen]);
 
-  // Frame loop: explicit stop when hidden; ~24 fps in the background; 30 cap in battery saver.
+  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; 30 cap in battery saver.
   useEffect(() => {
-    if (!animated || perf === "stopped") return;
+    if (!animated || perf === "stopped" || !stamp.isPlaying) return;
     const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(batteryFps, fpsCap) : fpsCap;
     let raf = 0;
     let last = performance.now();
@@ -115,7 +141,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration]);
+  }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying, playerGen]);
 
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
@@ -191,12 +217,8 @@ export function LyricsSizeControl() {
 /** Line index helper for compact views that want a "current line" without AMLL. */
 export function useActiveLine(lines: AmllLine[]): number {
   const stamp = useApp((s) => s.transport.position);
-  const [idx, setIdx] = useState(-1);
   const offset = useApp((s) => s.connection.clockOffsetMs);
-  useEffect(() => {
-    const tick = () => setIdx(activeLineIndex(lines, extrapolate(stamp, Date.now(), offset)));
-    tick();
-    return ticker.subscribe(tick);
-  }, [lines, stamp, offset]);
-  return idx;
+  const duration = useApp((s) => s.nowPlaying?.track.durationMs);
+  const derive = useCallback((pos: number) => activeLineIndex(lines, pos), [lines]);
+  return usePositionValue(stamp, duration, offset, derive);
 }

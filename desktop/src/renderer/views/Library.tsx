@@ -30,7 +30,7 @@ export function Library() {
     <button type="button" className={`lib-tile ${cls}`} onClick={() => navigate({ view, param })} data-testid={testId}>
       {covers.length ? (
         <span className="lib-fan" aria-hidden="true">
-          {covers.map((c, i) => <Artwork key={c} id={c} size={128} className={`lib-fan-cover n${i}`} />).reverse()}
+          {covers.map((c, i) => <Artwork key={c} id={c} size={64} className={`lib-fan-cover n${i}`} />).reverse()}
         </span>
       ) : null}
       <span className="lib-tile-icon" aria-hidden="true"><Icon name={icon} size={22} /></span>

@@ -3,22 +3,21 @@
 import { useEffect, useState } from "react";
 import { artworkUrl, ARTWORK_SIZES } from "@shared/constants";
 import { bridge } from "../core/bridge";
+import { LruCache } from "../lib/lru";
 import { Icon } from "./Icon";
 
-const cache = new Map<string, Promise<string | undefined>>();
+const cache = new LruCache<Promise<string | undefined>>(400);
 
 export function resolveArtwork(id: string | undefined, size: number): Promise<string | undefined> {
   if (!id) return Promise.resolve(undefined);
   const key = `${id}@${size}`;
-  let p = cache.get(key);
-  if (!p) {
-    p = bridge()
-      .query({ type: "artwork", data: { id, size } })
-      .then((r) => (r.type === "path" ? artworkUrl(r.data) : undefined))
-      .catch(() => undefined);
-    cache.set(key, p);
-    if (cache.size > 2000) cache.delete(cache.keys().next().value as string);
-  }
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const p = bridge()
+    .query({ type: "artwork", data: { id, size } })
+    .then((r) => (r.type === "path" ? artworkUrl(r.data) : undefined))
+    .catch(() => undefined);
+  cache.set(key, p);
   return p;
 }
 
@@ -39,5 +38,5 @@ export function Artwork({ id, size = ARTWORK_SIZES.grid, className = "art", alt 
   const url = useArtwork(id, size);
   const cls = `${className}${round ? " round" : ""}`;
   if (!url) return <div className={`${cls} placeholder`} aria-hidden="true"><Icon name="music" size={size > 100 ? 28 : 14} /></div>;
-  return <img className={cls} src={url} alt={alt} loading="lazy" draggable={false} />;
+  return <img className={cls} src={url} alt={alt} loading="lazy" decoding="async" draggable={false} />;
 }

@@ -379,7 +379,7 @@ function UpNextCard() {
             // which the pointer's single click leaves alone).
             <li key={e.item.key}>
               <button type="button" className="upnext-row" onClick={(ev) => { if (ev.detail === 0) d({ type: "jumpToQueueItem", data: { key: e.item.key } }); }} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => void openContextMenu(ev, { type: "queueItems", data: { keys: [e.item.key] } })} data-testid="sidebar-upnext-row">
-                <Artwork id={e.track.coverArt} size={100} className="art" />
+                <Artwork id={e.track.coverArt} size={64} className="art" />
                 <span className="text">
                   <span className="t1">{e.track.title}</span>
                   <span className="t2">{e.item.source.type === "autoplay" ? t("queue.autoplayFrom", { reason: e.item.source.data.reason }) : e.track.artist}</span>

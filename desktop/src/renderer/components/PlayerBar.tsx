@@ -9,9 +9,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RepeatMode } from "@core/api";
 import { t } from "@shared/strings";
+import { ARTWORK_SIZES } from "@shared/constants";
 import { SK } from "@shared/settings-keys";
 import { toggleSidePanel, useApp, useSetting } from "../store/app";
-import { usePosition } from "../store/position";
+import { extrapolate, usePositionPaint } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
@@ -59,7 +60,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
       <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}>
-        {track ? <Artwork id={track.coverArt} size={128} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
+        {track ? <Artwork id={track.coverArt} size={ARTWORK_SIZES.thumb} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
         <div className="text">
           {track ? (
             <>
@@ -122,11 +123,16 @@ function RepeatButton({ mode }: { mode: RepeatMode }) {
 export function SeekBar({ durationMs, compact = false }: { durationMs: number | undefined; compact?: boolean }) {
   const stamp = useApp((s) => s.transport.position);
   const offset = useApp((s) => s.connection.clockOffsetMs);
-  const pos = usePosition(stamp, durationMs, offset);
+  const perf = useApp((s) => s.perf);
   const [hover, setHover] = useState<number | undefined>(undefined);
   const [drag, setDrag] = useState<number | undefined>(undefined);
   const bar = useRef<HTMLDivElement>(null);
+  const fill = useRef<HTMLDivElement>(null);
+  const knob = useRef<HTMLDivElement>(null);
+  const positionEl = useRef<HTMLSpanElement>(null);
+  const shownRef = useRef(0);
   const dur = durationMs ?? 0;
+  const dragging = drag !== undefined;
   const frac = (x: number) => {
     const r = bar.current?.getBoundingClientRect();
     if (!r || !r.width) return 0;
@@ -134,20 +140,32 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   };
   const commit = useCallback((f: number) => bridge().dispatch({ type: "seekTo", data: { position_ms: Math.round(f * dur) } }), [dur]);
   useEffect(() => {
-    if (drag === undefined) return;
+    if (!dragging) return;
     const move = (e: MouseEvent) => setDrag(frac(e.clientX));
     const up = (e: MouseEvent) => { commit(frac(e.clientX)); setDrag(undefined); };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  }, [drag !== undefined, commit]);
-  const shown = drag !== undefined ? drag * dur : pos;
-  const pct = dur ? (shown / dur) * 100 : 0;
-  // Whole seconds only, so a focused slider is not re-announced every frame.
-  const seconds = Math.floor(shown / 1000);
+  }, [dragging, commit]);
+  const paint = useCallback((positionMs: number) => {
+    const shown = dragging ? (drag as number) * dur : positionMs;
+    shownRef.current = shown;
+    const pct = dur ? (shown / dur) * 100 : 0;
+    if (fill.current) fill.current.style.width = `${pct}%`;
+    if (knob.current) knob.current.style.left = `${pct}%`;
+    if (positionEl.current) positionEl.current.textContent = fmtTime(shown);
+    const seconds = Math.floor(shown / 1000);
+    bar.current?.setAttribute("aria-valuenow", String(seconds));
+    bar.current?.setAttribute("aria-valuetext", seekValueText(seconds * 1000, dur));
+  }, [dragging, drag, dur]);
+  usePositionPaint(stamp, durationMs, offset, paint, !dragging && perf !== "stopped");
+  const snapshot = dragging ? drag * dur : extrapolate(stamp, Date.now(), offset, durationMs);
+  shownRef.current = snapshot;
+  const pct = dur ? (snapshot / dur) * 100 : 0;
+  const seconds = Math.floor(snapshot / 1000);
   const onKey = (e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-    const to = seekKeyTarget(e.key, shown, dur);
+    const to = seekKeyTarget(e.key, shownRef.current, dur);
     if (to === undefined) return;
     e.preventDefault();
     e.stopPropagation();
@@ -155,16 +173,16 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   };
   return (
     <div className={`seek ${compact ? "compact" : ""}`} data-testid="seek">
-      <span data-testid="seek-position" aria-hidden="true">{fmtTime(shown)}</span>
-      <div ref={bar} className={`bar ${drag !== undefined ? "dragging" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
+      <span ref={positionEl} data-testid="seek-position" aria-hidden="true">{fmtTime(snapshot)}</span>
+      <div ref={bar} className={`bar ${dragging ? "dragging" : ""}`} role="slider" aria-label={t("player.seek")} aria-valuemin={0} aria-valuemax={Math.floor(dur / 1000)} aria-valuenow={seconds} aria-valuetext={seekValueText(seconds * 1000, dur)} aria-disabled={!dur || undefined} tabIndex={dur ? 0 : -1}
         onKeyDown={onKey}
         data-testid="seek-slider"
         onMouseDown={(e) => { if (!dur) return; e.preventDefault(); (e.currentTarget as HTMLElement).focus({ preventScroll: true }); setDrag(frac(e.clientX)); }}
         onMouseMove={(e) => setHover(frac(e.clientX))}
         onMouseLeave={() => setHover(undefined)}>
         <div className="track">
-          <div className="fill" style={{ width: `${pct}%` }} />
-          <div className="knob" style={{ left: `${pct}%` }} />
+          <div ref={fill} className="fill" style={{ width: `${pct}%` }} />
+          <div ref={knob} className="knob" style={{ left: `${pct}%` }} />
         </div>
         {hover !== undefined && dur ? <div className="hover-time" style={{ left: `${hover * 100}%` }}>{fmtTime(hover * dur)}</div> : null}
       </div>

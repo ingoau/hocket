@@ -130,7 +130,7 @@ export function TrackTable(props: TrackTableProps) {
     const f = focusRef.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 12, rangeExtractor });
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 8, rangeExtractor });
   const items = rowVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!onNeedRange || !items.length) return;
