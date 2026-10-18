@@ -2,13 +2,15 @@
 //! reducer is total, revisions are monotonic, next∘previous is the identity,
 //! previous∘next returns to the same track with the same queue after it,
 //! keys are unique, the derived queue contains every non-history item exactly
-//! once, history never exceeds its cap and the shuffle permutation is a
-//! bijection.
+//! once, history never exceeds its cap, the shuffle permutation is a
+//! bijection and a queue key names the same song for as long as it is shown
+//! (#97).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use proptest::prelude::*;
 
+use super::context_keys;
 use super::document::{new_document, same_state, validate};
 use super::reducer::{context_key, derive, reduce, AutoplayItem, Effect, QueueOp, ReduceCtx};
 use super::saved::SavedQueuePolicy;
@@ -146,6 +148,8 @@ fn consistent_doc() -> impl Strategy<Value = SessionDocument> {
                             });
                     let floor = played.map(|q| q + 1).max().unwrap_or(0);
                     doc.cursor = doc.cursor.max(floor).min(n as u32);
+                    // Reducer-generated documents key their context too.
+                    context_keys::ensure(&mut doc, &DeterministicEntropy::new(0));
                 }
                 doc.repeat = repeat;
                 doc.mode = mode;
@@ -243,6 +247,40 @@ fn op() -> impl Strategy<Value = QueueOp> {
     ]
 }
 
+/// An op on a key the queue shows: picked by position from what is shown
+/// when it runs, so the keys are real ones.
+#[derive(Debug, Clone)]
+enum Picked {
+    Op(QueueOp),
+    Jump(usize),
+    Remove(usize),
+    Move(usize, u32),
+    Skip(usize),
+}
+
+fn picked_op() -> impl Strategy<Value = Picked> {
+    prop_oneof![
+        3 => op().prop_map(Picked::Op),
+        1 => (0usize..12).prop_map(Picked::Jump),
+        1 => (0usize..12).prop_map(Picked::Remove),
+        2 => (0usize..12, 0u32..10).prop_map(|(i, to)| Picked::Move(i, to)),
+        1 => (0usize..12).prop_map(Picked::Skip),
+    ]
+}
+
+/// Every key the queue shows, with its track: history, current, playing
+/// next, upcoming, in that order.
+fn shown(doc: &SessionDocument) -> Vec<(String, String)> {
+    let d = derive(doc);
+    d.history
+        .iter()
+        .chain(d.current.iter())
+        .chain(d.playing_next.iter())
+        .chain(d.upcoming.iter())
+        .map(|i| (i.key.clone(), i.track_id.clone()))
+        .collect()
+}
+
 fn check_invariants(doc: &SessionDocument) {
     validate(doc).unwrap_or_else(|e| panic!("invalid document after reduce: {e}\n{doc:#?}"));
     assert!(doc.history.len() <= CAP, "history over cap");
@@ -322,6 +360,32 @@ proptest! {
                 check_invariants(&next);
                 cur = next;
             }
+        }
+    }
+
+    #[test]
+    fn keys_stay_with_their_song(doc in consistent_doc(), ops in prop::collection::vec(picked_op(), 1..16)) {
+        let entropy = DeterministicEntropy::new(11);
+        let mut cur = doc;
+        for (i, picked) in ops.into_iter().enumerate() {
+            let before = shown(&cur);
+            let key = |k: usize| before.get(k % before.len().max(1)).map(|(k, _)| k.clone()).unwrap_or_default();
+            let op = match picked {
+                Picked::Op(op) => op,
+                Picked::Jump(k) => QueueOp::JumpToQueueItem { key: key(k) },
+                Picked::Remove(k) => QueueOp::RemoveQueueItems { keys: vec![key(k)] },
+                Picked::Move(k, to_index) => QueueOp::MoveQueueItem { key: key(k), to_index },
+                Picked::Skip(k) => QueueOp::SkipUnavailable { key: key(k) },
+            };
+            let ctx = ReduceCtx { now: i as f64, position_ms: 0, history_cap: CAP, saved: SavedQueuePolicy::default().with_cap(2), entropy: &entropy };
+            let Ok((next, _)) = reduce(&cur, op.clone(), &ctx) else { continue };
+            let was: HashMap<_, _> = before.into_iter().collect();
+            for (k, track) in shown(&next) {
+                if let Some(old) = was.get(&k) {
+                    prop_assert_eq!(old, &track, "key {} changed song after {:?}", k, op);
+                }
+            }
+            cur = next;
         }
     }
 
