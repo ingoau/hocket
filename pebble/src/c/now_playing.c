@@ -113,6 +113,9 @@ static AppTimer *s_art_request_timer;
 static uint8_t s_art_retries;
 #endif
 static bool s_accel_subscribed;
+// The click config the action bar has. Setting one clears every click recognizer, cancelling a
+// press or hold in progress, so it is only set when it changes (see prv_set_click_config).
+static ClickConfigProvider s_click_config;
 static int16_t s_marquee_offset;
 static uint8_t s_marquee_cycles;
 
@@ -442,9 +445,23 @@ static void prv_track_change_animation(void) {
 
 // -- Action bar --------------------------------------------------------------------------------------
 
+// Installs a click config only when it differs from the one in place. The firmware's
+// window_set_click_config_provider clears all click recognizers (click_manager_clear), so a button
+// held at that moment loses its long-press and repeat timers and its release is ignored. The
+// phone sends state after every command and on every session change, and reinstalling the config
+// on each of those made holding up / down for volume (and the volume mode's repeats) fail whenever
+// an update landed mid-hold.
+static void prv_set_click_config(ClickConfigProvider config) {
+  if (config == s_click_config) return;
+  s_click_config = config;
+  action_bar_layer_set_click_config_provider(s_bar, config);
+}
+
 static void prv_update_ui_state(bool animated) {
   if (!s_window) return;
   if (s_showing_message) {
+    // The skip config handles the message too (select resumes; the rest do nothing there).
+    prv_set_click_config(prv_click_config_skip);
     action_bar_layer_clear_icon(s_bar, BUTTON_ID_UP);
     action_bar_layer_clear_icon(s_bar, BUTTON_ID_DOWN);
     if (!g_version_mismatch && (g_now.flags & NowCanResume)) {
@@ -456,14 +473,15 @@ static void prv_update_ui_state(bool animated) {
   }
   const bool playing = g_now.flags & NowPlaying;
   if (s_bar_state == BarSkip) {
-    action_bar_layer_set_click_config_provider(s_bar, prv_click_config_skip);
+    prv_set_click_config(prv_click_config_skip);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_UP, s_icon_skip_backward, animated);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_DOWN, s_icon_skip_forward, animated);
     GBitmap *select = !playing ? s_icon_play
                       : g_settings.show_volume_controls ? s_icon_ellipsis : s_icon_pause;
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_SELECT, select, animated);
   } else {
-    if (s_bar_state == BarVolume) action_bar_layer_set_click_config_provider(s_bar, prv_click_config_volume);
+    // A hold keeps the skip config (its long-click release ends the hold).
+    if (s_bar_state == BarVolume) prv_set_click_config(prv_click_config_volume);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_UP, s_icon_volume_up, animated);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_DOWN, s_icon_volume_down, animated);
     action_bar_layer_set_icon_animated(s_bar, BUTTON_ID_SELECT, playing ? s_icon_pause : s_icon_play, animated);
@@ -482,6 +500,23 @@ static void prv_bar_revert(void *context) {
 
 static void prv_reset_bar_revert(void) {
   if (s_bar_revert_timer) app_timer_reschedule(s_bar_revert_timer, ACTION_BAR_TIMEOUT_MS);
+}
+
+static void prv_cancel_bar_revert(void) {
+  if (s_bar_revert_timer) app_timer_cancel(s_bar_revert_timer);
+  s_bar_revert_timer = NULL;
+}
+
+static void prv_stop_volume_repeat(void) {
+  if (s_volume_repeat_timer) app_timer_cancel(s_volume_repeat_timer);
+  s_volume_repeat_timer = NULL;
+}
+
+// Back to skipping, dropping any volume mode or hold in progress (window shown, settings changed).
+static void prv_reset_bar(void) {
+  prv_cancel_bar_revert();
+  prv_stop_volume_repeat();
+  s_bar_state = BarSkip;
 }
 
 static void prv_toggle_playing(void) {
@@ -517,6 +552,7 @@ static void prv_select(void) {
     prv_toggle_playing();
   } else if ((g_now.flags & NowPlaying) && g_settings.show_volume_controls) {
     // The "…" opens volume mode for a couple of seconds.
+    prv_cancel_bar_revert();
     s_bar_revert_timer = app_timer_register(ACTION_BAR_TIMEOUT_MS, prv_bar_revert, NULL);
     prv_set_bar_state(BarVolume);
   } else {
@@ -547,6 +583,7 @@ static void prv_volume_repeat(void *context) {
 
 static void prv_volume_long_start(ClickRecognizerRef recognizer, void *context) {
   if (s_showing_message) return;
+  prv_stop_volume_repeat();
   s_volume_is_up = click_recognizer_get_button_id(recognizer) == BUTTON_ID_UP;
   prv_change_volume(s_volume_is_up);
   prv_set_bar_state(BarLongPress);
@@ -555,10 +592,10 @@ static void prv_volume_long_start(ClickRecognizerRef recognizer, void *context) 
 }
 
 static void prv_volume_long_end(ClickRecognizerRef recognizer, void *context) {
-  if (s_bar_state != BarLongPress) return;
-  prv_set_bar_state(BarSkip);
-  if (s_volume_repeat_timer) app_timer_cancel(s_volume_repeat_timer);
-  s_volume_repeat_timer = NULL;
+  // Always stop the repeat: the bar may have been reset under the hold (settings arrived), and
+  // leaving the timer running would keep changing the volume after release.
+  prv_stop_volume_repeat();
+  if (s_bar_state == BarLongPress) prv_set_bar_state(BarSkip);
 }
 
 static void prv_play_pause_long_start(ClickRecognizerRef recognizer, void *context) {
@@ -780,7 +817,9 @@ void now_playing_settings_changed(void) {
     s_art_requested_gen = 0;
     prv_art_gen_changed();
   }
-  s_bar_state = BarSkip;
+  prv_reset_bar();
+  // The config's subscriptions depend on the settings (volume controls, buttons-only back).
+  s_click_config = NULL;
   prv_update_layout();
 }
 
@@ -877,7 +916,7 @@ static void prv_load(Window *window) {
 
 static void prv_appear(Window *window) {
   touch_set_hold_handler(prv_hold, NULL);
-  s_bar_state = BarSkip;
+  prv_reset_bar();
   prv_update_layout();
 }
 
@@ -900,6 +939,11 @@ static void prv_unload(Window *window) {
   bitmap_layer_destroy(s_art_layer);
   if (s_art) gbitmap_destroy(s_art);
   s_art = NULL;
+  prv_reset_bar();
+  if (s_volume_icon_timer) app_timer_cancel(s_volume_icon_timer);
+  s_volume_icon_timer = NULL;
+  s_volume_image = NULL;
+  s_click_config = NULL;
   window_destroy(s_window);
   s_window = NULL;
 }
