@@ -56,6 +56,8 @@ import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ActionTarget
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
+import app.hocket.ui.nav.ArtworkShare
+import app.hocket.ui.nav.rememberArtworkShareSource
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Genre
@@ -295,11 +297,12 @@ fun AlbumCard(
     val artist = album.artist ?: stringResource(R.string.unknown_artist)
     val label = stringResource(R.string.row_album_a11y, album.name, artist)
     val interaction = remember { MutableInteractionSource() }
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
+    val share = rememberArtworkShareSource(ArtworkShare.album(album.id), album.coverArt)
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp)) {
             Box {
                 // The press ripple is drawn on the cover only (Navic): the text below stays calm.
-                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
+                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
@@ -339,10 +342,11 @@ fun ArtistCard(
 ) {
     val label = stringResource(R.string.row_artist_a11y, artist.name, artist.albumCount.toInt())
     val interaction = remember { MutableInteractionSource() }
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
+    val share = rememberArtworkShareSource(ArtworkShare.artist(artist.id), artist.coverArt)
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box {
-                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape).indication(interaction, ripple()), CircleShape)
+                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).clip(CircleShape).indication(interaction, ripple()), CircleShape)
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
@@ -358,9 +362,10 @@ fun ArtistCard(
 @Composable
 fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
     val label = stringResource(R.string.row_artist_a11y, artist.name, artist.albumCount.toInt())
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier) {
+    val share = rememberArtworkShareSource(ArtworkShare.artist(artist.id), artist.coverArt)
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(artist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), CircleShape)
+            Artwork(artist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp).then(share.modifier), CircleShape)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(artist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -377,9 +382,10 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
         stringResource(R.string.row_playlist_a11y, playlist.name, playlist.songCount.toInt()),
         if (playlist.isSmart) stringResource(R.string.badge_smart) else null,
     ).joinToString(", ")
-    SelectableRow(selected, selectionActive, onClick, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
+    val share = rememberArtworkShareSource(ArtworkShare.playlist(playlist.id), playlist.coverArt)
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+            Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp).then(share.modifier), RoundedCornerShape(ListArtCorner))
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)

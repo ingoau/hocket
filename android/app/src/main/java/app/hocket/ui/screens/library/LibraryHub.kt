@@ -78,6 +78,8 @@ import app.hocket.ui.components.AlbumCardSkeleton
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.IconArt
 import app.hocket.ui.components.JobsIndicator
+import app.hocket.ui.nav.ArtworkShare
+import app.hocket.ui.nav.rememberArtworkShareSource
 import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.ShimmerHost
 import app.hocket.ui.icons.HocketIcons
@@ -196,6 +198,7 @@ private fun PinCard(pin: ResolvedPin, modifier: Modifier, shape: Shape, onTap: (
     val haptics = LocalHapticFeedback.current
     val more = stringResource(R.string.action_more)
     val a11y = remember(pin, more) { listOf(CustomAccessibilityAction(more) { onMenu(); true }) }
+    val share = rememberArtworkShareSource(pinShareKey(pin), pin.coverArt)
     val sub = buildString {
         append(stringResource(pin.kind.label))
         if (pin.kind.choosesTap) when (pin.entry.pinTap) {
@@ -211,12 +214,12 @@ private fun PinCard(pin: ResolvedPin, modifier: Modifier, shape: Shape, onTap: (
     ) {
         Row(
             Modifier
-                .combinedClickable(onClick = onTap, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() })
+                .combinedClickable(onClick = { if (pin.entry.pinTap == PinTap.Open) share.prepare(); onTap() }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu() })
                 .semantics(mergeDescendants = true) { customActions = a11y }
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PinArt(pin, Modifier.size(48.dp))
+            PinArt(pin, Modifier.size(48.dp).then(share.modifier))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(pin.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -224,6 +227,13 @@ private fun PinCard(pin: ResolvedPin, modifier: Modifier, shape: Shape, onTap: (
             }
         }
     }
+}
+
+private fun pinShareKey(pin: ResolvedPin): String? = when (pin.kind) {
+    PinKind.Album -> ArtworkShare.album(pin.entry.id)
+    PinKind.Artist -> ArtworkShare.artist(pin.entry.id)
+    PinKind.Playlist -> ArtworkShare.playlist(pin.entry.id)
+    else -> null
 }
 
 /** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. */

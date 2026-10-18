@@ -95,9 +95,11 @@ import app.hocket.ui.components.AlbumStripSkeleton
 import app.hocket.ui.components.rememberSongMenu
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
+import app.hocket.ui.nav.ArtworkShare
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
 import app.hocket.ui.nav.ScrollToTopOnReselect
+import app.hocket.ui.nav.rememberArtworkShareSource
 import app.hocket.ui.screens.library.FilterMenuSheet
 import kotlinx.coroutines.launch
 
@@ -370,6 +372,12 @@ private fun coverOf(item: HomeItem): String? = when (item) {
     is HomeItem.FilterItem -> null
 }
 
+private fun shareKeyOf(item: HomeItem): String? = when (item) {
+    is HomeItem.AlbumItem -> ArtworkShare.album(item.album.id)
+    is HomeItem.ArtistItem -> ArtworkShare.artist(item.artist.id)
+    else -> null
+}
+
 /** The icon drawn in place of artwork for what has none: filters, and queues without a cover. */
 private fun iconOf(item: HomeItem): androidx.compose.ui.graphics.vector.ImageVector? = when {
     item is HomeItem.FilterItem -> HocketIcons.Filled.FilterAlt
@@ -393,16 +401,17 @@ private fun HomeCell(item: HomeItem, actions: HomeItemActions, modifier: Modifie
     val shape = itemShape(item)
     val round = item is HomeItem.ArtistItem
     val a11y = menuAction(item, actions)
+    val share = rememberArtworkShareSource(shareKeyOf(item), coverOf(item))
     Column(
         modifier
-            .combinedClickable(onClick = { actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
+            .combinedClickable(onClick = { share.prepare(); actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
             .semantics(mergeDescendants = true) { customActions = a11y }
             .testTag("home.item"),
         horizontalAlignment = if (round) Alignment.CenterHorizontally else Alignment.Start,
     ) {
         val icon = iconOf(item)
         if (icon != null) IconArt(icon, shape, Modifier.fillMaxWidth().aspectRatio(1f), iconSize = 40.dp)
-        else Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f), shape)
+        else Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier), shape)
         Spacer(Modifier.height(8.dp))
         // One line each, so the subtitle sits right under the title and every cell's caption is as tall.
         val align = if (round) TextAlign.Center else TextAlign.Start
@@ -419,16 +428,17 @@ private fun HomeListRow(item: HomeItem, actions: HomeItemActions) {
     val text = cellText(item)
     val shape = itemShape(item)
     val a11y = menuAction(item, actions)
+    val share = rememberArtworkShareSource(shareKeyOf(item), coverOf(item))
     Row(
         Modifier.fillMaxWidth()
-            .combinedClickable(onClick = { actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
+            .combinedClickable(onClick = { share.prepare(); actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
             .semantics(mergeDescendants = true) { customActions = a11y }
             .heightIn(min = 64.dp).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val icon = iconOf(item)
         if (icon != null) IconArt(icon, shape, Modifier.size(48.dp))
-        else Artwork(coverOf(item), ArtworkSizes.THUMB, null, Modifier.size(48.dp), shape)
+        else Artwork(coverOf(item), ArtworkSizes.THUMB, null, Modifier.size(48.dp).then(share.modifier), shape)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(text.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
