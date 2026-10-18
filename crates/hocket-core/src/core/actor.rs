@@ -49,6 +49,10 @@ pub(crate) const LOAD_RETRIES: u32 = 1;
 /// How long an item adopted at a gapless boundary waits for the backend's
 /// `TransitionedToNext` before it is loaded explicitly.
 pub(crate) const ADOPTION_TIMEOUT_MS: f64 = 2_000.0;
+/// Skips this close together form a burst: the first loads at once, the
+/// rest only update the session, and the item the burst lands on loads
+/// once no skip came for this long.
+pub(crate) const SKIP_SETTLE_MS: f64 = 150.0;
 /// Consecutive unavailable items before playback stops trying.
 pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 3;
 /// Artwork size for the media session (small in battery saver).
@@ -185,6 +189,17 @@ pub(crate) struct Actor {
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Track summaries already read from the mirror, for the queue view
+    /// (rebuilt on every queue change): see [`Actor::summaries`].
+    pub summary_cache: Mutex<super::state::SummaryCache>,
+    /// When the last skip (Next, Previous, a peer's queue jump) moved the
+    /// current item: a skip soon after it is part of a burst, whose loads
+    /// wait until the burst settles (see `Actor::defer_load`).
+    pub last_skip_at: Option<f64>,
+    /// The current local op is a skip (set around `local_op`).
+    pub skip_op: bool,
+    /// The settle deadline the pending-load timer was armed for.
+    pub pending_load_timer: Option<f64>,
     pub network: Option<NetworkState>,
     pub visible: bool,
     pub focused: bool,
@@ -442,6 +457,10 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            summary_cache: Mutex::new(Default::default()),
+            last_skip_at: None,
+            skip_op: false,
+            pending_load_timer: None,
             network: None,
             visible: true,
             focused: true,
@@ -529,6 +548,7 @@ impl Actor {
         match internal {
             Internal::Tick => self.on_tick(),
             Internal::Backend(report) => self.on_backend_report(report),
+            Internal::PendingLoadDue => self.on_pending_load_due(),
             Internal::BackendCommand(command) => self.emit(Event::Backend { command }),
             Internal::Jobs(ev) => match ev {
                 QueueEvent::JobsChanged(jobs) => {
@@ -882,6 +902,7 @@ impl Actor {
             self.engine_input(Input::Tick);
         }
         self.prefetch_tick(now);
+        self.flush_pending_load(false);
         self.playback_tick(now);
         self.remote_volume_tick(now);
         self.prime_next();

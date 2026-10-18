@@ -78,6 +78,9 @@ pub enum Internal {
     Tick,
     /// A report from the playback backend.
     Backend(BackendReport),
+    /// The settle window of a skip burst may have passed: load the item
+    /// the burst landed on (see `Actor::defer_load`).
+    PendingLoadDue,
     /// A command the external backend wants the platform player to run.
     BackendCommand(BackendCommand),
     /// Job queue visible-state change.
