@@ -233,6 +233,32 @@ async fn playback_records_skips_and_autoplay_picks_for_eviction() {
     t.core.shutdown().await;
 }
 
+/// A burst of Nexts loads the first press at once and defers the rest:
+/// the item that first press loaded is still left early, and counts as a
+/// skip like any other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_track_left_by_a_skip_burst_counts_as_skipped() {
+    let t = started("burst-signals", 4).await;
+    t.run(Command::PlayTracks {
+        server_id: t.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        start_index: 0,
+        label: "Four".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    t.dispatch(Command::Next);
+    t.dispatch(Command::Next);
+    t.core.settle().await;
+    t.run_for(1_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert_eq!(signal(&t, "t0").map(|s| s.1), Some(1));
+    assert_eq!(signal(&t, "t1").map(|s| s.1), Some(1));
+    assert_eq!(signal(&t, "t2").map(|s| s.1).unwrap_or(0), 0);
+    t.core.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pinning_a_fully_cached_track_keeps_the_cached_file() {
     let t = started("pin-cached", 3).await;

@@ -306,6 +306,8 @@ impl Actor {
     pub(crate) fn defer_load(&mut self, item: &QueueItem, position_ms: Ms, play: bool) {
         let now = self.now();
         if self.playback.loaded && self.playback.backend_key.is_some() {
+            // Leaving what the backend plays, as any skip would.
+            self.note_left_early();
             if let Some(id) = self.playback.track_id().map(str::to_string) {
                 let pos = self.playback.position_now(now);
                 let actions = self.scrobbler.track_ended(&id, Some(pos));
