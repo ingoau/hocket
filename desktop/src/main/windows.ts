@@ -107,7 +107,13 @@ export class Windows {
     win.on("unmaximize", persist);
     const vis = () => {
       if (win.isDestroyed()) return;
-      this.opts.onVisibility(win.isVisible() && !win.isMinimized(), win.isFocused());
+      const visible = win.isVisible() && !win.isMinimized();
+      // A visible-but-unfocused window (second monitor, fullscreen behind a
+      // floating window) must keep painting at the background rate. Chromium's
+      // default throttle drops rAF/timers to ~1 Hz and the fluid background
+      // strobes; we already stop both renderers when hidden.
+      win.webContents.setBackgroundThrottling(!visible);
+      this.opts.onVisibility(visible, win.isFocused());
       this.broadcastState();
     };
     for (const ev of ["show", "hide", "minimize", "restore", "focus", "blur", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "always-on-top-changed"] as const) {

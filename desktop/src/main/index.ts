@@ -26,7 +26,9 @@ import { Windows } from "./windows";
 
 // Chromium must not grab the media keys or publish its own media session:
 // audio comes out of Rust and the OS session is playwire's (design.md).
-app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling,MediaSessionService");
+// CalculateNativeWinOcclusion treats an unfocused fullscreen window as hidden
+// and starts/stops compositing — the fluid background flickers (#45).
+app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling,MediaSessionService,CalculateNativeWinOcclusion");
 
 const isDev = !app.isPackaged && process.env.HOCKET_DEV === "1";
 const appRoot = app.isPackaged ? app.getAppPath() : resolve(__dirname, "..", "..");
