@@ -215,6 +215,10 @@ struct Engine {
     pre_buffer_key: Option<QueueKey>,
     pre_buffer_position_ms: u32,
     generation: u64,
+    /// Bumped by every `SetNext` and `Load`: two `SetNext`s can carry the same
+    /// key for different tracks (an upcoming context item's key is its
+    /// index), so the key alone does not tell a superseded follow-up load.
+    next_generation: u64,
     pre_buffer_generation: u64,
     /// Output-format samples converted but not yet pushed.
     pending_out: Vec<f32>,
@@ -253,6 +257,7 @@ impl Engine {
             pre_buffer_key: None,
             pre_buffer_position_ms: 0,
             generation: 0,
+            next_generation: 0,
             pre_buffer_generation: 0,
             pending_out: Vec::new(),
             scratch_src: Vec::with_capacity(CHUNK_FRAMES * 8),
@@ -432,7 +437,7 @@ impl Engine {
                 }
             }
             Role::Next => {
-                if generation != self.generation || self.next_key.as_ref() != Some(&key) {
+                if generation != self.next_generation || self.next_key.as_ref() != Some(&key) {
                     return;
                 }
                 match result {
@@ -549,8 +554,9 @@ impl Engine {
                 self.next = None;
                 self.next_key = next.as_ref().map(|n| n.key.clone());
                 self.awaiting_next = false;
+                self.next_generation += 1;
                 if let Some(n) = next {
-                    self.spawn_load(Role::Next, self.generation, n, 0);
+                    self.spawn_load(Role::Next, self.next_generation, n, 0);
                 }
             }
             Cmd::Play => {
@@ -587,6 +593,7 @@ impl Engine {
             }
             Cmd::Stop => {
                 self.generation += 1;
+                self.next_generation += 1;
                 self.loading_current = false;
                 self.current = None;
                 self.next = None;
@@ -680,8 +687,9 @@ impl Engine {
         self.volume
             .set_target(if play { self.user_volume } else { 0.0 });
         self.next_key = next.as_ref().map(|n| n.key.clone());
+        self.next_generation += 1;
         if let Some(n) = next {
-            self.spawn_load(Role::Next, self.generation, n, 0);
+            self.spawn_load(Role::Next, self.next_generation, n, 0);
         }
         // Reuse the handoff pre-buffer when it is the same item nearby.
         let reuse = self.pre_buffer_key.as_ref() == Some(&source.key)

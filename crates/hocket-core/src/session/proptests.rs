@@ -277,6 +277,17 @@ fn check_invariants(doc: &SessionDocument) {
     );
     let p = Permutation::from_state(doc.shuffle.as_ref(), n);
     assert!(is_bijection(p.order()));
+    // A context item in Playing Next (put back by Previous) stands for a
+    // played position; one past the cursor would play twice.
+    for i in &doc.insertions {
+        if let QueueSource::Context { index } = i.source {
+            assert!(
+                p.to_position(index).is_some_and(|pos| pos < doc.cursor),
+                "context item {} in Playing Next is upcoming too",
+                i.key
+            );
+        }
+    }
     assert_eq!(p.len(), n);
     // The offline set only names stored items that are still marked.
     for key in crate::session::offline_skipped(doc) {
