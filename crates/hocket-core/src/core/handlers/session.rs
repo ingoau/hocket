@@ -779,6 +779,22 @@ impl Actor {
         // Played as soon as it lands only when the queue ran out for it;
         // a batch fetched ahead joins the queue behind the playing item.
         let advance = std::mem::take(&mut self.autoplay_advance);
+        if !advance {
+            // Fetched ahead for the item that was last: the queue may have
+            // moved on since (another album played, songs queued, autoplay
+            // or Repeat All toggled). Autoplay items go to Playing Next, so a
+            // batch kept then would play ahead of the new queue. Dropped; the
+            // end of the queue asks again if it still needs to.
+            let still_last = self.doc().is_some_and(|d| {
+                d.autoplay
+                    && d.repeat == RepeatMode::Off
+                    && d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
+                    && derive(d).total_upcoming == 0
+            });
+            if !still_last {
+                return;
+            }
+        }
         if picks.is_empty() {
             if !advance {
                 // Fetched ahead: the end of the queue asks again, and says so.

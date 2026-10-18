@@ -844,3 +844,36 @@ async fn autoplay_is_fetched_and_preloaded_before_the_queue_ends() {
         .iter()
         .any(|c| matches!(c, ScriptedCall::Load { .. })));
 }
+
+/// Autoplay fetched ahead for the last song is dropped when the queue moved
+/// on before it landed: autoplay items join Playing Next, so kept they would
+/// play ahead of the album started meanwhile (#13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn autoplay_fetched_ahead_does_not_jump_a_new_queue() {
+    let t = synced_core("autoplay-prefetch-stale").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al1"),
+    })
+    .await;
+    t.run(Command::SetAutoplay { enabled: true }).await;
+    let mut args = album_args(&sid, "al0");
+    args.start_index = Some(3);
+    // The last song fetches autoplay ahead; another album starts before the
+    // batch lands (both commands are queued ahead of it).
+    t.dispatch(Command::PlayContext { args });
+    t.dispatch(Command::PlayContext {
+        args: album_args(&sid, "al1"),
+    });
+    t.run_for(2000.0).await;
+    let q = t.queue().await;
+    assert_eq!(q.current.as_ref().unwrap().track.id, "t4");
+    assert!(
+        !q.playing_next
+            .iter()
+            .any(|e| matches!(e.item.source, QueueSource::Autoplay { .. })),
+        "the stale batch stayed out: {:?}",
+        q.playing_next
+    );
+    assert_eq!(q.upcoming.len(), 3);
+}
