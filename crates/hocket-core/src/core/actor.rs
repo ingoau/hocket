@@ -1,6 +1,6 @@
 //! The actor task: owns every subsystem and handles one message at a time.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -209,6 +209,9 @@ pub(crate) struct Actor {
     pub last_outbox_retry: f64,
     pub last_sync_check: f64,
     pub last_meta_prune: f64,
+    /// Artists whose cached top songs are being refreshed in the background
+    /// (one `getTopSongs` at a time per artist, however often the page asks).
+    pub top_songs_refreshing: HashSet<ArtistId>,
     /// Local ops issued from this device (undo labels).
     pub open_report: crate::db::OpenReport,
 }
@@ -461,6 +464,7 @@ impl Actor {
             last_outbox_retry: now,
             last_sync_check: 0.0,
             last_meta_prune: now,
+            top_songs_refreshing: HashSet::new(),
             open_report,
         };
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
@@ -586,6 +590,11 @@ impl Actor {
                 lyrics,
                 announce,
             } => self.on_lyrics_fetched(server_id, track_id, lyrics, announce),
+            Internal::TopSongsRefreshed {
+                server_id,
+                artist_id,
+                changed,
+            } => self.on_top_songs_refreshed(server_id, artist_id, changed),
             Internal::Artwork { id, size, path } => self.on_artwork(id, size, path),
             Internal::OutboxFlushed { report } => self.on_outbox_flushed(report),
             Internal::CasResult { entry_id, result } => self.on_cas_result(entry_id, result),

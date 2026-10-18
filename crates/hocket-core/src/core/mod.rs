@@ -139,6 +139,13 @@ pub enum Internal {
         /// Emit `LyricsChanged` (false for a silent prefetch).
         announce: bool,
     },
+    /// A background refresh of an artist's cached top songs ended;
+    /// `changed` when the cache now holds a different list.
+    TopSongsRefreshed {
+        server_id: ServerId,
+        artist_id: ArtistId,
+        changed: bool,
+    },
     /// Artwork resolved through the image cache.
     Artwork {
         id: String,
