@@ -78,9 +78,11 @@ impl Actor {
         }
         let d = derive(doc);
         let offline = self.is_offline();
+        // Repeat All wraps to the top: that item is next too (#13).
         d.playing_next
             .into_iter()
             .chain(d.upcoming)
+            .chain(d.wrap_next)
             .filter(|i| !i.unavailable)
             .find(|i| {
                 !offline

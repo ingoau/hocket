@@ -143,6 +143,12 @@ pub(crate) struct Actor {
     pub autoplay: Option<Box<AutoplayEngine>>,
     pub autoplay_generation: u32,
     pub autoplay_wanted: bool,
+    /// The queue ran out waiting on the autoplay batch in flight: play it
+    /// when it lands. Unset while it is fetched ahead of the end (#13).
+    pub autoplay_advance: bool,
+    /// The current item autoplay was last fetched ahead for, so a batch
+    /// that found nothing is not asked for again on every change.
+    pub autoplay_prefetched: Option<QueueKey>,
     pub reducer_policy: Arc<ReducerPolicy>,
     pub entropy: Arc<dyn Entropy>,
 
@@ -399,6 +405,8 @@ impl Actor {
             autoplay: Some(Box::new(autoplay)),
             autoplay_generation: 0,
             autoplay_wanted: false,
+            autoplay_advance: false,
+            autoplay_prefetched: None,
             reducer_policy,
             entropy,
             backend,

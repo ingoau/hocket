@@ -722,9 +722,10 @@ async fn mute_survives_clearing_the_queue() {
     assert!((t.backend.volume() - hocket_core::audio::backend::volume_to_gain(0.6)).abs() < 1e-12);
 }
 
-/// Removing the song that plays next replaces the gapless preload: the next
-/// context song inherits the removed one's key (`ctx-<index>`), and a preload
-/// kept by key alone played the removed song at the boundary (#62).
+/// Removing the song that plays next replaces the gapless preload. Context
+/// songs used to be keyed by index (`ctx-<index>`), so the next one inherited
+/// the removed one's key and a preload kept by key alone played the removed
+/// song at the boundary (#62); now each keeps its own key (#97).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn removing_the_next_song_replaces_the_gapless_preload() {
     let t = synced_core("remove-next-preload").await;
@@ -746,15 +747,13 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.upcoming[0].track.id, "t2");
-    assert_eq!(
-        q.upcoming[0].item.key, next.item.key,
-        "same key, another song"
-    );
+    let replacement = q.upcoming[0].item.key.clone();
+    assert_ne!(replacement, next.item.key, "another song, another key");
     assert!(
         t.backend
             .log()
             .iter()
-            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(k) } if *k == next.item.key)),
+            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(k) } if *k == replacement)),
         "the preload was replaced: {:?}",
         t.backend.log()
     );
@@ -763,6 +762,82 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     t.backend.clear_log();
     t.run_for(201_000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert!(!t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { .. })));
+}
+
+/// Under Repeat All the last song preloads the first one, which the queue
+/// wraps to, so the wrap is gapless too (#13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeat_all_preloads_the_wrap() {
+    let t = synced_core("wrap-preload").await;
+    let sid = t.server_id.clone();
+    let mut args = album_args(&sid, "al0");
+    args.start_index = Some(3);
+    t.run(Command::PlayContext { args }).await;
+    t.run(Command::SetRepeat {
+        mode: RepeatMode::All,
+    })
+    .await;
+    t.run_for(500.0).await;
+    let q = t.queue().await;
+    assert_eq!(q.current.as_ref().unwrap().track.id, "t3");
+    let wrap = q.wrap_next.clone().expect("wraps to the top");
+    assert_eq!(wrap.track.id, "t0");
+    assert!(
+        t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(k) } if *k == wrap.item.key)),
+        "the wrap is preloaded: {:?}",
+        t.backend.log()
+    );
+    t.backend.clear_log();
+    t.run_for(201_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    assert!(!t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { .. })));
+}
+
+/// With autoplay on, the last song fetches autoplay while it plays and
+/// preloads the first pick, rather than stopping at the end to fetch (#13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn autoplay_is_fetched_and_preloaded_before_the_queue_ends() {
+    let t = synced_core("autoplay-preload").await;
+    let sid = t.server_id.clone();
+    let mut args = album_args(&sid, "al0");
+    args.start_index = Some(3);
+    t.run(Command::PlayContext { args }).await;
+    t.run(Command::SetAutoplay { enabled: true }).await;
+    t.run_for(2000.0).await;
+    let q = t.queue().await;
+    assert_eq!(q.current.as_ref().unwrap().track.id, "t3", "still playing");
+    let pick = q
+        .playing_next
+        .first()
+        .cloned()
+        .expect("autoplay joined the queue ahead of the end");
+    assert!(matches!(pick.item.source, QueueSource::Autoplay { .. }));
+    assert!(
+        t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(k) } if *k == pick.item.key)),
+        "the pick is preloaded: {:?}",
+        t.backend.log()
+    );
+    t.backend.clear_log();
+    t.run_for(201_000.0).await;
+    assert_eq!(
+        t.current_track_id().await.as_deref(),
+        Some(pick.track.id.as_str())
+    );
     assert!(!t
         .backend
         .log()

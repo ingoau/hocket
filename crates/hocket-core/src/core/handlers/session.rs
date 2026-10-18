@@ -617,7 +617,13 @@ impl Actor {
             .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
-            self.request_autoplay();
+            self.autoplay_advance = true;
+            if self.autoplay.is_some() {
+                self.request_autoplay();
+            }
+            // Else a batch fetched ahead is in flight: it plays when it lands.
+        } else if owns && resolve_tracks.is_none() {
+            self.prefetch_autoplay(&document);
         }
         // Saved queues ride the engine's LWW set too.
         if !same_saved_set(&document.saved_queues, &self.last_saved_queues) {
@@ -654,6 +660,27 @@ impl Actor {
     }
 
     /// Ask the autoplay chain for a batch; `AppendAutoplay` + `Next` follow.
+    /// Fetch autoplay while the last item plays rather than once it has
+    /// ended, so its first pick can be preloaded for a gapless start (#13).
+    fn prefetch_autoplay(&mut self, doc: &SessionDocument) {
+        let Some(current) = doc.current.as_ref() else {
+            return;
+        };
+        let last = doc.autoplay
+            && doc.repeat == RepeatMode::Off
+            && self.playback.loaded
+            && derive(doc).total_upcoming == 0;
+        if !last
+            || self.autoplay.is_none()
+            || self.autoplay_prefetched.as_ref() == Some(&current.key)
+        {
+            return;
+        }
+        self.autoplay_prefetched = Some(current.key.clone());
+        self.autoplay_advance = false;
+        self.request_autoplay();
+    }
+
     pub(crate) fn request_autoplay(&mut self) {
         let Some(engine) = self.autoplay.take() else {
             self.autoplay_wanted = true;
@@ -749,7 +776,14 @@ impl Actor {
         if generation != self.autoplay_generation {
             return;
         }
+        // Played as soon as it lands only when the queue ran out for it;
+        // a batch fetched ahead joins the queue behind the playing item.
+        let advance = std::mem::take(&mut self.autoplay_advance);
         if picks.is_empty() {
+            if !advance {
+                // Fetched ahead: the end of the queue asks again, and says so.
+                return;
+            }
             self.player_notice(
                 PlayerNoticeCode::AutoplayFoundNothing,
                 "Autoplay found nothing to add",
@@ -776,10 +810,11 @@ impl Actor {
             let changed = vec![None; tracks.len()];
             let _ = self.db.upsert_tracks(&tracks, &changed, 0);
         }
-        let queue_ran_out = self
-            .doc()
-            .map(|d| derive(d).total_upcoming == 0)
-            .unwrap_or(false);
+        let queue_ran_out = advance
+            && self
+                .doc()
+                .map(|d| derive(d).total_upcoming == 0)
+                .unwrap_or(false);
         self.local_op(SessionOp::AppendAutoplay { items });
         if queue_ran_out && self.owns_transport() {
             self.playback.want_playing = true;
