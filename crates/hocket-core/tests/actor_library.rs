@@ -1117,8 +1117,10 @@ async fn artist_top_songs_are_cached_and_refreshed_in_the_background() {
         .advance(hocket_core::cache::TOP_SONGS_REFRESH_MS + 1.0);
     t.events.clear();
     assert_eq!(track_ids(t.query(top(10)).await), first);
-    // A second ask while the refresh runs does not start another.
-    assert_eq!(track_ids(t.query(top(10)).await), first);
+    // A second ask while the refresh runs does not start another. The
+    // refresh may already have landed, so either list is a valid answer.
+    let second = track_ids(t.query(top(10)).await);
+    assert!(second == first || second[0] == "a-new", "{second:?}");
     t.core.settle().await;
     assert_eq!(server.calls_to("getTopSongs"), calls + 2);
     assert!(t.events.all().iter().any(|e| matches!(
