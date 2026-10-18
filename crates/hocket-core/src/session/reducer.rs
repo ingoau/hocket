@@ -1096,8 +1096,19 @@ impl Reducer<'_, '_> {
             };
             return self.play_context(context, Some(0), false, false);
         }
+        // Context items Previous put back in Playing Next (see
+        // `push_current_to_future`) play before the context resumes, so in
+        // YouTube mode too, "next" means ahead of them, in Playing Next.
+        let behind_returned = next
+            && matches!(
+                self.doc.insertions.first(),
+                Some(QueueItem {
+                    source: QueueSource::Context { .. },
+                    ..
+                })
+            );
         match self.doc.mode {
-            QueueMode::Apple => {
+            mode if mode == QueueMode::Apple || behind_returned => {
                 let items: Vec<QueueItem> = track_ids
                     .into_iter()
                     .map(|t| QueueItem {
@@ -1122,7 +1133,7 @@ impl Reducer<'_, '_> {
                 self.doc.insertions.extend(items);
                 self.doc.insertions.extend(tail);
             }
-            QueueMode::YouTube => {
+            _ => {
                 for (k, t) in track_ids.into_iter().enumerate() {
                     let n = self.n() as u32;
                     let (index, position) = if next {
@@ -1176,7 +1187,17 @@ impl Reducer<'_, '_> {
 
     // -- shuffle -------------------------------------------------------------
 
+    /// Context items Previous put back in Playing Next (see
+    /// [`Self::push_current_to_future`]) are part of the context's future; a
+    /// new play order replaces that future, so they go (else they'd play twice).
+    fn drop_returned_context_items(&mut self) {
+        self.doc
+            .insertions
+            .retain(|i| !matches!(i.source, QueueSource::Context { .. }));
+    }
+
     fn shuffle_on(&mut self) {
+        self.drop_returned_context_items();
         let anchor = self
             .last_played_context_index()
             .filter(|&a| (a as usize) < self.n());
@@ -1193,6 +1214,7 @@ impl Reducer<'_, '_> {
         if self.doc.shuffle.is_none() {
             return;
         }
+        self.drop_returned_context_items();
         let last = self.last_played_context_index();
         self.doc.shuffle = None;
         self.doc.cursor = last.map(|i| i + 1).unwrap_or(0);
@@ -1284,10 +1306,17 @@ impl Reducer<'_, '_> {
     }
 
     /// Push the current item back to the front of the future, preserving its
-    /// source. A context item normally goes back by moving the cursor to its
-    /// position; if the most recent context item in history sits at or after
-    /// that position, the current item was reached by a Repeat-All wrap and
-    /// the cursor goes back to the end instead, so the wrap replays.
+    /// source. A context item that sits just behind the cursor, with nothing
+    /// in Playing Next, goes back by moving the cursor onto it; if the most
+    /// recent context item in history sits at or after its position, it was
+    /// reached by a Repeat-All wrap and the cursor goes back to the end
+    /// instead, so the wrap replays (with repeat now off, it goes to Playing
+    /// Next as below).
+    ///
+    /// Any other context item goes to the front of Playing Next (keeping its
+    /// key and source) and the cursor stays. Moving the cursor would put it
+    /// behind whatever is in Playing Next, or bring back the items between it
+    /// and the cursor, so Previous then Next would not land on it again.
     fn push_current_to_future(&mut self) {
         let Some(cur) = self.doc.current.take() else {
             return;
@@ -1295,13 +1324,24 @@ impl Reducer<'_, '_> {
         match cur.source {
             QueueSource::Context { index } => {
                 let p = self.perm();
-                if let Some(pos) = p.to_position(index) {
-                    let last_played = self.doc.history.iter().rev().find_map(|h| match h.source {
-                        QueueSource::Context { index } => p.to_position(index),
-                        _ => None,
-                    });
-                    let wrapped = last_played.map(|q| q >= pos).unwrap_or(false);
-                    self.doc.cursor = if wrapped { p.len() as u32 } else { pos };
+                match p.to_position(index) {
+                    Some(pos) if self.doc.insertions.is_empty() && pos + 1 == self.doc.cursor => {
+                        let last_played =
+                            self.doc.history.iter().rev().find_map(|h| match h.source {
+                                QueueSource::Context { index } => p.to_position(index),
+                                _ => None,
+                            });
+                        let wrapped = last_played.map(|q| q >= pos).unwrap_or(false);
+                        if !wrapped {
+                            self.doc.cursor = pos;
+                        } else if self.doc.repeat == RepeatMode::All {
+                            self.doc.cursor = p.len() as u32;
+                        } else {
+                            // No wrap to replay it (repeat went off since).
+                            self.doc.insertions.insert(0, cur);
+                        }
+                    }
+                    _ => self.doc.insertions.insert(0, cur),
                 }
             }
             QueueSource::Inserted | QueueSource::Autoplay { .. } => {
@@ -1361,8 +1401,13 @@ impl Reducer<'_, '_> {
                         if let Some(item) =
                             p.to_context(q - 1).and_then(|i| self.fresh_context_item(i))
                         {
-                            self.doc.current = Some(item);
-                            self.doc.cursor = q;
+                            if self.doc.insertions.is_empty() && q + 1 == self.doc.cursor {
+                                self.doc.current = Some(item);
+                                self.doc.cursor = q;
+                            } else if let Some(cur) = self.doc.current.replace(item) {
+                                // As in `push_current_to_future`.
+                                self.doc.insertions.insert(0, cur);
+                            }
                         }
                     }
                     _ => self.effects.push(Effect::RestartCurrent),
@@ -1797,6 +1842,143 @@ mod tests {
             );
             let (p, _) = step(&cur, &e, QueueOp::Previous);
             cur = p;
+        }
+    }
+
+    /// Previous then Next lands on the same track and leaves the queue as it
+    /// was, Playing Next items included: going back must not move them ahead
+    /// of the item gone back from.
+    #[test]
+    fn previous_then_next_returns_past_insertions() {
+        let e = DeterministicEntropy::new(2);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 4),
+            Some(0),
+            false,
+        );
+        let (d, _) = step(&d, &e, QueueOp::Next);
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["x".into()],
+            },
+        );
+        let future = |d: &SessionDocument| {
+            let mut f = vec![cur_track(d).to_string()];
+            f.extend(playing_next_tracks(d));
+            f.extend(upcoming_tracks(d));
+            f
+        };
+        assert_eq!(future(&d), ["a-t1", "x", "a-t2", "a-t3"]);
+        let t1 = d.current.as_ref().unwrap().key.clone();
+
+        let (b, _) = step(&d, &e, QueueOp::Previous);
+        assert_eq!(future(&b), ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
+        let (n, _) = step(&b, &e, QueueOp::Next);
+        assert!(same_state(&d, &n), "previous then next is the identity");
+        assert_eq!(n.current.as_ref().unwrap().key, t1, "same item, same key");
+
+        // Further back and forward again through the whole queue.
+        let (n, _) = step(&n, &e, QueueOp::Next);
+        assert_eq!(cur_track(&n), "x");
+        let (b, _) = step(&n, &e, QueueOp::Previous);
+        let (b, _) = step(&b, &e, QueueOp::Previous);
+        assert_eq!(future(&b), ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
+        let mut cur = b;
+        let mut played = vec![cur_track(&cur).to_string()];
+        loop {
+            let (n, fx) = step(&cur, &e, QueueOp::Next);
+            if fx.contains(&Effect::Stopped) {
+                break;
+            }
+            played.push(cur_track(&n).to_string());
+            cur = n;
+        }
+        assert_eq!(played, ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
+    }
+
+    /// After going back, Play Next goes right after the current item, ahead of
+    /// the items gone back from, in either queue mode.
+    #[test]
+    fn play_next_after_previous_goes_ahead_of_the_returned_items() {
+        for mode in [QueueMode::Apple, QueueMode::YouTube] {
+            let e = DeterministicEntropy::new(4);
+            let d = play(
+                &new_document("s", "id".into(), 0.0),
+                &e,
+                album("a", 4),
+                Some(0),
+                false,
+            );
+            let (d, _) = step(&d, &e, QueueOp::SetQueueMode { mode });
+            let (d, _) = step(&d, &e, QueueOp::Next);
+            let (d, _) = step(
+                &d,
+                &e,
+                QueueOp::AppendAutoplay {
+                    items: vec![AutoplayItem {
+                        track_id: "auto".into(),
+                        provider: crate::api::AutoplayProvider::Random,
+                        reason: "r".into(),
+                        score: None,
+                    }],
+                },
+            );
+            let (d, _) = step(&d, &e, QueueOp::Previous);
+            assert_eq!(playing_next_tracks(&d), ["a-t1", "auto"], "{mode:?}");
+            let (d, _) = step(
+                &d,
+                &e,
+                QueueOp::PlayNext {
+                    server_id: "srv".into(),
+                    track_ids: vec!["y".into()],
+                },
+            );
+            let mut f = playing_next_tracks(&d);
+            f.extend(upcoming_tracks(&d));
+            assert_eq!(f, ["y", "a-t1", "auto", "a-t2", "a-t3"], "{mode:?}");
+        }
+    }
+
+    /// A new play order replaces the context's future, items gone back from
+    /// included: they don't also stay in Playing Next to play twice.
+    #[test]
+    fn shuffle_drops_the_returned_context_items() {
+        let e = DeterministicEntropy::new(5);
+        // Back over an item with something in Playing Next, then toggle shuffle.
+        let gone_back = |shuffle: bool| {
+            let d = play(
+                &new_document("s", "id".into(), 0.0),
+                &e,
+                album("a", 4),
+                Some(0),
+                shuffle,
+            );
+            let (d, _) = step(&d, &e, QueueOp::Next);
+            let (d, _) = step(
+                &d,
+                &e,
+                QueueOp::PlayNext {
+                    server_id: "srv".into(),
+                    track_ids: vec!["x".into()],
+                },
+            );
+            let (d, _) = step(&d, &e, QueueOp::Previous);
+            assert_eq!(cur_track(&d), "a-t0");
+            assert_eq!(playing_next_tracks(&d).len(), 2);
+            let (d, _) = step(&d, &e, QueueOp::SetShuffle { enabled: !shuffle });
+            d
+        };
+        for shuffle in [false, true] {
+            let d = gone_back(shuffle);
+            assert_eq!(playing_next_tracks(&d), ["x"], "shuffle was {shuffle}");
+            let mut rest = upcoming_tracks(&d);
+            rest.sort();
+            assert_eq!(rest, ["a-t1", "a-t2", "a-t3"], "shuffle was {shuffle}");
         }
     }
 
@@ -2250,13 +2432,14 @@ mod tests {
         assert_eq!(upcoming_tracks(&j), vec!["a-t4"]);
         assert_eq!(j.history.len(), 1);
         // Jump back into history rewinds; the items the forward jump skipped
-        // stay skipped (Apple / Spotify semantics), the insertion is still pending.
+        // stay skipped (Apple / Spotify semantics), the insertion is still
+        // pending, and the item jumped back from comes next, ahead of it.
         let h = j.history[0].key.clone();
         let (b, _) = step(&j, &e, QueueOp::JumpToQueueItem { key: h });
         assert_eq!(cur_track(&b), "a-t0");
         assert!(b.history.is_empty());
-        assert_eq!(playing_next_tracks(&b), vec!["x"]);
-        assert_eq!(upcoming_tracks(&b), vec!["a-t3", "a-t4"]);
+        assert_eq!(playing_next_tracks(&b), vec!["a-t3", "x"]);
+        assert_eq!(upcoming_tracks(&b), vec!["a-t4"]);
         // Jump to current restarts.
         let (_, fx) = step(
             &d,

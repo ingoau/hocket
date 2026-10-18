@@ -99,7 +99,14 @@ impl Actor {
         }
         let next = self.next_item();
         let next_key = next.as_ref().map(|i| i.key.clone());
-        if next_key == self.playback.next_doc_key && self.playback.next.is_some() {
+        // An upcoming context item's key is its context index (`ctx-N`), so a
+        // removal, insertion or move ahead of it hands the same key to another
+        // track: the preload stays only if the track is the same too (#62).
+        let same_track = match (&next, &self.playback.next) {
+            (Some(i), Some(n)) => n.track.id == i.track_id,
+            _ => false,
+        };
+        if next_key == self.playback.next_doc_key && same_track {
             return;
         }
         let source = next.and_then(|i| {

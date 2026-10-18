@@ -721,3 +721,51 @@ async fn mute_survives_clearing_the_queue() {
     t.run(Command::SetMuted { muted: false }).await;
     assert!((t.backend.volume() - hocket_core::audio::backend::volume_to_gain(0.6)).abs() < 1e-12);
 }
+
+/// Removing the song that plays next replaces the gapless preload: the next
+/// context song inherits the removed one's key (`ctx-<index>`), and a preload
+/// kept by key alone played the removed song at the boundary (#62).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_the_next_song_replaces_the_gapless_preload() {
+    let t = synced_core("remove-next-preload").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    let q = t.queue().await;
+    let next = q.upcoming[0].clone();
+    assert_eq!(next.track.id, "t1");
+    t.backend.clear_log();
+
+    t.run(Command::RemoveQueueItems {
+        keys: vec![next.item.key.clone()],
+    })
+    .await;
+    t.run_for(500.0).await;
+    let q = t.queue().await;
+    assert_eq!(q.upcoming[0].track.id, "t2");
+    assert_eq!(
+        q.upcoming[0].item.key, next.item.key,
+        "same key, another song"
+    );
+    assert!(
+        t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(k) } if *k == next.item.key)),
+        "the preload was replaced: {:?}",
+        t.backend.log()
+    );
+
+    // At the boundary the backend moves on to the replaced preload by itself.
+    t.backend.clear_log();
+    t.run_for(201_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert!(!t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { .. })));
+}
