@@ -11,6 +11,7 @@ import { loadLocal, saveLocal } from "../lib/local-settings";
 import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
+import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
 import { SK } from "@shared/settings-keys";
 import type { MenuFacts } from "../lib/menu-model";
 
@@ -357,14 +358,18 @@ type ResultDataKeys = Parameters<typeof expectResult>[1];
 
 function recomputePerf(): void {
   const s = useApp.getState();
-  const visible = s.windowState.visible && s.pageVisible;
-  const perf: UiState["perf"] = !visible ? "stopped" : s.windowState.focused ? "full" : "background";
+  // Electron's shown/minimised is the stop signal. document.hidden (pageVisible)
+  // also goes false when Chromium thinks the window is occluded, which an
+  // unfocused fullscreen window often is — stopping then restarting the
+  // background is the flicker in #45. Prefetch still honours page visibility
+  // via SetVisibility in main.
+  const perf = perfForWindow(s.windowState.visible, s.windowState.focused);
   if (perf !== s.perf) useApp.setState({ perf });
   // Position ticker: stopped when hidden; 24 fps in the background; capped by
   // battery saver (30 fps) and the lyrics fps setting when focused.
   ticker.setPaused(perf === "stopped");
   const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 60)));
-  ticker.fps = perf === "background" ? Math.min(24, cap) : cap;
+  ticker.fps = perf === "background" ? Math.min(BACKGROUND_FPS, cap) : cap;
 }
 
 /** Wire the bridge once at startup. Returns a disposer. */

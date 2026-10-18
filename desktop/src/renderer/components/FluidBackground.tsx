@@ -1,8 +1,9 @@
 // Kawarp fluid background fed from the cached artwork via a CORS-clean <img>. Tint and
 // saturation tuned to sit behind AMLL's white lyric styling. Honours the
-// performance budget: stopped when hidden, ~24 fps unfocused, static blurred
-// still in battery saver, when the animated background is switched off, or
-// when the user prefers reduced motion.
+// performance budget: stopped when hidden, ~24 fps unfocused (lib/kawarp-budget,
+// never wall-clock ms into Kawarp.renderFrame), static blurred still in battery
+// saver, when the animated background is switched off, or when the user prefers
+// reduced motion.
 //
 // Contrast: a black scrim sits over the background, sized from the cover's
 // brightest colour so the fullscreen text colours (white and the 80 % white
@@ -16,6 +17,7 @@ import { SK } from "@shared/settings-keys";
 import { usePrefersReducedMotion } from "../lib/media";
 import { extractBrightest } from "../lib/accent";
 import { WHITE, scrimAlpha, type Rgb } from "../lib/contrast";
+import { startKawarpBudget } from "../lib/kawarp-budget";
 
 /** Alpha of the fullscreen player's muted text (global.css `.fullscreen --fg-muted`). */
 export const FULLSCREEN_MUTED_ALPHA = 0.8;
@@ -103,22 +105,12 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     };
   }, [url, animated]);
 
-  // Frame budget: explicit start/stop plus a throttled render in the background.
+  // Frame budget: Kawarp's rAF loop when focused; ~24 fps ourselves when
+  // unfocused (never pass wall-clock ms into renderFrame — that flickers).
   useEffect(() => {
     const k = kawarp.current;
     if (!k || !animated) return;
-    if (perf === "stopped") {
-      k.stop();
-      return;
-    }
-    if (perf === "full") {
-      k.start();
-      return () => k.stop();
-    }
-    // background: ~24 fps via our own interval instead of Kawarp's rAF loop
-    k.stop();
-    const id = setInterval(() => k.renderFrame(performance.now()), 1000 / 24);
-    return () => clearInterval(id);
+    return startKawarpBudget(k, perf);
   }, [perf, animated]);
 
   const shade = <div className="bg-shade" style={{ background: `rgba(0, 0, 0, ${scrim})` }} data-scrim={scrim} data-measured={brightest ? "true" : "false"} data-testid="fs-scrim" aria-hidden="true" />;
