@@ -8,6 +8,7 @@ import { Icon } from "../components/Icon";
 import { Heart } from "../components/Stars";
 import { Tile, TileList } from "../components/Tile";
 import { openContextMenu } from "../components/ContextMenu";
+import { TOP_SONGS_COUNT, topSongsSection } from "../lib/top-songs";
 
 export function ArtistDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -15,10 +16,12 @@ export function ArtistDetail({ id }: { id: string }) {
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const artist = useQuery(() => ({ type: "artist", data: { id } }), "artistDetail", [id]);
   const albums = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 500 } } }), "albums", [id, serverId]);
-  const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: 10 } }), "trackList", [id]);
+  const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: TOP_SONGS_COUNT } }), "trackList", [id]);
   const a = artist.data;
   const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
   const topList = top.data ?? [];
+  const topSection = topSongsSection(top.data?.length, top.error !== undefined);
+  const topHeading = <h2 className="section-heading"><span className="section-icon" aria-hidden="true"><Icon name="stats" size={18} /></span>{t("artist.topSongs")}</h2>;
   return (
     <div className="view" data-testid="view-artist">
       <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })}>
@@ -36,10 +39,15 @@ export function ArtistDetail({ id }: { id: string }) {
         </div>
       </div>
       <div className="view-body">
-        {topList.length ? (
+        {topSection.kind === "loading" ? (
           <>
-            <h2 className="section-heading"><span className="section-icon" aria-hidden="true"><Icon name="stats" size={18} /></span>{t("artist.topSongs")}</h2>
-            <div style={{ height: Math.min(topList.length, 10) * 30 + 40, display: "flex", flexDirection: "column" }}>
+            {topHeading}
+            <div style={{ height: topSection.height }} aria-busy="true" data-testid="artist-top-loading" />
+          </>
+        ) : topSection.kind === "list" ? (
+          <>
+            {topHeading}
+            <div style={{ height: topSection.height, display: "flex", flexDirection: "column" }}>
               <TrackTable tracks={topList} total={topList.length} columns={["art", "title", "album", "rating", "plays", "duration"]} scope={`artist-top:${id}`} label={t("artist.topSongs")} onPlay={(i) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topList.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } })} playingTrackId={playing} testId="artist-top" />
             </div>
           </>
