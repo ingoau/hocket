@@ -589,6 +589,9 @@ pub struct Engine {
     abandoned: VecDeque<PendingOp>,
     /// Replayed queue edits by op id: how many times each has gone again.
     replays: HashMap<String, u8>,
+    /// The latest of our ops (its counter) that moved each queue key: a
+    /// refused move another of ours has since superseded is not replayed.
+    moved: HashMap<QueueKey, u32>,
     unsynced: Vec<PendingOp>,
     unsynced_overflow: bool,
     sync_base: Option<SyncBase>,
@@ -747,6 +750,7 @@ impl Engine {
             pending: VecDeque::new(),
             abandoned: VecDeque::new(),
             replays: HashMap::new(),
+            moved: HashMap::new(),
             unsynced: vec![],
             unsynced_overflow: false,
             sync_base,
@@ -2984,6 +2988,12 @@ impl Engine {
                     document: d,
                     cause: DocChange::Local,
                 });
+                if let SessionOp::MoveQueueItem { key, .. } = &op {
+                    if self.moved.len() >= 256 {
+                        self.moved.clear();
+                    }
+                    self.moved.insert(key.clone(), self.op_counter);
+                }
                 self.send_op(
                     PendingOp {
                         op_id,
@@ -3206,6 +3216,18 @@ impl Engine {
             return;
         }
         let op = match p.op {
+            SessionOp::MoveQueueItem { ref key, .. } => {
+                // Dragged again since: the later drop is what the user wants.
+                let counter = p
+                    .op_id
+                    .rsplit('-')
+                    .next()
+                    .and_then(|c| c.parse::<u32>().ok());
+                if matches!((counter, self.moved.get(key)), (Some(c), Some(&last)) if last > c) {
+                    return;
+                }
+                p.op
+            }
             SessionOp::RemoveQueueItems { keys } => {
                 let q = crate::session::derive(&self.doc);
                 let to_come: BTreeSet<&str> = q
@@ -4968,6 +4990,40 @@ mod tests {
         let ups = upcoming_tracks(&e);
         assert_eq!(ups[0], "t5", "the first drag landed");
         assert_eq!(ups.len(), 4);
+    }
+
+    /// The same row dragged twice while someone else commits: the room
+    /// refuses the first drop and takes the second. The first is not replayed
+    /// over it, so the row ends where it was dropped last.
+    #[test]
+    fn a_drag_superseded_by_a_later_one_is_not_replayed() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let key = crate::session::derive(e.document()).upcoming[3].key.clone();
+        let a = sent_moves(&e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem {
+                key: key.clone(),
+                to_index: 0,
+            },
+        }));
+        let b = sent_moves(&e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem { key, to_index: 2 },
+        }));
+        assert_eq!(upcoming_tracks(&e), ["t2", "t3", "t5", "t4"]);
+        commit_from_b(
+            &mut e,
+            SessionOp::SetRepeat {
+                mode: crate::api::RepeatMode::All,
+            },
+            3,
+        );
+        assert!(
+            sent_moves(&reject(&mut e, &a[0].1, 3)).is_empty(),
+            "superseded"
+        );
+        ack(&mut e, &b[0].1, 4);
+        assert!(e.pending.is_empty());
+        assert_eq!(upcoming_tracks(&e), ["t2", "t3", "t5", "t4"]);
     }
 
     #[test]
