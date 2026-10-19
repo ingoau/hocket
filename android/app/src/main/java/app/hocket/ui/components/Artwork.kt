@@ -57,7 +57,9 @@ fun Artwork(
     val batterySaver by client.batterySaver.collectAsStateWithLifecycleCompat()
     val requested = if (batterySaver) smallerSize(size) else size
     val cacheKey = coverArt?.let { ArtworkPathCache.key(it, requested) }
-    // Unresolved (null: still asking the core) is distinct from resolved-to-nothing: only the latter shows the gradient.
+    // Unresolved (null: still asking the core) and resolved-to-nothing both show the id-seeded
+    // gradient, so a shared-element remount never flashes an empty white card.
+    val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
     val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
     LaunchedEffect(cacheKey) {
         if (state.value?.path != null) return@LaunchedEffect
@@ -67,15 +69,25 @@ fun Artwork(
     }
     val resolved = state.value
     val platformContext = LocalPlatformContext.current
-    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
-        val r = resolved
-        if (coverArt == null || (r != null && r.path == null)) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
-        val path = r?.path
+    val r = resolved
+    val path = r?.path
+    // A remount that already knows the file (shared-element overlay, a second card of the same
+    // album) must not paint the empty surfaceContainerHigh card or crossfade in over it — that is
+    // the white flash on the Albums tile fan and the albums page Recent row. Unresolved still
+    // paints the id-seeded gradient so a dest overlay's first frame is never a blank card.
+    Box(
+        modifier.clip(shape).then(
+            if (path == null || !startedWithCachedPath) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            else Modifier
+        ),
+    ) {
+        if (path == null) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
         if (path != null) {
-            val request = remember(path, requested) {
+            val request = remember(path, requested, startedWithCachedPath) {
                 // Decoded at the requested artwork size, not the view's: a view that resizes (the
                 // player's artwork going edge to edge) keeps its image instead of reloading it.
-                ImageRequest.Builder(platformContext).data(File(path.removePrefix("file://"))).size(requested).crossfade(ARTWORK_CROSSFADE_MS).build()
+                ImageRequest.Builder(platformContext).data(File(path.removePrefix("file://"))).size(requested)
+                    .crossfade(if (startedWithCachedPath) 0 else ARTWORK_CROSSFADE_MS).build()
             }
             AsyncImage(
                 model = request,

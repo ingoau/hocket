@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.Album
 import app.hocket.core.api.PlayHistoryEntry
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
@@ -108,6 +109,26 @@ internal fun <T : Any> rememberGroups(
         }
     }
     return groups
+}
+
+/**
+ * The albums the Library's Albums tile fans out, matching the first [limit] of the albums page's
+ * Recent group (latest plays, pinned albums left out).
+ */
+@Composable
+internal fun rememberRecentAlbums(limit: Int): List<Album> {
+    val client = LocalCoreClient.current
+    val pinned = rememberPinnedIds(PinKind.Album)
+    val history = rememberRecentHistory()
+    val albums by produceState(emptyList<Album>(), pinned, history, limit) {
+        if (history == null) return@produceState
+        value = coroutineScope {
+            recentAlbumIds(history, limit, pinned).map { id ->
+                async { (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data }
+            }.awaitAll().filterNotNull()
+        }
+    }
+    return albums
 }
 
 /**

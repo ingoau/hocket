@@ -87,7 +87,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.hocket.ui.components.formatDurationWords
+import app.hocket.ui.nav.ArtworkShare
+import app.hocket.ui.nav.LocalSharedArtwork
 import app.hocket.ui.nav.Route
+import app.hocket.ui.nav.sharedArtworkDestination
 import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.screens.library.DetailTarget
 import sh.calvin.reorderable.ReorderableItem
@@ -116,6 +119,7 @@ fun DetailPane(nav: NavHostController, target: DetailTarget?) {
 private fun DetailScaffold(
     nav: NavHostController, embedded: Boolean, title: String?, subtitle: String?, coverArt: String?, roundArtwork: Boolean = false,
     loading: Boolean = false,
+    shareKey: String? = null,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     header: @Composable () -> Unit,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
@@ -138,7 +142,7 @@ private fun DetailScaffold(
         Box(Modifier.fillMaxSize()) {
             ShimmerHost {
                 LazyColumn(state = rememberLazyListState(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-                    if (loading) {
+                    if (loading && shareKey == null) {
                         detailSkeleton(roundArtwork)
                         return@LazyColumn
                     }
@@ -147,7 +151,28 @@ private fun DetailScaffold(
                         // the header, so the rating, love and play buttons get the full width.
                         BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header")) {
                             val stacked = maxWidth < 380.dp || LocalDensity.current.fontScale >= 1.5f
-                            val art: @Composable () -> Unit = { Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.size(DetailArtSize), if (roundArtwork) CircleShape else RoundedCornerShape(DetailArtCorner)) }
+                            val art: @Composable () -> Unit = {
+                                Artwork(
+                                    coverArt, ArtworkSizes.GRID, title,
+                                    Modifier.size(DetailArtSize).sharedArtworkDestination(shareKey).testTag("detail.artwork"),
+                                    if (roundArtwork) CircleShape else RoundedCornerShape(DetailArtCorner),
+                                )
+                            }
+                            if (loading) {
+                                if (stacked) {
+                                    Column { art(); Spacer(Modifier.height(12.dp)); Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { SkeletonLine(Modifier.fillMaxWidth(0.7f), 14.dp); SkeletonLine(Modifier.fillMaxWidth(0.5f), 14.dp) } }
+                                } else {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        art()
+                                        Spacer(Modifier.width(16.dp))
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            SkeletonLine(Modifier.fillMaxWidth(0.7f), 14.dp)
+                                            SkeletonLine(Modifier.fillMaxWidth(0.5f), 14.dp)
+                                        }
+                                    }
+                                }
+                                return@BoxWithConstraints
+                            }
                             if (stacked) {
                                 Column { art(); Spacer(Modifier.height(12.dp)); header() }
                             } else {
@@ -158,6 +183,10 @@ private fun DetailScaffold(
                                 }
                             }
                         }
+                    }
+                    if (loading) {
+                        items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
+                        return@LazyColumn
                     }
                     content()
                 }
@@ -219,6 +248,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val client = LocalCoreClient.current
     PrimeAlbumOnDwell(id)
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val shareKey = ArtworkShare.album(id)
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var album by remember { mutableStateOf<Album?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(id, libraryGen) {
@@ -230,7 +261,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     }
     val a = album
     if (a == null) {
-        DetailScaffold(nav, embedded, null, null, null, loading = true, header = {}) {}
+        DetailScaffold(nav, embedded, null, null, flyingCover, shareKey = shareKey, loading = true, header = {}) {}
         return
     }
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
@@ -240,7 +271,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val songMenu = app.hocket.ui.components.rememberSongMenu()
     var albumSheet by remember { mutableStateOf(false) }
     val context = Commands.albumContext(a.serverId, a.id, a.name)
-    DetailScaffold(nav, embedded, a.name, a.artist, a.coverArt, actions = { IconButton(onClick = { albumSheet = true }) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) } }, header = {
+    DetailScaffold(nav, embedded, a.name, a.artist, a.coverArt, shareKey = shareKey, actions = { IconButton(onClick = { albumSheet = true }) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more)) } }, header = {
         Text(listOfNotNull(a.year?.toString(), a.genre).joinToString(stringResource(R.string.dot_separator)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong())), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
@@ -280,6 +311,8 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val client = LocalCoreClient.current
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
+    val shareKey = ArtworkShare.artist(id)
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var artist by remember(id) { mutableStateOf<Artist?>(null) }
     var albums by remember(id) { mutableStateOf<List<Album>>(emptyList()) }
     // null until the first answer: the section keeps its rows' space (skeletons) meanwhile, so the
@@ -301,12 +334,12 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     }
     val ar = artist
     if (ar == null) {
-        DetailScaffold(nav, embedded, null, null, null, roundArtwork = true, loading = true, header = {}) {}
+        DetailScaffold(nav, embedded, null, null, flyingCover, roundArtwork = true, shareKey = shareKey, loading = true, header = {}) {}
         return
     }
     val context = Commands.artistContext(ar.serverId, ar.id, ar.name)
     val songMenu = app.hocket.ui.components.rememberSongMenu()
-    DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, header = {
+    DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, shareKey = shareKey, header = {
         IconToggleButton(checked = ar.loved, onCheckedChange = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) {
             Icon(if (ar.loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (ar.loved) R.string.action_unlove else R.string.action_love), tint = if (ar.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -352,6 +385,8 @@ internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
 fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val shareKey = ArtworkShare.playlist(id)
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var playlist by remember { mutableStateOf<Playlist?>(null) }
     var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
     var dragKey by remember { mutableStateOf<String?>(null) }
@@ -408,13 +443,23 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             ShimmerHost {
                 LazyColumn(state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
                     if (p == null) {
-                        detailSkeleton()
+                        item(key = "header", contentType = "header") {
+                            Row(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header"), verticalAlignment = Alignment.CenterVertically) {
+                                Artwork(flyingCover, ArtworkSizes.GRID, null, Modifier.size(DetailArtSize).sharedArtworkDestination(shareKey).testTag("detail.artwork"), RoundedCornerShape(DetailArtCorner))
+                                Spacer(Modifier.width(16.dp))
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    SkeletonLine(Modifier.fillMaxWidth(0.7f), 14.dp)
+                                    SkeletonLine(Modifier.fillMaxWidth(0.5f), 14.dp)
+                                }
+                            }
+                        }
+                        items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
                         return@LazyColumn
                     }
                     val context = Commands.playlistContext(p.serverId, p.id, p.name)
                     item(key = "header", contentType = "header") {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Artwork(p.coverArt, ArtworkSizes.GRID, p.name, Modifier.size(DetailArtSize), RoundedCornerShape(DetailArtCorner))
+                        Row(Modifier.fillMaxWidth().padding(16.dp).testTag("detail.header"), verticalAlignment = Alignment.CenterVertically) {
+                            Artwork(p.coverArt, ArtworkSizes.GRID, p.name, Modifier.size(DetailArtSize).sharedArtworkDestination(shareKey).testTag("detail.artwork"), RoundedCornerShape(DetailArtCorner))
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
