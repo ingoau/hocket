@@ -35,6 +35,7 @@ import app.hocket.playback.pebble.PebbleProtocol.Type
 import io.rebble.pebblekit2.client.DefaultPebbleSender
 import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
+import io.rebble.pebblekit2.common.model.TransmissionResult
 import java.util.UUID
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
@@ -58,16 +59,31 @@ class PebbleBridge(
     private val core: () -> CoreHandle,
     private val serverId: () -> String?,
     private val scope: CoroutineScope,
+    /** Hands one message to the watch; null goes through the Pebble app. Tests put a fake here. */
+    private val transmit: (suspend (PebbleDictionary) -> Delivery)? = null,
 ) {
+    /** How handing a message to the watch went. */
+    enum class Delivery {
+        Sent,
+        /** Nacked, timed out or unknown: worth another go. */
+        Failed,
+        /** The watchapp is closed, the watch is gone or the Pebble app is unreachable. */
+        AppGone,
+    }
+
     companion object {
         private const val TAG = "PebbleBridge"
         /** Session updates come in bursts (a skip changes metadata, then position); the watch hears once. */
         const val NOW_DEBOUNCE_MS = 150L
         /**
          * The watch interpolates position locally (docs/pebble.md). Position-only session
-         * ticks are skipped; this is how often we still resync the stamp while playing.
+         * ticks are skipped, and anything else (a seek, a stall: the stamp drifting 1.5 s from the
+         * last one sent) pushes at once, so this resync is only a safety net while playing.
          */
-        const val NOW_RESYNC_MS = 15_000L
+        const val NOW_RESYNC_MS = 60_000L
+        /** A message the watch nacked or did not answer is sent again this much later, times the attempt. */
+        const val SEND_RETRY_MS = 250L
+        const val SEND_RETRIES = 2
         private const val SEARCH_LIMIT = 10
         private const val RECENT_LIMIT = 50
         private const val TEXT_MAX = 95
@@ -104,6 +120,8 @@ class PebbleBridge(
     private var lastNowAt = 0L
     /** Queue / resume label changed: push even if the session surface did not. */
     private var nowDirty = false
+    /** The settings blob the watch last took; the same one is not sent again. */
+    private var lastSettings: ByteArray? = null
 
     // -- core events (main thread) -----------------------------------------------------------------
 
@@ -118,7 +136,7 @@ class PebbleBridge(
             is Event.SettingChanged -> {
                 val s = event.data.setting
                 settings[s.key] = s.value
-                if (s.key.startsWith("pebble.") && open && settingsLoaded) scope.launch { send(settingsMessage()) }
+                if (s.key.startsWith("pebble.") && open && settingsLoaded) scope.launch { sendSettings() }
             }
             is Event.Started -> onSnapshot(event.data.snapshot)
             is Event.Snapshot -> onSnapshot(event.data.snapshot)
@@ -134,7 +152,7 @@ class PebbleBridge(
         volumeKnown = snapshot.transport.volumeDevice != null
         snapshot.settings.forEach { settings[it.key] = it.value }
         settingsLoaded = true
-        if (open) scope.launch { send(settingsMessage()) }
+        if (open) scope.launch { sendSettings() }
         onSession(snapshot.mediaSession)
     }
 
@@ -166,6 +184,7 @@ class PebbleBridge(
 
     fun appClosed() {
         open = false
+        lastSettings = null
         nowJob?.cancel()
         artJob?.cancel()
     }
@@ -179,7 +198,8 @@ class PebbleBridge(
     suspend fun onMessage(data: PebbleDictionary) {
         open = true
         when (num(data, Key.TYPE)) {
-            Type.HELLO -> onHello(num(data, Key.PROTO), text(data, Key.BUILD))
+            // Off the watch's message too: its outbox waits for this ack, and the replies would hold it.
+            Type.HELLO -> { val proto = num(data, Key.PROTO); val build = text(data, Key.BUILD); scope.launch { onHello(proto, build) } }
             Type.CMD -> onCommand(num(data, Key.CMD), num(data, Key.ARG), text(data, Key.PATH), text(data, Key.ITEM))
             // Lists can take a while (a search, a long playlist): answer the watch's message first.
             Type.LIST_REQ -> scope.launch { onListRequest(num(data, Key.REQ_ID), text(data, Key.PATH), num(data, Key.OFFSET)) }
@@ -189,12 +209,11 @@ class PebbleBridge(
 
     private suspend fun onHello(proto: Int, build: String) {
         send(mapOf(Key.TYPE to u8(Type.HELLO_REPLY), Key.PROTO to u32(PebbleProtocol.PROTO), Key.BUILD to PebbleDictionaryItem.Text(PebbleInstaller.bundledVersion)))
+        // A watchapp saying hello starts afresh: it may have restarted with the settings it persisted.
+        lastSettings = null
         // Before the core's settings have loaded these would be the defaults, wiping the watch's copy.
-        if (settingsLoaded) send(settingsMessage())
-        send(nowMessage())
-        lastPushed = session
-        lastNowAt = SystemClock.elapsedRealtime()
-        nowDirty = false
+        if (settingsLoaded) sendSettings()
+        sendNow()
         if (build.isNotEmpty()) PebbleInstaller.recordWatchVersion(context, build)
         if (proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion) PebbleInstaller.notifyUpdate(context)
     }
@@ -205,16 +224,64 @@ class PebbleBridge(
         nowJob = scope.launch {
             delay(NOW_DEBOUNCE_MS)
             if (!shouldPushNow()) return@launch
-            send(nowMessage())
-            lastPushed = session
-            lastNowAt = SystemClock.elapsedRealtime()
-            nowDirty = false
+            sendNow()
         }
     }
 
-    private suspend fun send(message: PebbleDictionary) = sendLock.withLock {
-        runCatching { sender.sendDataToPebble(PebbleProtocol.APP_UUID, message) }
+    /** Sends Now; only a delivered one counts as pushed, so a lost one goes again on the next tick. */
+    private suspend fun sendNow() {
+        val pushed = session
+        val dirty = nowDirty
+        nowDirty = false
+        if (send(nowMessage())) {
+            lastPushed = pushed
+            lastNowAt = SystemClock.elapsedRealtime()
+        } else {
+            nowDirty = nowDirty || dirty
+            lastPushed = null
+        }
+    }
+
+    /** Sends the settings unless the watch already has exactly these. */
+    private suspend fun sendSettings() {
+        val message = settingsMessage()
+        val blob = (message[Key.SETTINGS] as PebbleDictionaryItem.Bytes).value
+        if (lastSettings?.contentEquals(blob) == true) return
+        if (send(message)) lastSettings = blob
+    }
+
+    /**
+     * One message to the watch, in order with the others; true when the watch took it. One it
+     * nacked or did not answer (busy with its own send, a radio hiccup) goes again a moment later,
+     * a couple of times, instead of leaving the watch stale until the next change.
+     */
+    private suspend fun send(message: PebbleDictionary): Boolean = sendLock.withLock {
+        for (attempt in 0..SEND_RETRIES) {
+            if (attempt > 0) delay(SEND_RETRY_MS * attempt)
+            when (deliver(message)) {
+                Delivery.Sent -> return@withLock true
+                Delivery.AppGone -> {
+                    // Closed under us without a close event: stop pushing until it says hello.
+                    open = false
+                    return@withLock false
+                }
+                Delivery.Failed -> Unit
+            }
+        }
+        false
+    }
+
+    private suspend fun deliver(message: PebbleDictionary): Delivery {
+        transmit?.let { return it(message) }
+        val results = runCatching { sender.sendDataToPebble(PebbleProtocol.APP_UUID, message) }
             .onFailure { Log.w(TAG, "send failed: ${it.message}") }
+            .getOrElse { return Delivery.Failed }
+        // null: the Pebble app is unreachable; empty: no watch connected.
+        if (results.isNullOrEmpty()) return Delivery.AppGone
+        if (results.values.any { it is TransmissionResult.Success }) return Delivery.Sent
+        if (results.values.all { it is TransmissionResult.FailedDifferentAppOpen || it is TransmissionResult.FailedWatchNotConnected || it is TransmissionResult.FailedNoPermissions }) return Delivery.AppGone
+        Log.w(TAG, "send failed: ${results.values}")
+        return Delivery.Failed
     }
 
     // -- now playing ---------------------------------------------------------------------------------
@@ -550,7 +617,9 @@ class PebbleBridge(
                     message[Key.ART_HEIGHT] = u16(art.height)
                     message[Key.ART_SIZE] = u32(art.data.size)
                 }
-                send(message)
+                // A chunk the watch never took would leave a gap it throws the cover away for
+                // (main.c); it asks again on its own, so stop here.
+                if (!send(message)) return@launch
                 offset = end
             }
         }
