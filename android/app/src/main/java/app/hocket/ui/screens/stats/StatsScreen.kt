@@ -23,7 +23,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,6 +46,8 @@ import app.hocket.core.Queries
 import app.hocket.core.api.ListeningStats
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
+import app.hocket.ui.screens.library.rememberServerId
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.SectionHeaderSkeleton
 import app.hocket.ui.components.ShimmerHost
@@ -64,7 +66,10 @@ import app.hocket.ui.screens.home.AlbumStrip
 fun StatsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     var period by rememberSaveable { mutableIntStateOf(30) }
-    val stats by produceState<ListeningStats?>(null, period) { value = (client.query(Queries.stats(period)) as? QueryResult.Stats)?.data }
+    // Starts from the last answer for this period, so a pop back from a top album or artist has its
+    // row on the first frame to fly back into.
+    var stats by rememberCachedState<ListeningStats?>(listOf("stats", rememberServerId(), period)) { null }
+    LaunchedEffect(period) { stats = (client.query(Queries.stats(period)) as? QueryResult.Stats)?.data }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
