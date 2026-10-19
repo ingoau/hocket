@@ -43,8 +43,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import app.hocket.ui.brand.HeaderLockup
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -80,6 +80,7 @@ import app.hocket.core.api.Filter
 import app.hocket.core.api.SavedQueue
 import app.hocket.core.api.TrackSummary
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.EmptyState
@@ -128,9 +129,12 @@ fun HomeScreen(nav: NavHostController) {
     val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
     val shown = prefs.filter { it.on && it.section != null }
     val shownSet = shown.mapNotNull { it.section }.toSet()
-    val feed by produceState<Map<HomeSection, SectionContent>?>(null, serverId, libraryGen, shownSet, nowPlayingId) {
-        if (libraryGen < 0) return@produceState
-        value = loadHomeFeed(client, serverId, shownSet)
+    // Starts from the last feed, so coming back to Home (a pop from a page opened here) shows its
+    // rows on the first frame — the artwork that flew out has somewhere to fly back to.
+    var feed by rememberCachedState<Map<HomeSection, SectionContent>?>(listOf("home.feed", serverId)) { null }
+    LaunchedEffect(serverId, libraryGen, shownSet, nowPlayingId) {
+        if (libraryGen < 0) return@LaunchedEffect
+        feed = loadHomeFeed(client, serverId, shownSet)
     }
     var customising by remember { mutableStateOf(false) }
     var sectionMenu by remember { mutableStateOf<SectionPref?>(null) }

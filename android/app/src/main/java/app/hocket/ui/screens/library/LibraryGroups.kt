@@ -12,7 +12,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -39,6 +41,8 @@ import app.hocket.core.api.Album
 import app.hocket.core.api.PlayHistoryEntry
 import app.hocket.core.api.QueryResult
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.LocalScreenCache
+import app.hocket.ui.rememberCachedState
 
 /** What a library list shows above its full list: its pins of that kind (pin order), then its recent items. */
 data class ListGroups<T>(val pinned: List<T>, val recent: List<T>)
@@ -60,28 +64,37 @@ private const val GENERATION_SETTLE_MS = 500L
 
 /**
  * The library generation, settled: it bumps on every play and sync batch, and the groups re-query on
- * it, so a burst of bumps reloads them once, [GENERATION_SETTLE_MS] after the last. -1 until read
- * (callers wait for it, so they don't query twice on opening).
+ * it, so a burst of bumps reloads them once, [GENERATION_SETTLE_MS] after the last. Starts from the
+ * current generation, so a page's first query goes out with its first frame (callers still treat
+ * -1 as not read yet).
  */
 @OptIn(FlowPreview::class)
 @Composable
 internal fun rememberSettledGeneration(): Int {
     val client = LocalCoreClient.current
-    val generation by produceState(-1, client) {
+    val generation by produceState(client.libraryGeneration.value, client) {
         value = client.libraryGeneration.value
         client.libraryGeneration.drop(1).debounce(GENERATION_SETTLE_MS).collect { value = it }
     }
     return generation
 }
 
-/** This account's latest plays, newest first (as Home's Recently played reads them); null while loading. */
+/** The signed-in server's id, for keying [rememberCachedState] (null before sign-in). */
+@Composable
+internal fun rememberServerId(): String? = LocalCoreClient.current.server.collectAsStateWithLifecycle().value?.id
+
+/**
+ * This account's latest plays, newest first (as Home's Recently played reads them); null while
+ * loading. Starts from the last answer (see [rememberCachedState]) when coming back to a page.
+ */
 @Composable
 internal fun rememberRecentHistory(): List<PlayHistoryEntry>? {
     val client = LocalCoreClient.current
     val generation = rememberSettledGeneration()
-    val history by produceState<List<PlayHistoryEntry>?>(null, generation) {
-        if (generation < 0) return@produceState
-        value = (client.query(Queries.recentlyPlayed(RECENT_HISTORY)) as? QueryResult.History)?.data.orEmpty()
+    var history by rememberCachedState<List<PlayHistoryEntry>?>(listOf("library.history", rememberServerId())) { null }
+    LaunchedEffect(generation) {
+        if (generation < 0) return@LaunchedEffect
+        history = (client.query(Queries.recentlyPlayed(RECENT_HISTORY)) as? QueryResult.History)?.data.orEmpty()
     }
     return history
 }
@@ -91,18 +104,26 @@ internal fun rememberRecentHistory(): List<PlayHistoryEntry>? {
  * from the play history (pinned ones excluded), each resolved by [resolve] (all at once; there is
  * no batch query for albums or artists); gone items are left out. Loaded once the history is, and
  * again only when it or the pins change.
+ *
+ * Starts from the last answer for this list; on a first visit with no pins, from [recentStart] (the
+ * leading Recent items already known elsewhere, e.g. the Albums tile's fan), so those cards are in
+ * place on the first frame and the rest join after them.
  */
 @Composable
 internal fun <T : Any> rememberGroups(
     kind: PinKind,
     recentIds: (List<PlayHistoryEntry>, Collection<String>) -> List<String>,
+    recentStart: List<T>? = null,
     resolve: suspend (String) -> T?,
 ): ListGroups<T> {
     val pinned = rememberPinnedIds(kind)
     val history = rememberRecentHistory()
-    val groups by produceState(ListGroups<T>(emptyList(), emptyList()), pinned, history) {
-        if (history == null) return@produceState
-        value = coroutineScope {
+    var groups by rememberCachedState(listOf("library.groups", rememberServerId(), kind)) {
+        ListGroups(emptyList(), if (pinned.isEmpty()) recentStart.orEmpty() else emptyList())
+    }
+    LaunchedEffect(pinned, history) {
+        if (history == null) return@LaunchedEffect
+        groups = coroutineScope {
             val pins = pinned.take(PINNED_LIMIT).map { async { resolve(it) } }
             val recent = recentIds(history, pinned).map { async { resolve(it) } }
             ListGroups(pins.awaitAll().filterNotNull(), recent.awaitAll().filterNotNull())
@@ -120,9 +141,10 @@ internal fun rememberRecentAlbums(limit: Int): List<Album> {
     val client = LocalCoreClient.current
     val pinned = rememberPinnedIds(PinKind.Album)
     val history = rememberRecentHistory()
-    val albums by produceState(emptyList<Album>(), pinned, history, limit) {
-        if (history == null) return@produceState
-        value = coroutineScope {
+    var albums by rememberCachedState(recentAlbumsKey(rememberServerId(), limit)) { emptyList<Album>() }
+    LaunchedEffect(pinned, history, limit) {
+        if (history == null) return@LaunchedEffect
+        albums = coroutineScope {
             recentAlbumIds(history, limit, pinned).map { id ->
                 async { (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data }
             }.awaitAll().filterNotNull()
@@ -130,6 +152,13 @@ internal fun rememberRecentAlbums(limit: Int): List<Album> {
     }
     return albums
 }
+
+private fun recentAlbumsKey(serverId: String?, limit: Int) = listOf("library.recentAlbums", serverId, limit)
+
+/** What [rememberRecentAlbums] last showed for [limit], without loading anything (null if never loaded). */
+@Composable
+internal fun cachedRecentAlbums(limit: Int): List<Album>? =
+    LocalScreenCache.current?.get<List<Album>>(recentAlbumsKey(rememberServerId(), limit))
 
 /**
  * A group's header in a library list ("Pinned", "Recent", "All albums"), a heading, with an

@@ -36,6 +36,7 @@ import androidx.compose.material3.WideNavigationRailValue
 import androidx.compose.material3.rememberWideNavigationRailState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
@@ -63,8 +64,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -319,7 +323,21 @@ private fun MainShell(snackbar: SnackbarHostState) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
         val sharedArtwork = remember { SharedArtworkSession() }
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork) {
+        val screenCache = remember { app.hocket.ui.ScreenCache() }
+        // Each page takes the flight prepared for it as it becomes current (synchronously, inside
+        // navigate, so its first frame already matches), and drops it once it has left for good.
+        DisposableEffect(nav, sharedArtwork) {
+            val listener = NavController.OnDestinationChangedListener { controller, _, _ ->
+                val entry = controller.currentBackStackEntry ?: return@OnDestinationChangedListener
+                val id = entry.id
+                if (sharedArtwork.attach(id)) {
+                    entry.lifecycle.addObserver(LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_DESTROY) sharedArtwork.release(id) })
+                }
+            }
+            nav.addOnDestinationChangedListener(listener)
+            onDispose { nav.removeOnDestinationChangedListener(listener) }
+        }
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -520,11 +538,11 @@ private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGra
 /**
  * A NavHost destination drawn inside [PageTransitionLayer], so every screen (places, details,
  * settings pages) takes part in the Miuix push/pop and predictive back animation the same way.
- * [LocalNavAnimatedVisibilityScope] lets artwork on the page join a shared-element flight.
+ * [LocalNavAnimatedVisibilityScope] and [LocalNavPageId] let artwork on the page join a shared-element flight.
  */
 private inline fun <reified T : Any> NavGraphBuilder.screen(transitions: ShellTransitionInfo, noinline content: @Composable (NavBackStackEntry) -> Unit) {
     composable<T> { entry ->
-        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this, LocalNavPageId provides entry.id) {
             PageTransitionLayer(transitions, entry.id) { content(entry) }
         }
     }
