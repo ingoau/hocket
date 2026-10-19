@@ -965,7 +965,12 @@ impl Engine {
     fn run(mut self) {
         self.ensure_output();
         loop {
-            match self.rx.recv_timeout(Duration::from_millis(5)) {
+            let wait = if self.playing || self.fading_out {
+                Duration::from_millis(5)
+            } else {
+                Duration::from_millis(50)
+            };
+            match self.rx.recv_timeout(wait) {
                 Ok(cmd) => {
                     if !self.handle(cmd) {
                         break;

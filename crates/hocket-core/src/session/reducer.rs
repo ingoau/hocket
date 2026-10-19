@@ -61,6 +61,13 @@ use super::Entropy;
 
 /// Default history cap.
 pub const DEFAULT_HISTORY_CAP: usize = 200;
+/// How much history the UI queue view keeps. Previous still walks the full
+/// document; this only bounds what is serialised on every `QueueChanged`.
+pub const QUEUE_VIEW_HISTORY: usize = 50;
+/// How much of the upcoming context the UI queue view materialises. The
+/// remainder is counted in `total_upcoming` (both platforms already render
+/// a "N more" footer when the view is shorter than the total).
+pub const QUEUE_VIEW_UPCOMING: usize = 100;
 /// Previous within this many milliseconds goes to the previous item; after
 /// that it restarts the current one. Symfonium's documented behaviour
 /// (support.symfonium.app: "previous only goes back within the first 3 s").
@@ -349,6 +356,23 @@ impl DerivedQueue {
             mode: self.mode,
             total_upcoming: self.total_upcoming,
             wrap_next: self.wrap_next.map(&mut entry),
+        }
+    }
+
+    /// Bound the rows a `QueueView` carries so Next on a long playlist is
+    /// O(window) JSON rather than O(library). `total_upcoming` is left exact.
+    pub fn window_for_view(&mut self) {
+        self.window_for_view_caps(QUEUE_VIEW_HISTORY, QUEUE_VIEW_UPCOMING);
+    }
+
+    /// Same as [`Self::window_for_view`] with explicit caps (benches, tests).
+    pub fn window_for_view_caps(&mut self, history: usize, upcoming: usize) {
+        if self.history.len() > history {
+            let drain = self.history.len() - history;
+            self.history.drain(..drain);
+        }
+        if self.upcoming.len() > upcoming {
+            self.upcoming.truncate(upcoming);
         }
     }
 
@@ -3213,6 +3237,73 @@ mod tests {
         assert_eq!(v.upcoming.len(), 2);
         assert_eq!(v.total_upcoming, 2);
         assert_eq!(v.context_label.as_deref(), Some("Album a"));
+    }
+
+    #[test]
+    fn queue_view_window_keeps_total_and_truncates_rows() {
+        let e = DeterministicEntropy::new(17);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 300),
+            Some(0),
+            false,
+        );
+        let mut derived = derive(&d);
+        assert_eq!(derived.upcoming.len(), 299);
+        assert_eq!(derived.total_upcoming, 299);
+        derived.window_for_view();
+        assert_eq!(derived.upcoming.len(), QUEUE_VIEW_UPCOMING);
+        assert_eq!(derived.total_upcoming, 299);
+        assert_eq!(derived.history.len(), 0);
+    }
+
+    #[test]
+    fn queue_view_json_window_is_bounded() {
+        use crate::api::Event;
+        let e = DeterministicEntropy::new(1);
+        let d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 1_000),
+            Some(0),
+            false,
+        );
+        let resolve = |id: &TrackId| TrackSummary {
+            id: id.clone(),
+            title: id.clone(),
+            artist: Some("Artist".into()),
+            album: Some("Album".into()),
+            duration_ms: 180_000,
+            ..Default::default()
+        };
+        let full = serde_json::to_vec(&Event::QueueChanged {
+            queue: derive(&d).into_view(resolve),
+        })
+        .unwrap();
+        let mut derived = derive(&d);
+        derived.window_for_view();
+        let win = serde_json::to_vec(&Event::QueueChanged {
+            queue: derived.into_view(resolve),
+        })
+        .unwrap();
+        assert!(
+            win.len() * 4 < full.len(),
+            "windowed {} B should be much smaller than full {} B",
+            win.len(),
+            full.len()
+        );
+        assert!(
+            win.len() < 80_000,
+            "windowed QueueChanged should stay under 80 KiB, got {}",
+            win.len()
+        );
+        eprintln!(
+            "queue JSON 1000 tracks: full={} B windowed={} B ({:.1}×)",
+            full.len(),
+            win.len(),
+            full.len() as f64 / win.len() as f64
+        );
     }
 
     #[test]

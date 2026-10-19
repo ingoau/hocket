@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -115,6 +115,8 @@ pub(crate) struct Actor {
     pub tx: mpsc::UnboundedSender<ActorMsg>,
     sinks: Arc<Mutex<Vec<Arc<dyn EventSink>>>>,
     processed: Arc<AtomicU64>,
+    /// Ticker reads this: 250 ms while playing / starting up, 1 s when idle.
+    hot: Arc<AtomicBool>,
 
     pub db: Db,
     pub settings: Settings,
@@ -239,6 +241,7 @@ impl Actor {
         tx: mpsc::UnboundedSender<ActorMsg>,
         sinks: Arc<Mutex<Vec<Arc<dyn EventSink>>>>,
         processed: Arc<AtomicU64>,
+        hot: Arc<AtomicBool>,
         deps: Deps,
     ) -> Result<Actor, CoreError> {
         let data_dir = PathBuf::from(&cfg.data_dir);
@@ -404,6 +407,7 @@ impl Actor {
             tx,
             sinks,
             processed,
+            hot,
             db,
             settings,
             settings_store,
@@ -897,6 +901,10 @@ impl Actor {
         if !self.started {
             return;
         }
+        self.hot.store(
+            self.playback.playing || self.playback.buffering || self.pending_load_timer.is_some(),
+            Ordering::Relaxed,
+        );
         if now - self.last_engine_tick >= ENGINE_TICK_MS - 1.0 {
             self.last_engine_tick = now;
             self.engine_input(Input::Tick);
@@ -1060,10 +1068,7 @@ impl Actor {
     }
 
     pub(crate) fn emit(&self, event: Event) {
-        let sinks = self.sinks.lock().clone();
-        for s in sinks {
-            s.on_event(event.clone());
-        }
+        super::fanout_event(&self.sinks.lock(), event);
     }
 
     pub(crate) fn log(&mut self, level: &str, message: impl Into<String>) {

@@ -1,16 +1,16 @@
 //! RBJ cookbook biquads (Robert Bristow-Johnson, "Cookbook formulae for
 //! audio EQ biquad filter coefficients").
 //!
-//! Coefficients are computed in `f64`, state runs in `f64` (transposed direct
-//! form II, one state pair per channel) and samples are `f32` in and out.
-//! State is flushed to zero below [`DENORMAL_FLOOR`] every sample so a long
-//! silence never drops the filter into denormal arithmetic.
+//! Coefficients are computed in `f64`, then the process path runs in `f32`
+//! (transposed direct form II, one state pair per channel). Samples stay
+//! `f32` in and out. State is flushed to zero below [`DENORMAL_FLOOR`] every
+//! sample so a long silence never drops the filter into denormal arithmetic.
 
 use std::f64::consts::PI;
 
 /// Below this magnitude filter state is snapped to zero (−360 dB; far below
-/// anything audible, far above the `f64` denormal range).
-pub const DENORMAL_FLOOR: f64 = 1e-18;
+/// anything audible, far above the `f32` denormal range).
+pub const DENORMAL_FLOOR: f32 = 1e-18;
 
 /// Filter shapes the chain uses.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,20 +170,41 @@ impl Coefficients {
     }
 }
 
-/// A biquad with per-channel state.
+/// A biquad with per-channel state. Design coeffs stay `f64`; the audio
+/// thread runs transposed direct form II in `f32`.
 #[derive(Debug, Clone)]
 pub struct Biquad {
     coeffs: Coefficients,
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
     /// Transposed direct form II state, two per channel.
-    state: Vec<[f64; 2]>,
+    state: Vec<[f32; 2]>,
 }
 
 impl Biquad {
     pub fn new(coeffs: Coefficients, channels: usize) -> Self {
-        Self {
+        let mut bq = Self {
             coeffs,
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
             state: vec![[0.0; 2]; channels.max(1)],
-        }
+        };
+        bq.sync_process_coeffs();
+        bq
+    }
+
+    fn sync_process_coeffs(&mut self) {
+        self.b0 = self.coeffs.b0 as f32;
+        self.b1 = self.coeffs.b1 as f32;
+        self.b2 = self.coeffs.b2 as f32;
+        self.a1 = self.coeffs.a1 as f32;
+        self.a2 = self.coeffs.a2 as f32;
     }
 
     pub fn identity(channels: usize) -> Self {
@@ -197,6 +218,7 @@ impl Biquad {
     /// Swap coefficients without clearing state (smooth parameter changes).
     pub fn set_coefficients(&mut self, coeffs: Coefficients) {
         self.coeffs = coeffs;
+        self.sync_process_coeffs();
     }
 
     pub fn channels(&self) -> usize {
@@ -213,12 +235,11 @@ impl Biquad {
 
     /// Process one sample of one channel.
     #[inline]
-    pub fn tick(&mut self, channel: usize, x: f64) -> f64 {
-        let c = &self.coeffs;
+    pub fn tick(&mut self, channel: usize, x: f32) -> f32 {
         let s = &mut self.state[channel];
-        let y = c.b0 * x + s[0];
-        s[0] = c.b1 * x - c.a1 * y + s[1];
-        s[1] = c.b2 * x - c.a2 * y;
+        let y = self.b0 * x + s[0];
+        s[0] = self.b1 * x - self.a1 * y + s[1];
+        s[1] = self.b2 * x - self.a2 * y;
         if s[0].abs() < DENORMAL_FLOOR {
             s[0] = 0.0;
         }
@@ -233,7 +254,7 @@ impl Biquad {
         let channels = self.state.len();
         for frame in samples.chunks_exact_mut(channels) {
             for (ch, s) in frame.iter_mut().enumerate() {
-                *s = self.tick(ch, f64::from(*s)) as f32;
+                *s = self.tick(ch, *s);
             }
         }
     }

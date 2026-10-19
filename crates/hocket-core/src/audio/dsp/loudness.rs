@@ -90,7 +90,7 @@ impl KWeighting {
     }
 
     #[inline]
-    pub fn tick(&mut self, channel: usize, x: f64) -> f64 {
+    pub fn tick(&mut self, channel: usize, x: f32) -> f32 {
         self.highpass.tick(channel, self.shelf.tick(channel, x))
     }
 
@@ -141,7 +141,7 @@ impl LoudnessMeter {
                 if a > self.sample_peak {
                     self.sample_peak = a;
                 }
-                let y = self.filter.tick(ch, f64::from(s));
+                let y = f64::from(self.filter.tick(ch, s));
                 self.current[ch] += y * y;
             }
             self.current_frames += 1;
