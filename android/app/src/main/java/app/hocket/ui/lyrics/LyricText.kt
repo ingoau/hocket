@@ -3,6 +3,8 @@ package app.hocket.ui.lyrics
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -13,11 +15,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
@@ -27,12 +29,13 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.ResolvedTextDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import app.hocket.core.api.LyricLine
 import java.text.BreakIterator
-import kotlin.math.PI
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -64,18 +67,106 @@ internal class LyricTone(val idle: Color, val unsung: Color, val sung: Color) {
  * motion) shows what is being sung.
  */
 @Composable
-internal fun SyllableLineText(line: LyricLine, style: TextStyle, tone: LyricTone, sweep: List<Float>, timeMs: Long, bright: () -> Float, motion: Boolean, background: Boolean, modifier: Modifier = Modifier) {
+internal fun SyllableLineText(line: LyricLine, style: TextStyle, tone: LyricTone, sweep: List<Float>, timeMs: Long, bright: () -> Float, motion: Boolean, background: Boolean, near: Boolean = false, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val model = remember(line) { SyllableModel(line) }
     val holder = remember(model, style, measurer) { MeasuredHolder(model, style, measurer) }
-    Spacer(
-        modifier
-            .layout { measurable, constraints ->
-                val m = holder.at(constraints.maxWidth)
-                val placeable = measurable.measure(Constraints.fixed(m.layout.size.width, m.layout.size.height))
-                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    // This frame's sweep and time, read while drawing only (the pieces redraw, never recompose).
+    val frame = rememberUpdatedState(LineFrame(sweep, timeMs))
+    // Moving words: while the line is current or next, every word (and each letter of a word that
+    // swells) is its own piece in its own layer, moved by the layer. Text is drawn snapped to whole
+    // pixels vertically, so a word rising a pixel or two would step instead of glide; a layer
+    // moved by a fraction of a pixel is filtered smoothly (huddlefm's sprites, as GPU layers).
+    val pieces = motion && near
+    val paint = remember(model, tone, background) { LinePaint(model, tone, background) }
+    Layout(
+        content = {
+            Spacer(Modifier.drawBehind { holder.current?.let { m -> if (!pieces || bright() <= 0.001f) paint.drawStill(this, m, frame.value, bright()) } })
+            if (pieces) {
+                model.words.forEachIndexed { wi, w ->
+                    val ranges = model.letters[wi]
+                    if (ranges == null) WordPiece(holder, paint, wi, frame, bright)
+                    else ranges.indices.forEach { li -> LetterPiece(holder, paint, wi, li, frame, bright) }
+                }
             }
-            .drawBehind { holder.current?.let { drawLine(it, model, tone, sweep, timeMs, bright(), motion, background) } },
+        },
+        modifier = modifier,
+    ) { measurables, constraints ->
+        val m = holder.at(constraints.maxWidth)
+        val base = measurables[0].measure(Constraints.fixed(m.layout.size.width, m.layout.size.height))
+        val placed = ArrayList<Pair<androidx.compose.ui.layout.Placeable, IntOffset>>()
+        if (pieces) {
+            var k = 1
+            model.words.forEachIndexed { wi, _ ->
+                val rects = m.letters[wi]?.map { m.letterBox(it) } ?: listOf(m.wordBox(wi))
+                for (r in rects) {
+                    val left = floor(r.left).toInt(); val top = floor(r.top).toInt()
+                    val p = measurables[k++].measure(Constraints.fixed(ceil(r.right - left).toInt().coerceAtLeast(1), ceil(r.bottom - top).toInt().coerceAtLeast(1)))
+                    placed += p to IntOffset(left, top)
+                }
+            }
+        }
+        layout(base.width, base.height) {
+            base.place(0, 0)
+            for ((p, at) in placed) p.place(at)
+        }
+    }
+}
+
+/** What changes every frame on a lit line. */
+@androidx.compose.runtime.Immutable
+internal class LineFrame(val sweep: List<Float>, val timeMs: Long)
+
+/** A word's piece: the paragraph drawn clipped to the word, in a layer that rises with it. */
+@Composable
+private fun WordPiece(holder: MeasuredHolder, paint: LinePaint, word: Int, frame: State<LineFrame>, bright: () -> Float) {
+    Spacer(
+        Modifier
+            .graphicsLayer {
+                val b = bright()
+                translationY = -paint.rise(holder.current, word, frame.value.timeMs, b)
+                // Offscreen from the start (the piece exists from the line before), never switched
+                // on as the line lights: a layer's first offscreen frame can come out empty.
+                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+            }
+            .drawBehind {
+                val m = holder.current ?: return@drawBehind
+                val b = bright()
+                if (b <= 0.001f) return@drawBehind
+                val box = m.wordBox(word)
+                translate(-floor(box.left), -floor(box.top)) { paint.drawWord(this, m, word, frame.value, b) }
+            },
+    )
+}
+
+/** A letter of a swelling word: its own layer, which swells, spreads, lifts and glows. */
+@Composable
+private fun LetterPiece(holder: MeasuredHolder, paint: LinePaint, word: Int, letter: Int, frame: State<LineFrame>, bright: () -> Float) {
+    Spacer(
+        Modifier
+            .graphicsLayer {
+                val m = holder.current ?: return@graphicsLayer
+                val b = bright()
+                val e = paint.emphasis(m, word, letter, frame.value.timeMs, b)
+                val box = m.letterBox(m.letters[word]!![letter])
+                val l = m.letters[word]!![letter]
+                translationX = e.dx
+                translationY = e.dy
+                scaleX = e.scale; scaleY = e.scale
+                // The pivot: the letter's centre, a little below its middle.
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                    ((l.x + l.layout.size.width / 2f) - floor(box.left)) / size.width.coerceAtLeast(1f),
+                    ((l.y + l.layout.size.height * 0.6f) - floor(box.top)) / size.height.coerceAtLeast(1f),
+                )
+                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+            }
+            .drawBehind {
+                val m = holder.current ?: return@drawBehind
+                val b = bright()
+                if (b <= 0.001f) return@drawBehind
+                val box = m.letterBox(m.letters[word]!![letter])
+                translate(-floor(box.left), -floor(box.top)) { paint.drawLetter(this, m, word, letter, frame.value, b) }
+            },
     )
 }
 
@@ -91,6 +182,8 @@ internal class SyllableModel(line: LyricLine) {
     val sylStart = IntArray(line.syllables.size)
     val sylEnd = IntArray(line.syllables.size)
     val words: List<LyricWord>
+    /** Per word: its letters' character ranges, for the words that swell. */
+    val letters: List<List<IntRange>?>
 
     init {
         val sb = StringBuilder()
@@ -111,6 +204,19 @@ internal class SyllableModel(line: LyricLine) {
             val wordText = text.substring(sylStart[g.first], sylEnd[g.last])
             val emphasis = if (shouldEmphasize(wordText, endMs - startMs)) emphasisFor(endMs - startMs, wi == groups.lastIndex) else null
             LyricWord(g.first, g.last, sylStart[g.first], sylEnd[g.last], startMs, endMs, emphasis)
+        }
+        letters = words.map { w ->
+            if (w.emphasis == null) return@map null
+            val it = BreakIterator.getCharacterInstance()
+            it.setText(text.substring(w.start, w.end))
+            buildList<IntRange> {
+                var a = it.first()
+                var b = it.next()
+                while (b != BreakIterator.DONE) {
+                    if (text.substring(w.start + a, w.start + b).isNotBlank()) add(w.start + a until w.start + b)
+                    a = b; b = it.next()
+                }
+            }
         }
     }
 
@@ -165,7 +271,16 @@ internal class MeasuredLine(
     /** Per word: its letters, for the words that swell. */
     val letters: List<List<Letter>?>,
     val fontPx: Float,
-)
+) {
+    /** The word's boxes together. */
+    fun wordBox(word: Int): Rect = boxes[word].reduceOrNull { a, b -> Rect(min(a.left, b.left), min(a.top, b.top), max(a.right, b.right), max(a.bottom, b.bottom)) } ?: Rect.Zero
+
+    /** Where a swelling letter's layer goes: the letter with room to grow and glow. */
+    fun letterBox(letter: Letter): Rect {
+        val reach = fontPx * 0.7f
+        return Rect(letter.x - reach, letter.y - reach, letter.x + letter.layout.size.width + reach, letter.y + letter.layout.size.height + reach)
+    }
+}
 
 /** Measures the line once per width (the same width every frame) and keeps it. */
 internal class MeasuredHolder(private val model: SyllableModel, private val style: TextStyle, private val measurer: TextMeasurer) {
@@ -211,36 +326,25 @@ internal class MeasuredHolder(private val model: SyllableModel, private val styl
             }
         }
         val fontPx = layout.layoutInput.density.run { style.fontSize.toPx() }
-        val margin = fontPx
+        // Room above and below for the rise, within the line's own padding; none to the sides,
+        // where the line's offscreen layer ends (a word layer reaching past it is dropped).
+        val margin = fontPx * 0.25f
         val boxes = List(model.words.size) { ArrayList<Rect>(1) }
         for ((row, inRow) in segs.groupBy { it.row }) {
             val sorted = inRow.sortedBy { it.left }
             val top = layout.getLineTop(row) - if (row == 0) margin else 0f
             val bottom = layout.getLineBottom(row) + if (row == layout.lineCount - 1) margin else 0f
             sorted.forEachIndexed { k, s ->
-                val left = if (k == 0) -margin else (sorted[k - 1].right + s.left) / 2
-                val right = if (k == sorted.lastIndex) layout.size.width + margin else (s.right + sorted[k + 1].left) / 2
+                val left = if (k == 0) 0f else (sorted[k - 1].right + s.left) / 2
+                val right = if (k == sorted.lastIndex) layout.size.width.toFloat() else (s.right + sorted[k + 1].left) / 2
                 boxes[s.word] += Rect(left, top, right, bottom)
             }
         }
-        val letters = model.words.map { w ->
-            if (w.emphasis == null) return@map null
-            val it = BreakIterator.getCharacterInstance()
-            it.setText(text.substring(w.start, w.end))
-            buildList<Letter> {
-                var a = it.first()
-                var b = it.next()
-                while (b != BreakIterator.DONE) {
-                    val from = w.start + a
-                    val glyph = text.substring(from, w.start + b)
-                    if (glyph.isNotBlank()) {
-                        val single = measurer.measure(AnnotatedString(glyph), style.copy(textAlign = TextAlign.Start), softWrap = false)
-                        val row = layout.getLineForOffset(from)
-                        val box = layout.getBoundingBox(from)
-                        add(Letter(single, box.left, layout.getLineBaseline(row) - single.firstBaseline))
-                    }
-                    a = b; b = it.next()
-                }
+        val letters = model.letters.map { ranges ->
+            ranges?.map { r ->
+                val single = measurer.measure(AnnotatedString(text.substring(r.first, r.last + 1)), style.copy(textAlign = TextAlign.Start), softWrap = false)
+                val box = layout.getBoundingBox(r.first)
+                Letter(single, box.left, layout.getLineBaseline(layout.getLineForOffset(r.first)) - single.firstBaseline)
             }
         }
         return MeasuredLine(layout, boxes, sylLeft, sylRight, rtl, letters, fontPx)
@@ -252,28 +356,60 @@ private val empIn = CubicBezierEasing(0.2f, 0.4f, 0.58f, 1f)
 private val empOut = CubicBezierEasing(0.3f, 0f, 0.58f, 1f)
 private fun emphasisCurve(x: Float) = if (x < 0.5f) empIn.transform(x / 0.5f) else 1f - empOut.transform((x - 0.5f) / 0.5f)
 
-private fun DrawScope.drawLine(m: MeasuredLine, model: SyllableModel, tone: LyricTone, sweep: List<Float>, timeMs: Long, bright: Float, motion: Boolean, background: Boolean) {
-    if (bright <= 0.001f) {
-        // Not lit: sung and unsung are the same idle tone, nothing rises. One draw.
-        drawText(m.layout, color = tone.idle)
-        return
+/** How one line's words and letters are painted, for the still line and for its moving pieces. */
+internal class LinePaint(private val model: SyllableModel, private val tone: LyricTone, private val background: Boolean) {
+    /** A swelling letter's place: moved by [dx], [dy], grown by [scale]. */
+    class Swell(val dx: Float, val dy: Float, val scale: Float, val glow: Float)
+
+    private fun lift(m: MeasuredLine) = (if (background) 2 else 1) * LyricsMotion.LIFT_EM * m.fontPx
+
+    /** How far the word has risen, px: over its own time (a second at least), easing out, with the line's brightness. */
+    fun rise(m: MeasuredLine?, word: Int, timeMs: Long, bright: Float): Float {
+        if (m == null || bright <= 0f) return 0f
+        val w = model.words[word]
+        return lift(m) * bright * easeOut.transform(((timeMs - w.startMs).toFloat() / max(1_000L, w.endMs - w.startMs)).coerceIn(0f, 1f))
     }
-    val sung = tone.sung(bright)
-    val unsung = tone.unsung(bright)
-    val size = m.fontPx
-    val fade = size * LyricsMotion.FADE_WIDTH_EM
-    val lift = if (motion) (if (background) 2 else 1) * LyricsMotion.LIFT_EM * size else 0f
-    model.words.forEachIndexed { wi, w ->
-        val letters = m.letters[wi]
-        if (motion && letters != null && w.emphasis != null) {
-            drawEmphasis(letters, w, w.emphasis, { dx -> wordBrush(m, w, sweep, sung, unsung, fade, dx) }, timeMs, bright, size)
-            return@forEachIndexed
+
+    /** AMLL's emphasis for one letter, on top of the rise every sung word has (so a held word settles level with its neighbours). */
+    fun emphasis(m: MeasuredLine, word: Int, letter: Int, timeMs: Long, bright: Float): Swell {
+        val w = model.words[word]
+        val e = w.emphasis ?: return Swell(0f, 0f, 1f, 0f)
+        val count = m.letters[word]?.size?.coerceAtLeast(1) ?: 1
+        val size = m.fontPx
+        val delay = w.startMs + e.durationMs / 2.5f / count * letter
+        val swell = emphasisCurve(((timeMs - delay) / e.durationMs).coerceIn(0f, 1f)) * bright
+        return Swell(
+            dx = -swell * 0.03f * e.amount * (count / 2f - letter) * size,
+            dy = -swell * 0.025f * e.amount * size - rise(m, word, timeMs, bright),
+            scale = 1f + swell * 0.1f * e.amount,
+            glow = swell * e.glow,
+        )
+    }
+
+    /** The whole line, unmoved: one draw when it is not lit; word by word (risen, snapped) without pieces. */
+    fun drawStill(scope: DrawScope, m: MeasuredLine, frame: LineFrame, bright: Float) = with(scope) {
+        if (bright <= 0.001f) { drawText(m.layout, color = tone.idle); return@with }
+        for (wi in model.words.indices) {
+            val rise = rise(m, wi, frame.timeMs, bright)
+            translate(top = -rise) { drawWord(this, m, wi, frame, bright) }
         }
-        val brush = wordBrush(m, w, sweep, sung, unsung, fade)
-        val rise = lift * bright * easeOut.transform(((timeMs - w.startMs).toFloat() / max(1_000L, w.endMs - w.startMs)).coerceIn(0f, 1f))
-        for (box in m.boxes[wi]) {
-            translate(top = -rise) { clipRect(box.left, box.top, box.right, box.bottom) { drawText(m.layout, brush) } }
-        }
+    }
+
+    /** One word in the line's coordinates, clipped to its boxes. */
+    fun drawWord(scope: DrawScope, m: MeasuredLine, word: Int, frame: LineFrame, bright: Float) = with(scope) {
+        val brush = wordBrush(m, model.words[word], frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM)
+        for (box in m.boxes[word]) clipRect(box.left, box.top, box.right, box.bottom) { drawText(m.layout, brush) }
+    }
+
+    /** One letter of a swelling word, in the line's coordinates, glowing as it swells. */
+    fun drawLetter(scope: DrawScope, m: MeasuredLine, word: Int, letter: Int, frame: LineFrame, bright: Float) = with(scope) {
+        val l = m.letters[word]!![letter]
+        val w = model.words[word]
+        val e = w.emphasis!!
+        val glow = emphasis(m, word, letter, frame.timeMs, bright).glow
+        val shadow = if (glow > 0.01f) Shadow(Color.White.copy(alpha = glow.coerceIn(0f, 1f)), Offset.Zero, min(0.3f, e.glow * 0.3f) * m.fontPx * 2) else null
+        val brush = wordBrush(m, w, frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM, l.x)
+        translate(l.x, l.y) { drawText(l.layout, brush, shadow = shadow) }
     }
 }
 
@@ -292,25 +428,5 @@ private fun wordBrush(m: MeasuredLine, w: LyricWord, sweep: List<Float>, sung: C
     } else {
         val edge = left - fade + p * (width + fade)
         Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge + fade)
-    }
-}
-
-/** AMLL's emphasis: each letter swells, spreads, lifts and glows in turn. */
-private fun DrawScope.drawEmphasis(letters: List<Letter>, w: LyricWord, e: Emphasis, brushAt: (Float) -> Brush, timeMs: Long, bright: Float, size: Float) {
-    val count = letters.size.coerceAtLeast(1)
-    letters.forEachIndexed { index, letter ->
-        val delay = w.startMs + e.durationMs / 2.5f / count * index
-        val x = ((timeMs - delay) / e.durationMs).coerceIn(0f, 1f)
-        val swell = emphasisCurve(x) * bright
-        val scale = 1f + swell * 0.1f * e.amount
-        val dx = -swell * 0.03f * e.amount * (count / 2f - index) * size
-        val float = ((timeMs - (delay - 400f)) / (e.durationMs * 1.4f)).coerceIn(0f, 1f)
-        val dy = (-swell * 0.025f * e.amount - sin(float * PI.toFloat()) * LyricsMotion.LIFT_EM) * size
-        val glow = swell * e.glow
-        val shadow = if (glow > 0.01f) Shadow(Color.White.copy(alpha = glow.coerceIn(0f, 1f)), Offset.Zero, min(0.3f, e.glow * 0.3f) * size * 2) else null
-        val pivot = Offset(letter.layout.size.width / 2f, letter.layout.size.height * 0.6f)
-        withTransform({ translate(letter.x + dx, letter.y + dy); scale(scale, scale, pivot) }) {
-            drawText(letter.layout, brushAt(letter.x), shadow = shadow)
-        }
     }
 }

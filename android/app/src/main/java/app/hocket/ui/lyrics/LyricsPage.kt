@@ -101,8 +101,8 @@ import app.hocket.ui.icons.HocketIcons
  * sung and fold away after. The current line grows and lights on springs; the list scrolls to it a
  * moment early with the lines rippling into place one after another ([StaggeredScroll]); lines
  * further away soften (depth of field); long gaps breathe three dots. Duet voices sit on their own
- * sides. Tap to seek, offset control, fluid background. Position sampled at up to 30 fps (reduced
- * motion slower still) and stopped when not visible; the scroll and the springs run only while
+ * sides. Tap to seek, offset control, fluid background. Position sampled every display frame (30 fps on
+ * battery saver, slower still with reduced motion) and stopped when not visible; the scroll and the springs run only while
  * something moves; battery saver drops the depth-of-field blur and the fluid background.
  *
  * Accessibility: the page is one labelled container ("Lyrics"); each line is one item with its text,
@@ -133,13 +133,14 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     val trackId = current.trackId
     val lyrics = current.lyrics
 
-    // Position at 30 fps (battery and plugged); 4 per second with reduced motion (enough to
+    // Position every display frame, so the sweep and the rising words move as smoothly as the
+    // springs around them; 30 fps on battery saver; 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible, and no frames at all
     // while paused (the position is frozen until a seek, play or another track).
     var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(visible, reducedMotion, trackId) {
+    LaunchedEffect(visible, reducedMotion, batterySaver, trackId) {
         if (!visible) return@LaunchedEffect
-        val interval = if (reducedMotion) 250_000_000L else 33_000_000L
+        val interval = if (reducedMotion) 250_000_000L else if (batterySaver) 33_000_000L else 0L
         var last = 0L
         while (true) {
             val mark = client.positionMark()
@@ -392,7 +393,7 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
         val lazy = lazyIndex(i)
         // The core compares `position - offset` against the line start, so seeking to a line's
         // start means `start + offset` in audio time.
-        LyricLineView(i, line, doc.tier, lit, focused, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
+        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
     }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -466,7 +467,7 @@ private fun InterludeDots(gap: Interlude, timeMs: Long, side: Int, reducedMotion
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
     // Read while drawing only: the line grows, lights and (background vocals) slides out without
     // recomposing.
     val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = 1f, stiffness = LyricsMotion.SCALE_STIFFNESS), label = "lineScale")
@@ -532,15 +533,8 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
         contentAlignment = if (side == 1) Alignment.TopEnd else Alignment.TopStart,
     ) {
         Column(
-            Modifier.fillMaxWidth(if (duet) 0.85f else 1f).padding(vertical = if (line.background) 4.dp else 10.dp)
-                .graphicsLayer { scaleX = scale.value; scaleY = scaleX; translationY = lag(); transformOrigin = origin }
-                // Inside the scale: the bounds as drawn, the size as laid out.
-                .onGloballyPositioned { coords[0] = it }
-                // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
-                // the halo of text near the sides was cut off (#68).
-                .blur(blur, BlurredEdgeTreatment.Unbounded)
-                // Hidden while it is on the share card (its text flies there and back).
-                .alpha(if (hidden) 0f else 1f)
+            Modifier.fillMaxWidth(if (duet) 0.85f else 1f)
+                // Outside the layer and its padding: the whole row is the touch target.
                 // Tap seeks, hold shares; unsynced lines have nowhere to seek to, but can still be held.
                 .then(
                     when {
@@ -562,11 +556,29 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
                     this[LyricsSemantics.Lit] = lit
                     this[LyricsSemantics.Focused] = focused
                     this[LyricsSemantics.Blur] = blur.value
-                },
+                }
+                // Offscreen: the line is drawn once at its own size and the layer scaled and moved, so
+                // it grows and glides smoothly (text drawn scaled steps from pixel to pixel).
+                .graphicsLayer {
+                    scaleX = scale.value; scaleY = scaleX; translationY = lag(); transformOrigin = origin
+                    // A blurred line is a layer already (the blur's): no second one inside it.
+                    compositingStrategy = if (reducedMotion || blur > 0.dp) androidx.compose.ui.graphics.CompositingStrategy.Auto else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                }
+                // Inside the moving layer (a blur outside it would cut off a line moved past its box).
+                // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
+                // the halo of text near the sides was cut off (#68); for the same reason a blurred
+                // line has no offscreen layer of its own around the blur.
+                .blur(blur, BlurredEdgeTreatment.Unbounded)
+                // Inside the layer: room for the words to rise and glow.
+                .padding(vertical = if (line.background) 4.dp else 10.dp)
+                // Inside the scale: the bounds as drawn, the size as laid out.
+                .onGloballyPositioned { coords[0] = it }
+                // Hidden while it is on the share card (its text flies there and back).
+                .alpha(if (hidden) 0f else 1f),
             horizontalAlignment = if (side == 1) Alignment.End else Alignment.Start,
         ) {
             if (tier == LyricsTier.Syllable && line.syllables.isNotEmpty()) {
-                SyllableLineText(line, lineStyle, tone, sweep, heldTime[0], bright = { bright.value }, motion = !reducedMotion, background = line.background, modifier = Modifier.fillMaxWidth())
+                SyllableLineText(line, lineStyle, tone, sweep, heldTime[0], bright = { bright.value }, motion = !reducedMotion, background = line.background, near = near, modifier = Modifier.fillMaxWidth())
             } else {
                 // Line-timed (and unsynced): the whole line lights at once; no syllables invented.
                 BasicText(line.text, style = lineStyle, color = { androidx.compose.ui.graphics.lerp(tone.idle, tone.sung, bright.value) }, modifier = Modifier.fillMaxWidth())

@@ -57,11 +57,11 @@ class LyricsPageTest {
     private fun focused(line: Int): Boolean = compose.onNodeWithTag("lyrics.line.$line").fetchSemanticsNode().config[LyricsSemantics.Focused]
     private fun voice(line: Int): String = compose.onNodeWithTag("lyrics.line.$line").fetchSemanticsNode().config[LyricsSemantics.Voice]
 
-    /** Moves the clock (no core event) and lets the 30 fps frame loop pick the new position up. */
+    /** Moves the clock (no core event) and lets the frame loop pick the new position up. */
     private fun at(positionMs: Long) {
         clock = 1_000_000.0 + positionMs
-        // 8 × 16 ms frames: the page samples every 33 ms, so one advanceTimeBy(64) is not enough
-        // once the loop is no longer every display frame.
+        // 8 × 16 ms frames: the page samples every frame (every 33 ms on battery saver), so the
+        // springs and the scroll have frames to run too.
         repeat(8) { compose.mainClock.advanceTimeByFrame() }
         compose.waitForIdle()
     }
