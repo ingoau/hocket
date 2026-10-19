@@ -124,6 +124,16 @@ class CoreSessionPlayer(
     private var queue: QueueView? = null
     private var timeline = QueueTimeline.EMPTY
 
+    /** A playlist entry other than the current one, as built for [track]. */
+    private class CachedItem(val track: TrackSummary, val data: MediaItemData)
+
+    /**
+     * The last playlist's entries by queue key. A play/pause, seek or skip rebuilds the state; the
+     * entries whose track has not changed are reused, so neither their metadata nor their artwork
+     * URI is built again, and Media3's playlist diff finds them identical at once.
+     */
+    private var items: Map<String, CachedItem> = emptyMap()
+
     /** Apply a new queue view from the core. Main thread. */
     fun applyQueue(view: QueueView) {
         val prev = queue
@@ -226,15 +236,23 @@ class CoreSessionPlayer(
                 builder.setPlaylist(listOf(MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(mm).build()).setMediaMetadata(mm).setDurationUs(durationUs).setIsSeekable(seekable).build()))
                 builder.setCurrentMediaItemIndex(0)
             } else {
+                val built = HashMap<String, CachedItem>(timeline.entries.size)
                 builder.setPlaylist(timeline.entries.mapIndexed { i, entry ->
-                    val id = MediaId.QueueItem(entry.item.key).format()
+                    val key = entry.item.key
                     if (i == timeline.currentIndex) {
+                        val id = MediaId.QueueItem(key).format()
                         MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(mm).build()).setMediaMetadata(mm).setDurationUs(durationUs).setIsSeekable(seekable).build()
                     } else {
-                        val em = trackMetadata(entry.track, artwork(entry.track))
-                        MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(em).build()).setMediaMetadata(em).setDurationUs(Util.msToUs(entry.track.durationMs.toLong())).build()
+                        val cached = items[key]?.takeIf { it.track === entry.track || it.track == entry.track } ?: CachedItem(entry.track, run {
+                            val id = MediaId.QueueItem(key).format()
+                            val em = trackMetadata(entry.track, artwork(entry.track))
+                            MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(em).build()).setMediaMetadata(em).setDurationUs(Util.msToUs(entry.track.durationMs.toLong())).build()
+                        })
+                        built[key] = cached
+                        cached.data
                     }
                 })
+                items = built
                 builder.setCurrentMediaItemIndex(timeline.currentIndex)
             }
             val duration = meta.durationMs.toLong()

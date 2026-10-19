@@ -64,6 +64,22 @@ class CoreSessionQueueTest {
     }
 
     @Test
+    fun unchangedEntriesAreReusedAcrossStateChangesAndChangedOnesRebuilt() {
+        setUp()
+        val next = player.getMediaItemAt(3)
+        player.apply(state("t2").copy(isPlaying = false))
+        settle()
+        assertTrue("a pause reuses the other entries", next === player.getMediaItemAt(3))
+        // A renamed upcoming track (same keys, so applyQueue alone does not rebuild) shows on the next state.
+        val renamed = entry(3).copy(track = entry(3).track.copy(title = "Renamed"))
+        player.applyQueue(queue.copy(playingNext = listOf(renamed)))
+        player.apply(state("t2"))
+        settle()
+        assertEquals("Renamed", player.getMediaItemAt(3).mediaMetadata.title.toString())
+        assertEquals("Track 4", player.getMediaItemAt(4).mediaMetadata.title.toString())
+    }
+
+    @Test
     fun positionOnlyApplyDoesNotRebuildTheTimeline() {
         setUp()
         var timelineChanges = 0
