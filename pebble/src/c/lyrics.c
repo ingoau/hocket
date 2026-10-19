@@ -126,16 +126,18 @@ void lyrics_handle_page(DictionaryIterator *iter) {
     while (p < end && s_count < s_total) {
       p++;  // flags
       char field[3][LINE_LEN];
+      bool whole = true;
       for (int f = 0; f < 3; f++) {
         const uint8_t *z = memchr(p, 0, end - p);
-        if (!z) { p = end; break; }
+        if (!z) { whole = false; break; }
         size_t len = z - p;
         if (len >= LINE_LEN) len = LINE_LEN - 1;
         memcpy(field[f], p, len);
         field[f][len] = 0;
         p = z + 1;
       }
-      if (p > end) break;
+      // A row cut off mid-message: its fields were never written.
+      if (!whole || p > end) break;
       Line *l = &s_lines[s_count++];
       l->start_ms = field[0][0] ? atoi(field[0]) : -1;
       strcpy(l->text, field[1]);

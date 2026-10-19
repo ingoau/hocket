@@ -409,6 +409,8 @@ static void prv_handle_art(DictionaryIterator *iter) {
   if (gen != g_now.art_gen) return;
   const uint32_t offset = prv_u32(iter, MESSAGE_KEY_ArtOffset, 0);
   Tuple *data = dict_find(iter, MESSAGE_KEY_ArtData);
+  // A chunk resent after its ack went missing: already in the cover.
+  if (offset && s_art && offset < s_art_next) return;
   if (offset && s_art && offset != s_art_next) {
     // A chunk went missing: finishing would show a cover with a blank band. Drop it; the request's
     // retry (now_playing.c) asks for the cover again once the chunks stop.
