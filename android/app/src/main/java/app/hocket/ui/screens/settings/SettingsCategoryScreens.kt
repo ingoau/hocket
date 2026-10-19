@@ -176,7 +176,7 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
 
 /**
  * Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults, and
- * whether other apps (Android Auto, Wear, media browsers) may browse and control playback.
+ * whether other apps (media browsers, Android Auto) may browse and control playback.
  */
 @Composable
 fun PlaybackSettingsScreen(nav: NavHostController) {

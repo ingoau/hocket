@@ -143,12 +143,16 @@ the one core for the process through `CoreHost`:
   launcher supports that.
 - `MainActivity` also declares `CATEGORY_APP_MUSIC`, so the system can open Hocket as the music app.
 - "Allow control by other apps" (`media.externalControl`, device-local, off by default; Settings >
-  Playback) gates all of the above: while off, `onConnect` accepts only the system's own controls
-  (`ExternalControl`: this app, Media3's notification controller, and uids holding the privileged
-  `MEDIA_CONTENT_CONTROL`: SystemUI, Bluetooth; before API 28 the platform's anonymous legacy
-  controller too, since it cannot be identified), and every browse/search/add/custom request is
-  checked again. Turning it off strips already-connected apps of all commands and revokes their
-  artwork access. `PlaybackService` mirrors the value in SharedPreferences (`hocket-media-control`,
+  Playback) gates all of the above for apps that hold no permission for it: while off, `onConnect`
+  accepts only the system's own controls (`ExternalControl`: this app, Media3's notification
+  controller, and uids holding the privileged `MEDIA_CONTENT_CONTROL`: SystemUI, Bluetooth; before
+  API 28 the platform's anonymous legacy controller too, since it cannot be identified) and apps the
+  user gave notification access (watch companions, KDE Connect, Tasker: they can reach the session
+  through its notification or `getActiveSessions` anyway), and every browse/search/add/custom
+  request is checked again. Notification listeners come from the `enabled_notification_listeners`
+  secure setting (as Media3 reads it), a package counting only for a uid that owns it; the bridge
+  observes the setting, so revoking an app's access cuts it off like the toggle does. Turning it off
+  strips already-connected apps of all commands and revokes their artwork access. `PlaybackService` mirrors the value in SharedPreferences (`hocket-media-control`,
   excluded from backups) so a controller connecting before the core's snapshot is judged by the
   last choice, not the default.
 - Artwork for controllers: they cannot read the core's cache files, so browse and queue items carry

@@ -3,7 +3,11 @@ package app.hocket.playback
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.database.ContentObserver
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PercentageRating
@@ -56,8 +60,9 @@ import kotlin.math.roundToInt
  * five), for the current item or for any library or queue id.
  *
  * Who may connect is [control]'s ("Allow control by other apps"): with it off, only the system's own
- * controls and Media3's notification controller are accepted, and every request is checked again,
- * so turning it off also cuts off controllers that are already connected ([setExternalControl]).
+ * controls, Media3's notification controller and apps with notification access are accepted, and
+ * every request is checked again, so turning it off (or revoking an app's notification access) also
+ * cuts off controllers that are already connected ([setExternalControl], [listenerObserver]).
  */
 class MediaSessionBridge(
     context: Context,
@@ -225,19 +230,36 @@ class MediaSessionBridge(
         }
         .build()
 
+    /** Notification access granted or revoked: connected controllers are judged again. */
+    private val listenerObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            if (control.refreshListeners()) applyAccess()
+        }
+    }
+
+    private val resolver = context.contentResolver
+
+    init {
+        resolver.registerContentObserver(Settings.Secure.getUriFor(ExternalControl.ENABLED_NOTIFICATION_LISTENERS), false, listenerObserver)
+    }
+
     /**
      * The core's "Allow control by other apps" value. Turning it off revokes artwork access and
-     * strips every connected controller that is not the system's of all commands; turning it on
-     * gives those controllers their commands back. Main thread.
+     * strips every connected controller that is not trusted (the system's, or with notification
+     * access) of all commands; turning it on gives those controllers their commands back. Main thread.
      */
     fun setExternalControl(allowed: Boolean) {
-        if (!control.update(allowed)) return
-        if (!allowed) ArtworkProvider.revokeAll()
+        if (control.update(allowed)) applyAccess()
+    }
+
+    /** Gives every connected controller the access [control] now permits it. Main thread. */
+    private fun applyAccess() {
+        if (!control.allowed) ArtworkProvider.revokeAll()
         for (controller in session.connectedControllers) {
             val system = session.isMediaNotificationController(controller) || control.isSystem(controller.packageName, controller.uid)
             when {
                 system -> ArtworkProvider.allow(controller.packageName)
-                allowed -> {
+                control.permits(controller.packageName, controller.uid) -> {
                     ArtworkProvider.allow(controller.packageName)
                     session.setAvailableCommands(controller, sessionCommands, MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
                 }
@@ -289,6 +311,7 @@ class MediaSessionBridge(
     }
 
     fun release() {
+        resolver.unregisterContentObserver(listenerObserver)
         session.release()
         player.release()
     }
