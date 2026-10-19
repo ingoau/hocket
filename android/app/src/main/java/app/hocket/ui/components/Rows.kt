@@ -309,8 +309,9 @@ fun AlbumCard(
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier)
                         // Destination stays a sharedElement so the Recent covers are the flying
-                        // copies — they leave the fan on push and fly back into that card on pop.
-                        .sharedArtworkDestination(destinationShareKey, zIndex = 4f),
+                        // copies — they leave the fan on push and fly back into it on pop, stacked
+                        // and tilted as the fan holds them.
+                        .sharedArtworkDestination(destinationShareKey),
                 ) {
                     Artwork(
                         album.coverArt, ArtworkSizes.GRID, null,

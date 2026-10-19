@@ -68,6 +68,7 @@ import app.hocket.core.client.SelectionKind
 import app.hocket.core.client.TrackListKey
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
 import app.hocket.ui.components.AlbumCard
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.GenreRow
@@ -205,7 +206,9 @@ internal fun AlbumsTab(serverId: String, control: SortControl, open: (DetailTarg
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Albums
-    val groups = rememberGroups(PinKind.Album, { history, pinned -> recentAlbumIds(history, RECENT_CARDS, pinned) }) { id -> (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data }
+    // Opened from the Albums tile, the fan's covers are the first Recent cards: start from them so
+    // they are there to fly into on the first frame.
+    val groups = rememberGroups(PinKind.Album, { history, pinned -> recentAlbumIds(history, RECENT_CARDS, pinned) }, cachedRecentAlbums(ALBUMS_TILE_COVERS)) { id -> (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data }
     LaunchedEffect(key, state.generation) { client.albumPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Albums) client.setSelectionTotal(state.total) }
     if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
@@ -267,7 +270,7 @@ internal fun ArtistsTab(serverId: String, control: SortControl, open: (DetailTar
 internal fun PlaylistsTab(serverId: String, control: SortControl, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
     val libraryGen = rememberSettledGeneration()
-    var playlists by remember { mutableStateOf<List<Playlist>?>(null) }
+    var playlists by rememberCachedState<List<Playlist>?>(listOf("library.playlists", serverId)) { null }
     LaunchedEffect(serverId, libraryGen) {
         if (libraryGen < 0) return@LaunchedEffect
         playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data ?: playlists ?: emptyList()

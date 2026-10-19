@@ -70,6 +70,7 @@ import app.hocket.core.api.Track
 import app.hocket.core.client.SelectionKind
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
 import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
@@ -88,7 +89,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import app.hocket.ui.components.formatDurationWords
 import app.hocket.ui.nav.ArtworkShare
-import app.hocket.ui.nav.LocalSharedArtwork
+import app.hocket.ui.nav.flyingCoverArt
 import app.hocket.ui.nav.Route
 import app.hocket.ui.nav.sharedArtworkDestination
 import app.hocket.ui.screens.home.AlbumStrip
@@ -249,9 +250,11 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     PrimeAlbumOnDwell(id)
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.album(id)
-    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
-    var album by remember { mutableStateOf<Album?>(null) }
-    var tracks by remember { mutableStateOf<List<Track>?>(null) }
+    val flyingCover = flyingCoverArt(shareKey)
+    // Start from the last answer for this album: a pop back here (or a second visit) has the header
+    // and its artwork on the first frame, ready for a flight back into it.
+    var album by rememberCachedState<Album?>(listOf("detail.album", id)) { null }
+    var tracks by rememberCachedState<List<Track>?>(listOf("detail.albumTracks", id)) { null }
     LaunchedEffect(id, libraryGen) {
         val a = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
         val t = (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data
@@ -312,12 +315,12 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.artist(id)
-    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
-    var artist by remember(id) { mutableStateOf<Artist?>(null) }
-    var albums by remember(id) { mutableStateOf<List<Album>>(emptyList()) }
+    val flyingCover = flyingCoverArt(shareKey)
+    var artist by rememberCachedState<Artist?>(listOf("detail.artist", id)) { null }
+    var albums by rememberCachedState(listOf("detail.artistAlbums", id)) { emptyList<Album>() }
     // null until the first answer: the section keeps its rows' space (skeletons) meanwhile, so the
     // albums below never jump when the songs arrive.
-    var top by remember(id) { mutableStateOf<List<Track>?>(null) }
+    var top by rememberCachedState<List<Track>?>(listOf("detail.artistTop", id)) { null }
     // The artist and its albums come from the local mirror: show them as soon as they are read.
     // They used to wait for the top songs too, which on a first visit means a server round trip.
     LaunchedEffect(id, libraryGen, server?.id) {
@@ -386,9 +389,9 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val client = LocalCoreClient.current
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.playlist(id)
-    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
-    var playlist by remember { mutableStateOf<Playlist?>(null) }
-    var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
+    val flyingCover = flyingCoverArt(shareKey)
+    var playlist by rememberCachedState<Playlist?>(listOf("detail.playlist", id)) { null }
+    var entries by rememberCachedState<List<PlaylistEntry>?>(listOf("detail.playlistEntries", id)) { null }
     var dragKey by remember { mutableStateOf<String?>(null) }
     var dragFrom by remember { mutableIntStateOf(-1) }
     var commits by remember { mutableIntStateOf(0) }
@@ -525,8 +528,8 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
-    var albums by remember { mutableStateOf<List<Album>?>(null) }
-    var tracks by remember { mutableStateOf<List<Track>?>(null) }
+    var albums by rememberCachedState<List<Album>?>(listOf("detail.genreAlbums", serverId, name)) { null }
+    var tracks by rememberCachedState<List<Track>?>(listOf("detail.genreTracks", serverId, name)) { null }
     LaunchedEffect(name, libraryGen) {
         val al = (client.query(Queries.albums(serverId, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items
         val t = (client.query(Queries.tracks(serverId, Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items
