@@ -34,14 +34,39 @@ class PageCache<K, T>(
         val known: Boolean get() = total >= 0
     }
 
+    companion object {
+        /** Idle (empty) keys kept after invalidation; extra ones are dropped so sort/filter churn cannot grow forever. */
+        const val MAX_IDLE_KEYS = 48
+    }
+
     private val mutex = Mutex()
     private val inFlight = HashMap<Pair<K, Int>, Deferred<Unit>>()
     private val states = HashMap<K, MutableStateFlow<PagedList<T>>>()
 
+    /** How many query keys currently have a flow (including empty ones). */
+    fun keyCount(): Int = synchronized(states) { states.size }
+
     fun state(key: K): StateFlow<PagedList<T>> = flowFor(key).asStateFlow()
 
-    private fun flowFor(key: K): MutableStateFlow<PagedList<T>> =
-        synchronized(states) { states.getOrPut(key) { MutableStateFlow(PagedList()) } }
+    private fun flowFor(key: K): MutableStateFlow<PagedList<T>> {
+        synchronized(states) {
+            states[key]?.let { return it }
+            pruneIdleLocked(MAX_IDLE_KEYS - 1)
+            return MutableStateFlow(PagedList<T>()).also { states[key] = it }
+        }
+    }
+
+    /** Drop empty keys so sort/filter churn cannot grow the map forever. Filled keys are kept. */
+    private fun pruneIdleLocked(keep: Int) {
+        if (states.size <= keep) return
+        // Only drop keys emptied by [invalidate] (generation > 0). Brand-new
+        // empty keys are still filling and must not be evicted mid-fetch.
+        val idle = states.entries.filter { it.value.value.pages.isEmpty() && it.value.value.generation > 0 }.map { it.key }
+        for (k in idle) {
+            if (states.size <= keep) break
+            states.remove(k)
+        }
+    }
 
     /** Ensures the page containing [index] is loaded (or loading). Cheap to call from composition. */
     fun ensure(key: K, index: Int) {
@@ -79,6 +104,7 @@ class PageCache<K, T>(
             for ((k, flow) in states) {
                 if (predicate == null || predicate(k)) flow.update { PagedList(generation = it.generation + 1) }
             }
+            pruneIdleLocked(MAX_IDLE_KEYS)
         }
     }
 }

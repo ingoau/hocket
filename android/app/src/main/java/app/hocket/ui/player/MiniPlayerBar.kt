@@ -87,7 +87,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
-    val transport by client.transport.collectAsStateWithLifecycle()
+    val buffering by client.buffering.collectAsStateWithLifecycle()
     val playerNotice by client.playerNotice.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val track = entry?.track
@@ -197,9 +197,9 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                 IconButton(
                     onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); client.dispatch(Command.TogglePlay) },
                     colors = colors,
-                    modifier = Modifier.testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (transport.buffering) stateDescription = bufferingLabel },
+                    modifier = Modifier.testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (buffering) stateDescription = bufferingLabel },
                 ) {
-                    if (transport.buffering) LoadingIndicator(Modifier.size(28.dp), color = androidx.compose.material3.LocalContentColor.current)
+                    if (buffering) LoadingIndicator(Modifier.size(28.dp), color = androidx.compose.material3.LocalContentColor.current)
                     else Icon(if (playing) HocketIcons.Filled.Pause else HocketIcons.Filled.PlayArrow, null)
                 }
                 IconButton(onClick = { client.dispatch(Command.Next) }, colors = colors) { Icon(HocketIcons.Filled.SkipNext, stringResource(R.string.action_next)) }

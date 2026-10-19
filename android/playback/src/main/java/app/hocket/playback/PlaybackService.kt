@@ -13,6 +13,8 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
+import app.hocket.core.api.TransportState
+import app.hocket.core.client.isPositionTick
 import app.hocket.playback.pebble.PebbleBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -112,7 +114,18 @@ class PlaybackService : MediaLibraryService() {
         battery = BatterySaverMonitor(this, ::dispatch)
         pebble = PebbleBridge(this, { core }, { serverId }, scope)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
-        scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
+        // Position ticks stay off the main looper: Connect/Pebble/Media3 extrapolate the stamp.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            var lastTransport: TransportState? = null
+            core.events.collect { event ->
+                if (event is Event.TransportChanged) {
+                    val prev = lastTransport
+                    lastTransport = event.data.transport
+                    if (prev != null && prev.isPositionTick(event.data.transport)) return@collect
+                }
+                main.post { onEvent(event) }
+            }
+        }
         network.start()
         battery.start()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

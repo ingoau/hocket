@@ -245,11 +245,11 @@ internal fun FullPlayer(
                 seek = { PlayerSeek(position) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
-                    val transport by client.transport.collectAsStateWithLifecycle()
+                    val buffering by client.buffering.collectAsStateWithLifecycle()
                     // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
                     TransportRow(
                         playing = playing,
-                        buffering = transport.buffering,
+                        buffering = buffering,
                         onPrevious = { client.dispatch(Command.Previous) },
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },

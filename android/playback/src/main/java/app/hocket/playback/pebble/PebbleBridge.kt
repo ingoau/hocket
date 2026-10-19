@@ -1,6 +1,7 @@
 package app.hocket.playback.pebble
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
@@ -23,6 +24,7 @@ import app.hocket.core.api.SearchResults
 import app.hocket.core.api.Snapshot
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.client.PositionClock
+import app.hocket.playback.sameUiSurface
 import app.hocket.playback.pebble.PebbleProtocol.Cmd
 import app.hocket.playback.pebble.PebbleProtocol.Flag
 import app.hocket.playback.pebble.PebbleProtocol.Key
@@ -61,6 +63,11 @@ class PebbleBridge(
         private const val TAG = "PebbleBridge"
         /** Session updates come in bursts (a skip changes metadata, then position); the watch hears once. */
         const val NOW_DEBOUNCE_MS = 150L
+        /**
+         * The watch interpolates position locally (docs/pebble.md). Position-only session
+         * ticks are skipped; this is how often we still resync the stamp while playing.
+         */
+        const val NOW_RESYNC_MS = 15_000L
         private const val SEARCH_LIMIT = 10
         private const val RECENT_LIMIT = 50
         private const val TEXT_MAX = 95
@@ -92,16 +99,21 @@ class PebbleBridge(
     /** [settings] holds the core's values (a snapshot arrived); until then the watch keeps its own. */
     private var settingsLoaded = false
     private var lastSearch: Pair<String, SearchResults>? = null
+    /** Last session whose Now message went out (surface fields only). */
+    private var lastPushed: MediaSessionState? = null
+    private var lastNowAt = 0L
+    /** Queue / resume label changed: push even if the session surface did not. */
+    private var nowDirty = false
 
     // -- core events (main thread) -----------------------------------------------------------------
 
     fun onEvent(event: Event) {
         when (event) {
             is Event.MediaSession -> onSession(event.data.state)
-            is Event.QueueChanged -> { queue = event.data.queue; pushNowSoon() }
+            is Event.QueueChanged -> { queue = event.data.queue; nowDirty = true; pushNowSoon() }
             is Event.DevicesChanged -> devices = event.data.devices
             is Event.TransportChanged -> volumeKnown = event.data.transport.volumeDevice != null
-            is Event.ResumeOfferChanged -> { resumeOffer = event.data.offer; pushNowSoon() }
+            is Event.ResumeOfferChanged -> { resumeOffer = event.data.offer; nowDirty = true; pushNowSoon() }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.SettingChanged -> {
                 val s = event.data.setting
@@ -134,7 +146,17 @@ class PebbleBridge(
         if (started && bool(SettingKeys.PEBBLE_AUTO_OPEN, false) && !open) {
             scope.launch { runCatching { sender.startAppOnTheWatch(PebbleProtocol.APP_UUID) }.onFailure { Log.w(TAG, "start app failed: ${it.message}") } }
         }
-        pushNowSoon()
+        if (shouldPushNow()) pushNowSoon()
+    }
+
+    /** True when the watch needs a Now message (not a position-only session tick). */
+    internal fun shouldPushNow(nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean {
+        if (!open) return false
+        if (nowDirty) return true
+        val s = session ?: return true
+        val last = lastPushed ?: return true
+        if (!last.sameUiSurface(s)) return true
+        return nowElapsed - lastNowAt >= NOW_RESYNC_MS
     }
 
     // -- the watch -----------------------------------------------------------------------------------
@@ -169,6 +191,9 @@ class PebbleBridge(
         // Before the core's settings have loaded these would be the defaults, wiping the watch's copy.
         if (settingsLoaded) send(settingsMessage())
         send(nowMessage())
+        lastPushed = session
+        lastNowAt = SystemClock.elapsedRealtime()
+        nowDirty = false
         if (build.isNotEmpty()) PebbleInstaller.recordWatchVersion(context, build)
         if (proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion) PebbleInstaller.notifyUpdate(context)
     }
@@ -178,7 +203,11 @@ class PebbleBridge(
         nowJob?.cancel()
         nowJob = scope.launch {
             delay(NOW_DEBOUNCE_MS)
+            if (!shouldPushNow()) return@launch
             send(nowMessage())
+            lastPushed = session
+            lastNowAt = SystemClock.elapsedRealtime()
+            nowDirty = false
         }
     }
 
@@ -405,8 +434,11 @@ class PebbleBridge(
                         Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
                     }
                     "artist" -> {
-                        val albums = (query(Queries.albums(server, Page(0u, 500u), artistId = id)) as? QueryResult.Albums)?.data?.items.orEmpty()
-                        whole(playShuffle() + albums.map { Row("album:${it.id}", it.name, it.year?.toString() ?: "", RowFlag.BROWSABLE) })
+                        val from = (offset - 2).coerceAtLeast(0)
+                        val page = (query(Queries.albums(server, Page(from.toUInt(), PAGE.toUInt()), artistId = id)) as? QueryResult.Albums)?.data
+                        val albums = page?.items.orEmpty().map { Row("album:${it.id}", it.name, it.year?.toString() ?: "", RowFlag.BROWSABLE) }
+                        val rows = (if (offset < 2) playShuffle().drop(offset) else emptyList()) + albums
+                        Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
                     }
                     "search" -> {
                         val r = search(server, id) ?: return Triple(0, emptyList(), title)

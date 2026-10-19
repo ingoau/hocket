@@ -3,6 +3,8 @@ package app.hocket.playback
 import android.app.Application
 import android.os.Looper
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
@@ -59,6 +61,50 @@ class CoreSessionQueueTest {
         player.apply(state("t2"))
         player.applyQueue(queue)
         settle()
+    }
+
+    @Test
+    fun positionOnlyApplyDoesNotRebuildTheTimeline() {
+        setUp()
+        var timelineChanges = 0
+        player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                timelineChanges++
+            }
+        })
+        settle()
+        val start = timelineChanges
+        val base = state("t2")
+        repeat(40) { i ->
+            player.apply(base.copy(position = PositionStamp((i * 750).toUInt(), i.toDouble(), 1.0, true)))
+            settle()
+        }
+        assertEquals("40 position ticks must not rebuild the Media3 timeline", start, timelineChanges)
+        player.apply(base.copy(metadata = base.metadata!!.copy(title = "Other")))
+        settle()
+        assertTrue("a metadata change still rebuilds", timelineChanges > start)
+    }
+
+    @Test
+    fun applyQueueWithTheSameKeysDoesNotRebuildTheTimeline() {
+        setUp()
+        var timelineChanges = 0
+        player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                timelineChanges++
+            }
+        })
+        settle()
+        val start = timelineChanges
+        player.applyQueue(queue)
+        settle()
+        val loved = queue.current!!.track.copy(loved = true)
+        player.applyQueue(queue.copy(current = queue.current!!.copy(track = loved)))
+        settle()
+        assertEquals("metadata-only queue views must not rebuild the playlist", start, timelineChanges)
+        player.applyQueue(queue.copy(upcoming = listOf(entry(9))))
+        settle()
+        assertTrue("a membership change still rebuilds", timelineChanges > start)
     }
 
     @Test

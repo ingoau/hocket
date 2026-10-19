@@ -51,6 +51,7 @@ import app.hocket.R
 import app.hocket.core.SettingKeys
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
+import app.hocket.ui.screens.library.rememberSettledGeneration
 
 /**
  * Customise Home: every section, in Home's order, with a switch, up and down, and how it's shown.
@@ -61,10 +62,13 @@ import app.hocket.ui.icons.HocketIcons
 fun CustomiseHomeSheet(onDismiss: () -> Unit) {
     val client = LocalCoreClient.current
     val settings by client.settings.collectAsStateWithLifecycle()
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val libraryGen = rememberSettledGeneration()
     val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
     // "More from Theo Lund" rather than the generic title, once the artist is known (as on Home).
-    val topArtist by produceState<String?>(null, libraryGen) { value = moreFromArtist(client)?.name }
+    val topArtist by produceState<String?>(null, libraryGen) {
+        if (libraryGen < 0) return@produceState
+        value = moreFromArtist(client)?.name
+    }
     // Sections this build doesn't know stay in the list (a newer device's), unlisted here.
     val known = prefs.filter { it.section != null }
     fun save(next: List<SectionPref>) = HomeSections.save(client, next)

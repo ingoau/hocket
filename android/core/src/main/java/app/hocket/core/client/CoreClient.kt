@@ -60,6 +60,8 @@ class CoreClient(
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
+    /** Latest stamp, including ~1 Hz ticks that do not republish [transport]. */
+    private var clockTransport = emptyTransport()
     private val _nowPlaying = MutableStateFlow<QueueEntry?>(null)
     val nowPlaying: StateFlow<QueueEntry?> = _nowPlaying.asStateFlow()
     private val _connection = MutableStateFlow(emptyConnection())
@@ -150,6 +152,8 @@ class CoreClient(
     /** The single configured server (multi-server has no UI yet). */
     val server: StateFlow<ServerInfo?> = _servers.mapState(scope) { it.firstOrNull() }
     val isPlaying: StateFlow<Boolean> = _transport.mapState(scope) { it.position.isPlaying }
+    /** Buffering only: the mini player should not recompose on every transport stamp. */
+    val buffering: StateFlow<Boolean> = _transport.mapState(scope) { it.buffering }
     val ownsTransport: StateFlow<Boolean> = _mediaSession.mapState(scope) { it.ownsTransport }
     /** Jobs that are still doing something. */
     val activeJobs: StateFlow<List<Job>> = _jobs.mapState(scope) { jobs -> jobs.filter { it.state == JobState.Queued || it.state == JobState.Running || it.state == JobState.Paused } }
@@ -160,7 +164,7 @@ class CoreClient(
     /** Extrapolated position right now, for frame-driven consumers (lyrics via `withFrameNanos`). */
     fun positionNow(): Long {
         val duration = _nowPlaying.value?.track?.durationMs?.toLong()
-        return PositionClock.extrapolate(_transport.value, now(), _connection.value.clockOffsetMs, duration)
+        return PositionClock.extrapolate(clockTransport, now(), _connection.value.clockOffsetMs, duration)
     }
 
     /** ~30 Hz position while subscribed; nothing runs when no screen collects it. Lyrics uses [positionNow] on its own frame loop. */
@@ -300,6 +304,7 @@ class CoreClient(
         _servers.value = s.servers
         _session.value = s.session
         _queue.value = s.queue
+        clockTransport = s.transport
         _transport.value = s.transport
         _nowPlaying.value = s.queue.current
         _connection.value = s.connection
@@ -328,10 +333,12 @@ class CoreClient(
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
                 val sid = event.data.server_id
-                trackPages.invalidate { it.serverId == sid }
-                albumPages.invalidate { it.serverId == sid }
-                artistPages.invalidate { it.serverId == sid }
-                playlistTrackPages.invalidate()
+                val tables = event.data.tables
+                val all = tables.isEmpty()
+                if (all || "tracks" in tables) trackPages.invalidate { it.serverId == sid }
+                if (all || "albums" in tables) albumPages.invalidate { it.serverId == sid }
+                if (all || "artists" in tables) artistPages.invalidate { it.serverId == sid }
+                if (all || "playlists" in tables) playlistTrackPages.invalidate()
                 _libraryGeneration.update { it + 1 }
                 _libraryChanged.tryEmit(event.data)
             }
@@ -339,7 +346,10 @@ class CoreClient(
                 val items = event.data.items
                 // The core re-emits these when the item is queued; patching now keeps the player
                 // and the queue in step with the rows that change below.
-                _queue.update { LibraryPatches.queue(it, items) }
+                _queue.update { prev ->
+                    val next = LibraryPatches.queue(prev, items)
+                    if (next === prev) prev else next
+                }
                 _nowPlaying.update { e -> e?.let { LibraryPatches.entry(it, items) } }
                 _libraryItemsChanged.tryEmit(event.data)
             }
@@ -357,7 +367,12 @@ class CoreClient(
                 _queue.value = event.data.queue
                 _nowPlaying.value = event.data.queue.current
             }
-            is Event.TransportChanged -> _transport.value = event.data.transport
+            is Event.TransportChanged -> {
+                val next = event.data.transport
+                val prev = clockTransport
+                clockTransport = next
+                if (!prev.isPositionTick(next)) _transport.value = next
+            }
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.UndoChanged -> _undo.value = event.data.state
@@ -372,7 +387,13 @@ class CoreClient(
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer
-            is Event.LyricsChanged -> _lyrics.update { it + (event.data.track_id to event.data.lyrics) }
+            is Event.LyricsChanged -> _lyrics.update { prev ->
+                val next = LinkedHashMap<TrackId, Lyrics?>(prev.size + 1)
+                for ((id, doc) in prev) if (id != event.data.track_id) next[id] = doc
+                next[event.data.track_id] = event.data.lyrics
+                while (next.size > LYRICS_CACHE_CAP) next.remove(next.keys.first())
+                next
+            }
             is Event.PinsChanged -> _pins.value = event.data.pins
             is Event.StorageChanged -> _storage.value = event.data.storage
             is Event.FiltersChanged -> _filters.value = event.data.filters
@@ -401,6 +422,8 @@ class CoreClient(
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())
         fun emptyMediaSession() = MediaSessionState(null, false, PositionStamp(0u, 0.0, 1.0, false), false, RepeatMode.Off, 1.0, false, emptyList(), true)
         fun defaultAudioSettings() = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, emptyList(), null), true, null, false)
+        /** Lyrics documents kept in memory (now playing + a short history). */
+        const val LYRICS_CACHE_CAP = 12
     }
 }
 

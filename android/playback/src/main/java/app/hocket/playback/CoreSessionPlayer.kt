@@ -125,16 +125,36 @@ class CoreSessionPlayer(
 
     /** Apply a new queue view from the core. Main thread. */
     fun applyQueue(view: QueueView) {
+        val prev = queue
+        val trackId = current.metadata?.trackId
         queue = view
+        // Rating/love and other metadata-only queue views must not rebuild the
+        // Media3 playlist; [apply] still refreshes the current item's metadata.
+        if (prev != null && sameTimelineKeys(prev, view, trackId)) return
         invalidateState()
+    }
+
+    private fun sameTimelineKeys(a: QueueView, b: QueueView, trackId: String?): Boolean {
+        val left = timeline(a, trackId)
+        val right = timeline(b, trackId)
+        if (left.currentIndex != right.currentIndex || left.entries.size != right.entries.size) return false
+        for (i in left.entries.indices) {
+            if (left.entries[i].item.key != right.entries[i].item.key) return false
+        }
+        return true
     }
 
     /** Apply a new state from the core and notify controllers. Main thread. */
     fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs, remote: Boolean = this.remote, remoteVolume: Boolean = this.remoteVolume) {
+        val prev = current
+        val remoteFlagsChanged = this.remote != remote || this.remoteVolume != (remote && remoteVolume)
         current = state
         this.clockOffsetMs = clockOffsetMs
         this.remote = remote
         this.remoteVolume = remote && remoteVolume
+        // Position ticks (~750 ms) only refresh the stamp; Media3 polls the
+        // live supplier below, so rebuilding the playlist over binder is wasted.
+        if (!remoteFlagsChanged && prev.sameUiSurface(state)) return
         invalidateState()
     }
 
@@ -209,9 +229,11 @@ class CoreSessionPlayer(
                 })
                 builder.setCurrentMediaItemIndex(timeline.currentIndex)
             }
-            val stamp = s.position
             val duration = meta.durationMs.toLong()
-            builder.setContentPositionMs { PositionClock.extrapolate(stamp, now(), clockOffsetMs, duration) }
+            builder.setContentPositionMs {
+                val live = current
+                PositionClock.extrapolate(live.position, now(), clockOffsetMs, live.metadata?.durationMs?.toLong() ?: duration)
+            }
             builder.setContentBufferedPositionMs { duration }
         }
         return builder.build()

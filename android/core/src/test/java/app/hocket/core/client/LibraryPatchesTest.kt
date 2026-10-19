@@ -37,6 +37,17 @@ class LibraryPatchesTest {
     }
 
     @Test
+    fun queuePatchReturnsTheSameInstanceWhenNothingQueuedChanged() {
+        val items = listOf(state(LibraryItemKind.Track, "other", 5u, true))
+        val current = QueueEntry(
+            QueueItem("k", "t1", QueueSource.Inserted, false),
+            summary("t1"),
+        )
+        val q = QueueView("Album", emptyList(), current, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        assertSame(q, LibraryPatches.queue(q, items))
+    }
+
+    @Test
     fun itemChangesPatchNowPlayingAndEveryLibraryChangeBumpsTheGeneration() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
