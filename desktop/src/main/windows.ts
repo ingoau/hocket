@@ -8,6 +8,9 @@ import type { WindowKind, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 import type { StoreFile } from "./store-file";
 
+/** How long after its renderer is gone a window is loaded again. */
+const RELOAD_AFTER_CRASH_MS = 250;
+
 export interface WindowsOptions {
   appRoot: string;
   isDev: boolean;
@@ -67,7 +70,11 @@ export class Windows {
         return;
       }
       console.error(`[main] the ${kind} window's renderer is gone (${details.reason}); reloading it`);
-      this.load(win, kind);
+      // Not from inside the event: the gone renderer is still being torn down, and a load
+      // started now can hang the window (and quitting) instead of starting a new one.
+      setTimeout(() => {
+        if (!this.quitting && !win.isDestroyed()) this.load(win, kind);
+      }, RELOAD_AFTER_CRASH_MS);
     });
   }
 
