@@ -543,7 +543,7 @@ class FullPlayerLayoutTest {
         assertEquals(null, compose.onNodeWithTag("player.connect").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription))
         val localFill = deviceFill()
         core.client.dispatch(Commands.handoffTo("laptop"))
-        // The client reads who owns the transport from snapshots.
+        // A snapshot as on reattach (MediaSession events carry who owns the transport too).
         core.client.requestSnapshot()
         compose.waitUntil(5_000) { !core.client.ownsTransport.value }
         compose.mainClock.advanceTimeBy(1_000)

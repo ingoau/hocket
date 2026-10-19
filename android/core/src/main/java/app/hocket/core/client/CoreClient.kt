@@ -8,6 +8,9 @@ import app.hocket.core.api.*
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -17,7 +20,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -46,9 +53,15 @@ enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
  */
 class CoreClient(
     val core: CoreHandle,
-    private val scope: CoroutineScope,
+    parentScope: CoroutineScope,
     private val now: () -> Double = { System.currentTimeMillis().toDouble() },
 ) {
+    /**
+     * Everything this client runs (the event collector, derived flows, the position ticker, page
+     * fetches), cancelled together by [close]: a client replaced after a service restart must not
+     * leave its coroutines, and through them itself and its caches, behind in the app's scope.
+     */
+    private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[kotlinx.coroutines.Job]))
     val kind: CoreKind get() = core.kind
 
     // -- snapshot pieces ---------------------------------------------------------------------------
@@ -60,8 +73,14 @@ class CoreClient(
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
-    /** Latest stamp, including ~1 Hz ticks that do not republish [transport]. */
-    private var clockTransport = emptyTransport()
+    /**
+     * Latest stamp, including ~1 Hz ticks that do not republish [transport]. Written off the main
+     * thread for those ticks (see [collector]); a flow so a paused [position] can wait on it.
+     */
+    private val _clock = MutableStateFlow(emptyTransport())
+    private var clockTransport: TransportState
+        get() = _clock.value
+        set(value) { _clock.value = value }
     private val _nowPlaying = MutableStateFlow<QueueEntry?>(null)
     val nowPlaying: StateFlow<QueueEntry?> = _nowPlaying.asStateFlow()
     private val _connection = MutableStateFlow(emptyConnection())
@@ -167,11 +186,35 @@ class CoreClient(
         return PositionClock.extrapolate(clockTransport, now(), _connection.value.clockOffsetMs, duration)
     }
 
-    /** ~30 Hz position while subscribed; nothing runs when no screen collects it. Lyrics uses [positionNow] on its own frame loop. */
+    /** What [positionNow] extrapolates from at one moment; hand it to [awaitPositionMayMove]. */
+    class PositionMark internal constructor(internal val stamp: TransportState, internal val entry: QueueEntry?) {
+        /** The position advances on its own (playing); otherwise it is frozen until a new stamp. */
+        val moving: Boolean get() = stamp.position.isPlaying
+    }
+
+    fun positionMark(): PositionMark = PositionMark(_clock.value, _nowPlaying.value)
+
+    /**
+     * Returns at once while [mark]'s position moves. While it cannot (paused, stopped, nothing
+     * loaded) suspends until a new stamp (a seek, play, a tick) or another track arrives after
+     * [mark], so frame and timer loops sleep instead of re-reading a frozen position.
+     */
+    suspend fun awaitPositionMayMove(mark: PositionMark) {
+        if (mark.moving) return
+        combine(_clock, _nowPlaying) { t, e -> t !== mark.stamp || e !== mark.entry }.first { it }
+    }
+
+    /**
+     * ~30 Hz position while subscribed and playing; nothing runs when no screen collects it, and a
+     * paused player is not polled ([awaitPositionMayMove]). Lyrics uses [positionNow] on its own
+     * frame loop.
+     */
     val position: StateFlow<Long> = flow {
         while (true) {
+            val mark = positionMark()
             emit(positionNow())
-            delay(32)
+            delay(POSITION_TICK_MS)
+            awaitPositionMayMove(mark)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
 
@@ -262,7 +305,35 @@ class CoreClient(
     }
 
     // -- plumbing ----------------------------------------------------------------------------------
-    private val collector: kotlinx.coroutines.Job = scope.launch { core.events.collect(::onEvent) }
+    /**
+     * Folds the core's events into the flows above. Position ticks (which only move [positionNow]'s
+     * stamp) and events this client ignores are settled on the core's event thread, before the hop
+     * to [scope]'s (main) thread: during playback that is ~1 Hz of main-looper wakeups saved, with
+     * the screen on or off, for as long as the service keeps the core.
+     */
+    private val collector: kotlinx.coroutines.Job = scope.launch {
+        var seen: TransportState? = null
+        core.events
+            .filter { event ->
+                when (event) {
+                    is Event.TransportChanged -> {
+                        val next = event.data.transport
+                        val prev = seen
+                        seen = next
+                        if (prev != null && prev.isPositionTick(next)) {
+                            clockTransport = next
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    is Event.Backend, is Event.Log, is Event.ShortcutsChanged -> false
+                    else -> true
+                }
+            }
+            .flowOn(Dispatchers.Unconfined)
+            .collect(::onEvent)
+    }
 
     fun dispatch(command: Command) = core.dispatch(command)
 
@@ -404,14 +475,18 @@ class CoreClient(
             is Event.ShortcutsChanged -> Unit // desktop only
             is Event.ActionsChanged -> _actionsChanged.tryEmit(event.data.surface)
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
-            is Event.Backend, is Event.MediaSession -> Unit // consumed by the playback service
+            // Who owns transport after a handoff, and voice search waiting for playback, follow this
+            // (not only snapshots). The core sends it on real changes, never on position reports.
+            is Event.MediaSession -> _mediaSession.value = event.data.state
+            is Event.Backend -> Unit // consumed by the playback service
             is Event.Error -> _errors.tryEmit(event.data)
             is Event.Log -> Unit
         }
     }
 
+    /** Stops following the core: the flows keep their last values and nothing here runs any more. */
     fun close() {
-        collector.cancel()
+        scope.cancel()
     }
 
     companion object {
@@ -424,6 +499,8 @@ class CoreClient(
         fun defaultAudioSettings() = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, emptyList(), null), true, null, false)
         /** Lyrics documents kept in memory (now playing + a short history). */
         const val LYRICS_CACHE_CAP = 12
+        /** [position]'s period while playing (~30 Hz). */
+        const val POSITION_TICK_MS = 32L
     }
 }
 

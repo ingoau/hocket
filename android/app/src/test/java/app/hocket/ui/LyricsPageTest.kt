@@ -48,7 +48,9 @@ class LyricsPageTest {
     val compose = createComposeRule()
 
     private var clock = 1_000_000.0
-    private val core = TestCore(startPlaying = false, now = { clock })
+    /** Every read of the clock (the fake's stamps and the client's extrapolation). */
+    private var clockReads = 0
+    private val core = TestCore(startPlaying = false, now = { clockReads++; clock })
     private val events = CopyOnWriteArrayList<Event>()
 
     private fun sweep(line: Int): List<Float> = compose.onNodeWithTag("lyrics.line.$line").fetchSemanticsNode().config[LyricsSemantics.Sweep]
@@ -230,6 +232,24 @@ class LyricsPageTest {
         compose.onNodeWithText("♪").assertIsDisplayed()
         assertFalse(lit(line))
         assertSweep(doc.lines[line].syllables.map { 1f }, sweep(line))
+    }
+
+    @Test
+    fun pausedLyricsRunNoFrameLoopUntilASeekWakesThem() {
+        val doc = play()
+        val line = doc.lines.indexOfFirst { it.syllables.isEmpty() && it.startMs != null && !it.background }
+        assertTrue(line >= 0)
+        core.client.dispatch(app.hocket.core.api.Command.Pause)
+        advanceUntil("the pause") { !core.client.isPlaying.value }
+        repeat(8) { compose.mainClock.advanceTimeByFrame() }
+        val before = clockReads
+        repeat(120) { compose.mainClock.advanceTimeByFrame() }
+        val reads = clockReads - before
+        println("MEASURE paused lyrics page, 120 frames: $reads position reads")
+        assertTrue("paused: the frozen position is not re-read every frame ($reads reads)", reads <= 2)
+        // A seek while paused still moves the lines.
+        core.client.dispatch(Commands.seekTo(doc.lines[line].startMs!!.toLong() + 300))
+        advanceUntil("the paused seek to show") { lit(line) }
     }
 
     @Test
