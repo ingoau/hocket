@@ -163,11 +163,11 @@ class CoreClient(
         return PositionClock.extrapolate(_transport.value, now(), _connection.value.clockOffsetMs, duration)
     }
 
-    /** ~60 Hz position while subscribed; nothing runs when no screen collects it. */
+    /** ~30 Hz position while subscribed; nothing runs when no screen collects it. Lyrics uses [positionNow] on its own frame loop. */
     val position: StateFlow<Long> = flow {
         while (true) {
             emit(positionNow())
-            delay(16)
+            delay(32)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
 

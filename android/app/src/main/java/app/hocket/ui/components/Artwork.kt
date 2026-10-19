@@ -90,7 +90,7 @@ fun Artwork(
 
 private class Resolved(val path: String?)
 
-private const val ARTWORK_CROSSFADE_MS = 300
+private const val ARTWORK_CROSSFADE_MS = 120
 
 /**
  * Process-wide memory of `Query.Artwork` answers ("id@size" to a file path), bounded LRU. Only
