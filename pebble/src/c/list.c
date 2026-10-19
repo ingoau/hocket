@@ -31,7 +31,7 @@ struct List {
   uint16_t total;
   uint16_t base;
   uint8_t count;
-  Row rows[CACHE];
+  Row *rows;  // CACHE of them, remote lists only (the local menus would carry 3 KB for nothing)
   // Local
   uint8_t n_local;
   uint8_t local[MAX_MENU_ITEMS];
@@ -140,6 +140,30 @@ static void prv_ensure(List *l, uint16_t index) {
 }
 
 // Rows: [flags][id\0][title\0][sub\0]…
+// Reads up to max rows from p into out (NULL: only counts them); returns how many there are.
+static int prv_parse_rows(const uint8_t *p, const uint8_t *end, Row *out, int max) {
+  int n = 0;
+  while (p < end && n < max) {
+    Row scratch;
+    Row *r = out ? &out[n] : &scratch;
+    r->flags = *p++;
+    char *fields[] = {r->id, r->title, r->sub};
+    const size_t sizes[] = {sizeof(r->id), sizeof(r->title), sizeof(r->sub)};
+    for (int f = 0; f < 3; f++) {
+      fields[f][0] = 0;
+      const uint8_t *z = p < end ? memchr(p, 0, end - p) : NULL;
+      if (!z) { p = end; continue; }
+      size_t len = z - p;
+      if (len >= sizes[f]) len = sizes[f] - 1;
+      if (out) memcpy(fields[f], p, len);
+      fields[f][len] = 0;
+      p = z + 1;
+    }
+    n++;
+  }
+  return n;
+}
+
 void list_handle_page(DictionaryIterator *iter) {
   Tuple *req = dict_find(iter, MESSAGE_KEY_ReqId);
   if (!req) return;
@@ -159,27 +183,10 @@ void list_handle_page(DictionaryIterator *iter) {
   l->total = t ? t->value->uint16 : 0;
   l->have_total = true;
   const uint16_t offset = o ? o->value->uint16 : 0;
-  Row page[PAGE];
-  int n = 0;
-  if (items) {
-    const uint8_t *p = items->value->data, *end = p + items->length;
-    while (p < end && n < PAGE) {
-      Row *r = &page[n];
-      r->flags = *p++;
-      char *fields[] = {r->id, r->title, r->sub};
-      const size_t sizes[] = {sizeof(r->id), sizeof(r->title), sizeof(r->sub)};
-      for (int f = 0; f < 3; f++) {
-        const uint8_t *z = memchr(p, 0, end - p);
-        if (!z) { p = end; break; }
-        size_t len = z - p;
-        if (len >= sizes[f]) len = sizes[f] - 1;
-        memcpy(fields[f], p, len);
-        fields[f][len] = 0;
-        p = z + 1;
-      }
-      n++;
-    }
-  }
+  // Straight into the cache, not through a page on the stack (12 rows are 1.6 KB of a 2 KB stack).
+  const uint8_t *p = items ? items->value->data : NULL, *end = items ? p + items->length : NULL;
+  const int n = items ? prv_parse_rows(p, end, NULL, PAGE) : 0;
+  int at;
   // Merge with what is cached when the page is adjacent, otherwise replace.
   if (l->count && offset == l->base + l->count) {
     int drop = l->count + n - CACHE;
@@ -188,20 +195,21 @@ void list_handle_page(DictionaryIterator *iter) {
       l->base += drop;
       l->count -= drop;
     }
-    memcpy(l->rows + l->count, page, n * sizeof(Row));
+    at = l->count;
     l->count += n;
   } else if (l->count && offset + n == l->base) {
     int keep = l->count;
     if (keep + n > CACHE) keep = CACHE - n;
     memmove(l->rows + n, l->rows, keep * sizeof(Row));
-    memcpy(l->rows, page, n * sizeof(Row));
+    at = 0;
     l->base = offset;
     l->count = keep + n;
   } else {
-    memcpy(l->rows, page, n * sizeof(Row));
+    at = 0;
     l->base = offset;
     l->count = n;
   }
+  if (n) prv_parse_rows(p, end, l->rows + at, n);
   const bool first = offset == 0 && menu_layer_get_selected_index(l->menu).row == 0;
   menu_layer_reload_data(l->menu);
   // Open the queue on the playing row.
@@ -466,6 +474,7 @@ static void prv_unload(Window *window) {
   if (l->touch_shield) layer_destroy(l->touch_shield);
   menu_layer_destroy(l->menu);
   window_destroy(window);
+  free(l->rows);
   free(l);
 }
 
@@ -493,8 +502,14 @@ static List *prv_push(ListKind kind, const char *title) {
 
 void list_push_remote(const char *path, const char *title) {
   idle_activity();
-  List *l = prv_push(ListRemote, title);
-  if (!l) return;
+  Row *rows = malloc(CACHE * sizeof(Row));
+  List *l = rows ? prv_push(ListRemote, title) : NULL;
+  if (!l) {
+    free(rows);
+    if (!rows) show_notice("Out of memory");
+    return;
+  }
+  l->rows = rows;
   strncpy(l->path, path, sizeof(l->path) - 1);
   window_stack_push(l->window, true);
 }

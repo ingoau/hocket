@@ -168,9 +168,34 @@ void send_art_request(uint16_t gen, int16_t w, int16_t h) {
   prv_enqueue(&m);
 }
 
-static void prv_send_hello(void) {
+// No HelloReply yet (the phone's service was still starting and turned the Hello down, or it got
+// lost): say it again, backing off, until one arrives. Otherwise the watch would show "Open Hocket"
+// until some other message happened to come. Answered normally within a second: no extra traffic.
+#define HELLO_RETRY_MS 5000
+#define HELLO_RETRY_MAX_MS 60000
+static AppTimer *s_hello_timer;
+static uint32_t s_hello_wait_ms;
+
+static void prv_hello_fired(void *context);
+
+static void prv_hello_enqueue(void) {
   OutMsg m = {.type = MsgHello};
   prv_enqueue(&m);
+  if (s_hello_timer) app_timer_cancel(s_hello_timer);
+  s_hello_timer = app_timer_register(s_hello_wait_ms, prv_hello_fired, NULL);
+}
+
+static void prv_hello_fired(void *context) {
+  s_hello_timer = NULL;
+  if (!connection_service_peek_pebble_app_connection()) return;  // reconnecting says hello again
+  s_hello_wait_ms *= 2;
+  if (s_hello_wait_ms > HELLO_RETRY_MAX_MS) s_hello_wait_ms = HELLO_RETRY_MAX_MS;
+  prv_hello_enqueue();
+}
+
+static void prv_send_hello(void) {
+  s_hello_wait_ms = HELLO_RETRY_MS;
+  prv_hello_enqueue();
 }
 
 // -- Settings --------------------------------------------------------------------------------------
@@ -313,12 +338,24 @@ uint32_t now_position_ms(void) {
   return (uint32_t)pos;
 }
 
+// Takes a string tuple ("" when absent) straight into dst, cut to fit; true when dst changed. No
+// copy on the stack: the inbox handler runs on the app's 2 KB stack (4 KB on emery / gabbro), and
+// a list page's handler needs most of it.
+static bool prv_take_str(DictionaryIterator *iter, uint32_t key, char *dst, size_t n) {
+  Tuple *t = dict_find(iter, key);
+  const char *src = t && t->type == TUPLE_CSTRING ? t->value->cstring : "";
+  if (!strncmp(dst, src, n - 1)) return false;
+  strncpy(dst, src, n - 1);
+  dst[n - 1] = 0;
+  return true;
+}
+
 static void prv_handle_now(DictionaryIterator *iter) {
-  char title[TEXT_LEN], artist[TEXT_LEN], album[TEXT_LEN], resume[TEXT_LEN];
-  prv_str(iter, MESSAGE_KEY_Title, title, sizeof(title));
-  prv_str(iter, MESSAGE_KEY_Artist, artist, sizeof(artist));
-  prv_str(iter, MESSAGE_KEY_Album, album, sizeof(album));
-  prv_str(iter, MESSAGE_KEY_ResumeLabel, resume, sizeof(resume));
+  // Bitwise or: every field is taken, whichever changed.
+  const bool track_changed = prv_take_str(iter, MESSAGE_KEY_Title, g_now.title, sizeof(g_now.title)) |
+                             prv_take_str(iter, MESSAGE_KEY_Artist, g_now.artist, sizeof(g_now.artist));
+  const bool text_changed = prv_take_str(iter, MESSAGE_KEY_Album, g_now.album, sizeof(g_now.album)) |
+                            prv_take_str(iter, MESSAGE_KEY_ResumeLabel, g_now.resume_label, sizeof(g_now.resume_label));
   const uint32_t duration = prv_u32(iter, MESSAGE_KEY_Duration, 0);
   const uint32_t position = prv_u32(iter, MESSAGE_KEY_Position, 0);
   const uint32_t flags = prv_u32(iter, MESSAGE_KEY_Flags, 0);
@@ -326,15 +363,9 @@ static void prv_handle_now(DictionaryIterator *iter) {
   const uint32_t rating = prv_u32(iter, MESSAGE_KEY_Rating, 0);
   const uint32_t volume = prv_u32(iter, MESSAGE_KEY_Volume, 255);
   const uint32_t art_gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
-  const bool track_changed = strcmp(title, g_now.title) || strcmp(artist, g_now.artist);
-  const bool surface_changed = track_changed ||
-      strcmp(album, g_now.album) || strcmp(resume, g_now.resume_label) ||
+  const bool surface_changed = track_changed || text_changed ||
       duration != g_now.duration_ms || flags != g_now.flags || repeat != g_now.repeat ||
       rating != g_now.rating || volume != g_now.volume || art_gen != g_now.art_gen;
-  strcpy(g_now.title, title);
-  strcpy(g_now.artist, artist);
-  strcpy(g_now.album, album);
-  strcpy(g_now.resume_label, resume);
   g_now.duration_ms = duration;
   prv_stamp_position(position);
   g_now.flags = flags;
@@ -344,10 +375,12 @@ static void prv_handle_now(DictionaryIterator *iter) {
   g_now.art_gen = art_gen;
   if (!surface_changed) {
     now_playing_progress_only();
+    lyrics_position_changed();
     return;
   }
   now_playing_update(track_changed);
   if (track_changed) lyrics_track_changed();
+  else lyrics_position_changed();
   list_refresh_local();
   prv_idle_update();
 }
@@ -358,6 +391,7 @@ static void prv_handle_now(DictionaryIterator *iter) {
 static GBitmap *s_art;
 static uint16_t s_art_gen;
 static uint32_t s_art_size;
+static uint32_t s_art_next;  // the offset the next chunk must start at
 static int16_t s_art_w;
 
 void art_abort_inflight(void) {
@@ -367,14 +401,21 @@ void art_abort_inflight(void) {
   }
   s_art_gen = 0;
   s_art_size = 0;
+  s_art_next = 0;
 }
 
 static void prv_handle_art(DictionaryIterator *iter) {
   const uint16_t gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
   if (gen != g_now.art_gen) return;
-  now_playing_art_progress();
   const uint32_t offset = prv_u32(iter, MESSAGE_KEY_ArtOffset, 0);
   Tuple *data = dict_find(iter, MESSAGE_KEY_ArtData);
+  if (offset && s_art && offset != s_art_next) {
+    // A chunk went missing: finishing would show a cover with a blank band. Drop it; the request's
+    // retry (now_playing.c) asks for the cover again once the chunks stop.
+    art_abort_inflight();
+    return;
+  }
+  now_playing_art_progress();
   if (offset == 0) {
     if (s_art) gbitmap_destroy(s_art);
     s_art = NULL;
@@ -395,6 +436,7 @@ static void prv_handle_art(DictionaryIterator *iter) {
     s_art_size = prv_u32(iter, MESSAGE_KEY_ArtSize, 0);
   }
   if (!s_art || s_art_gen != gen || !data) return;
+  s_art_next = offset + data->length;
   uint8_t *dst = gbitmap_get_data(s_art);
   const uint16_t bpr = gbitmap_get_bytes_per_row(s_art);
   const uint32_t stride = (s_art_w + 1) / 2;
@@ -441,6 +483,8 @@ static void prv_inbox(DictionaryIterator *iter, void *context) {
       break;
     }
     case MsgHelloReply:
+      if (s_hello_timer) app_timer_cancel(s_hello_timer);
+      s_hello_timer = NULL;
       g_version_mismatch = prv_u32(iter, MESSAGE_KEY_Proto, HOCKET_PROTO) != HOCKET_PROTO;
       now_playing_update(false);
       break;
@@ -670,8 +714,9 @@ static void prv_init(void) {
   app_message_register_inbox_received(prv_inbox);
   app_message_register_outbox_sent(prv_outbox_sent);
   app_message_register_outbox_failed(prv_outbox_failed);
-  // Big enough for a page of list rows or a chunk of art.
-  app_message_open(4096, 512);
+  // Big enough for a chunk of art; without art, for the largest message there, a page of list rows
+  // (12 rows of at most 137 bytes, its title and the other keys: under 1.8 KB), for 2 KB more heap.
+  app_message_open(ART_SUPPORTED ? 4096 : 2048, 512);
   connection_service_subscribe((ConnectionHandlers){.pebble_app_connection_handler = prv_connection});
 #if defined(PBL_TOUCH)
   if (touch_service_is_enabled()) touch_service_subscribe(prv_touch, NULL);

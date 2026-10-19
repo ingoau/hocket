@@ -192,10 +192,14 @@ static void prv_track_update(Layer *layer, GContext *ctx) {
   const GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite));
   graphics_fill_rect(ctx, b, s_cfg->track_radius, GCornersAll);
-  uint32_t pct = 0;
-  if (g_now.duration_ms) pct = (uint64_t)now_position_ms() * 100 / g_now.duration_ms;
-  if (pct > 100) pct = 100;
-  const int16_t w = b.size.w * pct / 100;
+  // 32-bit maths (a 64-bit division pulls in 750 bytes of libgcc, and app code lives in app RAM):
+  // milliseconds up to 1000 s, seconds beyond, neither overflowing at a width of a few hundred.
+  const uint32_t dur = g_now.duration_ms;
+  uint32_t pos = now_position_ms();
+  if (pos > dur) pos = dur;
+  int16_t w = 0;
+  if (dur > 1000000) w = (pos / 1000) * b.size.w / (dur / 1000);
+  else if (dur) w = pos * b.size.w / dur;
   if (w > 0) {
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorBlack));
     graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), s_cfg->track_radius, GCornersAll);

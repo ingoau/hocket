@@ -207,3 +207,5 @@ void list_start_search(void);
 void lyrics_push(void);
 void lyrics_handle_page(DictionaryIterator *iter);
 void lyrics_track_changed(void);
+// The playhead moved or play / pause changed (a Now message): re-aim the wait for the next line.
+void lyrics_position_changed(void);
