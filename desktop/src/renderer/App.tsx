@@ -28,6 +28,7 @@ import { useQueueDropReveal } from "./lib/queue-drag";
 import { useTheme } from "./lib/theme";
 import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const FullscreenPlayer = lazy(() => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer })));
 
@@ -46,6 +47,13 @@ export function App() {
   const narrow = useMediaQuery(NARROW);
   const loadedFs = useFullscreenChunk(ready, fullscreen);
   useLyricPlayerPreload();
+  // The fullscreen player makes the rest of the window inert: if it fails it closes (the
+  // window works again) and the next open starts afresh.
+  const [fsFailures, setFsFailures] = useState(0);
+  const onFullscreenError = () => {
+    setFsFailures((n) => n + 1);
+    useApp.getState().setFullscreen(false);
+  };
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
@@ -72,12 +80,12 @@ export function App() {
           <EditPinsPanel />
           <Router />
         </main>
-        <NowPlayingSidebar />
+        <ErrorBoundary name="side panel"><NowPlayingSidebar /></ErrorBoundary>
       </div>
       <PlayerBar inert={modal} />
       <NowPlayingAnnouncer />
       {/* Covers the whole window (sidebar, panels and player bar included). Kept mounted after first open so the close fade still runs. */}
-      {loadedFs ? <Suspense fallback={null}><FullscreenPlayer /></Suspense> : null}
+      {loadedFs ? <ErrorBoundary key={fsFailures} name="fullscreen player" fallback={null} onError={onFullscreenError}><Suspense fallback={null}><FullscreenPlayer /></Suspense></ErrorBoundary> : null}
       <ContextMenu />
       <PlaylistPicker />
       <CommandPalette />

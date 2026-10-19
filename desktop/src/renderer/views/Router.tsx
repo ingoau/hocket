@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useApp, type Route } from "../store/app";
 import { Home } from "./Home";
 import { Library } from "./Library";
@@ -28,7 +29,8 @@ const DETAIL = new Set<Route["view"]>(["album", "artist", "playlist", "genre"]);
 export function Router() {
   const route = useApp((s) => s.route);
   const key = DETAIL.has(route.view) ? `${route.view}:${route.id ?? ""}` : route.view;
-  return <RouteView key={key} route={route} />;
+  // A page that fails to render shows its error in place; another page starts afresh.
+  return <ErrorBoundary key={key} name={`the ${route.view} page`}><RouteView route={route} /></ErrorBoundary>;
 }
 
 function RouteView({ route }: { route: Route }) {

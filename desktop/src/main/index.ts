@@ -48,6 +48,9 @@ if (!app.requestSingleInstanceLock()) {
   void main();
 }
 
+// A stray rejected promise is logged, not fatal: the process holds the core and every window.
+process.on("unhandledRejection", (reason) => console.error("[main] unhandled promise rejection", reason));
+
 async function main(): Promise<void> {
   await app.whenReady();
   app.setName("Hocket");

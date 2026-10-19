@@ -41,11 +41,34 @@ export class Windows {
   }
 
   private load(win: BrowserWindow, kind: WindowKind): void {
-    if (this.opts.isDev) {
-      void win.loadURL(`${DEV_SERVER_URL}/index.html?window=${kind}`);
-    } else {
-      void win.loadURL(`${APP_SCHEME}://renderer/index.html?window=${kind}`);
-    }
+    const url = this.opts.isDev ? `${DEV_SERVER_URL}/index.html?window=${kind}` : `${APP_SCHEME}://renderer/index.html?window=${kind}`;
+    // A load cut short (the window closed or reloaded meanwhile) rejects; that is not an error
+    // for the main process to die of.
+    win.loadURL(url).catch((err: unknown) => console.warn(`[main] the ${kind} window did not finish loading`, err));
+  }
+
+  /** Renderer crashes, per window kind, in the last minute. */
+  private crashes = new Map<WindowKind, number[]>();
+
+  /**
+   * A renderer that crashes or is killed (out of memory, the OS) leaves its window blank: load
+   * it again, and the store reattaches with RequestSnapshot. At most three times a minute, so a
+   * page that crashes as it loads does not spin.
+   */
+  private recoverRenderer(win: BrowserWindow, kind: WindowKind): void {
+    win.webContents.on("render-process-gone", (_e, details) => {
+      if (details.reason === "clean-exit" || this.quitting || win.isDestroyed()) return;
+      const now = Date.now();
+      const recent = (this.crashes.get(kind) ?? []).filter((t) => now - t < 60_000);
+      recent.push(now);
+      this.crashes.set(kind, recent);
+      if (recent.length > 3) {
+        console.error(`[main] the ${kind} window's renderer is gone again (${details.reason}); not reloading it`);
+        return;
+      }
+      console.error(`[main] the ${kind} window's renderer is gone (${details.reason}); reloading it`);
+      this.load(win, kind);
+    });
   }
 
   ensureAnchor(): BrowserWindow {
@@ -133,6 +156,7 @@ export class Windows {
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     // will-navigate is denied for every WebContents in index.ts (web-contents-created).
+    this.recoverRenderer(win, "main");
     this.load(win, "main");
     return win;
   }
@@ -181,6 +205,7 @@ export class Windows {
       this.mini = undefined;
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    this.recoverRenderer(win, "mini");
     this.load(win, "mini");
     return win;
   }

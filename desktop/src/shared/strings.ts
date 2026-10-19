@@ -5,6 +5,8 @@ const STRINGS = {
   "app.name": "Hocket",
   "app.devBanner": "Development build: running against the fake core (no native addon loaded).",
   "app.loading": "Starting…",
+  "app.viewFailed": "Something went wrong showing this page.",
+  "app.viewRetry": "Try again",
 
   // Navigation
   "nav.home": "Home",
