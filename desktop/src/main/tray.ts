@@ -27,7 +27,12 @@ export class AppTray {
     this.rebuild();
   }
 
+  /**
+   * Called on every transport event (position reports come about once a second); the menu is
+   * rebuilt only when what it shows changes (on Linux each rebuild re-exports it over D-Bus).
+   */
   update(nowPlaying: string | undefined, playing: boolean): void {
+    if (nowPlaying === this.nowPlaying && playing === this.playing) return;
     this.nowPlaying = nowPlaying;
     this.playing = playing;
     this.rebuild();

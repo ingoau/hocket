@@ -4,6 +4,7 @@ import type {
   AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
+import { isPositionTick } from "@shared/transport";
 import type { PlayerNotice } from "../lib/notice";
 
 export interface CoreState {
@@ -276,25 +277,8 @@ function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
   return { ...q, history, current, playingNext, upcoming };
 }
 
-function sameTransportUi(a: TransportState, b: TransportState): boolean {
-  return a.lease.owner === b.lease.owner &&
-    a.lease.epoch === b.lease.epoch &&
-    a.buffering === b.buffering &&
-    a.volume === b.volume &&
-    a.muted === b.muted &&
-    a.volumeDevice === b.volumeDevice &&
-    a.position.isPlaying === b.position.isPlaying &&
-    a.position.rate === b.position.rate;
-}
-
 /** ~1 Hz position reports: keep the previous object so zustand subscribers do not re-render. */
-export function isPositionTick(prev: TransportState, next: TransportState): boolean {
-  if (!sameTransportUi(prev, next)) return false;
-  const dt = next.position.takenAt - prev.position.takenAt;
-  if (dt <= 0 || dt > 2500) return false;
-  const expected = prev.position.positionMs + dt * prev.position.rate;
-  return Math.abs(next.position.positionMs - expected) < 1500;
-}
+export { isPositionTick };
 
 export function patchSearch(r: SearchResults, items: LibraryItemState[]): SearchResults {
   return {
