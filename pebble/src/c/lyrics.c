@@ -5,8 +5,9 @@
 #include "hocket.h"
 
 #define MAX_LINES 160
-// The phone cuts a row's title to 47 bytes (PebbleProtocol.encodeRows), so a line never needs more.
-#define LINE_LEN 48
+// The phone cuts a lyric line to 191 bytes (PebbleProtocol.LYRIC_MAX), so a line never needs more.
+// Each line gets a buffer of its own length: a fixed slot that long for every line would not fit.
+#define LYRIC_MAX 191
 #define LYRICS_PREFETCH 12
 #define RETRY_MS 5000  // re-request a page the phone has not answered in 5 s
 // Wake just after the next line starts, so the time it is drawn at is already past its start.
@@ -14,7 +15,7 @@
 
 typedef struct {
   int32_t start_ms;  // -1 when unsynced
-  char text[LINE_LEN];
+  char *text;
 } Line;
 
 static Window *s_window;
@@ -32,6 +33,21 @@ static bool s_waiting;            // a page request is out
 static char s_title[TEXT_LEN];
 
 static void prv_request(uint16_t offset);
+
+static void prv_free_lines(void) {
+  for (int i = 0; i < s_count; i++) free(s_lines[i].text);
+  s_count = 0;
+}
+
+static char *prv_strndup(const char *text, size_t len) {
+  if (len > LYRIC_MAX) len = LYRIC_MAX;
+  char *copy = malloc(len + 1);
+  if (copy) {
+    memcpy(copy, text, len);
+    copy[len] = 0;
+  }
+  return copy;
+}
 
 // The request or its reply got lost (not connected, the phone busy): ask again.
 static void prv_retry(void *context) {
@@ -125,22 +141,32 @@ void lyrics_handle_page(DictionaryIterator *iter) {
     const uint8_t *p = items->value->data, *end = p + items->length;
     while (p < end && s_count < s_total) {
       p++;  // flags
-      char field[3][LINE_LEN];
+      // Where each of the row's three fields starts and how long it is, read in place.
+      const uint8_t *field[3];
+      size_t len[3];
       bool whole = true;
       for (int f = 0; f < 3; f++) {
-        const uint8_t *z = memchr(p, 0, end - p);
+        const uint8_t *z = p < end ? memchr(p, 0, end - p) : NULL;
         if (!z) { whole = false; break; }
-        size_t len = z - p;
-        if (len >= LINE_LEN) len = LINE_LEN - 1;
-        memcpy(field[f], p, len);
-        field[f][len] = 0;
+        field[f] = p;
+        len[f] = z - p;
         p = z + 1;
       }
-      // A row cut off mid-message: its fields were never written.
-      if (!whole || p > end) break;
+      // A row cut off mid-message: drop it.
+      if (!whole) break;
+      char start[12];
+      const size_t start_len = len[0] < sizeof(start) - 1 ? len[0] : sizeof(start) - 1;
+      memcpy(start, field[0], start_len);
+      start[start_len] = 0;
+      char *text = prv_strndup((const char *)field[1], len[1]);
+      if (!text) {
+        // Out of memory: keep the lines loaded so far and ask for no more.
+        s_total = s_count;
+        break;
+      }
       Line *l = &s_lines[s_count++];
-      l->start_ms = field[0][0] ? atoi(field[0]) : -1;
-      strcpy(l->text, field[1]);
+      l->start_ms = start[0] ? atoi(start) : -1;
+      l->text = text;
     }
   }
   s_loaded = true;
@@ -167,13 +193,13 @@ static void prv_demo(void) {
     "Second verse, first sample line",
     "Last line of the demo",
   };
-  s_count = s_total = ARRAY_LENGTH(LINES);
+  s_total = ARRAY_LENGTH(LINES);
   // Timed around the demo position, so the page opens mid-song.
   const int32_t start = (int32_t)now_position_ms() - 22000;
-  for (int i = 0; i < s_count; i++) {
-    s_lines[i].start_ms = start + i * 4000;
-    strncpy(s_lines[i].text, LINES[i], LINE_LEN - 1);
-    s_lines[i].text[LINE_LEN - 1] = 0;
+  for (s_count = 0; s_count < s_total; s_count++) {
+    s_lines[s_count].start_ms = start + s_count * 4000;
+    s_lines[s_count].text = prv_strndup(LINES[s_count], strlen(LINES[s_count]));
+    if (!s_lines[s_count].text) break;
   }
   s_loaded = true;
 }
@@ -181,7 +207,8 @@ static void prv_demo(void) {
 
 void lyrics_track_changed(void) {
   if (!s_window) return;
-  s_count = s_total = 0;
+  prv_free_lines();
+  s_total = 0;
   s_loaded = false;
   s_manual = false;
   s_focus = 0;
@@ -212,7 +239,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
     return;
   }
   const int16_t focus = s_focus < s_count ? s_focus : s_count - 1;
-  GSize fs = graphics_text_layout_get_content_size(s_lines[focus].text, focus_font, GRect(0, 0, w, 200),
+  GSize fs = graphics_text_layout_get_content_size(s_lines[focus].text, focus_font, GRect(0, 0, w, 1000),
                                                    GTextOverflowModeWordWrap, GTextAlignmentLeft);
   int16_t top = b.size.h / 2 - fs.h / 2 - 4;
   // The focused line: white when it is the one playing, the accent while browsing.
@@ -223,7 +250,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   int16_t y = top + fs.h + 6;
   for (int i = focus + 1; i < s_count && y < b.size.h; i++) {
-    GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 200),
+    GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 1000),
                                                     GTextOverflowModeWordWrap, GTextAlignmentLeft);
     graphics_draw_text(ctx, s_lines[i].text, other_font, GRect(inset, y, w, s.h + 4),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -231,7 +258,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
   }
   y = top;
   for (int i = focus - 1; i >= 0 && y > 0; i--) {
-    GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 200),
+    GSize s = graphics_text_layout_get_content_size(s_lines[i].text, other_font, GRect(0, 0, w, 1000),
                                                     GTextOverflowModeWordWrap, GTextAlignmentLeft);
     y -= s.h + 4;
     graphics_draw_text(ctx, s_lines[i].text, other_font, GRect(inset, y, w, s.h + 4),
@@ -319,9 +346,10 @@ static void prv_unload(Window *window) {
   s_retry_timer = NULL;
   layer_destroy(s_layer);
   s_layer = NULL;
+  prv_free_lines();
   free(s_lines);
   s_lines = NULL;
-  s_count = s_total = 0;
+  s_total = 0;
   s_loaded = false;
   s_waiting = false;
   window_destroy(s_window);
