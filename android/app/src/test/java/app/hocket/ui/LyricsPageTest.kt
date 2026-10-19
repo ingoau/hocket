@@ -3,7 +3,6 @@ package app.hocket.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.api.Event
@@ -226,10 +225,12 @@ class LyricsPageTest {
         at(end + 500)
         assertSweep(doc.lines[line].syllables.map { 1f }, sweep(line))
         assertTrue(lit(line))
-        assertFalse(runCatching { compose.onNodeWithText("♪").assertIsDisplayed() }.isSuccess)
-        // Deep in the gap: the marker shows, the line dims, the sweep stays held at 1 (never swept further).
+        assertFalse(exists("lyrics.interlude"))
+        // Deep in the gap: the breathing dots show (one labelled item), the line dims, the sweep
+        // stays held at 1 (never swept further).
         at(end + 2_500)
-        compose.onNodeWithText("♪").assertIsDisplayed()
+        compose.onNodeWithTag("lyrics.interlude").assertIsDisplayed()
+        assertEquals(listOf("Instrumental"), compose.onNodeWithTag("lyrics.interlude").fetchSemanticsNode().config[SemanticsProperties.ContentDescription])
         assertFalse(lit(line))
         assertSweep(doc.lines[line].syllables.map { 1f }, sweep(line))
     }
@@ -249,7 +250,8 @@ class LyricsPageTest {
         assertTrue("paused: the frozen position is not re-read every frame ($reads reads)", reads <= 2)
         // A seek while paused still moves the lines.
         core.client.dispatch(Commands.seekTo(doc.lines[line].startMs!!.toLong() + 300))
-        advanceUntil("the paused seek to show") { lit(line) }
+        // (The list brings the line into view as it lights.)
+        advanceUntil("the paused seek to show") { exists("lyrics.line.$line") && lit(line) }
     }
 
     @Test

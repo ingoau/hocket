@@ -41,15 +41,18 @@ import kotlinx.coroutines.withContext
  * only resamples it) so that, over any artwork, in light and dark theme alike:
  * - lit lines (white) reach 4.5:1,
  * - secondary text ([SECONDARY_ALPHA]: background-vocal lines, translations, the offset row) 4.5:1,
- * - inactive main lines ([INACTIVE_ALPHA], 28 sp bold, i.e. large text) 3:1.
+ * - inactive main lines ([INACTIVE_ALPHA], 28 sp bold, i.e. large text) 3:1, and so the not yet
+ *   sung part of the lit line ([UNSUNG_ALPHA]), a little brighter than the lines around it.
  */
 object LyricsContrast {
     const val INACTIVE_ALPHA = 0.6f
     const val SECONDARY_ALPHA = 0.8f
+    const val UNSUNG_ALPHA = 0.7f
     const val MIN_SCRIM = 0.35f
     val active = Color.White
     val inactive = Color.White.copy(alpha = INACTIVE_ALPHA)
     val secondary = Color.White.copy(alpha = SECONDARY_ALPHA)
+    val unsung = Color.White.copy(alpha = UNSUNG_ALPHA)
 
     /** The least black scrim alpha (at least [MIN_SCRIM]) that meets every target over [brightest]. */
     fun scrimAlpha(brightest: Color): Float {
