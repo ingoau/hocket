@@ -124,7 +124,7 @@ A page of line-synced lyrics for the playing track (line timing only, no word ti
 - Up / down move the focus to other lines and stop following. Select seeks playback to the focused line's start and resumes following.
 - Back while browsing returns to the current line (following again); back while following closes the page.
 
-The phone sends the lines as the list `lyrics` (row id = start in ms with the track's timing offset applied, empty when unsynced). The page wakes when the next line starts (and on play, pause or a seek), not on a poll, so paused or unsynced it does not wake at all.
+The phone sends the lines as the list `lyrics` (row id = start in ms with the track's timing offset applied, empty when unsynced); a line is kept up to 191 bytes (other lists' titles stop at 47), and a page of long lines carries fewer than 12 rows so it still fits the watch's 2 KB inbox. The watch gives each line a buffer of its own length. The page wakes when the next line starts (and on play, pause or a seek), not on a poll, so paused or unsynced it does not wake at all.
 
 
 ## Queue  

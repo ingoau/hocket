@@ -448,7 +448,9 @@ class PebbleBridge(
             Key.REQ_ID to u16(reqId),
             Key.OFFSET to u16(offset),
             Key.TOTAL to u16(total),
-            Key.ITEMS to PebbleDictionaryItem.Bytes(PebbleProtocol.encodeRows(rows.take(PAGE))),
+            Key.ITEMS to PebbleDictionaryItem.Bytes(
+                if (rawPath == "lyrics") PebbleProtocol.encodeLyricRows(rows) else PebbleProtocol.encodeRows(rows.take(PAGE)),
+            ),
         )
         if (title != null) message[Key.LIST_TITLE] = str(title)
         send(message)
