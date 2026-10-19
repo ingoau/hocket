@@ -7,6 +7,9 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
@@ -60,7 +63,11 @@ class ArtworkFlightRecordingTest {
         compose.waitUntil(5_000) { exists("home.item") }
         settle()
 
-        record(dir, "1-home-card-open") { compose.onAllNodesWithTag("home.item").onFirst().performSemanticsAction(SemanticsActions.OnClick) }
+        // An artist card in the seeded Home's "Your favourite artists" row.
+        val artist = hasTestTag("home.item") and hasText("Iron Signals") and hasText("4 albums")
+        compose.onNode(hasTestTag("home.screen")).performTouchInput { swipeUp(startY = bottom * 0.8f, endY = bottom * 0.6f) }
+        settle()
+        record(dir, "1-home-card-open") { compose.onNode(artist).performSemanticsAction(SemanticsActions.OnClick) }
         compose.waitUntil(5_000) { exists("detail.header") }
         record(dir, "2-home-card-back") { back() }
         compose.waitUntil(5_000) { exists("home.item") }
