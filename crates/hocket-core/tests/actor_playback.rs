@@ -905,3 +905,72 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
     t.run_for(2000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));
 }
+
+/// Position reports (~1 Hz) used to emit TransportChanged *and* MediaSession.
+/// The latter rebuilt OS notifications, Android binder playlists and the
+/// Pebble now-playing push. UIs extrapolate from the stamp on TransportChanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn position_ticks_emit_transport_not_media_session() {
+    let t = synced_core("pos-ms").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(200.0).await;
+    t.events.clear();
+    t.run_for(4_500.0).await;
+    let evs = t.events.all();
+    let transport = evs
+        .iter()
+        .filter(|e| matches!(e, Event::TransportChanged { .. }))
+        .count();
+    let session = evs
+        .iter()
+        .filter(|e| matches!(e, Event::MediaSession { .. }))
+        .count();
+    assert!(
+        transport >= 4,
+        "expected ~1 Hz transport stamps over 4.5s, got {transport}"
+    );
+    assert_eq!(
+        session, 0,
+        "MediaSession must not follow position reports (got {session} vs {transport} TransportChanged)"
+    );
+}
+
+/// Rating a track that is not in the session must not rebuild the queue view / OS session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rating_off_queue_does_not_emit_queue() {
+    let t = synced_core("rate-offq").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.events.clear();
+    t.run(Command::SetRating {
+        targets: vec![RatingTarget::Track { id: "t7".into() }],
+        rating: 5,
+    })
+    .await;
+    let evs = t.events.all();
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            Event::LibraryChanged { ids, .. } if ids.iter().any(|id| id == "t7")
+        )),
+        "the library still announces the rated row"
+    );
+    let queue = evs
+        .iter()
+        .filter(|e| matches!(e, Event::QueueChanged { .. }))
+        .count();
+    let session = evs
+        .iter()
+        .filter(|e| matches!(e, Event::MediaSession { .. }))
+        .count();
+    assert_eq!(queue, 0, "off-queue ratings must not emit QueueChanged");
+    assert_eq!(session, 0, "off-queue ratings must not rebuild MediaSession");
+}

@@ -1064,9 +1064,11 @@ impl Actor {
                     let actions = self.scrobbler.progress(&id, position_ms);
                     self.apply_scrobble_actions(actions);
                 }
+                // UIs and the OS media session extrapolate from the stamp;
+                // a MediaSession event here would rebuild notifications,
+                // binder playlists and the Pebble now-playing push ~1 Hz.
                 let transport = self.transport_state();
                 self.emit(Event::TransportChanged { transport });
-                self.emit_media_session();
             }
             BackendReport::Ended { key } => {
                 if !current(&key, self) {

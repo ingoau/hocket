@@ -42,6 +42,10 @@ impl Actor {
     }
 
     fn after_library_mutation(&mut self, tables: Vec<&str>, ids: Vec<String>) {
+        let playlist_shape = tables
+            .iter()
+            .any(|t| *t == "playlists" || *t == "playlist_tracks");
+        let refresh_queue = playlist_shape || ids.is_empty() || self.queue_contains_any(&ids);
         if let Some(sid) = self.server_id() {
             self.emit(Event::LibraryChanged {
                 server_id: sid,
@@ -50,7 +54,23 @@ impl Actor {
             });
         }
         self.schedule_flush();
-        self.emit_queue();
+        if refresh_queue {
+            self.emit_queue();
+        }
+    }
+
+    /// Whether any of [ids] is the current item, history, an insertion, or in the playing context.
+    fn queue_contains_any(&self, ids: &[String]) -> bool {
+        self.doc().is_some_and(|d| {
+            d.current
+                .iter()
+                .chain(d.insertions.iter())
+                .chain(d.history.iter())
+                .any(|i| ids.contains(&i.track_id))
+                || d.context
+                    .as_ref()
+                    .is_some_and(|c| c.tracks.iter().any(|t| ids.contains(t)))
+        })
     }
 
     // -- telling this device's screens and the other devices ---------------------------
@@ -230,6 +250,7 @@ impl Actor {
         if !playlists.is_empty() {
             tables.extend(["playlists", "playlist_tracks"]);
         }
+        let refresh_queue = !playlists.is_empty() || self.queue_contains_any(&ids);
         self.emit(Event::LibraryChanged {
             server_id: sid,
             tables: tables.into_iter().map(String::from).collect(),
@@ -238,8 +259,11 @@ impl Actor {
         if !playlists.is_empty() {
             self.reconcile_playlist_pins();
         }
-        // Now playing, the queue and the OS media session show the new values.
-        self.emit_queue();
+        // Now playing, the queue and the OS media session show the new values,
+        // but only when a queued row actually changed.
+        if refresh_queue {
+            self.emit_queue();
+        }
     }
 
     fn push_remote_undo(&mut self, kind: &str, label: String, items: Vec<RemoteItem>) {
