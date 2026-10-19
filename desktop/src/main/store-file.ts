@@ -31,7 +31,24 @@ export class StoreFile {
     this.flush();
   }
 
-  private flush(): void {
+  /**
+   * Like `set`, written within `delayMs`: window moves and resizes arrive dozens of times a
+   * second while dragging, and each write is a synchronous file write and rename on the main
+   * process's thread (the one relaying every IPC message). `flush()` writes it now.
+   */
+  setSoon<K extends keyof MainState>(key: K, value: MainState[K], delayMs = 500): void {
+    this.state[key] = value;
+    if (this.pending) return;
+    this.pending = setTimeout(() => this.flush(), delayMs);
+    this.pending.unref?.();
+  }
+
+  private pending: ReturnType<typeof setTimeout> | undefined;
+
+  /** Write the state now, including anything `setSoon` is holding. */
+  flush(): void {
+    if (this.pending) clearTimeout(this.pending);
+    this.pending = undefined;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       const tmp = join(dirname(this.path), `.${Date.now()}.tmp`);

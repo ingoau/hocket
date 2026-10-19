@@ -99,7 +99,7 @@ export class Windows {
     const persist = () => {
       if (win.isDestroyed()) return;
       const b = win.getNormalBounds();
-      this.opts.store.set("mainBounds", { ...b, maximized: win.isMaximized() });
+      this.opts.store.setSoon("mainBounds", { ...b, maximized: win.isMaximized() });
     };
     win.on("resize", persist);
     win.on("move", persist);
@@ -126,6 +126,7 @@ export class Windows {
         return;
       }
       persist();
+      this.opts.store.flush();
     });
     win.on("closed", () => {
       this.main = undefined;
@@ -173,7 +174,7 @@ export class Windows {
     win.on("move", () => {
       if (!win.isDestroyed()) {
         const [x, y] = win.getPosition();
-        this.opts.store.set("miniBounds", { x: x ?? 0, y: y ?? 0 });
+        this.opts.store.setSoon("miniBounds", { x: x ?? 0, y: y ?? 0 });
       }
     });
     win.on("closed", () => {
@@ -209,6 +210,8 @@ export class Windows {
 
   destroyAll(): void {
     this.quitting = true;
+    // A bounds write still held by setSoon (a move just before quitting).
+    this.opts.store.flush();
     for (const w of [this.main, this.mini, this.anchor]) if (w && !w.isDestroyed()) w.destroy();
     app.quit();
   }
