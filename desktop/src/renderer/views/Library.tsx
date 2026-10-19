@@ -67,7 +67,7 @@ export function Library() {
         </div>
         <TileList label={t("library.recentlyAdded")} className="grid" testId="library-recent">
           {(recent.data?.items ?? []).map((a) => (
-            <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playAlbum(a)} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="library-album" />
+            <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playAlbum(a)} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} dragTarget={{ type: "albums", data: { ids: [a.id] } }} testId="library-album" />
           ))}
         </TileList>
       </div>

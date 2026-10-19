@@ -126,7 +126,9 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const transport = useApp((s) => s.transport);
   const queue = useApp((s) => s.queue);
   const sleep = useApp((s) => s.sleepTimer);
-  const mode = useApp((s) => s.nowPlayingMode);
+  const storedMode = useApp((s) => s.nowPlayingMode);
+  const reveal = useApp((s) => s.queueDropReveal);
+  const mode = reveal ? "queue" : storedMode;
   const setMode = useApp((s) => s.setNowPlayingMode);
   const setFullscreen = useApp((s) => s.setFullscreen);
   const navigate = useApp((s) => s.navigate);

@@ -29,6 +29,7 @@ import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
 import { Icon } from "./components/Icon";
 import { isOfflineNotice, noticeText } from "./lib/notice";
+import { useQueueDropReveal } from "./lib/queue-drag";
 
 export function App() {
   const ready = useApp((s) => s.ready);
@@ -37,6 +38,7 @@ export function App() {
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
+  const queueDropReveal = useApp((s) => s.queueDropReveal);
   // A modal (dialog, palette, fullscreen player) makes the rest of the window inert:
   // no focus, no pointer, hidden from assistive tech.
   const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
@@ -44,6 +46,7 @@ export function App() {
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
+  useQueueDropReveal();
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
   if (!hasServer) return <Setup />;
@@ -59,7 +62,7 @@ export function App() {
         <OfflineBanner offline={network?.kind === "offline"} />
         <TopBar />
       </header>
-      <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": panels.rightOpen && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
+        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" id="main" tabIndex={-1} data-testid="content">
           {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}

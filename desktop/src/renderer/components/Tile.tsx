@@ -3,11 +3,13 @@
 // (lib/roving.ts), Enter opens, Shift+F10 opens the tile's menu. The hover
 // play button is a pointer shortcut and not a Tab stop (the menu has Play).
 import { useRef, type ReactNode } from "react";
+import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
 import { useRoving } from "../lib/roving";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import type { IntentHandlers } from "../lib/use-prime";
+import { libraryDragProps } from "../lib/queue-drag";
 
 export function TileList({ label, className = "", children, testId }: { label: string; className?: string; children: ReactNode; testId?: string }) {
   const ref = useRef<HTMLUListElement>(null);
@@ -19,7 +21,7 @@ export function TileList({ label, className = "", children, testId }: { label: s
   );
 }
 
-export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onPlay, playIntent, onContextMenu, testId }: {
+export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onPlay, playIntent, onContextMenu, dragTarget, testId }: {
   title: string;
   subtitle?: string;
   coverArt?: string;
@@ -32,6 +34,8 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
   /** Handlers that prime what the play button plays when the pointer rests on it. */
   playIntent?: IntentHandlers;
   onContextMenu?: (e: React.MouseEvent) => void;
+  /** Drag onto the queue (Play next, or a place in the timeline). */
+  dragTarget?: ActionTarget;
   testId?: string;
 }) {
   return (
@@ -44,6 +48,7 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
         // A keyboard "click" has detail 0: Enter/Space activate even when the pointer needs a double click.
         onClick={(e) => { if (onOpen) onOpen(); else if (e.detail === 0) onActivate?.(); }}
         onDoubleClick={onActivate ?? onOpen}
+        {...libraryDragProps(dragTarget)}
       >
         <Artwork id={coverArt} size={300} round={round} />
         <span className="t1" title={title}>{title}</span>

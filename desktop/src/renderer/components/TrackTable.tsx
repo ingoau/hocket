@@ -16,6 +16,7 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
+import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
 
 export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -304,8 +305,13 @@ export function TrackTable(props: TrackTableProps) {
                 onClick={(e) => click(e, vi.index)}
                 onDoubleClick={() => tr && onPlay(vi.index, tr)}
                 onContextMenu={(e) => onContext(e, vi.index)}
-                draggable={!!onReorder}
-                onDragStart={onReorder ? (e) => { dragFrom.current = vi.index; e.dataTransfer.effectAllowed = "move"; } : undefined}
+                draggable={!!tr}
+                onDragStart={tr ? (e) => {
+                  if (dragFromControl(e)) { e.preventDefault(); return; }
+                  if (onReorder) { dragFrom.current = vi.index; e.dataTransfer.effectAllowed = "copyMove"; }
+                  startLibraryDrag(e, targetFor(vi.index));
+                } : undefined}
+                onDragEnd={() => { dragFrom.current = undefined; endLibraryDrag(); }}
                 onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
                 onDrop={onReorder ? (e) => { e.preventDefault(); if (dragFrom.current !== undefined && dragFrom.current !== vi.index) onReorder(dragFrom.current, vi.index); dragFrom.current = undefined; } : undefined}
                 data-testid="track-row"

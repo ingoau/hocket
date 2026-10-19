@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
-import type { Album, Artist, Filter, SavedQueue, TrackSummary } from "@core/api";
+import type { ActionTarget, Album, Artist, Filter, SavedQueue, TrackSummary } from "@core/api";
 import { useApp, useJsonSetting, type MenuItem } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
@@ -13,6 +13,7 @@ import { BrandMark } from "../components/BrandMark";
 import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
+import { libraryDragProps } from "../lib/queue-drag";
 import { HOME_SECTIONS_KEY, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, type HomeSectionId, type SectionPref, type SectionStyle } from "../lib/home-sections";
 
 /** How many items a section loads. */
@@ -42,6 +43,7 @@ interface Item {
   open: () => void;
   play?: () => void;
   menu: (e: React.MouseEvent) => void;
+  dragTarget?: ActionTarget;
 }
 
 /**
@@ -141,7 +143,7 @@ function SectionItems({ items, style, label }: { items: Item[]; style: SectionSt
       <ul className="plain-list home-list" aria-label={label}>
         {items.slice(0, 8).map((it) => (
           <li key={it.key} className="home-list-row" onContextMenu={it.menu}>
-            <button type="button" className="home-list-main" onClick={it.open} onDoubleClick={it.play}>
+            <button type="button" className="home-list-main" onClick={it.open} onDoubleClick={it.play} {...libraryDragProps(it.dragTarget)}>
               {it.icon ? <span className="home-icon-art" aria-hidden="true"><Icon name={it.icon} size={20} /></span> : <Artwork id={it.coverArt} size={96} round={it.round} />}
               <span className="text"><span className="t1">{it.title}</span>{it.subtitle ? <span className="t2">{it.subtitle}</span> : null}</span>
             </button>
@@ -161,7 +163,7 @@ function SectionItems({ items, style, label }: { items: Item[]; style: SectionSt
         </button>
       </li>
     ) : (
-      <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} testId="home-item" />
+      <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} dragTarget={it.dragTarget} testId="home-item" />
     ),
   );
   return <TileList label={label} className={style === "grid" ? "grid" : "scroller"}>{tiles}</TileList>;
@@ -214,17 +216,20 @@ function useSectionData(id: HomeSectionId): SectionData {
     open: () => navigate({ view: "album", id: a.id }),
     play: () => playContext(serverId, { type: "album", data: { id: a.id } }, a.name),
     menu: (e) => void openContextMenu(e, { type: "albums", data: { ids: [a.id] } }),
+    dragTarget: { type: "albums", data: { ids: [a.id] } },
   });
   const artistItem = (a: Artist): Item => ({
     key: `ar:${a.id}`, title: a.name, subtitle: t("artist.albums", { n: a.albumCount }), coverArt: a.coverArt, round: true,
     open: () => navigate({ view: "artist", id: a.id }),
     play: () => playContext(serverId, { type: "artist", data: { id: a.id } }, a.name),
     menu: (e) => void openContextMenu(e, { type: "artists", data: { ids: [a.id] } }),
+    dragTarget: { type: "artists", data: { ids: [a.id] } },
   });
   const trackItems = (tracks: TrackSummary[], label: string): Item[] => tracks.map((tr, i) => ({
     key: `t:${i}:${tr.id}`, title: tr.title, subtitle: tr.artist ?? t("misc.unknownArtist"), coverArt: tr.coverArt,
     open: () => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: tracks.map((x) => x.id), start_index: i, label, shuffle: false } }),
     menu: (e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } }),
+    dragTarget: { type: "tracks", data: { ids: [tr.id] } },
   }));
   const filterItem = (f: Filter): Item => ({
     key: `f:${f.id}`, title: filterName(f), subtitle: t("library.kind.filter"), icon: "filter",

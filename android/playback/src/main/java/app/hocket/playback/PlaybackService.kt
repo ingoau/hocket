@@ -32,7 +32,8 @@ import kotlinx.coroutines.launch
  *   [MediaSessionBridge] (the session's state and its queue timeline).
  * - Publishes the library to other apps (Android Auto, Wear, Assistant, `MediaBrowser`s) through
  *   [LibraryBrowser] on the first server, telling subscribed browsers when it changes, only while
- *   "Allow control by other apps" (`media.externalControl`, [ExternalControl]) is on.
+ *   "Allow control by other apps" (`media.externalControl`, [ExternalControl]) is on or the app has
+ *   notification access.
  * - Registers the [NetworkMonitor] and [BatterySaverMonitor].
  * - Feeds [ConnectRoutes] (devices, lease owner, session state) so that while another device plays
  *   the session reports remote playback and [ConnectRouteProvider] names that device as the output;

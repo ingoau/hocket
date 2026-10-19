@@ -55,7 +55,7 @@ export function ArtistDetail({ id }: { id: string }) {
         <h2 className="section-heading"><span className="section-icon" aria-hidden="true"><Icon name="album" size={18} /></span>{t("artist.albums")}</h2>
         <TileList label={t("artist.albums")} className="grid">
           {(albums.data?.items ?? []).map((al) => (
-            <Tile key={al.id} title={al.name} subtitle={`${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} testId="artist-album" />
+            <Tile key={al.id} title={al.name} subtitle={`${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
           ))}
         </TileList>
       </div>

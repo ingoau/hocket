@@ -58,14 +58,15 @@ export function NowPlayingSidebar() {
   const narrow = useMediaQuery(NARROW);
   const drawerOpen = useApp((s) => s.drawerOpen);
   const setDrawerOpen = useApp((s) => s.setDrawerOpen);
+  const reveal = useApp((s) => s.queueDropReveal);
   // The drawer withdraws before it unmounts; the docked panel is part of the
   // layout (the content pane widens the moment it closes), so it just goes.
-  const open = narrow ? drawerOpen : panels.rightOpen;
+  const open = (narrow ? drawerOpen : panels.rightOpen) || reveal;
   const presence = usePresence(open || undefined, ref, { instant: !narrow });
   if (!presence.value) return null;
-  const view = panels.rightView;
+  const view = reveal ? "queue" : panels.rightView;
   return (
-    <aside {...presence.exitProps} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""} ${presence.closing ? "closing" : ""}`} aria-label={t("a11y.sidePanel")} data-view={view} data-testid="right-panel"
+    <aside {...presence.exitProps} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""} ${presence.closing ? "closing" : ""}`} aria-label={t("a11y.sidePanel")} data-view={view} data-drop-reveal={reveal || undefined} data-testid="right-panel"
       onKeyDown={narrow ? (e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setDrawerOpen(false); document.querySelector<HTMLElement>('[data-testid="toggle-side-panel"]')?.focus(); } } : undefined}>
       <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={MIN_W} aria-valuemax={MAX_W} tabIndex={0}
         onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ rightWidth: Math.max(MIN_W, Math.min(MAX_W, panels.rightWidth + d)) }); }} data-testid="side-panel-resize" />
