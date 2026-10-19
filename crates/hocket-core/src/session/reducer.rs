@@ -61,9 +61,6 @@ use super::Entropy;
 
 /// Default history cap.
 pub const DEFAULT_HISTORY_CAP: usize = 200;
-/// How much history the UI queue view keeps. Previous still walks the full
-/// document; this only bounds what is serialised on every `QueueChanged`.
-pub const QUEUE_VIEW_HISTORY: usize = 50;
 /// How much of the upcoming context the UI queue view materialises. The
 /// remainder is counted in `total_upcoming` (both platforms already render
 /// a "N more" footer when the view is shorter than the total).
@@ -361,19 +358,10 @@ impl DerivedQueue {
 
     /// Bound the rows a `QueueView` carries so Next on a long playlist is
     /// O(window) JSON rather than O(library). `total_upcoming` is left exact.
+    /// History is left whole: it is already capped (`queue.historyCap`), and
+    /// both apps clear it by sending back every key the view carries.
     pub fn window_for_view(&mut self) {
-        self.window_for_view_caps(QUEUE_VIEW_HISTORY, QUEUE_VIEW_UPCOMING);
-    }
-
-    /// Same as [`Self::window_for_view`] with explicit caps (benches, tests).
-    pub fn window_for_view_caps(&mut self, history: usize, upcoming: usize) {
-        if self.history.len() > history {
-            let drain = self.history.len() - history;
-            self.history.drain(..drain);
-        }
-        if self.upcoming.len() > upcoming {
-            self.upcoming.truncate(upcoming);
-        }
+        self.upcoming.truncate(QUEUE_VIEW_UPCOMING);
     }
 
     /// Every item that is not history, in play order: current, playing next, upcoming.
@@ -3256,6 +3244,29 @@ mod tests {
         assert_eq!(derived.upcoming.len(), QUEUE_VIEW_UPCOMING);
         assert_eq!(derived.total_upcoming, 299);
         assert_eq!(derived.history.len(), 0);
+    }
+
+    #[test]
+    fn queue_view_window_keeps_all_history() {
+        let e = DeterministicEntropy::new(17);
+        let mut d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 300),
+            Some(0),
+            false,
+        );
+        for _ in 0..120 {
+            d = step(&d, &e, QueueOp::Next).0;
+        }
+        let mut derived = derive(&d);
+        assert_eq!(derived.history.len(), 120);
+        derived.window_for_view();
+        assert_eq!(
+            derived.history.len(),
+            120,
+            "Clear history sends back every key the view carries"
+        );
     }
 
     #[test]

@@ -155,7 +155,7 @@ impl Normaliser {
         let mut gain = db_to_linear(self.gain_db) as f32;
         for frame in samples.chunks_exact_mut(self.channels) {
             for (ch, s) in frame.iter_mut().enumerate() {
-                let y = f64::from(self.filter.tick(ch, *s));
+                let y = self.filter.tick(ch, f64::from(*s));
                 self.current[ch] += y * y;
                 *s *= gain;
             }

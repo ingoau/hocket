@@ -185,7 +185,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
     paint();
     if (!stamp.isPlaying && !dragging) return;
     return ticker.subscribe(paint);
-  }, [stamp, durationMs, offset, dur, dragging, width, x0, xEnd, gap, stroke, thumbW]);
+  }, [stamp, durationMs, offset, dur, dragging, focused, width, x0, xEnd, gap, stroke, thumbW]);
 
   useEffect(() => {
     if (reducedMotion || stopped) return;
