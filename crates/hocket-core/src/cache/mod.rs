@@ -14,6 +14,11 @@
 //!   entries, count budget for the rest.
 //! - Metadata: [`Caches::meta_get`] / [`meta_put`](Caches::meta_put) —
 //!   small JSON blobs (artist info, similar songs...) with a per-entry TTL.
+//! - Artist top songs: [`Caches::top_songs_get`] / [`top_songs_put`](Caches::top_songs_put)
+//!   — the last `getTopSongs` answer per artist, kept in the metadata table
+//!   and served stale-while-revalidate: the artist page shows it at once and
+//!   the actor refreshes it in the background once it is older than
+//!   [`TOP_SONGS_REFRESH_MS`].
 //! - [`Caches::storage_contribution`] → `images_bytes` for `api::StorageSummary`.
 
 use std::path::{Path, PathBuf};
@@ -22,7 +27,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rusqlite::{params, OptionalExtension};
 
-use crate::api::{Lyrics, LyricsSource};
+use crate::api::{Lyrics, LyricsSource, Track};
 use crate::db::{Db, DbError, DbResult};
 use crate::subsonic::{SubsonicApi, SubsonicError};
 use crate::util::Clock;
@@ -37,6 +42,40 @@ pub const LYRICS_NEGATIVE_TTL_MS: f64 = 7.0 * 24.0 * 3600.0 * 1000.0;
 pub const DEFAULT_LYRICS_MAX_ENTRIES: usize = 5000;
 /// Default metadata TTL.
 pub const DEFAULT_META_TTL_MS: f64 = 24.0 * 3600.0 * 1000.0;
+
+/// Cached top songs older than this are refreshed in the background (still served meanwhile).
+pub const TOP_SONGS_REFRESH_MS: f64 = 6.0 * 3600.0 * 1000.0;
+/// Cached top songs are dropped by housekeeping after this long unseen-refreshed.
+pub const TOP_SONGS_TTL_MS: f64 = 30.0 * 24.0 * 3600.0 * 1000.0;
+
+/// What [`Caches::top_songs_put`] stores: the songs and how many were asked
+/// for, so a later, smaller request can be answered from a larger list.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+struct TopSongsEntry {
+    requested: u32,
+    tracks: Vec<Track>,
+}
+
+/// A cached `getTopSongs` answer for one artist (see [`Caches::top_songs_get`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedTopSongs {
+    /// At most the requested count, in the server's order.
+    pub tracks: Vec<Track>,
+    /// How many songs the stored answer was fetched for (refresh with this).
+    pub requested: u32,
+    pub fetched_at: f64,
+}
+
+impl CachedTopSongs {
+    /// Old enough that the server should be asked again.
+    pub fn is_stale(&self, now: f64) -> bool {
+        now - self.fetched_at >= TOP_SONGS_REFRESH_MS
+    }
+}
+
+fn top_songs_key(artist_id: &str) -> String {
+    format!("artistTopSongs:{artist_id}")
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -460,6 +499,88 @@ impl Caches {
         })
     }
 
+    /// A metadata blob whatever its age, with when it was stored. For
+    /// stale-while-revalidate readers: never deletes (housekeeping does).
+    pub fn meta_get_stale<T: serde::de::DeserializeOwned>(
+        &self,
+        server_id: &str,
+        key: &str,
+    ) -> Result<Option<(T, f64)>, CacheError> {
+        let row: Option<(String, f64)> = self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT json, fetched_at FROM metadata_cache WHERE server_id = ?1 AND key = ?2",
+                params![server_id, key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })?;
+        match row {
+            Some((json, fetched_at)) => Ok(Some((serde_json::from_str(&json)?, fetched_at))),
+            None => Ok(None),
+        }
+    }
+
+    // -- artist top songs -------------------------------------------------------
+
+    /// The cached top songs for an artist, when they can answer a request for
+    /// `count`: the stored answer was fetched for at least `count` songs, or
+    /// the server had fewer than were asked for (so asking for more would not
+    /// add any). Served whatever its age; check [`CachedTopSongs::is_stale`].
+    pub fn top_songs_get(
+        &self,
+        server_id: &str,
+        artist_id: &str,
+        count: u32,
+    ) -> Result<Option<CachedTopSongs>, CacheError> {
+        let Some((entry, fetched_at)) =
+            self.meta_get_stale::<TopSongsEntry>(server_id, &top_songs_key(artist_id))?
+        else {
+            return Ok(None);
+        };
+        let exhaustive = (entry.tracks.len() as u64) < u64::from(entry.requested);
+        if entry.requested < count && !exhaustive {
+            return Ok(None);
+        }
+        let mut tracks = entry.tracks;
+        tracks.truncate(count as usize);
+        Ok(Some(CachedTopSongs {
+            tracks,
+            requested: entry.requested,
+            fetched_at,
+        }))
+    }
+
+    /// Store an artist's top songs as the server answered a request for
+    /// `requested` of them. Returns whether the list (its ids, in order)
+    /// differs from what was cached before, so callers know to tell the UI.
+    pub fn top_songs_put(
+        &self,
+        server_id: &str,
+        artist_id: &str,
+        requested: u32,
+        tracks: &[Track],
+    ) -> Result<bool, CacheError> {
+        let key = top_songs_key(artist_id);
+        let before = self
+            .meta_get_stale::<TopSongsEntry>(server_id, &key)
+            .ok()
+            .flatten()
+            .map(|(e, _)| e);
+        let entry = TopSongsEntry {
+            requested,
+            tracks: tracks.to_vec(),
+        };
+        self.meta_put(server_id, &key, &entry, Some(TOP_SONGS_TTL_MS))?;
+        let changed = match before {
+            None => true,
+            Some(b) => {
+                b.tracks.len() != tracks.len()
+                    || b.tracks.iter().zip(tracks).any(|(x, y)| x.id != y.id)
+            }
+        };
+        Ok(changed)
+    }
+
     /// `images_bytes` for `api::StorageSummary` (lyrics/metadata live in the
     /// database and are counted nowhere else).
     pub fn storage_contribution(&self) -> DbResult<f64> {
@@ -718,5 +839,89 @@ mod tests {
         caches.meta_put("srv", "k", &1, None).unwrap();
         *clock.0.lock() += DEFAULT_META_TTL_MS + 1.0;
         assert_eq!(caches.meta_prune().unwrap(), 1);
+    }
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: id.into(),
+            server_id: "srv".into(),
+            title: id.to_uppercase(),
+            ..Default::default()
+        }
+    }
+
+    fn ids(c: &CachedTopSongs) -> Vec<&str> {
+        c.tracks.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    #[test]
+    fn top_songs_round_trip_and_serve_smaller_requests() {
+        let (_dir, _db, caches, _clock, _server) = fixture();
+        assert!(caches.top_songs_get("srv", "ar1", 10).unwrap().is_none());
+        let list: Vec<Track> = (0..20).map(|i| track(&format!("s{i}"))).collect();
+        assert!(caches.top_songs_put("srv", "ar1", 20, &list).unwrap());
+        let got = caches.top_songs_get("srv", "ar1", 10).unwrap().unwrap();
+        assert_eq!(got.tracks.len(), 10);
+        assert_eq!(ids(&got)[..2], ["s0", "s1"]);
+        assert_eq!(got.requested, 20);
+        assert_eq!(got.fetched_at, 1_000.0);
+        // Asking for more than was fetched is a miss while the server may have more.
+        assert!(caches.top_songs_get("srv", "ar1", 50).unwrap().is_none());
+        // Other servers and artists are separate.
+        assert!(caches.top_songs_get("other", "ar1", 10).unwrap().is_none());
+        assert!(caches.top_songs_get("srv", "ar2", 10).unwrap().is_none());
+    }
+
+    #[test]
+    fn top_songs_short_answer_serves_any_count() {
+        let (_dir, _db, caches, _clock, _server) = fixture();
+        caches
+            .top_songs_put("srv", "ar1", 10, &[track("a"), track("b")])
+            .unwrap();
+        // The server had only two: asking for 500 would add nothing.
+        let got = caches.top_songs_get("srv", "ar1", 500).unwrap().unwrap();
+        assert_eq!(ids(&got), ["a", "b"]);
+        // An empty answer is cached too (artists with no plays stay instant).
+        caches.top_songs_put("srv", "ar2", 10, &[]).unwrap();
+        assert!(caches
+            .top_songs_get("srv", "ar2", 10)
+            .unwrap()
+            .unwrap()
+            .tracks
+            .is_empty());
+    }
+
+    #[test]
+    fn top_songs_are_served_stale_and_report_changes() {
+        let (_dir, _db, caches, clock, _server) = fixture();
+        let first = [track("a"), track("b")];
+        assert!(caches.top_songs_put("srv", "ar1", 10, &first).unwrap());
+        assert!(!caches
+            .top_songs_get("srv", "ar1", 10)
+            .unwrap()
+            .unwrap()
+            .is_stale(clock.now_ms()));
+        *clock.0.lock() += TOP_SONGS_REFRESH_MS;
+        // Past the refresh age (and past the default metadata TTL): still served.
+        *clock.0.lock() += DEFAULT_META_TTL_MS;
+        let got = caches.top_songs_get("srv", "ar1", 10).unwrap().unwrap();
+        assert!(got.is_stale(clock.now_ms()));
+        assert_eq!(ids(&got), ["a", "b"]);
+        assert_eq!(caches.meta_prune().unwrap(), 0, "kept until its own TTL");
+        // Same songs again: unchanged, but fresh now.
+        assert!(!caches.top_songs_put("srv", "ar1", 10, &first).unwrap());
+        let got = caches.top_songs_get("srv", "ar1", 10).unwrap().unwrap();
+        assert!(!got.is_stale(clock.now_ms()));
+        // Reordered or different songs: changed.
+        assert!(caches
+            .top_songs_put("srv", "ar1", 10, &[track("b"), track("a")])
+            .unwrap());
+        assert!(caches
+            .top_songs_put("srv", "ar1", 10, &[track("b")])
+            .unwrap());
+        // Housekeeping drops it once its own TTL has passed.
+        *clock.0.lock() += TOP_SONGS_TTL_MS + 1.0;
+        assert_eq!(caches.meta_prune().unwrap(), 1);
+        assert!(caches.top_songs_get("srv", "ar1", 10).unwrap().is_none());
     }
 }

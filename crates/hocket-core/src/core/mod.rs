@@ -78,6 +78,9 @@ pub enum Internal {
     Tick,
     /// A report from the playback backend.
     Backend(BackendReport),
+    /// The settle window of a skip burst may have passed: load the item
+    /// the burst landed on (see `Actor::defer_load`).
+    PendingLoadDue,
     /// A command the external backend wants the platform player to run.
     BackendCommand(BackendCommand),
     /// Job queue visible-state change.
@@ -138,6 +141,13 @@ pub enum Internal {
         lyrics: Option<Lyrics>,
         /// Emit `LyricsChanged` (false for a silent prefetch).
         announce: bool,
+    },
+    /// A background refresh of an artist's cached top songs ended;
+    /// `changed` when the cache now holds a different list.
+    TopSongsRefreshed {
+        server_id: ServerId,
+        artist_id: ArtistId,
+        changed: bool,
     },
     /// Artwork resolved through the image cache.
     Artwork {

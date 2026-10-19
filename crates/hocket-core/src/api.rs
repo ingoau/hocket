@@ -2505,6 +2505,8 @@ pub enum Event {
         progress: SyncProgress,
     },
     /// Mirror tables changed; UIs should refetch visible queries. Empty = everything.
+    /// `artistTopSongs` (with the artist ids) means a cached `Query::ArtistTopSongs`
+    /// answer was refreshed in the background and now differs.
     LibraryChanged {
         server_id: ServerId,
         tables: Vec<String>,

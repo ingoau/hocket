@@ -63,6 +63,14 @@ class CoreSessionPlayer(
         /** History entries shown before the current one: enough to go back, small over binder. */
         const val HISTORY_SHOWN = 25
 
+        /**
+         * Playing-next and upcoming entries shown after the current one. The playlist is rebuilt,
+         * diffed and sent over binder on every state change (each Next, each position update): a
+         * long playlist in full made that slow on the main thread. Further entries come into view as
+         * the queue moves.
+         */
+        const val UPCOMING_SHOWN = 100
+
         private val REMOTE_DEVICE: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
             .setRoutingControllerId(ConnectRoutes.SESSION_ID)
             .build()
@@ -76,7 +84,7 @@ class CoreSessionPlayer(
 
         /**
          * The timeline for [queue] around the playing track: the last [HISTORY_SHOWN] history
-         * entries, the current one, playing next, upcoming. Empty when the queue's current entry is
+         * entries, the current one, then the first [UPCOMING_SHOWN] of playing next and upcoming. Empty when the queue's current entry is
          * not [currentTrackId] (or there is none).
          */
         fun timeline(queue: QueueView?, currentTrackId: String?): QueueTimeline {
@@ -87,8 +95,12 @@ class CoreSessionPlayer(
             val seen = hashSetOf(current.item.key)
             val shownHistory = queue.history.takeLast(HISTORY_SHOWN)
             val history = shownHistory.filter { seen.add(it.item.key) }
-            val after = (queue.playingNext + queue.upcoming).filter { seen.add(it.item.key) }
-            val dropped = shownHistory.size + queue.playingNext.size + queue.upcoming.size - history.size - after.size
+            var dropped = shownHistory.size - history.size
+            val after = ArrayList<QueueEntry>(minOf(UPCOMING_SHOWN, queue.playingNext.size + queue.upcoming.size))
+            for (entry in queue.playingNext.asSequence() + queue.upcoming.asSequence()) {
+                if (after.size >= UPCOMING_SHOWN) break
+                if (seen.add(entry.item.key)) after.add(entry) else dropped++
+            }
             if (dropped > 0) Log.w(TAG, "dropped $dropped queue entries with duplicate keys")
             return QueueTimeline(history + current + after, history.size)
         }

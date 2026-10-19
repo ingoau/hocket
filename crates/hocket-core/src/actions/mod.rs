@@ -861,8 +861,8 @@ fn queue_commands(
     // Play next on queue items still to play moves them up rather than queueing them again (#37):
     // they are removed and queued again by the same PlayNext, behind the played ones (history, the
     // current item), which are queued again as before. Removing them all in one op keeps every key
-    // valid; a MoveQueueItem per key would not, as moving one context item renumbers the index-based
-    // keys (`ctx-<n>`) of the others.
+    // valid even when a peer still keys context items by index (`ctx-<n>`), where a MoveQueueItem per
+    // key would renumber the others.
     let (track_ids, remove) = match target {
         ActionTarget::QueueItems { keys } if next => {
             let (upcoming, played): (Vec<_>, Vec<_>) =

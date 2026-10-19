@@ -303,6 +303,9 @@ fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
     }
 }
 
+/** How many top songs an artist page lists. */
+private const val ARTIST_TOP_SONGS = 10
+
 @Composable
 fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
@@ -310,17 +313,24 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val server by client.server.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.artist(id)
     val flyingCover = LocalSharedArtwork.current?.takeIf { it.key == shareKey }?.coverArt
-    var artist by remember { mutableStateOf<Artist?>(null) }
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-    var top by remember { mutableStateOf<List<Track>>(emptyList()) }
-    LaunchedEffect(id, libraryGen) {
+    var artist by remember(id) { mutableStateOf<Artist?>(null) }
+    var albums by remember(id) { mutableStateOf<List<Album>>(emptyList()) }
+    // null until the first answer: the section keeps its rows' space (skeletons) meanwhile, so the
+    // albums below never jump when the songs arrive.
+    var top by remember(id) { mutableStateOf<List<Track>?>(null) }
+    // The artist and its albums come from the local mirror: show them as soon as they are read.
+    // They used to wait for the top songs too, which on a first visit means a server round trip.
+    LaunchedEffect(id, libraryGen, server?.id) {
         val ar = (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data
         val al = server?.id?.let { sid -> (client.query(Queries.albums(sid, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
-        val t = (client.query(Queries.artistTopSongs(id, 10)) as? QueryResult.TrackList)?.data
-        // Everything at once, so the sections do not pop in one after another.
+        // Together, so the header and the albums do not pop in one after another.
         albums = al ?: albums
-        top = t ?: top
         artist = ar ?: artist
+    }
+    // Cached by the core (and refreshed behind the page), so usually as quick as the rest.
+    LaunchedEffect(id, libraryGen) {
+        val t = (client.query(Queries.artistTopSongs(id, ARTIST_TOP_SONGS)) as? QueryResult.TrackList)?.data
+        top = t ?: top ?: emptyList()
     }
     val ar = artist
     if (ar == null) {
@@ -336,10 +346,14 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
         ar.biography?.let { bio -> item(key = "bio") { SectionHeader(stringResource(R.string.artist_biography)); Text(bio, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) } }
-        if (top.isNotEmpty()) {
+        val topSongs = top
+        if (topSongs == null) {
             item(key = "h.top") { SectionHeader(stringResource(R.string.artist_top_songs)) }
-            itemsIndexed(top, key = { _, t -> "top" + t.id }, contentType = { _, _ -> "track" }) { i, t ->
-                TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, top.map { it.id }, i, ar.name)) }, onMore = { songMenu.open(t.toSummary()) })
+            items(ARTIST_TOP_SONGS, key = { "top.skeleton$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
+        } else if (topSongs.isNotEmpty()) {
+            item(key = "h.top") { SectionHeader(stringResource(R.string.artist_top_songs)) }
+            itemsIndexed(topSongs, key = { _, t -> "top" + t.id }, contentType = { _, _ -> "track" }) { i, t ->
+                TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, topSongs.map { it.id }, i, ar.name)) }, onMore = { songMenu.open(t.toSummary()) })
             }
         }
         if (albums.isNotEmpty()) {

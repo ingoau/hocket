@@ -8,7 +8,7 @@ use crate::connect::engine::Input;
 use crate::connect::wire::{SessionOp, TransportCommand};
 use crate::core::actor::{
     Actor, ADOPTION_TIMEOUT_MS, LOAD_RETRIES, MAX_CONSECUTIVE_SKIPS, MEDIA_SESSION_ART,
-    MEDIA_SESSION_ART_SMALL,
+    MEDIA_SESSION_ART_SMALL, SKIP_SETTLE_MS,
 };
 use crate::core::state::{pending_scrobbles_key, PendingScrobble};
 
@@ -78,9 +78,11 @@ impl Actor {
         }
         let d = derive(doc);
         let offline = self.is_offline();
+        // Repeat All wraps to the top: that item is next too (#13).
         d.playing_next
             .into_iter()
             .chain(d.upcoming)
+            .chain(d.wrap_next)
             .filter(|i| !i.unavailable)
             .find(|i| {
                 !offline
@@ -91,6 +93,11 @@ impl Actor {
     }
 
     pub(crate) fn refresh_next(&mut self) {
+        if self.playback.pending_load.is_some() {
+            // The backend holds the item a burst skipped away from; the
+            // deferred load hands over the follow-up with the item.
+            return;
+        }
         if !self.audio.gapless {
             self.playback.next = None;
             self.playback.next_doc_key = None;
@@ -99,8 +106,8 @@ impl Actor {
         }
         let next = self.next_item();
         let next_key = next.as_ref().map(|i| i.key.clone());
-        // An upcoming context item's key is its context index (`ctx-N`), so a
-        // removal, insertion or move ahead of it hands the same key to another
+        // A document an older peer edited keys upcoming context items by
+        // index (`ctx-N`), and an edit ahead of one hands its key to another
         // track: the preload stays only if the track is the same too (#62).
         let same_track = match (&next, &self.playback.next) {
             (Some(i), Some(n)) => n.track.id == i.track_id,
@@ -188,6 +195,7 @@ impl Actor {
         play: bool,
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
+        self.playback.pending_load = None;
         let Some(track) = self.track_or_bare(&item.track_id) else {
             return;
         };
@@ -289,6 +297,116 @@ impl Actor {
         self.prefetch_artwork_for_current();
     }
 
+    /// The current item changed by a skip in a burst (see
+    /// [`SKIP_SETTLE_MS`]): show it as loading at once, but give the backend
+    /// nothing until the burst settles, so a run of Next presses does not
+    /// open a stream for every track it passes. The old item stops (paused,
+    /// its reports ignored) and its play ends here; the new one starts
+    /// counting as a play, with its now-playing, only once it loads.
+    pub(crate) fn defer_load(&mut self, item: &QueueItem, position_ms: Ms, play: bool) {
+        let now = self.now();
+        if self.playback.loaded && self.playback.backend_key.is_some() {
+            // Leaving what the backend plays, as any skip would.
+            self.note_left_early();
+            if let Some(id) = self.playback.track_id().map(str::to_string) {
+                let pos = self.playback.position_now(now);
+                let actions = self.scrobbler.track_ended(&id, Some(pos));
+                self.apply_scrobble_actions(actions);
+            }
+            if self.playback.playing {
+                if let Err(e) = self.backend.pause() {
+                    self.log("debug", format!("pause: {e}"));
+                }
+            }
+        }
+        let track = self.track_or_bare(&item.track_id);
+        let position_ms = match &track {
+            Some(t) if t.duration_ms > 0 => position_ms.min(t.duration_ms),
+            _ => position_ms,
+        };
+        let p = &mut self.playback;
+        p.doc_key = Some(item.key.clone());
+        p.backend_key = None;
+        p.track = track;
+        p.position_ms = position_ms;
+        p.position_at = now;
+        p.playing = play;
+        p.buffering = true;
+        p.loaded = true;
+        p.awaiting_transition = false;
+        p.adopted_at = None;
+        p.next = None;
+        p.next_doc_key = None;
+        p.focus_suspended = false;
+        p.load_failures = 0;
+        if play {
+            p.want_playing = true;
+        }
+        p.pending_load = Some(now + SKIP_SETTLE_MS);
+        self.arm_pending_load_timer();
+        self.stamp();
+        self.emit_transport();
+    }
+
+    /// Wake the actor when the settle window should have passed. The
+    /// periodic tick checks too (virtual time in tests moves only with it);
+    /// this only makes the load follow the last skip closely.
+    fn arm_pending_load_timer(&mut self) {
+        let Some(deadline) = self.playback.pending_load else {
+            return;
+        };
+        if self.pending_load_timer.is_some() {
+            // One timer at a time: when it fires it re-arms for a deadline
+            // that moved meanwhile.
+            return;
+        }
+        self.pending_load_timer = Some(deadline);
+        let delay = (deadline - self.now()).clamp(1.0, SKIP_SETTLE_MS);
+        let tx = self.tx.clone();
+        self.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
+            let _ = tx.send(crate::core::ActorMsg::Internal(Internal::PendingLoadDue));
+        });
+    }
+
+    pub(crate) fn on_pending_load_due(&mut self) {
+        let armed = self.pending_load_timer.take();
+        self.flush_pending_load(false);
+        if let (Some(deadline), Some(armed)) = (self.playback.pending_load, armed) {
+            // Skips came after the timer was set: wait for the new deadline.
+            // An unmoved deadline not yet reached (a virtual clock) is left
+            // to the tick.
+            if deadline > armed {
+                self.arm_pending_load_timer();
+            }
+        }
+    }
+
+    /// Load the item a skip burst landed on, once the settle window passed
+    /// (`force`: now, e.g. on a restart). It loads where the session stands
+    /// then: paused or seeked meanwhile is honoured.
+    pub(crate) fn flush_pending_load(&mut self, force: bool) {
+        let Some(deadline) = self.playback.pending_load else {
+            return;
+        };
+        if !force && self.now() < deadline {
+            return;
+        }
+        self.playback.pending_load = None;
+        if !self.owns_transport() {
+            return;
+        }
+        let Some(item) = self.doc().and_then(|d| d.current.clone()) else {
+            return;
+        };
+        if self.playback.doc_key.as_ref() != Some(&item.key) {
+            return;
+        }
+        let play = self.playback.playing;
+        let position = self.playback.position_ms;
+        self.load_item(&item, position, play, None);
+    }
+
     pub(crate) fn unload(&mut self) {
         if self.playback.loaded {
             let _ = self.backend.stop();
@@ -316,6 +434,12 @@ impl Actor {
     }
 
     pub(crate) fn restart_current(&mut self) {
+        if self.playback.pending_load.is_some() {
+            self.playback.position_ms = 0;
+            self.playback.playing = true;
+            self.flush_pending_load(true);
+            return;
+        }
         let Some(track) = self.playback.track.clone() else {
             return;
         };
@@ -566,6 +690,7 @@ impl Actor {
         self.playback.next_doc_key = None;
         self.playback.awaiting_transition = false;
         self.playback.adopted_at = None;
+        self.playback.pending_load = None;
     }
 
     /// Every tick: an item adopted at a gapless boundary that the backend
@@ -613,7 +738,11 @@ impl Actor {
         self.playback.position_ms = self.playback.position_now(now);
         self.playback.position_at = now;
         self.playback.playing = playing;
-        let r = if playing {
+        let r = if self.playback.pending_load.is_some() {
+            // Nothing of this item is in the backend yet: the deferred load
+            // starts it playing or paused.
+            Ok(())
+        } else if playing {
             self.backend.play()
         } else {
             self.backend.pause()
@@ -645,6 +774,12 @@ impl Actor {
         self.playback.position_at = self.now();
         // A seek ends a stall as far as we know (the native engine clears it
         // silently); a backend still short of data reports buffering again.
+        if self.playback.pending_load.is_some() {
+            // The deferred load starts there.
+            self.stamp();
+            self.emit_transport();
+            return;
+        }
         self.playback.buffering = false;
         if let Err(e) = self.backend.seek(position_ms) {
             self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
@@ -1410,7 +1545,7 @@ impl Actor {
     }
 
     pub(crate) fn emit_media_session(&mut self) {
-        let queue = self.queue_view();
+        let queue = self.queue_head_view();
         let transport = self.transport_state();
         let state = self.media_session_state(&queue, &transport);
         self.emit(Event::MediaSession { state });
@@ -1514,7 +1649,7 @@ impl Actor {
     }
 
     pub(crate) fn media_session_command(&mut self, action: MediaSessionAction, value: Option<f64>) {
-        let queue = self.queue_view();
+        let queue = self.queue_head_view();
         let transport = self.transport_state();
         let state = self.media_session_state(&queue, &transport);
         if let Some(cmd) = command_for(action, value, &state) {
