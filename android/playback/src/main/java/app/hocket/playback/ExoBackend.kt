@@ -97,7 +97,8 @@ class ExoBackend(
 
     internal companion object {
         private const val TAG = "ExoBackend"
-        private const val POSITION_INTERVAL_MS = 750L
+        /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
+        private const val POSITION_INTERVAL_MS = 1_000L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
 
         /** Backoff before recovery attempt [attempt] (0-based) of a network error, or null when out of attempts. */
