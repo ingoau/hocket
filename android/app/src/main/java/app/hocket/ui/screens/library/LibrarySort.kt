@@ -169,6 +169,9 @@ const val PINNED_LIMIT = 6
 const val RECENT_ROWS = 3
 const val RECENT_CARDS = 6
 
+/** How many Recent covers the Library's Albums browse tile fans out (the first of that page's Recent row). */
+const val ALBUMS_TILE_COVERS = 3
+
 /** How much play history the Recent groups look through. */
 const val RECENT_HISTORY = 200
 

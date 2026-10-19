@@ -21,8 +21,8 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * Predictive back between screens: the gesture reveals the previous screen while the current one
- * shrinks into a card that moves away from the swipe's edge; cancelling restores it, releasing
- * finishes the pop.
+ * slides toward the trailing edge (right in LTR), the same direction from either swipe edge;
+ * cancelling restores it, releasing finishes the pop.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
@@ -38,7 +38,8 @@ class PredictiveBackTest {
         compose.waitForIdle()
     }
 
-    private fun event(progress: Float, edge: Int = BackEventCompat.EDGE_LEFT) = BackEventCompat(touchX = 10f + progress * 400f, touchY = 800f, progress = progress, swipeEdge = edge)
+    private fun event(progress: Float, edge: Int = BackEventCompat.EDGE_LEFT) =
+        BackEventCompat(touchX = 10f + progress * 400f, touchY = 800f, progress = progress, swipeEdge = edge)
 
     private fun openSubPage() {
         val core = TestCore(startPlaying = false)
@@ -51,30 +52,30 @@ class PredictiveBackTest {
     }
 
     @Test
-    fun theGestureShrinksThePageOverThePreviousOneAndCancelRestoresIt() {
+    fun theGestureSlidesThePageTowardTheTrailingEdgeAndCancelRestoresIt() {
         openSubPage()
         val full = compose.onRoot().fetchSemanticsNode().boundsInRoot
         back { it.dispatchOnBackStarted(event(0f)) }
         back { it.dispatchOnBackProgressed(event(0.3f)) }
         // Both screens are composed: the settings list is revealed behind the sub-page.
         assertTrue(exists("settings.categories"))
-        val card = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot
-        assertTrue("the page shrinks: $card in $full", card.width < full.width * 0.95f && card.height < full.height * 0.95f)
-        assertTrue("and moves right, away from the left edge: $card", card.left > full.left + 1f)
+        val page = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot
+        assertTrue("the page slides toward the trailing edge (right in LTR): $page in $full", page.left > full.left + 1f)
         back { it.dispatchOnBackCancelled() }
         compose.waitUntil(5_000) { !exists("settings.categories") }
         val restored = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot
         assertEquals(full.width, restored.width, 1f)
+        assertEquals(full.left, restored.left, 1f)
     }
 
     @Test
-    fun fromTheRightEdgeThePageMovesLeftAndReleasingPops() {
+    fun fromTheRightEdgeThePageStillMovesRightAndReleasingPops() {
         openSubPage()
         val full = compose.onRoot().fetchSemanticsNode().boundsInRoot
         back { it.dispatchOnBackStarted(event(0f, BackEventCompat.EDGE_RIGHT)) }
         back { it.dispatchOnBackProgressed(event(0.5f, BackEventCompat.EDGE_RIGHT)) }
-        val card = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot
-        assertTrue("moves left, away from the right edge: $card", card.right < full.right - 1f)
+        val page = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot
+        assertTrue("same direction as a left-edge swipe: toward the trailing edge: $page", page.left > full.left + 1f)
         back { it.onBackPressed() }
         compose.waitUntil(5_000) { exists("settings.categories") && !exists("settings.screen") }
     }

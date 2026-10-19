@@ -27,6 +27,8 @@ import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.CarouselItemWidth
 import app.hocket.ui.components.GridArtCorner
 import app.hocket.ui.components.GridCellText
+import app.hocket.ui.nav.ArtworkShare
+import app.hocket.ui.nav.rememberArtworkShareSource
 
 /**
  * A horizontal carousel of albums (Navic): 150 dp covers 12 dp apart inside a 16 dp margin, a
@@ -37,9 +39,10 @@ fun AlbumStrip(albums: List<Album>, modifier: Modifier = Modifier, onClick: (Alb
     LazyRow(modifier, contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.id }) { album ->
             val interaction = remember { MutableInteractionSource() }
-            Column(Modifier.animateItem().width(CarouselItemWidth).clickable(interaction, indication = null) { onClick(album) }) {
+            val share = rememberArtworkShareSource(ArtworkShare.album(album.id), album.coverArt)
+            Column(Modifier.animateItem().width(CarouselItemWidth).clickable(interaction, indication = null) { share.prepare(); onClick(album) }) {
                 Artwork(album.coverArt, ArtworkSizes.GRID, stringResource(R.string.row_album_a11y, album.name, album.artist ?: ""),
-                    Modifier.size(CarouselItemWidth).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
+                    Modifier.size(CarouselItemWidth).then(share.modifier).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
                 Spacer(Modifier.height(6.dp))
                 GridCellText(album.name, album.artist ?: stringResource(R.string.unknown_artist))
             }

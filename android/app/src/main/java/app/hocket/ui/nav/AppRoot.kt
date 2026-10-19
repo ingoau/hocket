@@ -1,5 +1,6 @@
 package app.hocket.ui.nav
 
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -316,7 +318,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu) {
+        val sharedArtwork = remember { SharedArtworkSession() }
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -344,7 +347,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val transitions = remember { ShellTransitionInfo() }
             transitions.reducedMotion = LocalReducedMotion.current
             transitions.layoutDirection = LocalLayoutDirection.current
-            transitions.density = density
             val reselected = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
             val currentSelected by rememberUpdatedState(selected)
             val currentItems by rememberUpdatedState(items)
@@ -400,7 +402,13 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // Content runs to the bottom of the screen: the transparent navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    val contentNavigator = remember(nav) { app.hocket.ui.DetailNavigator({ nav.navigate(Route.Album(it)) }, { nav.navigate(Route.Artist(it)) }, { nav.navigate(Route.Playlist(it)) }) }
+                    val contentNavigator = remember(nav, sharedArtwork) {
+                        app.hocket.ui.DetailNavigator(
+                            { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); nav.navigate(Route.Album(id)) },
+                            { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); nav.navigate(Route.Artist(id)) },
+                            { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); nav.navigate(Route.Playlist(id)) },
+                        )
+                    }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
                         AppNavHost(nav, transitions, Modifier.fillMaxSize())
                     }
@@ -409,11 +417,11 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
             // accessibility actions) collapse it as they navigate: the page opens in view, not
             // behind the player.
-            val navigator = remember(nav, sheet) {
+            val navigator = remember(nav, sheet, sharedArtwork) {
                 app.hocket.ui.DetailNavigator(
-                    openAlbum = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
-                    openArtist = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Artist(id)) },
-                    openPlaylist = { id -> scope.launch { sheet.collapse() }; nav.navigate(Route.Playlist(id)) },
+                    openAlbum = { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
+                    openArtist = { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Artist(id)) },
+                    openPlaylist = { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Playlist(id)) },
                 )
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
@@ -510,27 +518,34 @@ private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGra
 )
 
 /**
- * A NavHost destination drawn inside [PredictiveBackCard], so every screen (places, details,
- * settings pages) takes part in the predictive back animation the same way.
+ * A NavHost destination drawn inside [PageTransitionLayer], so every screen (places, details,
+ * settings pages) takes part in the Miuix push/pop and predictive back animation the same way.
+ * [LocalNavAnimatedVisibilityScope] lets artwork on the page join a shared-element flight.
  */
 private inline fun <reified T : Any> NavGraphBuilder.screen(transitions: ShellTransitionInfo, noinline content: @Composable (NavBackStackEntry) -> Unit) {
-    composable<T> { entry -> PredictiveBackCard(transitions, entry.id) { content(entry) } }
+    composable<T> { entry ->
+        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+            PageTransitionLayer(transitions, entry.id) { content(entry) }
+        }
+    }
 }
 
 @Composable
 private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo, modifier: Modifier) {
-    NavHost(
-        nav,
-        startDestination = Route.Home,
-        modifier = modifier,
-        enterTransition = { transitions.enter(this) },
-        exitTransition = { transitions.exit(this) },
-        popEnterTransition = { transitions.popEnter(this) },
-        popExitTransition = { transitions.popExit(this) },
-        predictivePopEnterTransition = { edge -> transitions.predictivePopEnter(edge) },
-        predictivePopExitTransition = { edge -> transitions.predictivePopExit(this, edge) },
-        sizeTransform = null,
-    ) {
+    SharedTransitionLayout(modifier) {
+        CompositionLocalProvider(LocalSharedTransitionScope provides this) {
+            NavHost(
+                nav,
+                startDestination = Route.Home,
+                modifier = Modifier.fillMaxSize().clipToBounds(),
+                enterTransition = { transitions.enter(this) },
+                exitTransition = { transitions.exit(this) },
+                popEnterTransition = { transitions.popEnter(this) },
+                popExitTransition = { transitions.popExit(this) },
+                predictivePopEnterTransition = { edge -> transitions.predictivePopEnter(this, edge) },
+                predictivePopExitTransition = { edge -> transitions.predictivePopExit(this, edge) },
+                sizeTransform = null,
+            ) {
         screen<Route.Home>(transitions) { HomeScreen(nav) }
         screen<Route.Library>(transitions) { LibraryScreen(nav) }
         screen<Route.Search>(transitions) { SearchScreen(nav) }
@@ -564,5 +579,7 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.SettingsLibrary>(transitions) { LibrarySettingsScreen(nav) }
         screen<Route.SettingsBattery>(transitions) { BatterySettingsScreen(nav) }
         screen<Route.SettingsBackup>(transitions) { BackupSettingsScreen(nav) }
+            }
+        }
     }
 }
