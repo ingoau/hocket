@@ -99,4 +99,25 @@ class NowPlayingWidgetTest {
         assertTrue("longer side ${art.width} at most 256", art.width <= 256 && art.height <= 256)
         assertNull(NowPlayingWidget.decode(java.io.File(app.cacheDir, "gone.png").path))
     }
+
+    @Test
+    fun aPlayPauseIsAPartialUpdateThatLeavesTheCoverAlone() {
+        val file = java.io.File(app.cacheDir, "cover-partial.png")
+        file.outputStream().use { android.graphics.Bitmap.createBitmap(600, 600, android.graphics.Bitmap.Config.ARGB_8888).compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        val playing = WidgetState("Blue Train", "John Coltrane", file.path, true, null)
+        val full = NowPlayingWidget.views(app, playing)
+        val root = full.apply(app, FrameLayout(app))
+        val partial = NowPlayingWidget.playButton(app, playing.copy(playing = false))
+        partial.reapply(app, root)
+        assertEquals("Play", root.findViewById<View>(R.id.widget_play).contentDescription)
+        assertEquals("the rest stays", "Blue Train", root.findViewById<TextView>(R.id.widget_title).text.toString())
+        fun bytes(views: android.widget.RemoteViews): Int {
+            val parcel = android.os.Parcel.obtain()
+            return try { views.writeToParcel(parcel, 0); parcel.dataSize() } finally { parcel.recycle() }
+        }
+        println("MEASURE widget update over binder: full ${bytes(full)} B, play/pause ${bytes(partial)} B")
+        assertTrue(bytes(partial) < bytes(full))
+        // The cover is decoded once per path, not on every redraw.
+        assertTrue(NowPlayingWidget.cover(file.path) === NowPlayingWidget.cover(file.path))
+    }
 }

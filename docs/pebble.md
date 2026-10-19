@@ -22,6 +22,8 @@ We cannot replace the system music app; this is a separate "Hocket" watchapp in 
 
 **Protocol** (`pebble/src/c/hocket.h`, mirrored by `PebbleProtocol.kt`; bump `HOCKET_PROTO` on any incompatible change). Phone → watch: Now (state), List (one page of ≤ 12 packed rows), Art (chunks), Settings (a small blob the watch persists), HelloReply, Notice. Watch → phone: Hello (protocol + build), Cmd (command, argument, list path and row id), ListReq (path + offset), ArtReq. Lists are addressed by path: `queue`, `library`, `playlists`, `albums`, `artists`, `recent`, `downloads`, `devices`, `lyrics`, `album:<id>`, `playlist:<id>`, `artist:<id>`, `search:<text>`, `goAlbum`, `goArtist`; a browsable row's id is itself a path. The phone pushes Now (debounced) and Settings only while the watchapp is open.
 
+**Link behaviour.** Now goes out when something the watch draws changes, on a seek or a stall (the stamp drifting 1.5 s from the last one sent), and otherwise once a minute while playing as a safety net; the watch interpolates position in between. Settings go out only when the blob differs from the one the watch last took. The phone answers Hello off the watch's message (its ack is not held up by the three replies), sends a message the watch nacked or did not answer again after 250 ms and 500 ms, counts a Now as pushed only once delivered, and stops pushing when the watchapp turns out to be closed (until the next Hello). The watch says Hello again (5 s, doubling to 60 s) until a HelloReply arrives, so a phone service that was still starting cannot leave it on "Open Hocket". An art transfer with a missing chunk is dropped rather than shown with a blank band; the request's retry fetches it again. The watch's inbox is 4 KB with art, 2 KB without (a list page is under 1.8 KB). Inbox handlers keep their stack small: the app stack is 2 KB on all but Time 2 and Round 2.
+
 
 ## Watches  
 *Status: decided*
@@ -122,7 +124,7 @@ A page of line-synced lyrics for the playing track (line timing only, no word ti
 - Up / down move the focus to other lines and stop following. Select seeks playback to the focused line's start and resumes following.
 - Back while browsing returns to the current line (following again); back while following closes the page.
 
-The phone sends the lines as the list `lyrics` (row id = start in ms with the track's timing offset applied, empty when unsynced).
+The phone sends the lines as the list `lyrics` (row id = start in ms with the track's timing offset applied, empty when unsynced). The page wakes when the next line starts (and on play, pause or a seek), not on a poll, so paused or unsynced it does not wake at all.
 
 
 ## Queue  

@@ -1,14 +1,12 @@
 // Main window shell: server setup as the entire first screen, otherwise the
 // sidebar / content / right panel / player bar layout.
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
-import { useApp, useSetting } from "./store/app";
+import { useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
-import { extractAccent } from "./lib/accent";
-import { resolveArtwork } from "./components/Artwork";
 import { Sidebar } from "./components/Sidebar";
 import { EditPinsPanel } from "./components/EditPinsPanel";
 import { TopBar } from "./components/TopBar";
@@ -21,15 +19,20 @@ import { Toasts } from "./components/Toasts";
 import { Dialogs } from "./components/Dialogs";
 import { Router } from "./views/Router";
 import { Setup } from "./views/Setup";
-import { FullscreenPlayer } from "./views/FullscreenPlayer";
 import { executeAction } from "./store/actions";
-import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
-import { accentTokens, type ThemeName } from "./lib/contrast";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
 import { Icon } from "./components/Icon";
 import { isOfflineNotice, noticeText } from "./lib/notice";
 import { useQueueDropReveal } from "./lib/queue-drag";
+import { useTheme } from "./lib/theme";
+import { handOnFocus } from "./lib/focus";
+import { loadAmll } from "./lib/amll";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+
+// One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
+const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
+const FullscreenPlayer = lazy(() => loadFullscreen().catch(loadFullscreen));
 
 export function App() {
   const ready = useApp((s) => s.ready);
@@ -41,8 +44,18 @@ export function App() {
   const queueDropReveal = useApp((s) => s.queueDropReveal);
   // A modal (dialog, palette, fullscreen player) makes the rest of the window inert:
   // no focus, no pointer, hidden from assistive tech.
+  const fullscreen = useApp((s) => s.fullscreen);
   const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
   const narrow = useMediaQuery(NARROW);
+  const loadedFs = useFullscreenChunk(ready, fullscreen);
+  useLyricPlayerPreload();
+  // The fullscreen player makes the rest of the window inert: if it fails it closes (the
+  // window works again) and the next open starts afresh.
+  const [fsFailures, setFsFailures] = useState(0);
+  const onFullscreenError = () => {
+    setFsFailures((n) => n + 1);
+    useApp.getState().setFullscreen(false);
+  };
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
@@ -69,12 +82,12 @@ export function App() {
           <EditPinsPanel />
           <Router />
         </main>
-        <NowPlayingSidebar />
+        <ErrorBoundary name="side panel"><NowPlayingSidebar /></ErrorBoundary>
       </div>
       <PlayerBar inert={modal} />
       <NowPlayingAnnouncer />
-      {/* Covers the whole window (sidebar, panels and player bar included). */}
-      <FullscreenPlayer />
+      {/* Covers the whole window (sidebar, panels and player bar included). Kept mounted after first open so the close fade still runs. */}
+      {loadedFs ? <ErrorBoundary key={fsFailures} name="fullscreen player" fallback={null} onError={onFullscreenError}><Suspense fallback={null}><FullscreenPlayer /></Suspense></ErrorBoundary> : null}
       <ContextMenu />
       <PlaylistPicker />
       <CommandPalette />
@@ -125,46 +138,37 @@ function NowPlayingAnnouncer() {
   return <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="now-playing-announcer">{text}</div>;
 }
 
-/** Theme (light/dark/system), accent colour setting and dynamic accent from artwork. */
-export function useTheme() {
-  const theme = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
-  const accentSetting = useSetting<string | null>(SK.displayAccent, null) || DEFAULT_ACCENT;
-  const dynamic = useSetting(SK.displayDynamicColour, true);
-  const cover = useApp((s) => s.nowPlaying?.track.coverArt);
-  const accent = useApp((s) => s.accent);
-  const setAccent = useApp((s) => s.setAccent);
-  const [resolved, setResolved] = useState<ThemeName>("light");
+/**
+ * Whether to mount the lazily loaded fullscreen player: once the window is idle after startup
+ * (so it is normally loaded before the first open), or at once when it opens first.
+ */
+function useFullscreenChunk(ready: boolean, fullscreen: boolean): boolean {
+  const [load, setLoad] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => {
-      const name: ThemeName = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
-      document.documentElement.setAttribute("data-theme", name);
-      setResolved(name);
-    };
-    apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, [theme]);
+    if (load || !ready) return;
+    const id = requestIdleCallback(() => setLoad(true), { timeout: 5000 });
+    return () => cancelIdleCallback(id);
+  }, [ready, load]);
+  // Opened before the chunk arrived: the shell turns inert (and drops focus) before the player
+  // mounts, so hand it the opener now for the player to return focus to on close.
+  useLayoutEffect(() => {
+    if (!fullscreen || load) return;
+    const a = document.activeElement;
+    // From a menu, the menu has already handed its trigger on.
+    if (a instanceof HTMLElement && a !== document.body && !a.closest("[role=menu]")) handOnFocus(a);
+    setLoad(true);
+  }, [fullscreen, load]);
+  return load || fullscreen;
+}
+
+/** Synced lyrics have arrived for what is playing: load the lyric player when idle, ahead of a lyrics view. */
+function useLyricPlayerPreload(): void {
+  const synced = useApp((s) => !!s.lyrics?.lyrics && s.lyrics.lyrics.tier !== "unsynced");
   useEffect(() => {
-    if (!dynamic || !cover) {
-      setAccent(undefined);
-      return;
-    }
-    let alive = true;
-    void resolveArtwork(cover, 64).then((url) => url && extractAccent(url)).then((c) => alive && setAccent(c));
-    return () => { alive = false; };
-  }, [dynamic, cover, setAccent]);
-  // Every accent-derived colour is contrast-checked for the theme (lib/contrast.ts).
-  useEffect(() => {
-    const tokens = accentTokens(accent ?? accentSetting, resolved);
-    const style = document.documentElement.style;
-    style.setProperty("--accent", tokens.accent);
-    style.setProperty("--accent-fg", tokens.accentFg);
-    style.setProperty("--accent-text", tokens.accentText);
-    style.setProperty("--accent-inverse", tokens.accentInverse);
-    style.setProperty("--accent-tint", tokens.accentTint);
-    style.setProperty("--focus-ring", tokens.focusRing);
-  }, [accent, accentSetting, resolved]);
+    if (!synced) return;
+    const id = requestIdleCallback(() => void loadAmll().catch(() => undefined), { timeout: 3000 });
+    return () => cancelIdleCallback(id);
+  }, [synced]);
 }
 
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */

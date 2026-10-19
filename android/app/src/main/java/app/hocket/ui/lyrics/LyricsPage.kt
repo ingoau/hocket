@@ -114,14 +114,19 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     val lyrics = current.lyrics
 
     // Position at 30 fps (battery and plugged); 4 per second with reduced motion (enough to
-    // move the static highlight between lines); nothing when not visible.
+    // move the static highlight between lines); nothing when not visible, and no frames at all
+    // while paused (the position is frozen until a seek, play or another track).
     var positionMs by remember { mutableStateOf(0L) }
     LaunchedEffect(visible, reducedMotion, trackId) {
         if (!visible) return@LaunchedEffect
         val interval = if (reducedMotion) 250_000_000L else 33_000_000L
         var last = 0L
-        while (true) withFrameNanos { now ->
-            if (interval == 0L || now - last >= interval) { positionMs = client.positionNow(); last = now }
+        while (true) {
+            val mark = client.positionMark()
+            withFrameNanos { now ->
+                if (!mark.moving || interval == 0L || now - last >= interval) { positionMs = client.positionNow(); last = now }
+            }
+            client.awaitPositionMayMove(mark)
         }
     }
 

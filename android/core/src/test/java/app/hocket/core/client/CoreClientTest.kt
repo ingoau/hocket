@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -108,6 +109,29 @@ class CoreClientTest {
     }
 
     @Test
+    fun positionTicksDoNotPublishANewTransportState() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        val published = client.transport.value
+        val tick = published.copy(
+            position = published.position.copy(
+                positionMs = published.position.positionMs + 750u,
+                takenAt = published.position.takenAt + 750.0,
+            ),
+        )
+        client.onEvent(Event.TransportChanged(EventTransportChangedInner(tick)))
+        assertSame(published, client.transport.value)
+        clock = tick.position.takenAt
+        assertEquals(tick.position.positionMs.toLong(), client.positionNow())
+        val paused = tick.copy(position = tick.position.copy(isPlaying = false, rate = 0.0))
+        client.onEvent(Event.TransportChanged(EventTransportChangedInner(paused)))
+        assertEquals(false, client.transport.value.position.isPlaying)
+    }
+
+    @Test
     fun libraryChangedInvalidatesPageCaches() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
@@ -121,6 +145,38 @@ class CoreClientTest {
         client.onEvent(Event.LibraryChanged(EventLibraryChangedInner(core.library.serverId, listOf("tracks"), emptyList())))
         assertEquals(0, client.trackPages.state(key).value.pages.size)
         assertEquals(1, client.trackPages.state(key).value.generation)
+    }
+
+    @Test
+    fun libraryChangedDoesNotWipePlaylistPagesOnATrackOnlyUpdate() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        val tracks = TrackListKey(core.library.serverId, SortOrder.Title, false)
+        val playlists = PlaylistTracksKey("p1")
+        client.trackPages.ensure(tracks, 0)
+        client.playlistTrackPages.ensure(playlists, 0)
+        runCurrent()
+        val playlistGen = client.playlistTrackPages.state(playlists).value.generation
+        client.onEvent(Event.LibraryChanged(EventLibraryChangedInner(core.library.serverId, listOf("tracks"), emptyList())))
+        assertEquals(0, client.trackPages.state(tracks).value.pages.size)
+        assertEquals(playlistGen, client.playlistTrackPages.state(playlists).value.generation)
+    }
+
+    @Test
+    fun lyricsCacheEvictsOldestDocuments() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        val extra = 5
+        repeat(CoreClient.LYRICS_CACHE_CAP + extra) { i ->
+            client.onEvent(Event.LyricsChanged(EventLyricsChangedInner("t$i", null)))
+        }
+        assertEquals(CoreClient.LYRICS_CACHE_CAP, client.lyrics.value.size)
+        assertFalse(client.lyrics.value.containsKey("t0"))
+        assertTrue(client.lyrics.value.containsKey("t${CoreClient.LYRICS_CACHE_CAP + extra - 1}"))
     }
 
     @Test

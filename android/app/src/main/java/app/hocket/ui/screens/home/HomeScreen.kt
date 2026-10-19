@@ -101,6 +101,7 @@ import app.hocket.ui.nav.Route
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import app.hocket.ui.nav.rememberArtworkShareSource
 import app.hocket.ui.screens.library.FilterMenuSheet
+import app.hocket.ui.screens.library.rememberSettledGeneration
 import kotlinx.coroutines.launch
 
 /** Width of a Row-style cell (Navic's carousel width). */
@@ -119,7 +120,7 @@ fun HomeScreen(nav: NavHostController) {
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     val settings by client.settings.collectAsStateWithLifecycle()
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val libraryGen = rememberSettledGeneration()
     val filters by client.filters.collectAsStateWithLifecycle()
     val saved by client.savedQueues.collectAsStateWithLifecycle()
     // A new song starting changes what "most played" and "lately" mean: re-read on track change.
@@ -128,6 +129,7 @@ fun HomeScreen(nav: NavHostController) {
     val shown = prefs.filter { it.on && it.section != null }
     val shownSet = shown.mapNotNull { it.section }.toSet()
     val feed by produceState<Map<HomeSection, SectionContent>?>(null, serverId, libraryGen, shownSet, nowPlayingId) {
+        if (libraryGen < 0) return@produceState
         value = loadHomeFeed(client, serverId, shownSet)
     }
     var customising by remember { mutableStateOf(false) }

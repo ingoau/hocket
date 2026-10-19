@@ -12,6 +12,7 @@ import { BLACK, composite, contrast, mix, roundRgb, WHITE, type Rgb } from "./co
 
 /** What the classifier gets: the cover at this side (it resamples to 128 itself). */
 const SIDE = 256;
+const CLASSIFY_CACHE_CAP = 32;
 const cache = new Map<string, ArtworkLayout | undefined>();
 
 export function loadImage(url: string): Promise<HTMLImageElement | undefined> {
@@ -25,7 +26,12 @@ export function loadImage(url: string): Promise<HTMLImageElement | undefined> {
 /** The layout for the cover at `url` (cached per URL and preference). */
 export async function classify(url: string, preference: ImmersiveArtwork, dark: boolean): Promise<ArtworkLayout | undefined> {
   const key = `${url}|${preference}|${dark}`;
-  if (cache.has(key)) return cache.get(key);
+  if (cache.has(key)) {
+    const hit = cache.get(key);
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  }
   const img = await loadImage(url);
   let layout: ArtworkLayout | undefined;
   if (img) {
@@ -44,7 +50,13 @@ export async function classify(url: string, preference: ImmersiveArtwork, dark: 
       layout = await bridge().artworkLayout(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), w, h, { faces: [], preference, theme: dark ? "dark" : "light" }).catch(() => undefined);
     }
   }
+  if (cache.has(key)) cache.delete(key);
   cache.set(key, layout);
+  while (cache.size > CLASSIFY_CACHE_CAP) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
   return layout;
 }
 
@@ -65,7 +77,7 @@ export interface Scene {
 /** Scenes being prepared or ready, most recent last; a few are kept (the current, the next, the last). */
 const scenes = new Map<string, Promise<Scene>>();
 const ready = new Map<string, Scene>();
-const KEEP = 8;
+const KEEP = 3;
 
 /** The scene for `coverArt`, prepared once and cached (call it ahead of time for the next track). */
 export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dark: boolean): Promise<Scene> {
@@ -87,6 +99,8 @@ export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dar
   scenes.set(key, p);
   for (const old of [...scenes.keys()].slice(0, Math.max(0, scenes.size - KEEP))) {
     scenes.delete(old);
+    const gone = ready.get(old);
+    if (gone) gone.img = undefined;
     ready.delete(old);
   }
   return p;

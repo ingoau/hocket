@@ -40,10 +40,20 @@ object LibraryPatches {
         artists = r.artists.map { artist(it, items) },
     )
 
-    fun queue(q: QueueView, items: List<LibraryItemState>): QueueView = q.copy(
-        history = q.history.map { entry(it, items) },
-        current = q.current?.let { entry(it, items) },
-        playingNext = q.playingNext.map { entry(it, items) },
-        upcoming = q.upcoming.map { entry(it, items) },
-    )
+    fun queue(q: QueueView, items: List<LibraryItemState>): QueueView {
+        val history = q.history.map { entry(it, items) }
+        val current = q.current?.let { entry(it, items) }
+        val playingNext = q.playingNext.map { entry(it, items) }
+        val upcoming = q.upcoming.map { entry(it, items) }
+        if (sameRefs(history, q.history) && current === q.current && sameRefs(playingNext, q.playingNext) && sameRefs(upcoming, q.upcoming)) {
+            return q
+        }
+        return q.copy(history = history, current = current, playingNext = playingNext, upcoming = upcoming)
+    }
+
+    private fun sameRefs(a: List<QueueEntry>, b: List<QueueEntry>): Boolean {
+        if (a.size != b.size) return false
+        for (i in a.indices) if (a[i] !== b[i]) return false
+        return true
+    }
 }

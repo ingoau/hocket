@@ -4,6 +4,7 @@ import type {
   AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
+import { isPositionTick } from "@shared/transport";
 import type { PlayerNotice } from "../lib/notice";
 
 export interface CoreState {
@@ -144,12 +145,11 @@ export function reduce(state: CoreState, e: Event): CoreState {
       // A rating or love set here or on another signed-in device. Lists refetch on the
       // libraryChanged that follows; copies held in view state are patched now.
       const items = e.data.items;
-      return {
-        ...state,
-        nowPlaying: state.nowPlaying && patchEntry(state.nowPlaying, items),
-        queue: patchQueue(state.queue, items),
-        lastServerSearch: state.lastServerSearch && patchSearch(state.lastServerSearch, items),
-      };
+      const nowPlaying = state.nowPlaying && patchEntry(state.nowPlaying, items);
+      const queue = patchQueue(state.queue, items);
+      const lastServerSearch = state.lastServerSearch && patchSearch(state.lastServerSearch, items);
+      if (nowPlaying === state.nowPlaying && queue === state.queue && lastServerSearch === state.lastServerSearch) return state;
+      return { ...state, nowPlaying, queue, lastServerSearch };
     }
     case "playlistChanged":
       // Views refetch on the libraryChanged that follows.
@@ -161,7 +161,7 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "queueChanged":
       return { ...state, queue: e.data.queue, nowPlaying: e.data.queue.current ?? state.nowPlaying };
     case "transportChanged":
-      return { ...state, transport: e.data.transport };
+      return isPositionTick(state.transport, e.data.transport) ? state : { ...state, transport: e.data.transport };
     case "nowPlayingChanged":
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":
@@ -232,7 +232,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "backend":
       return state;
     case "mediaSession":
-      return { ...state, mediaSession: e.data.state };
+      // OS media session is owned by the main process; the renderer uses transport / nowPlaying.
+      return state;
     case "error":
       return { ...state, lastError: { kind: e.data.kind, message: e.data.message, detail: e.data.detail, at: Date.now() } };
     case "log":
@@ -261,10 +262,23 @@ function patchEntry(e: QueueEntry, items: LibraryItemState[]): QueueEntry {
   return track === e.track ? e : { ...e, track };
 }
 
-function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
-  const list = (l: QueueEntry[]) => l.map((e) => patchEntry(e, items));
-  return { ...q, history: list(q.history), current: q.current && patchEntry(q.current, items), playingNext: list(q.playingNext), upcoming: list(q.upcoming) };
+function sameEntryRefs(a: QueueEntry[], b: QueueEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
+
+function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
+  const history = q.history.map((e) => patchEntry(e, items));
+  const current = q.current && patchEntry(q.current, items);
+  const playingNext = q.playingNext.map((e) => patchEntry(e, items));
+  const upcoming = q.upcoming.map((e) => patchEntry(e, items));
+  if (sameEntryRefs(history, q.history) && current === q.current && sameEntryRefs(playingNext, q.playingNext) && sameEntryRefs(upcoming, q.upcoming)) return q;
+  return { ...q, history, current, playingNext, upcoming };
+}
+
+/** ~1 Hz position reports: keep the previous object so zustand subscribers do not re-render. */
+export { isPositionTick };
 
 export function patchSearch(r: SearchResults, items: LibraryItemState[]): SearchResults {
   return {

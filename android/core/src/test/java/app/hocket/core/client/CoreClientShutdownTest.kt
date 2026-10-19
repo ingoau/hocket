@@ -15,6 +15,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.runCurrent
@@ -96,5 +97,31 @@ class CoreClientShutdownTest {
         try { pending.await() } catch (e: CancellationException) { threw = true }
         assertTrue("a cancelled query is not turned into a null result", threw)
         assertEquals(0, client.queryFailures.value)
+    }
+
+    @Test
+    fun aClosedClientLeavesNothingRunningInTheAppScope() = runTest {
+        // The app's scope outlives every client: one is replaced each time the service (and its core) restarts.
+        val app = kotlinx.coroutines.CoroutineScope(backgroundScope.coroutineContext + kotlinx.coroutines.SupervisorJob(backgroundScope.coroutineContext[kotlinx.coroutines.Job]))
+        fun running(): Int {
+            fun count(job: kotlinx.coroutines.Job): Int = job.children.sumOf { (if (it.isActive) 1 else 0) + count(it) }
+            return count(app.coroutineContext[kotlinx.coroutines.Job]!!)
+        }
+        val core = FakeCore(seed = 3, timers = false, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, app)
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        val watcher = app.launch { client.position.collect { } }
+        runCurrent()
+        watcher.cancel()
+        runCurrent()
+        val before = running()
+        client.close()
+        runCurrent()
+        println("MEASURE coroutines left in the app scope by a closed client: ${running()} (of $before while open)")
+        assertEquals(0, running())
+        // Still readable: the UI may draw the old client's last values for a frame.
+        assertTrue(client.started.value)
     }
 }

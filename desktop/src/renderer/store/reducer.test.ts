@@ -33,6 +33,26 @@ describe("reducer", () => {
     expect(settingValue(s, "missing", 42)).toBe(42);
   });
 
+  it("does not mirror mediaSession into view state (OS session is main-process only)", () => {
+    const s0 = applySnapshot(initialCoreState, snapshot);
+    const s1 = reduce(s0, { type: "mediaSession", data: { state: { ...snapshot.mediaSession, isPlaying: true } } });
+    expect(s1).toBe(s0);
+    expect(s1.mediaSession.isPlaying).toBe(false);
+  });
+
+  it("keeps the same transport object on position ticks, not seeks", () => {
+    const s0 = applySnapshot(initialCoreState, snapshot);
+    const tick = { ...snapshot.transport, position: { ...snapshot.transport.position, positionMs: 5750, takenAt: 750 } };
+    const s1 = reduce(s0, { type: "transportChanged", data: { transport: tick } });
+    expect(s1).toBe(s0);
+    const seek = { ...snapshot.transport, position: { ...snapshot.transport.position, positionMs: 90_000, takenAt: 800 } };
+    const s2 = reduce(s0, { type: "transportChanged", data: { transport: seek } });
+    expect(s2).not.toBe(s0);
+    expect(s2.transport.position.positionMs).toBe(90_000);
+    const paused = reduce(s0, { type: "transportChanged", data: { transport: { ...snapshot.transport, position: { ...snapshot.transport.position, isPlaying: false, rate: 0 } } } });
+    expect(paused.transport.position.isPlaying).toBe(false);
+  });
+
   it("mirrors *Changed events", () => {
     let s = applySnapshot(initialCoreState, snapshot);
     s = reduce(s, { type: "transportChanged", data: { transport: { ...snapshot.transport, volume: 0.9 } } });
@@ -50,6 +70,12 @@ describe("reducer", () => {
     expect(s.playerNotice).toBeUndefined();
     s = reduce(s, { type: "resumeOfferChanged", data: { offer: { deviceName: "Pixel", track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" }, positionMs: 10, lastSeen: 0 } } });
     expect(s.resumeOffer?.deviceName).toBe("Pixel");
+  });
+
+  it("returns the same state when libraryItemsChanged does not touch held copies", () => {
+    const s0 = applySnapshot(initialCoreState, snapshot);
+    const s1 = reduce(s0, { type: "libraryItemsChanged", data: { server_id: "s", items: [{ kind: "track", id: "nope", rating: 5, loved: true }], from_device: "other" } });
+    expect(s1).toBe(s0);
   });
 
   it("patches ratings and loves from libraryItemsChanged into now playing, the queue and server search results", () => {

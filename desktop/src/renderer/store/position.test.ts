@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { extrapolate } from "./position";
+import { extrapolate, frameDue } from "./position";
+
+describe("frameDue", () => {
+  /** Frames painted in one second of vsync at `hz` (with ±0.3 ms of jitter) under an `fps` cap. */
+  const painted = (hz: number, fps: number) => {
+    let last = 0;
+    let n = 0;
+    for (let i = 1; i <= hz; i++) {
+      const t = (i * 1000) / hz + (i % 2 ? 0.3 : -0.3);
+      if (frameDue(t - last, fps)) {
+        last = t;
+        n++;
+      }
+    }
+    return n;
+  };
+  it("keeps a 30 fps cap at 30 on a 60 Hz display, not every third frame", () => {
+    expect(painted(60, 30)).toBe(30);
+  });
+  it("never goes over the cap, and paints every frame when the cap is the refresh rate", () => {
+    expect(painted(60, 60)).toBe(60);
+    expect(painted(120, 30)).toBe(30);
+    expect(painted(144, 30)).toBeLessThanOrEqual(30);
+    expect(painted(144, 30)).toBeGreaterThanOrEqual(28);
+    expect(painted(60, 24)).toBeLessThanOrEqual(24);
+  });
+});
 
 describe("extrapolate", () => {
   it("holds still when paused", () => {

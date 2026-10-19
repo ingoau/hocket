@@ -175,9 +175,13 @@ void touch_clear_hold_handler(void *ctx);
 
 void now_playing_push(void);
 void now_playing_update(bool track_changed);
+/** Position-only: stamp the progress bar if Now Playing is on top; skip layout. */
+void now_playing_progress_only(void);
 void now_playing_settings_changed(void);
 void now_playing_art_ready(GBitmap *art);  // takes ownership; NULL clears
 void now_playing_art_progress(void);       // a chunk of the current cover arrived
+/** Drop a cover transfer that is no longer the current gen (skip storms). */
+void art_abort_inflight(void);
 Window *now_playing_window(void);
 
 // -- list.c --------------------------------------------------------------------------------------
@@ -203,3 +207,5 @@ void list_start_search(void);
 void lyrics_push(void);
 void lyrics_handle_page(DictionaryIterator *iter);
 void lyrics_track_changed(void);
+// The playhead moved or play / pause changed (a Now message): re-aim the wait for the next line.
+void lyrics_position_changed(void);

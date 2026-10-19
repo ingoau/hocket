@@ -402,44 +402,64 @@ fn perm(doc: &SessionDocument) -> Permutation {
 
 /// Derive the visible queue.
 pub fn derive(doc: &SessionDocument) -> DerivedQueue {
+    derive_window(doc, usize::MAX)
+}
+
+/// The upcoming context item at unshuffled `index`.
+fn context_item(keys: Option<&ContextKeys>, ts: &[TrackId], index: u32) -> QueueItem {
+    QueueItem {
+        key: keys
+            .and_then(|k| k.key(index as usize))
+            .unwrap_or_else(|| context_key(index)),
+        track_id: ts.get(index as usize).cloned().unwrap_or_default(),
+        source: QueueSource::Context { index },
+        unavailable: false,
+    }
+}
+
+/// The upcoming context items in play order (what [`derive`] lists after
+/// Playing Next), each built only when the iterator gets to it.
+pub fn upcoming_context(doc: &SessionDocument) -> impl Iterator<Item = QueueItem> + '_ {
+    let p = perm(doc);
+    let start = (doc.cursor as usize).min(p.len());
+    let ts = tracks(doc);
+    let keys = (start < p.len()).then(|| context_keys::read(doc)).flatten();
+    (start..p.len())
+        .filter_map(move |pos| p.to_context(pos as u32))
+        .map(move |index| context_item(keys.as_ref(), ts, index))
+}
+
+/// [`derive`] with at most `limit` upcoming context items built: a long
+/// context costs only the rows asked for. `total_upcoming` and `wrap_next`
+/// are exact; with `limit` 0 nothing per item is built at all.
+pub fn derive_window(doc: &SessionDocument, limit: usize) -> DerivedQueue {
     let p = perm(doc);
     let n = p.len();
     let start = (doc.cursor as usize).min(n);
     let ts = tracks(doc);
-    let keys = context_keys::read(doc);
-    let key = |index: u32| {
-        keys.as_ref()
-            .and_then(|k| k.key(index as usize))
-            .unwrap_or_else(|| context_key(index))
-    };
-    let upcoming: Vec<QueueItem> = (start..n)
-        .filter_map(|pos| p.to_context(pos as u32))
-        .map(|index| QueueItem {
-            key: key(index),
-            track_id: ts.get(index as usize).cloned().unwrap_or_default(),
-            source: QueueSource::Context { index },
-            unavailable: false,
-        })
-        .collect();
+    // Every position below `n` maps to a context index.
+    let remaining = n - start;
     // Mirrors `Candidate::Wrap` in `advance`.
-    let wrap_next =
-        (doc.insertions.is_empty() && upcoming.is_empty() && doc.repeat == RepeatMode::All)
-            .then(|| p.to_context(0))
-            .flatten()
-            .and_then(|index| {
-                Some(QueueItem {
-                    key: key(index),
-                    track_id: ts.get(index as usize)?.clone(),
-                    source: QueueSource::Context { index },
-                    unavailable: false,
-                })
-            });
+    let wraps = doc.insertions.is_empty() && remaining == 0 && doc.repeat == RepeatMode::All;
+    let keys = (wraps || (limit > 0 && remaining > 0))
+        .then(|| context_keys::read(doc))
+        .flatten();
+    let upcoming: Vec<QueueItem> = (start..n)
+        .take(limit)
+        .filter_map(|pos| p.to_context(pos as u32))
+        .map(|index| context_item(keys.as_ref(), ts, index))
+        .collect();
+    let wrap_next = wraps
+        .then(|| p.to_context(0))
+        .flatten()
+        .filter(|index| (*index as usize) < ts.len())
+        .map(|index| context_item(keys.as_ref(), ts, index));
     DerivedQueue {
         context_label: doc.context.as_ref().map(|c| c.label.clone()),
         history: doc.history.clone(),
         current: doc.current.clone(),
         playing_next: doc.insertions.clone(),
-        total_upcoming: (doc.insertions.len() + upcoming.len()) as u32,
+        total_upcoming: (doc.insertions.len() + remaining) as u32,
         upcoming,
         shuffle: doc.shuffle.is_some(),
         repeat: doc.repeat,
@@ -1375,7 +1395,15 @@ impl Reducer<'_, '_> {
     /// Move to the next playable item. Returns false (and leaves the document
     /// untouched) when there is none.
     fn advance(&mut self) -> bool {
-        let snapshot = self.doc.clone();
+        // Only these change before a way forward is found (the context and
+        // its keys only once one is): keep them, not a copy of the whole
+        // document, whose context can run to thousands of tracks.
+        let snapshot = (
+            self.doc.current.clone(),
+            self.doc.history.clone(),
+            self.doc.insertions.clone(),
+            self.doc.cursor,
+        );
         let effects_len = self.effects.len();
         // The outgoing item precedes anything skipped on the way to the next one.
         if let Some(cur) = self.doc.current.take() {
@@ -1383,7 +1411,7 @@ impl Reducer<'_, '_> {
         }
         loop {
             let Some(c) = self.candidate() else {
-                *self.doc = snapshot;
+                self.put_back(snapshot);
                 self.effects.truncate(effects_len);
                 return false;
             };
@@ -1417,7 +1445,7 @@ impl Reducer<'_, '_> {
                         .to_context(0)
                         .and_then(|i| self.fresh_context_item(i))
                     else {
-                        *self.doc = snapshot;
+                        self.put_back(snapshot);
                         self.effects.truncate(effects_len);
                         return false;
                     };
@@ -1428,6 +1456,15 @@ impl Reducer<'_, '_> {
             self.doc.current = Some(item);
             return true;
         }
+    }
+
+    /// Put back what [`Self::advance`] kept.
+    fn put_back(&mut self, kept: (Option<QueueItem>, Vec<QueueItem>, Vec<QueueItem>, u32)) {
+        let (current, history, insertions, cursor) = kept;
+        self.doc.current = current;
+        self.doc.history = history;
+        self.doc.insertions = insertions;
+        self.doc.cursor = cursor;
     }
 
     fn end_of_queue(&mut self) {
@@ -1919,6 +1956,56 @@ mod tests {
             },
         );
         assert_eq!(derive(&d).wrap_next, None);
+    }
+
+    /// The windowed derive and the lazy upcoming list are the full derive,
+    /// cut short: same rows, same keys, exact totals and wrap.
+    #[test]
+    fn windowed_derive_is_the_full_one_cut_short() {
+        let e = DeterministicEntropy::new(9);
+        let check = |d: &SessionDocument| {
+            let full = derive(d);
+            assert_eq!(upcoming_context(d).collect::<Vec<_>>(), full.upcoming);
+            for limit in [0, 1, 2, 7, 1_000] {
+                let w = derive_window(d, limit);
+                let mut cut = full.clone();
+                cut.upcoming.truncate(limit);
+                assert_eq!(w, cut, "limit {limit}");
+            }
+        };
+        let mut d = play(
+            &new_document("s", "id".into(), 0.0),
+            &e,
+            album("a", 9),
+            Some(2),
+            true,
+        );
+        check(&d);
+        d = step(
+            &d,
+            &e,
+            QueueOp::PlayNext {
+                server_id: "srv".into(),
+                track_ids: vec!["x".into(), "y".into()],
+            },
+        )
+        .0;
+        check(&d);
+        d = step(
+            &d,
+            &e,
+            QueueOp::SetRepeat {
+                mode: RepeatMode::All,
+            },
+        )
+        .0;
+        while derive(&d).total_upcoming > 0 {
+            d = step(&d, &e, QueueOp::Next).0;
+            check(&d);
+        }
+        assert!(derive_window(&d, 0).wrap_next.is_some());
+        d = step(&d, &e, QueueOp::SetShuffle { enabled: false }).0;
+        check(&d);
     }
 
     #[test]

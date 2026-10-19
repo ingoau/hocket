@@ -22,6 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -111,8 +112,14 @@ class PlaybackService : MediaLibraryService() {
         network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
         battery = BatterySaverMonitor(this, ::dispatch)
         pebble = PebbleBridge(this, { core }, { serverId }, scope)
-        // Subscribed before the snapshot is requested, so its `Started` cannot be missed.
-        scope.launch(start = CoroutineStart.UNDISPATCHED) { core.events.collect { event -> main.post { onEvent(event) } } }
+        // Subscribed before the snapshot is requested, so its `Started` cannot be missed. Collected
+        // on the core's event thread (Unconfined), not main: only what [onEvent] or the watch act
+        // on is posted, so position ticks, download and sync progress never wake the main looper.
+        scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            val gate = ServiceEventGate()
+            // Posted before onDestroy cancelled [scope] but run after: the bridge and backend are released.
+            core.events.collect { event -> if (gate.admit(event)) main.post { if (scope.isActive) onEvent(event) } }
+        }
         network.start()
         battery.start()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

@@ -385,12 +385,12 @@ function recomputePerf(): void {
 }
 
 /** Wire the bridge once at startup. Returns a disposer. */
-export function connectStore(): () => void {
+export function connectStore(kind: "main" | "mini" = "main"): () => void {
   const b = bridge();
   // The core emits LyricsChanged on every NowPlayingChanged; the snapshot on
   // (re)attach carries no lyrics, so ask once for whatever is already playing.
   const requestLyrics = (trackId: string | undefined) => {
-    if (!trackId) return;
+    if (!trackId || kind === "mini") return;
     void b.query({ type: "lyrics", data: { track_id: trackId } }).then((r) => {
       if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);

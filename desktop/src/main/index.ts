@@ -12,6 +12,7 @@ import { API_SCHEMA_VERSION, APP_SCHEME, ART_HOST, ART_SCHEME, DEV_SERVER_URL } 
 import { IPC } from "@shared/bridge-types";
 import { snapshotOf } from "@shared/core-handle";
 import { formatDeepLink, parseDeepLink } from "@shared/deep-link";
+import { PositionTickFilter } from "@shared/transport";
 import { ArtworkRegistry } from "./artwork";
 import { createCore, loadNative, NativeCoreUnavailable } from "./core-host";
 import { ServerCredentialStore } from "./credentials";
@@ -46,6 +47,9 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   void main();
 }
+
+// A stray rejected promise is logged, not fatal: the process holds the core and every window.
+process.on("unhandledRejection", (reason) => console.error("[main] unhandled promise rejection", reason));
 
 async function main(): Promise<void> {
   await app.whenReady();
@@ -173,8 +177,28 @@ async function main(): Promise<void> {
   });
 
   // Fan events out to every renderer window; keep the tray in step.
+  // mediaSession / backend / log are main-process only (OS session, player, tracing).
+  // The mini player only paints now-playing + transport; skip queue/library/lyrics/sync there.
+  const miniEvents = new Set<Event["type"]>([
+    "started",
+    "snapshot",
+    "nowPlayingChanged",
+    "transportChanged",
+    "connectionChanged",
+    "settingChanged",
+    "libraryItemsChanged",
+    "batterySaverChanged",
+  ]);
+  // Position reports (~1 Hz while playing) stay here: every window extrapolates from the stamp it has.
+  const ticks = new PositionTickFilter();
   core.onEvent((event: Event) => {
-    for (const w of windows.all()) w.webContents.send(IPC.event, event);
+    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && ticks.pass(event)) {
+      for (const w of windows.all()) {
+        if (w.isDestroyed()) continue;
+        if (windows.mini && w === windows.mini && !miniEvents.has(event.type)) continue;
+        w.webContents.send(IPC.event, event);
+      }
+    }
     if (event.type === "nowPlayingChanged") {
       const t = event.data.entry?.track;
       tray.update(t ? `${t.title} · ${t.artist ?? ""}` : undefined, lastPlaying);

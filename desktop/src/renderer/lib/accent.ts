@@ -2,8 +2,20 @@
 // downscaled image, drawn on a canvas. Cheap (32x32) and cached per URL.
 import { brightestPixel, type Rgb } from "./contrast";
 
+export const ACCENT_CACHE_CAP = 80;
 const cache = new Map<string, string | undefined>();
 const brightCache = new Map<string, Rgb | undefined>();
+
+function remember<K, V>(map: Map<K, V>, key: K, value: V): V {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > ACCENT_CACHE_CAP) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+  return value;
+}
 
 async function pixels(url: string): Promise<Uint8ClampedArray | undefined> {
   const img = new Image();
@@ -25,7 +37,7 @@ export async function extractAccent(url: string): Promise<string | undefined> {
   if (cache.has(url)) return cache.get(url);
   const data = await pixels(url);
   const v = data ? pickAccent(data) : undefined;
-  cache.set(url, v);
+  remember(cache, url, v);
   return v;
 }
 
@@ -34,7 +46,7 @@ export async function extractBrightest(url: string): Promise<Rgb | undefined> {
   if (brightCache.has(url)) return brightCache.get(url);
   const data = await pixels(url);
   const v = data ? brightestPixel(data) : undefined;
-  brightCache.set(url, v);
+  remember(brightCache, url, v);
   return v;
 }
 

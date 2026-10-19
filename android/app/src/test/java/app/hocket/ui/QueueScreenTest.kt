@@ -70,6 +70,29 @@ class QueueScreenTest {
     }
 
     @Test
+    fun tappingThePlayingRowNeverSendsItBackToTheStart() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val key = core.client.queue.value.current!!.item.key
+        core.client.dispatch(Commands.seekTo(60_000))
+        compose.waitForIdle()
+        compose.onNodeWithTag("queue.row.$key").performClick()
+        compose.waitForIdle()
+        assertEquals(key, core.client.queue.value.current!!.item.key)
+        assertTrue("still ${core.client.positionNow()} ms in, not restarted", core.client.positionNow() >= 60_000)
+        // Paused, the tap plays on from there.
+        core.client.dispatch(Command.Pause)
+        compose.waitForIdle()
+        compose.onNodeWithTag("queue.row.$key").performClick()
+        compose.waitForIdle()
+        assertTrue(core.client.isPlaying.value)
+        assertTrue(core.client.positionNow() >= 60_000)
+    }
+
+    @Test
     fun historySitsAboveNowPlayingAndCanBeReplayedOrCleared() {
         val core = TestCore()
         compose.setThemedContent(core) { QueuePanel() }

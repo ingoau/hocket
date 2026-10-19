@@ -19,6 +19,16 @@ function clamp(v: number, max?: number): number {
   return max !== undefined && max > 0 ? Math.min(lo, max) : lo;
 }
 
+/**
+ * Whether a frame `elapsed` ms after the last one painted is due under an `fps` cap. Frames
+ * arrive on the display's vsync with jitter, so a strict `elapsed >= 1000 / fps` misses the
+ * frame that lands a hair early: a 30 fps cap on a 60 Hz display painted every third frame
+ * (20 fps). A tenth of an interval of slack keeps it on every second one.
+ */
+export function frameDue(elapsed: number, fps: number): boolean {
+  return elapsed >= (1000 / fps) * 0.9;
+}
+
 /** Shared ticker: one rAF loop for every subscriber, at most `fps` updates a second. */
 class Ticker {
   private subs = new Set<() => void>();
@@ -41,8 +51,7 @@ class Ticker {
     if (this.raf !== undefined || this.paused || typeof requestAnimationFrame === "undefined") return;
     const loop = (t: number) => {
       this.raf = requestAnimationFrame(loop);
-      const interval = 1000 / this.fps;
-      if (t - this.last < interval) return;
+      if (!frameDue(t - this.last, this.fps)) return;
       this.last = t;
       this.now = t;
       for (const s of this.subs) s();

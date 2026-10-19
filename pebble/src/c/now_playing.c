@@ -90,7 +90,7 @@ static BitmapLayer *s_message_image;
 static TextLayer *s_message_text;
 
 static GBitmap *s_icon_skip_forward, *s_icon_skip_backward, *s_icon_ellipsis, *s_icon_play,
-    *s_icon_pause, *s_icon_play_pause, *s_icon_volume_up, *s_icon_volume_down;
+    *s_icon_pause, *s_icon_volume_up, *s_icon_volume_down;
 static GBitmap *s_image_volume_up, *s_image_volume_down, *s_image_no_music;
 static GBitmap *s_art;
 
@@ -118,6 +118,8 @@ static bool s_accel_subscribed;
 static ClickConfigProvider s_click_config;
 static int16_t s_marquee_offset;
 static uint8_t s_marquee_cycles;
+static bool s_title_overflow_valid;
+static int16_t s_title_overflow;
 
 static void prv_click_config_skip(void *context);
 static void prv_click_config_volume(void *context);
@@ -190,10 +192,14 @@ static void prv_track_update(Layer *layer, GContext *ctx) {
   const GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite));
   graphics_fill_rect(ctx, b, s_cfg->track_radius, GCornersAll);
-  uint32_t pct = 0;
-  if (g_now.duration_ms) pct = (uint64_t)now_position_ms() * 100 / g_now.duration_ms;
-  if (pct > 100) pct = 100;
-  const int16_t w = b.size.w * pct / 100;
+  // 32-bit maths (a 64-bit division pulls in 750 bytes of libgcc, and app code lives in app RAM):
+  // milliseconds up to 1000 s, seconds beyond, neither overflowing at a width of a few hundred.
+  const uint32_t dur = g_now.duration_ms;
+  uint32_t pos = now_position_ms();
+  if (pos > dur) pos = dur;
+  int16_t w = 0;
+  if (dur > 1000000) w = (pos / 1000) * b.size.w / (dur / 1000);
+  else if (dur) w = pos * b.size.w / dur;
   if (w > 0) {
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorBlack));
     graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), s_cfg->track_radius, GCornersAll);
@@ -217,8 +223,12 @@ static void prv_tick(struct tm *t, TimeUnits units) {
   if (g_now.flags & NowPlaying) prv_update_progress();
 }
 
+static bool prv_is_top(void) {
+  return s_window && window_stack_get_top_window() == s_window;
+}
+
 static void prv_set_tick(void) {
-  if (prv_progress_visible() && (g_now.flags & NowPlaying)) {
+  if (prv_is_top() && prv_progress_visible() && (g_now.flags & NowPlaying)) {
     tick_timer_service_subscribe(SECOND_UNIT, prv_tick);
   } else {
     tick_timer_service_unsubscribe();
@@ -287,15 +297,19 @@ static void prv_art_title_update(Layer *layer, GContext *ctx) {
 #endif
 
 static int16_t prv_title_overflow(void) {
+  if (s_title_overflow_valid) return s_title_overflow;
   GRect t = prv_art_title_rect();
   GSize used = graphics_text_layout_get_content_size(
       s_title_buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), GRect(0, 0, 2000, t.size.h),
       GTextOverflowModeFill, GTextAlignmentLeft);
-  return used.w - t.size.w;
+  s_title_overflow = used.w - t.size.w;
+  s_title_overflow_valid = true;
+  return s_title_overflow;
 }
 
 static void prv_marquee_step(void *context) {
   s_marquee_timer = NULL;
+  if (!prv_is_top()) return;
   const int16_t overflow = prv_title_overflow();
   if (overflow <= 0 || !prv_has_art()) {
     s_marquee_offset = 0;
@@ -322,6 +336,7 @@ static void prv_restart_marquee(void) {
   s_marquee_timer = NULL;
   s_marquee_offset = 0;
   s_marquee_cycles = 0;
+  s_title_overflow_valid = false;
   if (prv_has_art() && PBL_IF_RECT_ELSE(true, false)) {
     s_marquee_timer = app_timer_register(1000, prv_marquee_step, NULL);
   }
@@ -759,6 +774,7 @@ static void prv_art_gen_changed(void) {
   if (s_art_retry_timer) app_timer_cancel(s_art_retry_timer);
   s_art_request_timer = s_art_retry_timer = NULL;
   s_art_retries = 0;
+  art_abort_inflight();
   if (!g_now.art_gen) {
     now_playing_art_ready(NULL);
     return;
@@ -790,6 +806,10 @@ static void prv_update_accel(void) {
 }
 
 // -- Public ------------------------------------------------------------------------------------------
+
+void now_playing_progress_only(void) {
+  if (prv_is_top()) prv_update_progress();
+}
 
 void now_playing_update(bool track_changed) {
   if (!s_window) return;
@@ -919,6 +939,23 @@ static void prv_appear(Window *window) {
   touch_set_hold_handler(prv_hold, NULL);
   prv_reset_bar();
   prv_update_layout();
+  prv_restart_marquee();
+}
+
+static void prv_disappear(Window *window) {
+  tick_timer_service_unsubscribe();
+  if (s_marquee_timer) {
+    app_timer_cancel(s_marquee_timer);
+    s_marquee_timer = NULL;
+  }
+  touch_clear_hold_handler(NULL);
+}
+
+static void prv_destroy_bitmap(GBitmap **b) {
+  if (*b) {
+    gbitmap_destroy(*b);
+    *b = NULL;
+  }
 }
 
 static void prv_unload(Window *window) {
@@ -940,6 +977,16 @@ static void prv_unload(Window *window) {
   bitmap_layer_destroy(s_art_layer);
   if (s_art) gbitmap_destroy(s_art);
   s_art = NULL;
+  prv_destroy_bitmap(&s_icon_skip_forward);
+  prv_destroy_bitmap(&s_icon_skip_backward);
+  prv_destroy_bitmap(&s_icon_ellipsis);
+  prv_destroy_bitmap(&s_icon_play);
+  prv_destroy_bitmap(&s_icon_pause);
+  prv_destroy_bitmap(&s_icon_volume_up);
+  prv_destroy_bitmap(&s_icon_volume_down);
+  prv_destroy_bitmap(&s_image_volume_up);
+  prv_destroy_bitmap(&s_image_volume_down);
+  prv_destroy_bitmap(&s_image_no_music);
   prv_reset_bar();
   if (s_volume_icon_timer) app_timer_cancel(s_volume_icon_timer);
   s_volume_icon_timer = NULL;
@@ -955,7 +1002,6 @@ void now_playing_push(void) {
   s_icon_ellipsis = gbitmap_create_with_resource(RESOURCE_ID_ICON_ELLIPSIS);
   s_icon_play = gbitmap_create_with_resource(RESOURCE_ID_ICON_PLAY);
   s_icon_pause = gbitmap_create_with_resource(RESOURCE_ID_ICON_PAUSE);
-  s_icon_play_pause = gbitmap_create_with_resource(RESOURCE_ID_ICON_PLAY_PAUSE);
   s_icon_volume_up = gbitmap_create_with_resource(RESOURCE_ID_ICON_VOLUME_UP);
   s_icon_volume_down = gbitmap_create_with_resource(RESOURCE_ID_ICON_VOLUME_DOWN);
   s_image_volume_up = gbitmap_create_with_resource(RESOURCE_ID_LARGE_VOLUME_UP);
@@ -964,7 +1010,7 @@ void now_playing_push(void) {
 
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers){
-    .load = prv_load, .appear = prv_appear, .unload = prv_unload,
+    .load = prv_load, .appear = prv_appear, .disappear = prv_disappear, .unload = prv_unload,
   });
   window_stack_push(s_window, true);
 }

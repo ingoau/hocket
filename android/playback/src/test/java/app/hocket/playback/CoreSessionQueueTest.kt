@@ -2,7 +2,10 @@ package app.hocket.playback
 
 import android.app.Application
 import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
@@ -62,6 +65,86 @@ class CoreSessionQueueTest {
     }
 
     @Test
+    fun unchangedEntriesAreReusedAcrossStateChangesAndChangedOnesRebuilt() {
+        setUp()
+        val next = player.getMediaItemAt(3)
+        player.apply(state("t2").copy(isPlaying = false))
+        settle()
+        assertTrue("a pause reuses the other entries", next === player.getMediaItemAt(3))
+        // A renamed upcoming track (same keys, so applyQueue alone does not rebuild) shows on the next state.
+        val renamed = entry(3).copy(track = entry(3).track.copy(title = "Renamed"))
+        player.applyQueue(queue.copy(playingNext = listOf(renamed)))
+        player.apply(state("t2"))
+        settle()
+        assertEquals("Renamed", player.getMediaItemAt(3).mediaMetadata.title.toString())
+        assertEquals("Track 4", player.getMediaItemAt(4).mediaMetadata.title.toString())
+    }
+
+    @Test
+    fun positionOnlyApplyDoesNotRebuildTheTimeline() {
+        setUp()
+        var timelineChanges = 0
+        player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                timelineChanges++
+            }
+        })
+        settle()
+        val start = timelineChanges
+        val base = state("t2")
+        repeat(40) { i ->
+            player.apply(base.copy(position = PositionStamp((i * 750).toUInt(), i * 750.0, 1.0, true)))
+            settle()
+        }
+        assertEquals("40 position ticks must not rebuild the Media3 timeline", start, timelineChanges)
+        player.apply(base.copy(metadata = base.metadata!!.copy(title = "Other")))
+        settle()
+        assertTrue("a metadata change still rebuilds", timelineChanges > start)
+    }
+
+    @Test
+    fun aSeekReachesControllersAsADiscontinuity() {
+        setUp()
+        var discontinuities = 0
+        player.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+                discontinuities++
+            }
+        })
+        settle()
+        val base = state("t2")
+        player.apply(base.copy(position = PositionStamp(750u, 750.0, 1.0, true)), clockOffsetMs = 0.0)
+        settle()
+        assertEquals("a tick is not a discontinuity", 0, discontinuities)
+        // Seeked elsewhere (the app's scrubber, another device): same surface, new position.
+        player.apply(base.copy(position = PositionStamp(120_000u, 800.0, 1.0, true)), clockOffsetMs = 0.0)
+        settle()
+        assertTrue("a seek must reach controllers", discontinuities > 0)
+    }
+
+    @Test
+    fun applyQueueWithTheSameKeysDoesNotRebuildTheTimeline() {
+        setUp()
+        var timelineChanges = 0
+        player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                timelineChanges++
+            }
+        })
+        settle()
+        val start = timelineChanges
+        player.applyQueue(queue)
+        settle()
+        val loved = queue.current!!.track.copy(loved = true)
+        player.applyQueue(queue.copy(current = queue.current!!.copy(track = loved)))
+        settle()
+        assertEquals("metadata-only queue views must not rebuild the playlist", start, timelineChanges)
+        player.applyQueue(queue.copy(upcoming = listOf(entry(9))))
+        settle()
+        assertTrue("a membership change still rebuilds", timelineChanges > start)
+    }
+
+    @Test
     fun thePlaylistIsTheQueueAroundTheCurrentEntry() {
         setUp()
         assertEquals(6, player.mediaItemCount)
@@ -114,6 +197,32 @@ class CoreSessionQueueTest {
         sent.clear()
         player.seekTo(0, 0)
         assertEquals("k0", (sent.single() as Command.JumpToQueueItem).data.key)
+    }
+
+    @Test
+    fun pickingTheCurrentEntryLeavesItWhereItIs() {
+        setUp()
+        // A controller's queue view picking the playing entry (legacy `skipToQueueItem`) names no
+        // position: it must not send the track back to its start.
+        player.seekToDefaultPosition(2)
+        assertTrue("no seek to 0: $sent", sent.none { it is Command.MediaSessionCommand && it.data.action == MediaSessionAction.Seek })
+        assertTrue("no restart: $sent", sent.none { it is Command.JumpToQueueItem })
+        // A seek inside the current entry still seeks.
+        player.seekTo(2, 30_000)
+        assertEquals(30_000.0, (sent.single() as Command.MediaSessionCommand).data.value)
+    }
+
+    @Test
+    fun playingTheCurrentEntryByIdResumesInsteadOfRestarting() {
+        setUp()
+        // `playFromMediaId` with the playing entry's queue id (some cars and watches resume so).
+        player.setMediaItems(listOf(MediaItem.Builder().setMediaId(MediaId.QueueItem("k2").format()).build()), 0, C.TIME_UNSET)
+        settle()
+        assertTrue("not handed on as a jump: $requests", requests.isEmpty())
+        assertEquals(MediaSessionAction.Play, (sent.single() as Command.MediaSessionCommand).data.action)
+        // Another entry still plays through the library (a jump).
+        player.setMediaItems(listOf(MediaItem.Builder().setMediaId(MediaId.QueueItem("k4").format()).build()), 0, C.TIME_UNSET)
+        assertEquals("play@0" to listOf(MediaId.QueueItem("k4").format()), requests.last())
     }
 
     @Test

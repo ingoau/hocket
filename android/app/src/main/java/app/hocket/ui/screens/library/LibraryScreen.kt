@@ -266,9 +266,12 @@ internal fun ArtistsTab(serverId: String, control: SortControl, open: (DetailTar
 @Composable
 internal fun PlaylistsTab(serverId: String, control: SortControl, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val libraryGen = rememberSettledGeneration()
     var playlists by remember { mutableStateOf<List<Playlist>?>(null) }
-    LaunchedEffect(serverId, libraryGen) { playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data ?: playlists ?: emptyList() }
+    LaunchedEffect(serverId, libraryGen) {
+        if (libraryGen < 0) return@LaunchedEffect
+        playlists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data ?: playlists ?: emptyList()
+    }
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.Playlists
@@ -390,9 +393,12 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
 @Composable
 internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarget) -> Unit, topPadding: Dp = 0.dp) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
+    val libraryGen = rememberSettledGeneration()
     var genres by remember { mutableStateOf<List<Genre>?>(null) }
-    LaunchedEffect(serverId, libraryGen) { genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList() }
+    LaunchedEffect(serverId, libraryGen) {
+        if (libraryGen < 0) return@LaunchedEffect
+        genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList()
+    }
     val list = genres
     val pinnedIds = rememberPinnedIds(PinKind.Genre)
     val history = rememberRecentHistory()

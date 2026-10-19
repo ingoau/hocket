@@ -12,8 +12,9 @@
 //   while playing and flat when paused).
 //
 // Same slider semantics and keys as the mini player's SeekBar. The wave is
-// drawn by a requestAnimationFrame loop that writes the path directly (no
-// React render per frame) and only runs while something is moving.
+// drawn on the shared position ticker (store/position.ts), which writes the
+// path directly (no React render per frame), only runs while something is
+// moving, and keeps to the ticker's frame-rate cap.
 //
 // Two sizes: the fullscreen player's (times under the bar, the remaining time
 // on the right) and the player bar's ("bar": a slimmer wave with the elapsed
@@ -82,7 +83,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   // The player bar's wave moves only while the window has focus and the battery saver is off (it
   // is always on screen, unlike the fullscreen player's); otherwise it holds still, like with
   // reduced motion. The fullscreen one stops only with the window hidden.
-  const stopped = useApp((s) => (variant === "bar" ? s.perf !== "full" || s.batterySaver : s.perf === "stopped"));
+  const stopped = useApp((s) => (variant === "bar" ? s.perf !== "full" || s.batterySaver || s.fullscreen : s.perf === "stopped"));
   const reducedMotion = usePrefersReducedMotion();
   const [drag, setDrag] = useState<number | undefined>(undefined);
   const [hover, setHover] = useState<number | undefined>(undefined);
@@ -136,7 +137,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   const thumbH = variant === "bar" ? 18 : 28;
   const thumbW = variant === "bar" ? 4 : 5;
 
-  const live = useRef({ amp: waving ? geo.amplitude : 0, vel: 0, phase: 0, x0, x1: x0, mid });
+  const live = useRef({ amp: waving ? geo.amplitude : 0, vel: 0, phase: 0, x0, x1: x0, mid, moving: false });
   live.current.x0 = x0;
   live.current.mid = mid;
   if (reducedMotion || stopped) {
@@ -144,6 +145,15 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
     live.current.vel = 0;
   }
 
+  // What paint last wrote, per attribute: a write is skipped when the value is unchanged, so
+  // the labels and the slider's value (which assistive tech follows) change once a second, not
+  // every frame. Cleared whenever React may have rendered those elements afresh (the effect below).
+  const written = useRef(new Map<string, string>());
+  const put = (key: string, value: string, write: (v: string) => void) => {
+    if (written.current.get(key) === value) return;
+    written.current.set(key, value);
+    write(value);
+  };
   const paint = () => {
     const shown = dragRef.current !== undefined ? dragRef.current * dur : extrapolate(stamp, Date.now(), offset, durationMs);
     shownRef.current = shown;
@@ -153,22 +163,24 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
     const restStart = x + gap;
     live.current.x1 = playedEnd;
     const s = live.current;
-    path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase, geo.wavelength));
-    clipRect.current?.setAttribute("width", String(Math.max(0, playedEnd + stroke / 2)));
-    thumb.current?.setAttribute("x", String(x - thumbW / 2));
-    if (restLine.current) {
-      restLine.current.setAttribute("x1", String(restStart));
-      restLine.current.style.display = restStart < xEnd ? "" : "none";
-    }
-    if (stopDot.current) stopDot.current.style.display = restStart < xEnd - stroke * 2 ? "" : "none";
+    // While the wave moves, its frame (on the same tick, right after this) draws the path.
+    if (!s.moving) path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase, geo.wavelength));
+    put("clip", String(Math.max(0, playedEnd + stroke / 2)), (v) => clipRect.current?.setAttribute("width", v));
+    put("thumb", String(x - thumbW / 2), (v) => thumb.current?.setAttribute("x", v));
+    put("rest", String(restStart), (v) => restLine.current?.setAttribute("x1", v));
+    put("restShown", restStart < xEnd ? "" : "none", (v) => { if (restLine.current) restLine.current.style.display = v; });
+    put("stopShown", restStart < xEnd - stroke * 2 ? "" : "none", (v) => { if (stopDot.current) stopDot.current.style.display = v; });
     const seconds = Math.floor(shown / 1000);
-    bar.current?.setAttribute("aria-valuenow", String(seconds));
-    bar.current?.setAttribute("aria-valuetext", seekValueText(seconds * 1000, dur));
-    if (timeEl.current) timeEl.current.textContent = fmtTime(shown);
-    if (remainEl.current) remainEl.current.textContent = `-${fmtTime(Math.max(0, dur - shown))}`;
+    put("value", String(seconds), (v) => {
+      bar.current?.setAttribute("aria-valuenow", v);
+      bar.current?.setAttribute("aria-valuetext", seekValueText(seconds * 1000, dur));
+    });
+    const time = fmtTime(shown);
+    put("time", time, (v) => { if (timeEl.current) timeEl.current.textContent = v; });
+    put("remain", `-${fmtTime(Math.max(0, dur - shown))}`, (v) => { if (remainEl.current) remainEl.current.textContent = v; });
     if (bubbleEl.current) {
       bubbleEl.current.style.left = `${x}px`;
-      bubbleEl.current.textContent = fmtTime(shown);
+      bubbleEl.current.textContent = time;
     }
   };
 
@@ -182,36 +194,43 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   };
 
   useLayoutEffect(() => {
+    written.current.clear();
     paint();
     if (!stamp.isPlaying && !dragging) return;
     return ticker.subscribe(paint);
   }, [stamp, durationMs, offset, dur, dragging, focused, width, x0, xEnd, gap, stroke, thumbW]);
 
+  // The wave's motion runs on the shared position ticker, in the same frame as the position
+  // paint and at the same frame-rate cap (the lyrics fps setting, lower in the background and
+  // in battery saver), not on a loop of its own at the display's refresh rate.
   useEffect(() => {
     if (reducedMotion || stopped) return;
     const target = waving ? geo.amplitude : 0;
     const s = live.current;
     if (!waving && Math.abs(s.amp) < 0.01 && Math.abs(s.vel) < 0.01) return;
-    let raf = 0;
     let last = performance.now();
-    const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+    s.moving = true;
+    const frame = () => {
+      const now = ticker.now;
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
       last = now;
       s.vel += (-STIFFNESS * (s.amp - target) - DAMPING * s.vel) * dt;
       s.amp += s.vel * dt;
       s.phase = (s.phase + (geo.wavelength / geo.period) * dt) % geo.wavelength;
-      path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase, geo.wavelength));
       const settled = !waving && Math.abs(s.amp) < 0.01 && Math.abs(s.vel) < 0.01;
       if (settled) {
         s.amp = 0;
         s.vel = 0;
-        path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, 0, s.phase, geo.wavelength));
-        return;
+        s.moving = false;
+        unsubscribe();
       }
-      raf = requestAnimationFrame(frame);
+      path.current?.setAttribute("d", wavePath(s.x0, s.x1, s.mid, Math.max(0, s.amp), s.phase, geo.wavelength));
     };
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    const unsubscribe = ticker.subscribe(frame);
+    return () => {
+      s.moving = false;
+      unsubscribe();
+    };
   }, [waving, reducedMotion, stopped, geo]);
 
   const bubble = dragging || focused;

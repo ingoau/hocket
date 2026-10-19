@@ -76,14 +76,42 @@ impl ContextKeys {
         self.slots.get(index).map(|s| self.key_of(s))
     }
 
-    /// The slot that stands for `key`.
-    pub(crate) fn slot_for(&self, key: &str) -> Slot {
+    /// The serial `n` when `key` is exactly `<base>.<n>`.
+    fn serial_of(&self, key: &str) -> Option<u32> {
         key.strip_prefix(self.base.as_str())
             .and_then(|rest| rest.strip_prefix('.'))
             .and_then(|n| n.parse().ok())
             .filter(|n: &u32| format!("{}.{n}", self.base) == key)
+    }
+
+    /// The slot that stands for `key`.
+    pub(crate) fn slot_for(&self, key: &str) -> Slot {
+        self.serial_of(key)
             .map(Slot::Serial)
             .unwrap_or_else(|| Slot::Key(key.to_string()))
+    }
+
+    /// Every slot's key differs from the others and from each of `stored`.
+    /// Compared as slots (a key and the slot standing for it are the same),
+    /// so no serial key is formatted: a long context has thousands.
+    fn clear_of<'a>(&'a self, stored: impl Iterator<Item = &'a str>) -> bool {
+        #[derive(PartialEq, Eq, Hash)]
+        enum Id<'a> {
+            Serial(u32),
+            Key(&'a str),
+        }
+        let id = |key: &'a str| match self.serial_of(key) {
+            Some(n) => Id::Serial(n),
+            None => Id::Key(key),
+        };
+        let mut seen: HashSet<Id<'a>> = stored.map(id).collect();
+        seen.reserve(self.slots.len());
+        self.slots.iter().all(|s| {
+            seen.insert(match s {
+                Slot::Serial(n) => Id::Serial(*n),
+                Slot::Key(k) => id(k),
+            })
+        })
     }
 
     /// Unshuffled index of the slot holding `key`.
@@ -153,10 +181,6 @@ impl ContextKeys {
             slots,
         }
     }
-
-    fn keys(&self) -> impl Iterator<Item = QueueKey> + '_ {
-        self.slots.iter().map(|s| self.key_of(s))
-    }
 }
 
 /// FNV-1a over the track ids: cheap, and the same on every platform.
@@ -216,14 +240,13 @@ pub fn ensure(doc: &mut SessionDocument, entropy: &dyn Entropy) {
         return;
     }
     let usable = read(doc).is_some_and(|k| {
-        let mut seen: HashSet<QueueKey> = doc
-            .history
-            .iter()
-            .chain(doc.current.iter())
-            .chain(doc.insertions.iter())
-            .map(|i| i.key.clone())
-            .collect();
-        k.keys().all(|key| seen.insert(key))
+        k.clear_of(
+            doc.history
+                .iter()
+                .chain(doc.current.iter())
+                .chain(doc.insertions.iter())
+                .map(|i| i.key.as_str()),
+        )
     });
     if !usable {
         write(doc, ContextKeys::fresh(entropy, n));
@@ -250,6 +273,27 @@ mod tests {
         assert_eq!(k, ContextKeys::fresh(&DeterministicEntropy::new(1), 3));
         assert_eq!(k.index_of("k1.1"), Some(1));
         assert_eq!(k.index_of("k2"), None);
+    }
+
+    #[test]
+    fn clear_of_compares_keys_as_written() {
+        let e = DeterministicEntropy::new(1);
+        let mut k = ContextKeys::fresh(&e, 3);
+        assert!(k.clear_of(["x", "k1.02", "k10.2"].into_iter()));
+        assert!(
+            !k.clear_of(["x", "k1.2"].into_iter()),
+            "a stored key in a slot"
+        );
+        k.slots[0] = Slot::Key("k9".into());
+        assert!(k.clear_of(std::iter::empty()));
+        assert!(!k.clear_of(["k9"].into_iter()));
+        // A key slot spelling a serial one is the same key twice.
+        k.slots[0] = Slot::Key("k1.2".into());
+        assert!(!k.clear_of(std::iter::empty()));
+        k.slots[0] = Slot::Key("k1.1".into());
+        assert!(!k.clear_of(std::iter::empty()));
+        k.slots[0] = Slot::Serial(2);
+        assert!(!k.clear_of(std::iter::empty()));
     }
 
     #[test]

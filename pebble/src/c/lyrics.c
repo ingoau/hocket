@@ -5,9 +5,12 @@
 #include "hocket.h"
 
 #define MAX_LINES 160
-#define LINE_LEN 64
-#define FOLLOW_MS 250
-#define RETRY_TICKS (5000 / FOLLOW_MS)  // re-request a page the phone has not answered in 5 s
+// The phone cuts a row's title to 47 bytes (PebbleProtocol.encodeRows), so a line never needs more.
+#define LINE_LEN 48
+#define LYRICS_PREFETCH 12
+#define RETRY_MS 5000  // re-request a page the phone has not answered in 5 s
+// Wake just after the next line starts, so the time it is drawn at is already past its start.
+#define FOLLOW_SLACK_MS 20
 
 typedef struct {
   int32_t start_ms;  // -1 when unsynced
@@ -23,18 +26,36 @@ static int16_t s_current = -1;  // the line playing now
 static int16_t s_focus;         // the line in the middle
 static bool s_manual;           // focus moved by the buttons
 static bool s_loaded;
-static AppTimer *s_follow_timer;
-static bool s_waiting;       // a page request is out
-static uint8_t s_wait_ticks;
+static AppTimer *s_follow_timer;  // the next line's start
+static AppTimer *s_retry_timer;   // a page request the phone has not answered
+static bool s_waiting;            // a page request is out
 static char s_title[TEXT_LEN];
+
+static void prv_request(uint16_t offset);
+
+// The request or its reply got lost (not connected, the phone busy): ask again.
+static void prv_retry(void *context) {
+  s_retry_timer = NULL;
+  if (s_waiting && s_lines) prv_request(s_count);
+}
 
 static void prv_request(uint16_t offset) {
   static uint16_t next = 0x8000;  // lists use ids below this
   if (next < 0x8000) next = 0x8000;
   s_req_id = next++;
   s_waiting = true;
-  s_wait_ticks = 0;
+  if (s_retry_timer) app_timer_reschedule(s_retry_timer, RETRY_MS);
+  else s_retry_timer = app_timer_register(RETRY_MS, prv_retry, NULL);
   send_list_request(s_req_id, "lyrics", offset);
+}
+
+/** Ask for the next page only when the playhead or focus is near the last loaded line. */
+static void prv_prefetch(void) {
+  if (s_waiting || s_count >= s_total) return;
+  int16_t need = s_focus;
+  if (s_current > need) need = s_current;
+  if (need < 0) need = 0;
+  if (need + LYRICS_PREFETCH >= (int16_t)s_count) prv_request(s_count);
 }
 
 static int16_t prv_line_at(uint32_t pos) {
@@ -47,30 +68,46 @@ static int16_t prv_line_at(uint32_t pos) {
   return current;
 }
 
-// Moves to the line playing now.
+static void prv_follow(void *context);
+
+// Moves to the line playing now, then sleeps until the next one starts. Nothing wakes the page
+// while paused, before lyrics load or when they are unsynced: a Now message (play, pause, seek)
+// comes in through lyrics_position_changed, a page through lyrics_handle_page.
 static void prv_sync(void) {
-  const int16_t line = prv_line_at(now_position_ms());
+  const uint32_t pos = now_position_ms();
+  const int16_t line = prv_line_at(pos);
   if (line != s_current) {
     s_current = line;
     if (!s_manual) s_focus = line < 0 ? 0 : line;
     layer_mark_dirty(s_layer);
   }
+  if (s_follow_timer) app_timer_cancel(s_follow_timer);
+  s_follow_timer = NULL;
+  const int16_t next = line + 1;
+  if (!(g_now.flags & NowPlaying) || next >= s_count || s_lines[next].start_ms < 0) return;
+  const uint32_t start = s_lines[next].start_ms;
+  s_follow_timer = app_timer_register((start > pos ? start - pos : 0) + FOLLOW_SLACK_MS, prv_follow, NULL);
 }
 
-// The follow timer: the only place that registers it again.
 static void prv_follow(void *context) {
   s_follow_timer = NULL;
   if (!s_window || !s_lines) return;
-  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
-  // The request or its reply got lost (not connected, the phone busy): ask again.
-  if (s_waiting && ++s_wait_ticks >= RETRY_TICKS) prv_request(s_count);
   prv_sync();
+  prv_prefetch();
+}
+
+void lyrics_position_changed(void) {
+  if (!s_window || !s_lines) return;
+  prv_sync();
+  prv_prefetch();
 }
 
 void lyrics_handle_page(DictionaryIterator *iter) {
   Tuple *req = dict_find(iter, MESSAGE_KEY_ReqId);
   if (!req || req->value->uint16 != s_req_id || !s_lines) return;
   s_waiting = false;
+  if (s_retry_timer) app_timer_cancel(s_retry_timer);
+  s_retry_timer = NULL;
   Tuple *total = dict_find(iter, MESSAGE_KEY_Total);
   Tuple *offset = dict_find(iter, MESSAGE_KEY_Offset);
   Tuple *items = dict_find(iter, MESSAGE_KEY_Items);
@@ -89,25 +126,27 @@ void lyrics_handle_page(DictionaryIterator *iter) {
     while (p < end && s_count < s_total) {
       p++;  // flags
       char field[3][LINE_LEN];
+      bool whole = true;
       for (int f = 0; f < 3; f++) {
         const uint8_t *z = memchr(p, 0, end - p);
-        if (!z) { p = end; break; }
+        if (!z) { whole = false; break; }
         size_t len = z - p;
         if (len >= LINE_LEN) len = LINE_LEN - 1;
         memcpy(field[f], p, len);
         field[f][len] = 0;
         p = z + 1;
       }
-      if (p > end) break;
+      // A row cut off mid-message: its fields were never written.
+      if (!whole || p > end) break;
       Line *l = &s_lines[s_count++];
       l->start_ms = field[0][0] ? atoi(field[0]) : -1;
       strcpy(l->text, field[1]);
     }
   }
   s_loaded = true;
-  if (s_count < s_total) prv_request(s_count);
   s_current = -2;  // recompute
   prv_sync();
+  prv_prefetch();
   layer_mark_dirty(s_layer);
 }
 
@@ -149,6 +188,7 @@ void lyrics_track_changed(void) {
   s_current = -1;
 #ifdef HOCKET_DEMO
   prv_demo();
+  prv_sync();
 #else
   prv_request(0);
 #endif
@@ -206,6 +246,7 @@ static void prv_move(int delta) {
   if (next >= s_count) next = s_count - 1;
   s_focus = next;
   s_manual = s_focus != s_current;
+  prv_prefetch();
   layer_mark_dirty(s_layer);
 }
 
@@ -265,7 +306,6 @@ static void prv_load(Window *window) {
       SwipeDirection_Right | SwipeDirection_Up | SwipeDirection_Down));
 #endif
   lyrics_track_changed();
-  s_follow_timer = app_timer_register(FOLLOW_MS, prv_follow, NULL);
 }
 
 static void prv_appear(Window *window) {
@@ -275,6 +315,8 @@ static void prv_appear(Window *window) {
 static void prv_unload(Window *window) {
   if (s_follow_timer) app_timer_cancel(s_follow_timer);
   s_follow_timer = NULL;
+  if (s_retry_timer) app_timer_cancel(s_retry_timer);
+  s_retry_timer = NULL;
   layer_destroy(s_layer);
   s_layer = NULL;
   free(s_lines);

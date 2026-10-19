@@ -288,8 +288,9 @@ class MediaSessionBridge(
 
     /** Push a new state to the player and refresh the custom layout. Main thread. */
     fun apply(state: MediaSessionState, clockOffsetMs: Double, remote: Boolean = player.isRemote, remoteVolume: Boolean = false) {
+        val sameSurface = player.state.sameUiSurface(state)
         player.apply(state, clockOffsetMs, remote, remoteVolume)
-        session.setMediaButtonPreferences(buttons(state))
+        if (!sameSurface) session.setMediaButtonPreferences(buttons(state))
     }
 
     private fun buttons(state: MediaSessionState): List<CommandButton> {

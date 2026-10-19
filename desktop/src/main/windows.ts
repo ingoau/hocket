@@ -8,6 +8,9 @@ import type { WindowKind, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 import type { StoreFile } from "./store-file";
 
+/** How long after its renderer is gone a window is loaded again. */
+const RELOAD_AFTER_CRASH_MS = 250;
+
 export interface WindowsOptions {
   appRoot: string;
   isDev: boolean;
@@ -41,11 +44,38 @@ export class Windows {
   }
 
   private load(win: BrowserWindow, kind: WindowKind): void {
-    if (this.opts.isDev) {
-      void win.loadURL(`${DEV_SERVER_URL}/index.html?window=${kind}`);
-    } else {
-      void win.loadURL(`${APP_SCHEME}://renderer/index.html?window=${kind}`);
-    }
+    const url = this.opts.isDev ? `${DEV_SERVER_URL}/index.html?window=${kind}` : `${APP_SCHEME}://renderer/index.html?window=${kind}`;
+    // A load cut short (the window closed or reloaded meanwhile) rejects; that is not an error
+    // for the main process to die of.
+    win.loadURL(url).catch((err: unknown) => console.warn(`[main] the ${kind} window did not finish loading`, err));
+  }
+
+  /** Renderer crashes, per window kind, in the last minute. */
+  private crashes = new Map<WindowKind, number[]>();
+
+  /**
+   * A renderer that crashes or is killed (out of memory, the OS) leaves its window blank: load
+   * it again, and the store reattaches with RequestSnapshot. At most three times a minute, so a
+   * page that crashes as it loads does not spin.
+   */
+  private recoverRenderer(win: BrowserWindow, kind: WindowKind): void {
+    win.webContents.on("render-process-gone", (_e, details) => {
+      if (details.reason === "clean-exit" || this.quitting || win.isDestroyed()) return;
+      const now = Date.now();
+      const recent = (this.crashes.get(kind) ?? []).filter((t) => now - t < 60_000);
+      recent.push(now);
+      this.crashes.set(kind, recent);
+      if (recent.length > 3) {
+        console.error(`[main] the ${kind} window's renderer is gone again (${details.reason}); not reloading it`);
+        return;
+      }
+      console.error(`[main] the ${kind} window's renderer is gone (${details.reason}); reloading it`);
+      // Not from inside the event: the gone renderer is still being torn down, and a load
+      // started now can hang the window (and quitting) instead of starting a new one.
+      setTimeout(() => {
+        if (!this.quitting && !win.isDestroyed()) this.load(win, kind);
+      }, RELOAD_AFTER_CRASH_MS);
+    });
   }
 
   ensureAnchor(): BrowserWindow {
@@ -99,7 +129,7 @@ export class Windows {
     const persist = () => {
       if (win.isDestroyed()) return;
       const b = win.getNormalBounds();
-      this.opts.store.set("mainBounds", { ...b, maximized: win.isMaximized() });
+      this.opts.store.setSoon("mainBounds", { ...b, maximized: win.isMaximized() });
     };
     win.on("resize", persist);
     win.on("move", persist);
@@ -126,12 +156,14 @@ export class Windows {
         return;
       }
       persist();
+      this.opts.store.flush();
     });
     win.on("closed", () => {
       this.main = undefined;
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     // will-navigate is denied for every WebContents in index.ts (web-contents-created).
+    this.recoverRenderer(win, "main");
     this.load(win, "main");
     return win;
   }
@@ -173,13 +205,14 @@ export class Windows {
     win.on("move", () => {
       if (!win.isDestroyed()) {
         const [x, y] = win.getPosition();
-        this.opts.store.set("miniBounds", { x: x ?? 0, y: y ?? 0 });
+        this.opts.store.setSoon("miniBounds", { x: x ?? 0, y: y ?? 0 });
       }
     });
     win.on("closed", () => {
       this.mini = undefined;
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    this.recoverRenderer(win, "mini");
     this.load(win, "mini");
     return win;
   }
@@ -209,6 +242,8 @@ export class Windows {
 
   destroyAll(): void {
     this.quitting = true;
+    // A bounds write still held by setSoon (a move just before quitting).
+    this.opts.store.flush();
     for (const w of [this.main, this.mini, this.anchor]) if (w && !w.isDestroyed()) w.destroy();
     app.quit();
   }

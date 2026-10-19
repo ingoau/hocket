@@ -15,11 +15,15 @@ async function primes(page: Page): Promise<Prime[]> {
   return [...r.data.matchAll(/^ {2}prime (\w+) (\S+) -> (\S+) (\w+)/gm)].map((m) => ({ kind: m[1]!, id: m[2]!, trackId: m[3]!, outcome: m[4]! }));
 }
 
+/** When the last openFirstAlbum double-clicked its tile: the page (and its dwell) cannot start before. */
+let openedAt = 0;
+
 async function openFirstAlbum(page: Page): Promise<string> {
   await openPlace(page, "albums");
   const tile = page.getByTestId("grid-tile").first();
   await expect(tile).toBeVisible();
   const id = (await tile.getAttribute("data-id")) ?? "";
+  openedAt = Date.now();
   await tile.dblclick();
   await expect(page.getByTestId("view-album")).toBeVisible();
   await expect(page.getByTestId("track-row").first()).toBeVisible();
@@ -64,7 +68,9 @@ test.describe("album priming", () => {
     const { page } = hocket;
     await completeSetup(page);
     const albumId = await openFirstAlbum(page);
-    const shownAt = Date.now();
+    // From the click, not from when the test saw the rows: the page shows (and the dwell starts)
+    // as soon as the album loads, often well before the test's visibility checks return.
+    const shownAt = openedAt;
     // Well inside the dwell: nothing yet.
     await page.waitForTimeout(1200);
     expect((await primes(page)).filter((p) => p.kind === "album")).toEqual([]);

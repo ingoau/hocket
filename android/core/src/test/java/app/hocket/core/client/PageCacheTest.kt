@@ -43,6 +43,24 @@ class PageCacheTest {
     }
 
     @Test
+    fun newKeysPruneIdleOnesPastTheCap() = runTest {
+        val cache = PageCache<Int, Int>(this, pageSize = 10) { _, offset, limit ->
+            PageCache.Page((offset until offset + limit).toList(), offset, 10)
+        }
+        // Fill first so keys have pages; empty-at-create prune must not drop active lists.
+        repeat(PageCache.MAX_IDLE_KEYS) { k -> cache.ensure(k, 0) }
+        advanceUntilIdle()
+        repeat(12) { k -> cache.ensure(PageCache.MAX_IDLE_KEYS + k, 0) }
+        advanceUntilIdle()
+        assertEquals(PageCache.MAX_IDLE_KEYS + 12, cache.keyCount())
+        cache.invalidate()
+        assertEquals(PageCache.MAX_IDLE_KEYS, cache.keyCount())
+        cache.ensure(10_000, 0)
+        advanceUntilIdle()
+        assertEquals(PageCache.MAX_IDLE_KEYS, cache.keyCount())
+    }
+
+    @Test
     fun failedFetchLeavesPageAbsentForRetry() = runTest {
         var fail = true
         val cache = PageCache<String, Int>(this, pageSize = 10) { _, offset, limit ->

@@ -938,6 +938,8 @@ class FakeCore(
     }
 
     private fun jumpTo(key: QueueKey) {
+        // As the core: a jump to the current item restarts it.
+        if (current?.key == key) { startPlayback(0, true); emitTransport(); return }
         val before = captureSession()
         val view = queueView()
         view.history.indexOfFirst { it.item.key == key }.takeIf { it >= 0 }?.let { i ->

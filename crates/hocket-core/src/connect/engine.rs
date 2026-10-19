@@ -99,6 +99,9 @@ pub const LAN_BLOCK_MS: f64 = 600_000.0;
 /// and doubles each time, up to [`LAN_BLOCK_MS`].
 const LAN_STRIKES: u32 = 3;
 const LAN_STRIKE_BLOCK_MS: f64 = 30_000.0;
+/// How many times a queue edit the room refused is submitted again.
+const MAX_REPLAYS: u8 = 3;
+
 /// Cap on locally confirmed ops kept for a fast-forward replay.
 const UNSYNCED_CAP: usize = 500;
 /// Advertise the session revision at most this often.
@@ -584,6 +587,11 @@ pub struct Engine {
     /// them if their base happens to match after someone else's op, and then
     /// only the originator ever hears of it (an `OpAck`). Bounded.
     abandoned: VecDeque<PendingOp>,
+    /// Replayed queue edits by op id: how many times each has gone again.
+    replays: HashMap<String, u8>,
+    /// The latest of our ops (its counter) that moved each queue key: a
+    /// refused move another of ours has since superseded is not replayed.
+    moved: HashMap<QueueKey, u32>,
     unsynced: Vec<PendingOp>,
     unsynced_overflow: bool,
     sync_base: Option<SyncBase>,
@@ -741,6 +749,8 @@ impl Engine {
             doc: document,
             pending: VecDeque::new(),
             abandoned: VecDeque::new(),
+            replays: HashMap::new(),
+            moved: HashMap::new(),
             unsynced: vec![],
             unsynced_overflow: false,
             sync_base,
@@ -2978,6 +2988,12 @@ impl Engine {
                     document: d,
                     cause: DocChange::Local,
                 });
+                if let SessionOp::MoveQueueItem { key, .. } = &op {
+                    if self.moved.len() >= 256 {
+                        self.moved.clear();
+                    }
+                    self.moved.insert(key.clone(), self.op_counter);
+                }
                 self.send_op(
                     PendingOp {
                         op_id,
@@ -3071,6 +3087,7 @@ impl Engine {
     }
 
     fn on_op_ack(&mut self, op_id: String, revision: u32) {
+        self.replays.remove(&op_id);
         let Some(pos) = self.pending.iter().position(|p| p.op_id == op_id) else {
             // A rolled-back op the room accepted anyway: it is now part of the
             // session, so apply it exactly like anyone else's commit.
@@ -3123,9 +3140,18 @@ impl Engine {
         reason: RejectReason,
         document: SessionDocument,
     ) {
-        if !self.pending.iter().any(|p| p.op_id == op_id) {
+        let Some(rejected) = self.pending.iter().find(|p| p.op_id == op_id).cloned() else {
+            // One we rolled back already: the room's refusal is final, so a
+            // keyed queue edit goes again on the document as it now stands.
+            if reason == RejectReason::Stale {
+                if let Some(pos) = self.abandoned.iter().position(|p| p.op_id == op_id) {
+                    let p = self.abandoned.remove(pos).expect("position exists");
+                    self.replay(p);
+                }
+            }
+            self.replays.remove(&op_id);
             return;
-        }
+        };
         let previous = self.doc.clone();
         self.log(
             "info",
@@ -3135,7 +3161,8 @@ impl Engine {
             ),
         );
         // Ops after the rejected one were chained on a base the room never
-        // saw; the room may still accept them if the revisions line up.
+        // saw; the room may still accept them if the revisions line up (each
+        // is answered on its own, and replayed then if refused).
         self.abandon_pending();
         let had_unsynced = !self.unsynced.is_empty() || self.unsynced_overflow;
         self.confirmed = document.clone();
@@ -3162,6 +3189,73 @@ impl Engine {
         self.unsynced_overflow = false;
         if reason == RejectReason::Fenced {
             self.lose_lease();
+        }
+        if reason == RejectReason::Stale {
+            self.abandoned.retain(|p| p.op_id != op_id);
+            self.replay(rejected);
+        }
+        self.replays.remove(&op_id);
+    }
+
+    /// Submit a keyed queue edit the room refused (see
+    /// [`SessionOp::replays_after_conflict`]) again, on the document as it now
+    /// stands, under a fresh id. Only edits still meaning what they did go: a
+    /// removal keeps the keys that are still to come (one that became current
+    /// meanwhile is not skipped), and an edit goes at most [`MAX_REPLAYS`]
+    /// times.
+    fn replay(&mut self, p: PendingOp) {
+        if !p.op.replays_after_conflict() {
+            return;
+        }
+        let attempt = self.replays.remove(&p.op_id).unwrap_or(0) + 1;
+        if attempt > MAX_REPLAYS {
+            self.log(
+                "info",
+                format!("op {} dropped after {MAX_REPLAYS} replays", p.op_id),
+            );
+            return;
+        }
+        let op = match p.op {
+            SessionOp::MoveQueueItem { ref key, .. } => {
+                // Dragged again since: the later drop is what the user wants.
+                let counter = p
+                    .op_id
+                    .rsplit('-')
+                    .next()
+                    .and_then(|c| c.parse::<u32>().ok());
+                if matches!((counter, self.moved.get(key)), (Some(c), Some(&last)) if last > c) {
+                    return;
+                }
+                p.op
+            }
+            SessionOp::RemoveQueueItems { keys } => {
+                let q = crate::session::derive(&self.doc);
+                let to_come: BTreeSet<&str> = q
+                    .playing_next
+                    .iter()
+                    .chain(q.upcoming.iter())
+                    .map(|i| i.key.as_str())
+                    .collect();
+                let keys: Vec<QueueKey> = keys
+                    .into_iter()
+                    .filter(|k| to_come.contains(k.as_str()))
+                    .collect();
+                if keys.is_empty() {
+                    return;
+                }
+                SessionOp::RemoveQueueItems { keys }
+            }
+            op => op,
+        };
+        let before = self.pending.len();
+        self.on_local_op(op);
+        if self.pending.len() > before {
+            if let Some(new) = self.pending.back() {
+                if self.replays.len() >= 64 {
+                    self.replays.clear();
+                }
+                self.replays.insert(new.op_id.clone(), attempt);
+            }
         }
     }
 
@@ -3196,7 +3290,8 @@ impl Engine {
         }
         if !self.pending.is_empty() {
             // Ours are probably stale now; roll back so one press = one skip.
-            // The room may still accept a chained one, hence "abandoned".
+            // The room may still accept a chained one, hence "abandoned"
+            // (keyed queue edits it refuses are replayed then, on_op_reject).
             self.abandon_pending();
             self.doc = self.confirmed.clone();
         }
@@ -4707,6 +4802,273 @@ mod tests {
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::DocumentChanged { .. })));
+    }
+
+    /// Five tracks from `b` at revision 2, joined from `a`: t1 plays, t2..t5 follow.
+    fn joined_with_five(e: &mut Engine) {
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(e, Some(replica_with(room_doc)), vec![dev("b")]);
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: SessionOp::PlayTracks {
+                    server_id: "srv".into(),
+                    track_ids: (1..=5).map(|i| format!("t{i}")).collect(),
+                    start_index: 0,
+                    label: "sel".into(),
+                    shuffle: false,
+                    save_outgoing: false,
+                },
+                revision: 2,
+                device_id: "b".into(),
+                op_id: "b-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+    }
+
+    fn upcoming_tracks(e: &Engine) -> Vec<String> {
+        crate::session::derive(e.document())
+            .upcoming
+            .into_iter()
+            .map(|i| i.track_id)
+            .collect()
+    }
+
+    fn sent_moves(outs: &[Output]) -> Vec<(u32, String)> {
+        wire_outs(outs)
+            .into_iter()
+            .filter_map(|(_, m)| match m {
+                Msg::Op {
+                    base_revision,
+                    op: SessionOp::MoveQueueItem { .. },
+                    op_id,
+                    ..
+                } => Some((base_revision, op_id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn commit_from_b(e: &mut Engine, op: SessionOp, revision: u32) -> Vec<Output> {
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op,
+                revision,
+                device_id: "b".into(),
+                op_id: format!("b-{revision}"),
+                at: 2.0,
+                position_ms: 0,
+            }),
+        })
+    }
+
+    fn reject(e: &mut Engine, op_id: &str, revision: u32) -> Vec<Output> {
+        let mut document = e.confirmed.clone();
+        document.revision = revision;
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpReject {
+                op_id: op_id.into(),
+                current_revision: revision,
+                reason: RejectReason::Stale,
+                document,
+            }),
+        })
+    }
+
+    fn ack(e: &mut Engine, op_id: &str, revision: u32) -> Vec<Output> {
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: op_id.into(),
+                revision,
+            }),
+        })
+    }
+
+    fn move_op(e: &Engine, upcoming: usize, to_index: u32) -> SessionOp {
+        let key = crate::session::derive(e.document()).upcoming[upcoming]
+            .key
+            .clone();
+        SessionOp::MoveQueueItem { key, to_index }
+    }
+
+    #[test]
+    fn a_reorder_survives_someone_elses_commit_landing_first() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let op = move_op(&e, 2, 0);
+        let first = sent_moves(&e.handle(Input::LocalOp { op }));
+        assert_eq!(first.len(), 1);
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        // b changes repeat at revision 3 before ours is answered: ours is
+        // rolled back (the room will refuse it as stale) ...
+        let outs = commit_from_b(
+            &mut e,
+            SessionOp::SetRepeat {
+                mode: crate::api::RepeatMode::All,
+            },
+            3,
+        );
+        assert!(sent_moves(&outs).is_empty());
+        // ... and once it has, the move goes again on top of b's.
+        let again = sent_moves(&reject(&mut e, &first[0].1, 3));
+        assert_eq!(again.len(), 1, "the move is sent again");
+        assert_eq!(again[0].0, 3, "on the room's new revision");
+        assert_ne!(again[0].1, first[0].1, "under a fresh id");
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        assert_eq!(e.document().repeat, crate::api::RepeatMode::All);
+        ack(&mut e, &again[0].1, 4);
+        assert!(e.pending.is_empty());
+        assert_eq!(e.confirmed.revision, 4);
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+    }
+
+    #[test]
+    fn a_reorder_refused_as_stale_is_replayed_on_the_rooms_document() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let mut room_doc = e.confirmed.clone();
+        let op = move_op(&e, 2, 0);
+        let first = sent_moves(&e.handle(Input::LocalOp { op }));
+        // The room took someone's op we have not heard of yet.
+        room_doc.repeat = crate::api::RepeatMode::One;
+        room_doc.revision = 3;
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpReject {
+                op_id: first[0].1.clone(),
+                current_revision: 3,
+                reason: RejectReason::Stale,
+                document: room_doc,
+            }),
+        });
+        let again = sent_moves(&outs);
+        assert_eq!(again.len(), 1, "the move is sent again");
+        assert_eq!(again[0].0, 3);
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        assert_eq!(e.document().repeat, crate::api::RepeatMode::One);
+    }
+
+    /// Two quick drags in flight when someone else commits: the room refuses
+    /// the first and takes the chained second. Each refusal replays once and
+    /// the session settles with both moves (no replay storm).
+    #[test]
+    fn chained_reorders_settle_after_a_conflict() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let a = sent_moves(&e.handle(Input::LocalOp {
+            op: move_op(&e, 3, 0),
+        }));
+        let b = sent_moves(&e.handle(Input::LocalOp {
+            op: move_op(&e, 3, 1),
+        }));
+        assert_eq!((a[0].0, b[0].0), (2, 3), "chained");
+        commit_from_b(
+            &mut e,
+            SessionOp::SetRepeat {
+                mode: crate::api::RepeatMode::All,
+            },
+            3,
+        );
+        // The room refuses A (base 2) and, its revision now 3, takes B (base 3).
+        let a2 = sent_moves(&reject(&mut e, &a[0].1, 3));
+        assert_eq!(a2.len(), 1);
+        let outs = ack(&mut e, &b[0].1, 4);
+        assert!(sent_moves(&outs).is_empty(), "B landing replays nothing");
+        // A' (base 3) is now stale too: refused once more, replayed once more.
+        let a3 = sent_moves(&reject(&mut e, &a2[0].1, 4));
+        assert_eq!(a3.len(), 1);
+        assert_eq!(a3[0].0, 4);
+        ack(&mut e, &a3[0].1, 5);
+        assert!(e.pending.is_empty());
+        assert_eq!(e.confirmed.revision, 5);
+        let ups = upcoming_tracks(&e);
+        assert_eq!(ups[0], "t5", "the first drag landed");
+        assert_eq!(ups.len(), 4);
+    }
+
+    /// The same row dragged twice while someone else commits: the room
+    /// refuses the first drop and takes the second. The first is not replayed
+    /// over it, so the row ends where it was dropped last.
+    #[test]
+    fn a_drag_superseded_by_a_later_one_is_not_replayed() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let key = crate::session::derive(e.document()).upcoming[3].key.clone();
+        let a = sent_moves(&e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem {
+                key: key.clone(),
+                to_index: 0,
+            },
+        }));
+        let b = sent_moves(&e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem { key, to_index: 2 },
+        }));
+        assert_eq!(upcoming_tracks(&e), ["t2", "t3", "t5", "t4"]);
+        commit_from_b(
+            &mut e,
+            SessionOp::SetRepeat {
+                mode: crate::api::RepeatMode::All,
+            },
+            3,
+        );
+        assert!(
+            sent_moves(&reject(&mut e, &a[0].1, 3)).is_empty(),
+            "superseded"
+        );
+        ack(&mut e, &b[0].1, 4);
+        assert!(e.pending.is_empty());
+        assert_eq!(upcoming_tracks(&e), ["t2", "t3", "t5", "t4"]);
+    }
+
+    #[test]
+    fn a_replayed_edit_gives_up_after_a_few_refusals() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let mut id = sent_moves(&e.handle(Input::LocalOp {
+            op: move_op(&e, 2, 0),
+        }))[0]
+            .1
+            .clone();
+        let mut sends = 0;
+        for rev in 3..20 {
+            let again = sent_moves(&reject(&mut e, &id, rev));
+            if again.is_empty() {
+                break;
+            }
+            sends += 1;
+            id = again[0].1.clone();
+        }
+        assert_eq!(sends, MAX_REPLAYS as usize);
+    }
+
+    #[test]
+    fn a_replayed_removal_never_skips_what_became_current() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let next = crate::session::derive(e.document()).upcoming[0].key.clone();
+        let first = wire_outs(&e.handle(Input::LocalOp {
+            op: SessionOp::RemoveQueueItems { keys: vec![next] },
+        }));
+        let Msg::Op { op_id, .. } = &first[0].1 else {
+            panic!("an op")
+        };
+        // The playing device's track ends first: what we removed is now current.
+        commit_from_b(&mut e, SessionOp::Next, 3);
+        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        let outs = reject(&mut e, op_id, 3);
+        assert!(
+            wire_outs(&outs)
+                .iter()
+                .all(|(_, m)| !matches!(m, Msg::Op { .. })),
+            "not replayed"
+        );
+        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
     }
 
     #[test]

@@ -147,11 +147,44 @@ pub fn bump_revision(doc: &mut SessionDocument, now: EpochMs) {
 }
 
 /// True when two documents are equal apart from `revision` and `updated_at`.
+/// Field by field, without copying either (every reducer op asks, and a
+/// long context makes a copy cost as much as the op). The destructuring is
+/// exhaustive, so a new field cannot be left out.
 pub fn same_state(a: &SessionDocument, b: &SessionDocument) -> bool {
-    let mut b2 = b.clone();
-    b2.revision = a.revision;
-    b2.updated_at = a.updated_at;
-    *a == b2
+    let SessionDocument {
+        schema_version,
+        session_id,
+        scope,
+        revision: _,
+        updated_at: _,
+        context,
+        mode,
+        cursor,
+        current,
+        history,
+        insertions,
+        shuffle,
+        repeat,
+        autoplay,
+        transport,
+        saved_queues,
+        extra,
+    } = a;
+    *schema_version == b.schema_version
+        && *session_id == b.session_id
+        && *scope == b.scope
+        && *mode == b.mode
+        && *cursor == b.cursor
+        && *repeat == b.repeat
+        && *autoplay == b.autoplay
+        && *current == b.current
+        && *shuffle == b.shuffle
+        && *transport == b.transport
+        && *insertions == b.insertions
+        && *history == b.history
+        && *saved_queues == b.saved_queues
+        && *extra == b.extra
+        && *context == b.context
 }
 
 /// Structural validation. A document that fails here came from a buggy peer
@@ -374,5 +407,14 @@ mod tests {
         assert!(same_state(&a, &b));
         b.cursor = 1;
         assert!(!same_state(&a, &b));
+        let mut c = a.clone();
+        c.extra.insert("contextKeys".into(), "{}".into());
+        assert!(!same_state(&a, &c));
+        let mut d = a.clone();
+        d.context.as_mut().unwrap().tracks.push("x".into());
+        assert!(!same_state(&a, &d));
+        let mut e = a.clone();
+        e.transport.played_ms = 1;
+        assert!(!same_state(&a, &e));
     }
 }

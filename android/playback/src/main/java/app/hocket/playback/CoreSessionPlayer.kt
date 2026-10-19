@@ -17,6 +17,7 @@ import app.hocket.core.api.QueueView
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.PositionClock
+import app.hocket.core.client.continuesTo
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import android.os.Looper
@@ -123,20 +124,57 @@ class CoreSessionPlayer(
     private var queue: QueueView? = null
     private var timeline = QueueTimeline.EMPTY
 
+    /** A playlist entry other than the current one, as built for [track]. */
+    private class CachedItem(val track: TrackSummary, val data: MediaItemData)
+
+    /**
+     * The last playlist's entries by queue key. A play/pause, seek or skip rebuilds the state; the
+     * entries whose track has not changed are reused, so neither their metadata nor their artwork
+     * URI is built again, and Media3's playlist diff finds them identical at once.
+     */
+    private var items: Map<String, CachedItem> = emptyMap()
+
     /** Apply a new queue view from the core. Main thread. */
     fun applyQueue(view: QueueView) {
+        val prev = queue
+        val trackId = current.metadata?.trackId
         queue = view
+        // Rating/love and other metadata-only queue views must not rebuild the
+        // Media3 playlist; [apply] still refreshes the current item's metadata.
+        if (prev != null && sameTimelineKeys(prev, view, trackId)) return
         invalidateState()
+    }
+
+    private fun sameTimelineKeys(a: QueueView, b: QueueView, trackId: String?): Boolean {
+        val left = timeline(a, trackId)
+        val right = timeline(b, trackId)
+        if (left.currentIndex != right.currentIndex || left.entries.size != right.entries.size) return false
+        for (i in left.entries.indices) {
+            if (left.entries[i].item.key != right.entries[i].item.key) return false
+        }
+        return true
     }
 
     /** Apply a new state from the core and notify controllers. Main thread. */
     fun apply(state: MediaSessionState, clockOffsetMs: Double = this.clockOffsetMs, remote: Boolean = this.remote, remoteVolume: Boolean = this.remoteVolume) {
+        val prev = current
+        val remoteFlagsChanged = this.remote != remote || this.remoteVolume != (remote && remoteVolume)
         current = state
         this.clockOffsetMs = clockOffsetMs
         this.remote = remote
         this.remoteVolume = remote && remoteVolume
+        // Position ticks only refresh the stamp; Media3 polls the live supplier below,
+        // so rebuilding the playlist over binder is wasted. A seek is not a tick: it
+        // must reach controllers as a discontinuity.
+        if (!remoteFlagsChanged && prev.isPositionTick(state)) return
+        if (prev.metadata?.trackId == state.metadata?.trackId && state.metadata != null && !prev.position.continuesTo(state.position)) {
+            seekedTo = PositionClock.extrapolate(state.position, now(), clockOffsetMs, state.metadata?.durationMs?.toLong())
+        }
         invalidateState()
     }
+
+    /** A seek made elsewhere (the app, another device) for the next [getState] to report once. */
+    private var seekedTo: Long? = null
 
     /** The track behind queue entry [key] in the current queue view; null when it is not there. */
     fun trackIdForQueueKey(key: String): String? = queue?.let { q ->
@@ -198,22 +236,34 @@ class CoreSessionPlayer(
                 builder.setPlaylist(listOf(MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(mm).build()).setMediaMetadata(mm).setDurationUs(durationUs).setIsSeekable(seekable).build()))
                 builder.setCurrentMediaItemIndex(0)
             } else {
+                val built = HashMap<String, CachedItem>(timeline.entries.size)
                 builder.setPlaylist(timeline.entries.mapIndexed { i, entry ->
-                    val id = MediaId.QueueItem(entry.item.key).format()
+                    val key = entry.item.key
                     if (i == timeline.currentIndex) {
+                        val id = MediaId.QueueItem(key).format()
                         MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(mm).build()).setMediaMetadata(mm).setDurationUs(durationUs).setIsSeekable(seekable).build()
                     } else {
-                        val em = trackMetadata(entry.track, artwork(entry.track))
-                        MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(em).build()).setMediaMetadata(em).setDurationUs(Util.msToUs(entry.track.durationMs.toLong())).build()
+                        val cached = items[key]?.takeIf { it.track === entry.track || it.track == entry.track } ?: CachedItem(entry.track, run {
+                            val id = MediaId.QueueItem(key).format()
+                            val em = trackMetadata(entry.track, artwork(entry.track))
+                            MediaItemData.Builder(id).setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(em).build()).setMediaMetadata(em).setDurationUs(Util.msToUs(entry.track.durationMs.toLong())).build()
+                        })
+                        built[key] = cached
+                        cached.data
                     }
                 })
+                items = built
                 builder.setCurrentMediaItemIndex(timeline.currentIndex)
             }
-            val stamp = s.position
             val duration = meta.durationMs.toLong()
-            builder.setContentPositionMs { PositionClock.extrapolate(stamp, now(), clockOffsetMs, duration) }
+            builder.setContentPositionMs {
+                val live = current
+                PositionClock.extrapolate(live.position, now(), clockOffsetMs, live.metadata?.durationMs?.toLong() ?: duration)
+            }
             builder.setContentBufferedPositionMs { duration }
+            seekedTo?.let { builder.setPositionDiscontinuity(Player.DISCONTINUITY_REASON_SEEK, it) }
         }
+        seekedTo = null
         return builder.build()
     }
 
@@ -287,6 +337,9 @@ class CoreSessionPlayer(
             // Another queue entry (a controller's queue view): jump to it.
             mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != t.currentIndex && mediaItemIndex in t.entries.indices ->
                 dispatch(Commands.jumpToQueueItem(t.entries[mediaItemIndex].item.key))
+            // The current entry picked from a queue view (`skipToQueueItem`, `seekToDefaultPosition`)
+            // names no position: it is already playing, so it stays where it is, never back to 0.
+            positionMs == C.TIME_UNSET && t.entries.isNotEmpty() && mediaItemIndex == t.currentIndex -> Unit
             else -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, (if (positionMs == C.TIME_UNSET) 0L else positionMs).coerceAtLeast(0).toDouble()))
         }
         return Futures.immediateVoidFuture()
@@ -319,7 +372,16 @@ class CoreSessionPlayer(
     }
 
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
-        if (mediaItems.isNotEmpty()) media?.play(mediaItems.map { it.mediaId }, if (startIndex == C.INDEX_UNSET) 0 else startIndex)
+        val start = if (startIndex == C.INDEX_UNSET) 0 else startIndex
+        // A controller playing the session's own current entry (`playFromMediaId` with its queue id,
+        // as some cars and watches do to resume) means play on: a jump to the current entry would
+        // restart it.
+        val key = (mediaItems.getOrNull(start)?.mediaId?.let(MediaId::parse) as? MediaId.QueueItem)?.key
+        if (key != null && key == queue?.current?.item?.key) {
+            dispatch(Commands.mediaSessionCommand(MediaSessionAction.Play))
+            return Futures.immediateVoidFuture()
+        }
+        if (mediaItems.isNotEmpty()) media?.play(mediaItems.map { it.mediaId }, start)
         return Futures.immediateVoidFuture()
     }
 }

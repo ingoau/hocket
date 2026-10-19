@@ -3,7 +3,7 @@
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
-import { useTheme } from "../App";
+import { useTheme } from "../lib/theme";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { SeekBar } from "../components/PlayerBar";
@@ -11,12 +11,11 @@ import { Heart } from "../components/Stars";
 
 export function MiniApp() {
   const now = useApp((s) => s.nowPlaying);
-  const transport = useApp((s) => s.transport);
+  const playing = useApp((s) => s.transport.position.isPlaying);
   const win = useApp((s) => s.windowState);
   useTheme();
   const d = bridge().dispatch;
   const track = now?.track;
-  const playing = transport.position.isPlaying;
   return (
     <main className="mini" aria-label={t("mini.title")} data-testid="mini-player">
       <div className="art-wrap"><Artwork id={track?.coverArt} size={300} className="art" /></div>
