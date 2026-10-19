@@ -30,7 +30,9 @@ import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
-const FullscreenPlayer = lazy(() => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer })));
+// One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
+const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
+const FullscreenPlayer = lazy(() => loadFullscreen().catch(loadFullscreen));
 
 export function App() {
   const ready = useApp((s) => s.ready);
