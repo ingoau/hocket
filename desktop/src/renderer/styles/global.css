@@ -562,7 +562,7 @@ h3 { font-size: var(--fs-lg); }
 .right-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
 .pane-body { flex: 1; min-height: 0; overflow: auto; }
 .queue-section { padding: 6px 10px 2px; color: var(--fg-faint); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; position: sticky; top: 0; background: var(--bg-sunken); z-index: 1; }
-.qrow { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 3px; margin: 0 4px; }
+.qrow { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 3px; margin: 0 4px; position: relative; overflow: visible; }
 .qrow:hover { background: var(--bg-hover); }
 .qrow.selected { background: var(--selection); }
 .qrow.current { background: var(--accent-soft); }
@@ -580,8 +580,24 @@ h3 { font-size: var(--fs-lg); }
 .qrow .dur { color: var(--fg-faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .qrow .grip { color: var(--fg-faint); cursor: grab; opacity: 0; }
 button.qrow { width: 100%; }
+.qrow.next, .qrow.upcoming { cursor: grab; }
 .qrow:hover .grip { opacity: 1; }
-.qrow.dragging { opacity: 0.4; }
+.qrow.dragging { opacity: 0.4; cursor: grabbing; }
+/* Insertion line is a straight bar. An inset box-shadow would follow the row's radius. */
+.qrow.drop-before::before,
+.qrow.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.qrow.drop-before::before { top: 0; }
+.qrow.drop-after::after { bottom: 0; }
 .sq-row { display: flex; gap: 10px; padding: 8px 10px; align-items: center; margin: 0 4px; border-radius: var(--shape-md); }
 .sq-row:hover { background: var(--bg-hover); }
 .sq-row .art { width: 40px; height: 40px; border-radius: var(--shape-sm); background: var(--bg-elev); }
