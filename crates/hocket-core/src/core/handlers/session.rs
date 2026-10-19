@@ -15,7 +15,9 @@ use crate::connect::session_adapter::TunableReducer;
 use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
 use crate::core::state::SavedPosition;
-use crate::session::reducer::{derive, reduce, QueueOp, ReduceCtx};
+use crate::session::reducer::{
+    derive, derive_window, reduce, upcoming_context, QueueOp, ReduceCtx, QUEUE_VIEW_UPCOMING,
+};
 use crate::session::{saved, Effect};
 use crate::undo::{SessionUndo, UndoAction, UndoTier};
 
@@ -37,9 +39,7 @@ impl Resolver for DbResolver<'_> {
                 return Some(i.track_id.clone());
             }
         }
-        derive(doc)
-            .upcoming
-            .into_iter()
+        upcoming_context(doc)
             .find(|i| &i.key == key)
             .map(|i| i.track_id)
     }
@@ -49,8 +49,7 @@ impl Resolver for DbResolver<'_> {
             return false;
         };
         let doc = e.document();
-        doc.insertions.iter().any(|i| &i.key == key)
-            || derive(doc).upcoming.iter().any(|i| &i.key == key)
+        doc.insertions.iter().any(|i| &i.key == key) || upcoming_context(doc).any(|i| &i.key == key)
     }
 
     fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
@@ -711,7 +710,7 @@ impl Actor {
         let last = doc.autoplay
             && doc.repeat == RepeatMode::Off
             && self.playback.loaded
-            && derive(doc).total_upcoming == 0;
+            && derive_window(doc, 0).total_upcoming == 0;
         if !last
             || self.autoplay.is_none()
             || self.autoplay_prefetched.as_ref() == Some(&current.key)
@@ -831,7 +830,9 @@ impl Actor {
         let wanted = self.doc().is_some_and(|d| {
             d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
                 && (advance
-                    || (d.autoplay && d.repeat == RepeatMode::Off && derive(d).total_upcoming == 0))
+                    || (d.autoplay
+                        && d.repeat == RepeatMode::Off
+                        && derive_window(d, 0).total_upcoming == 0))
         });
         if !wanted {
             // The engine is back: fetch ahead for whatever is last now.
@@ -875,7 +876,7 @@ impl Actor {
         let queue_ran_out = advance
             && self
                 .doc()
-                .map(|d| derive(d).total_upcoming == 0)
+                .map(|d| derive_window(d, 0).total_upcoming == 0)
                 .unwrap_or(false);
         self.local_op(SessionOp::AppendAutoplay { items });
         if queue_ran_out && self.owns_transport() {
@@ -1088,8 +1089,7 @@ impl Actor {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
-        let mut derived = derive(doc);
-        derived.window_for_view();
+        let derived = derive_window(doc, QUEUE_VIEW_UPCOMING);
         let mut seen: HashSet<&TrackId> = HashSet::new();
         let mut ids: Vec<TrackId> = vec![];
         for i in derived

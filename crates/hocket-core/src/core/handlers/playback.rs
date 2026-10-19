@@ -18,7 +18,7 @@ use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
 use crate::outbox::{ScrobbleAction, Verdict};
-use crate::session::reducer::derive;
+use crate::session::reducer::derive_window;
 
 impl Actor {
     // -- loading ----------------------------------------------------------------
@@ -76,8 +76,10 @@ impl Actor {
         if doc.repeat == RepeatMode::One {
             return None;
         }
-        let d = derive(doc);
         let offline = self.is_offline();
+        // Context items are never marked unavailable: online, the first
+        // upcoming one is as far as the search below can get.
+        let d = derive_window(doc, if offline { usize::MAX } else { 1 });
         // Repeat All wraps to the top: that item is next too (#13).
         d.playing_next
             .into_iter()
