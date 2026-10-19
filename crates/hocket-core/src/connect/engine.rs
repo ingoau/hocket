@@ -3136,6 +3136,11 @@ impl Engine {
         );
         // Ops after the rejected one were chained on a base the room never
         // saw; the room may still accept them if the revisions line up.
+        let replay = if reason == RejectReason::Stale {
+            self.replayable_from(Some(&op_id))
+        } else {
+            Vec::new()
+        };
         self.abandon_pending();
         let had_unsynced = !self.unsynced.is_empty() || self.unsynced_overflow;
         self.confirmed = document.clone();
@@ -3162,6 +3167,30 @@ impl Engine {
         self.unsynced_overflow = false;
         if reason == RejectReason::Fenced {
             self.lose_lease();
+        }
+        self.replay(replay);
+    }
+
+    /// Pending ops worth replaying after a conflict (see
+    /// [`SessionOp::replays_after_conflict`]): from `from` on when given (the
+    /// earlier ones may still be acknowledged), else all of them.
+    fn replayable_from(&self, from: Option<&str>) -> Vec<SessionOp> {
+        let start = from
+            .and_then(|id| self.pending.iter().position(|p| p.op_id == id))
+            .unwrap_or(0);
+        self.pending
+            .iter()
+            .skip(start)
+            .filter(|p| p.op.replays_after_conflict())
+            .map(|p| p.op.clone())
+            .collect()
+    }
+
+    /// Submit rolled-back edits again, on the document as it now stands, under
+    /// fresh ids (a late answer to the original then finds nothing pending).
+    fn replay(&mut self, ops: Vec<SessionOp>) {
+        for op in ops {
+            self.on_local_op(op);
         }
     }
 
@@ -3194,9 +3223,12 @@ impl Engine {
             self.upstream_send(Msg::SyncRequest);
             return;
         }
+        let mut replay = Vec::new();
         if !self.pending.is_empty() {
             // Ours are probably stale now; roll back so one press = one skip.
             // The room may still accept a chained one, hence "abandoned".
+            // Keyed queue edits go again on top of this commit instead.
+            replay = self.replayable_from(None);
             self.abandon_pending();
             self.doc = self.confirmed.clone();
         }
@@ -3238,6 +3270,7 @@ impl Engine {
         if self.picker.is_some() && op.changes_current() {
             self.reprepare_picker();
         }
+        self.replay(replay);
         self.maybe_advertise(false);
     }
 
@@ -4707,6 +4740,132 @@ mod tests {
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::DocumentChanged { .. })));
+    }
+
+    /// Five tracks from `b` at revision 2, joined from `a`: t1 plays, t2..t5 follow.
+    fn joined_with_five(e: &mut Engine) {
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(e, Some(replica_with(room_doc)), vec![dev("b")]);
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: SessionOp::PlayTracks {
+                    server_id: "srv".into(),
+                    track_ids: (1..=5).map(|i| format!("t{i}")).collect(),
+                    start_index: 0,
+                    label: "sel".into(),
+                    shuffle: false,
+                    save_outgoing: false,
+                },
+                revision: 2,
+                device_id: "b".into(),
+                op_id: "b-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+    }
+
+    fn upcoming_tracks(e: &Engine) -> Vec<String> {
+        crate::session::derive(e.document())
+            .upcoming
+            .into_iter()
+            .map(|i| i.track_id)
+            .collect()
+    }
+
+    fn sent_moves(outs: &[Output]) -> Vec<(u32, String)> {
+        wire_outs(outs)
+            .into_iter()
+            .filter_map(|(_, m)| match m {
+                Msg::Op {
+                    base_revision,
+                    op: SessionOp::MoveQueueItem { .. },
+                    op_id,
+                    ..
+                } => Some((base_revision, op_id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_reorder_survives_someone_elses_commit_landing_first() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let key = crate::session::derive(e.document()).upcoming[2].key.clone();
+        let outs = e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem { key, to_index: 0 },
+        });
+        let first = sent_moves(&outs);
+        assert_eq!(first.len(), 1);
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        // b changes repeat at revision 3 before ours is answered: the room will
+        // refuse ours as stale, so it goes again on top of b's.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op: SessionOp::SetRepeat {
+                    mode: crate::api::RepeatMode::All,
+                },
+                revision: 3,
+                device_id: "b".into(),
+                op_id: "b-2".into(),
+                at: 2.0,
+                position_ms: 0,
+            }),
+        });
+        let again = sent_moves(&outs);
+        assert_eq!(again.len(), 1, "the move is sent again");
+        assert_eq!(again[0].0, 3, "on the room's new revision");
+        assert_ne!(again[0].1, first[0].1, "under a fresh id");
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        assert_eq!(e.document().repeat, crate::api::RepeatMode::All);
+        // The room's refusal of the original changes nothing.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpReject {
+                op_id: first[0].1.clone(),
+                current_revision: 3,
+                reason: RejectReason::Stale,
+                document: e.confirmed.clone(),
+            }),
+        });
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::DocumentChanged { .. })));
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        assert_eq!(e.pending.len(), 1);
+    }
+
+    #[test]
+    fn a_reorder_refused_as_stale_is_replayed_on_the_rooms_document() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let mut room_doc = e.confirmed.clone();
+        let key = crate::session::derive(e.document()).upcoming[2].key.clone();
+        let outs = e.handle(Input::LocalOp {
+            op: SessionOp::MoveQueueItem { key, to_index: 0 },
+        });
+        let first = sent_moves(&outs);
+        // The room took someone's op we have not heard of yet.
+        room_doc.repeat = crate::api::RepeatMode::One;
+        room_doc.revision = 3;
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpReject {
+                op_id: first[0].1.clone(),
+                current_revision: 3,
+                reason: RejectReason::Stale,
+                document: room_doc,
+            }),
+        });
+        let again = sent_moves(&outs);
+        assert_eq!(again.len(), 1, "the move is sent again");
+        assert_eq!(again[0].0, 3);
+        assert_eq!(upcoming_tracks(&e), ["t4", "t2", "t3", "t5"]);
+        assert_eq!(e.document().repeat, crate::api::RepeatMode::One);
     }
 
     #[test]

@@ -498,6 +498,17 @@ impl SessionOp {
         )
     }
 
+    /// Edits addressed by queue key whose intent survives someone else's op
+    /// committing first, and which are harmless if the room also took the
+    /// original: they are replayed after a conflict instead of dropped, so a
+    /// reorder on one device is not lost to a skip on another.
+    pub fn replays_after_conflict(&self) -> bool {
+        matches!(
+            self,
+            SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
+        )
+    }
+
     /// Ops only the transport owner issues (they follow playback itself).
     pub fn is_owner_op(&self) -> bool {
         matches!(
