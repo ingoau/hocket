@@ -1248,6 +1248,14 @@ export class FakeCore implements CoreHandle {
         return;
       }
       this.next(false);
+      return;
+    }
+    // Like the core's BackendReport::Position: a fresh stamp about once a second while playing.
+    const now = Date.now();
+    if (now - this.lastPositionEmit >= 1000) {
+      this.lastPositionEmit = now;
+      this.transport = { ...this.transport, position: { ...this.transport.position, positionMs: pos, takenAt: now } };
+      this.emit({ type: "transportChanged", data: { transport: this.transport } });
     }
   }
 
