@@ -41,18 +41,19 @@ test.describe("resilience", () => {
     const { app, page } = hocket;
     await completeSetup(page);
     await playFirstAlbum(page);
-    const title = await page.getByTestId("player-bar").locator(".now .title").textContent();
-    expect(title).toBeTruthy();
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.isVisible())?.webContents.forcefullyCrashRenderer());
-    // Same window, a new renderer: the library and what is playing come back. (Playwright's page
-    // stays the crashed one, so the window is read through main; a script sent to the renderer
-    // as it goes may never answer, hence the race.)
-    const shown = () => app.evaluate(async ({ BrowserWindow }) => {
+    const title = page.getByTestId("player-bar").locator(".now .title");
+    const playing = await title.textContent();
+    expect(playing).toBeTruthy();
+    // Main hears that the window's renderer is gone, as it would from the OS. (A real
+    // forcefullyCrashRenderer also takes Playwright's connection to the page down on CI runners,
+    // hanging the test and its teardown; what is under test is main's recovery.)
+    await page.evaluate(() => { (window as unknown as { beforeCrash: boolean }).beforeCrash = true; });
+    await app.evaluate(({ BrowserWindow }) => {
       const wc = BrowserWindow.getAllWindows().find((w) => w.isVisible())?.webContents;
-      if (!wc || wc.isCrashed()) return "";
-      const read = wc.executeJavaScript(`document.querySelector('[data-testid="app"] [data-testid="player-bar"] .now .title')?.textContent ?? ""`) as Promise<string>;
-      return Promise.race([read, new Promise<string>((r) => setTimeout(() => r(""), 500))]);
-    }).catch(() => "");
-    await expect.poll(shown, { timeout: 20_000 }).toBe(title);
+      wc?.emit("render-process-gone", { preventDefault() {} }, { reason: "crashed", exitCode: 139 });
+    });
+    // Loaded again (a fresh page), and the library and what is playing come back.
+    await expect.poll(() => page.evaluate(() => (window as unknown as { beforeCrash?: boolean }).beforeCrash ?? false).catch(() => true), { timeout: 20_000 }).toBe(false);
+    await expect(title).toHaveText(playing ?? "", { timeout: 20_000 });
   });
 });
