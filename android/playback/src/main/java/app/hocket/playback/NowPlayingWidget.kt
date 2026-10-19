@@ -71,16 +71,54 @@ class NowPlayingWidget : AppWidgetProvider() {
         /** Covers are decoded down to about this size: a widget bitmap travels over binder. */
         private const val ART_PX = 256
         private var last: WidgetState? = null
+        /** What the placed widgets last received in full (or merged since); null when unknown. */
+        private var drawn: WidgetState? = null
+        /** The last cover decoded, by path: play/pause and device changes do not read it again. */
+        private var art: Pair<String, Bitmap?>? = null
 
-        /** Stores [state] and redraws every placed widget when it changed. Main thread. */
+        /**
+         * Stores [state] and redraws every placed widget when it changed. Main thread. A change of
+         * play state alone is a partial update (the button): the cover is neither decoded again nor
+         * sent over binder again.
+         */
         fun update(context: Context, state: WidgetState) {
             if (state == last) return
             last = state
             state.save(context)
             val manager = AppWidgetManager.getInstance(context) ?: return
             val ids = manager.getAppWidgetIds(ComponentName(context, NowPlayingWidget::class.java))
-            if (ids.isEmpty()) return
-            runCatching { manager.updateAppWidget(ids, views(context, shown(state))) }.onFailure { Log.w(TAG, "widget update failed: ${it.message}") }
+            if (ids.isEmpty()) { drawn = null; return }
+            val next = shown(state)
+            val before = drawn
+            drawn = null
+            runCatching {
+                if (before != null && before.copy(playing = next.playing) == next) manager.partiallyUpdateAppWidget(ids, playButton(context, next))
+                else manager.updateAppWidget(ids, views(context, next))
+                drawn = next
+            }.onFailure { Log.w(TAG, "widget update failed: ${it.message}") }
+        }
+
+        /** Just the play / pause button for [state] (a partial update). */
+        internal fun playButton(context: Context, state: WidgetState): RemoteViews = RemoteViews(context.packageName, R.layout.widget_now_playing).apply {
+            setPlayButton(context, state, openIntent(context))
+        }
+
+        private fun RemoteViews.setPlayButton(context: Context, state: WidgetState, open: PendingIntent?) {
+            setImageViewResource(R.id.widget_play, if (state.playing) R.drawable.widget_pause else R.drawable.widget_play)
+            setContentDescription(R.id.widget_play, context.getString(if (state.playing) R.string.widget_pause else R.string.widget_play))
+            // Nothing loaded: play has nothing to resume, so it opens the app instead.
+            val play = if (state.hasTrack) WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PLAY_PAUSE) else open
+            play?.let { setOnClickPendingIntent(R.id.widget_play, it) }
+        }
+
+        private fun openIntent(context: Context): PendingIntent? = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+            PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+
+        /** [decode] of [path], remembered for the last path asked for. Main thread. */
+        internal fun cover(path: String): Bitmap? {
+            art?.let { (p, bitmap) -> if (p == path && bitmap?.isRecycled != true) return bitmap }
+            return decode(path).also { art = path to it }
         }
 
         /**
@@ -101,22 +139,16 @@ class NowPlayingWidget : AppWidgetProvider() {
             }
             setTextViewText(R.id.widget_device, device.orEmpty())
             setViewVisibility(R.id.widget_device, if (device == null) View.GONE else View.VISIBLE)
-            val art = state.artworkPath?.let(::decode)
+            val art = state.artworkPath?.let(::cover)
             if (art != null) setImageViewBitmap(R.id.widget_art, art) else setImageViewResource(R.id.widget_art, R.drawable.widget_art_placeholder)
-            setImageViewResource(R.id.widget_play, if (state.playing) R.drawable.widget_pause else R.drawable.widget_play)
-            setContentDescription(R.id.widget_play, context.getString(if (state.playing) R.string.widget_pause else R.string.widget_play))
             setOnClickPendingIntent(R.id.widget_next, WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_NEXT))
             setOnClickPendingIntent(R.id.widget_previous, WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PREVIOUS))
             val buttons = if (state.hasTrack) View.VISIBLE else View.GONE
             setViewVisibility(R.id.widget_next, buttons)
             setViewVisibility(R.id.widget_previous, buttons)
-            val open = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
-                PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            }
+            val open = openIntent(context)
             open?.let { setOnClickPendingIntent(R.id.widget_root, it) }
-            // Nothing loaded: play has nothing to resume, so it opens the app instead.
-            val play = if (state.hasTrack) WidgetActionReceiver.intent(context, WidgetActionReceiver.ACTION_PLAY_PAUSE) else open
-            play?.let { setOnClickPendingIntent(R.id.widget_play, it) }
+            setPlayButton(context, state, open)
         }
 
         /** The cached cover at [path], at most [ART_PX] on its longer side; null when it is gone. */
@@ -134,6 +166,8 @@ class NowPlayingWidget : AppWidgetProvider() {
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        // A newly placed widget may be all the launcher has drawn: the next change is a full update.
+        drawn = null
         appWidgetManager.updateAppWidget(appWidgetIds, views(context, shown(last ?: WidgetState.load(context))))
     }
 }
