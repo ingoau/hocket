@@ -285,7 +285,9 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   corners round while it moves. Pops reverse it. Predictive back scrubs that same pop, always
   toward the trailing edge, whatever edge the swipe started at. Bar switches stay a short
   fade-through. Album, artist and playlist covers fly from the list into the detail header
-  (`ui/nav/SharedArtwork.kt`, after Navic). Reduced motion makes it a crossfade. Holding the
+  and back again on pop (`ui/nav/SharedArtwork.kt`, after Navic). The Library's Albums tile
+  fans the same Recent covers as the albums page and those three fly into that row. Reduced
+  motion makes it a crossfade. Holding the
   bottom bar does nothing special: it is edited from Settings > Customise or the account sheet.
 - Mini player: tap to expand, swipe left/right to skip with resistance past the threshold, a thin
   wavy progress line.

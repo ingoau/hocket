@@ -78,6 +78,7 @@ import app.hocket.ui.components.ShimmerHost
 import app.hocket.ui.components.TrackRowSkeleton
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.Dp
+import app.hocket.ui.nav.ArtworkShare
 import app.hocket.ui.nav.Route
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -153,14 +154,22 @@ private val fullSpan: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(
  * A grid list's top: Pinned and Recent as rows of cards (each hidden when empty), then the full
  * list's header with its sort chip. Grid headers sit 6 dp in, to line up with the cards' art.
  */
-private fun <T> LazyGridScope.gridGroups(groups: ListGroups<T>, allTitle: Int, control: SortControl, key: (T) -> String, cellWidth: Dp, card: @Composable (T, Modifier) -> Unit) {
+private fun <T> LazyGridScope.gridGroups(
+    groups: ListGroups<T>,
+    allTitle: Int,
+    control: SortControl,
+    key: (T) -> String,
+    cellWidth: Dp,
+    recentCard: @Composable ((T, Modifier) -> Unit)? = null,
+    card: @Composable (T, Modifier) -> Unit,
+) {
     if (groups.pinned.isNotEmpty()) {
         item(key = "pinned.h", span = fullSpan, contentType = "header") { ListHeader(stringResource(R.string.library_group_pinned), Modifier.testTag("library.group.pinned"), start = 6.dp) }
         item(key = "pinned", span = fullSpan, contentType = "row") { CardRow(groups.pinned, key, cellWidth, GRID_EDGE, card = card) }
     }
     if (groups.recent.isNotEmpty()) {
         item(key = "recent.h", span = fullSpan, contentType = "header") { ListHeader(stringResource(R.string.library_group_recent), Modifier.testTag("library.group.recent"), start = 6.dp) }
-        item(key = "recent", span = fullSpan, contentType = "row") { CardRow(groups.recent, key, cellWidth, GRID_EDGE, card = card) }
+        item(key = "recent", span = fullSpan, contentType = "row") { CardRow(groups.recent, key, cellWidth, GRID_EDGE, card = recentCard ?: card) }
     }
     item(key = "all.h", span = fullSpan, contentType = "header") {
         ListHeader(stringResource(allTitle), Modifier.testTag("library.group.all"), start = 6.dp) { SortChip(control.sort, control.options, control.onSort) }
@@ -202,10 +211,16 @@ internal fun AlbumsTab(serverId: String, control: SortControl, open: (DetailTarg
     val grid = rememberLazyGridState()
     ScrollToTopOnReselect(grid)
     KeepTopForGroups(groups, { grid.firstVisibleItemIndex == 0 && grid.firstVisibleItemScrollOffset == 0 }) { grid.requestScrollToItem(0) }
-    @Composable fun Card(album: Album, modifier: Modifier, titleLines: Int = 2) = AlbumCard(album, onClick = { open(DetailTarget.Album(album.id)) }, modifier = modifier.testTag("library.album"),
-        selected = selecting && selection.contains(album.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Albums, album.id) }, titleLines = titleLines)
+    @Composable fun Card(album: Album, modifier: Modifier, titleLines: Int = 2, fromTile: Boolean = false) = AlbumCard(
+        album, onClick = { open(DetailTarget.Album(album.id)) }, modifier = modifier.testTag("library.album"),
+        selected = selecting && selection.contains(album.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Albums, album.id) }, titleLines = titleLines,
+        destinationShareKey = if (fromTile) ArtworkShare.albumsTile(album.id) else null,
+    )
     LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        gridGroups(groups, R.string.library_all_albums, control, { it.id }, ALBUM_ROW_CELL) { album, modifier -> Card(album, modifier, titleLines = 1) }
+        gridGroups(
+            groups, R.string.library_all_albums, control, { it.id }, ALBUM_ROW_CELL,
+            recentCard = { album, modifier -> Card(album, modifier, titleLines = 1, fromTile = true) },
+        ) { album, modifier -> Card(album, modifier, titleLines = 1) }
         // Until the total is known, a screenful of skeletons; items are keyed by position so a
         // skeleton turns into its card in place (no remove and insert as pages arrive).
         val count = if (state.known) state.total else SKELETON_COUNT

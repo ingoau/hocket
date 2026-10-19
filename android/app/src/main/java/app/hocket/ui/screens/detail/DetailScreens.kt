@@ -249,7 +249,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     PrimeAlbumOnDwell(id)
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.album(id)
-    val flyingCover = LocalSharedArtwork.current?.takeIf { it.key == shareKey }?.coverArt
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var album by remember { mutableStateOf<Album?>(null) }
     var tracks by remember { mutableStateOf<List<Track>?>(null) }
     LaunchedEffect(id, libraryGen) {
@@ -312,7 +312,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.artist(id)
-    val flyingCover = LocalSharedArtwork.current?.takeIf { it.key == shareKey }?.coverArt
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var artist by remember(id) { mutableStateOf<Artist?>(null) }
     var albums by remember(id) { mutableStateOf<List<Album>>(emptyList()) }
     // null until the first answer: the section keeps its rows' space (skeletons) meanwhile, so the
@@ -386,7 +386,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val client = LocalCoreClient.current
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.playlist(id)
-    val flyingCover = LocalSharedArtwork.current?.takeIf { it.key == shareKey }?.coverArt
+    val flyingCover = LocalSharedArtwork.current?.coverArtFor(shareKey)
     var playlist by remember { mutableStateOf<Playlist?>(null) }
     var entries by remember { mutableStateOf<List<PlaylistEntry>?>(null) }
     var dragKey by remember { mutableStateOf<String?>(null) }

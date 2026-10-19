@@ -58,6 +58,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.nav.ArtworkShare
 import app.hocket.ui.nav.rememberArtworkShareSource
+import app.hocket.ui.nav.sharedArtworkDestination
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Genre
@@ -293,6 +294,8 @@ fun AlbumCard(
     onToggleSelect: () -> Unit = {},
     /** 1 in a carousel row, where cells needn't line up with a row below. */
     titleLines: Int = 2,
+    /** Extra shared-element key, e.g. the Albums tile fan flying into this Recent card. */
+    destinationShareKey: String? = null,
 ) {
     val artist = album.artist ?: stringResource(R.string.unknown_artist)
     val label = stringResource(R.string.row_album_a11y, album.name, artist)
@@ -302,7 +305,13 @@ fun AlbumCard(
         Column(Modifier.padding(6.dp)) {
             Box {
                 // The press ripple is drawn on the cover only (Navic): the text below stays calm.
-                Artwork(album.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()), RoundedCornerShape(GridArtCorner))
+                Artwork(
+                    album.coverArt, ArtworkSizes.GRID, null,
+                    Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier)
+                        .sharedArtworkDestination(destinationShareKey)
+                        .clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
+                    RoundedCornerShape(GridArtCorner),
+                )
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }

@@ -9,10 +9,12 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.nav.AppRoot
@@ -41,7 +43,8 @@ class PageTransitionTest {
     private val outDir: File? = (System.getProperty("hocket.screenshotDir") ?: System.getenv("HOCKET_SCREENSHOT_DIR"))
         ?.takeIf { it.isNotBlank() }?.let(::File)
 
-    private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    private fun exists(tag: String, unmerged: Boolean = false) =
+        compose.onAllNodesWithTag(tag, useUnmergedTree = unmerged).fetchSemanticsNodes().isNotEmpty()
 
     @Test
     fun aPushEntersFromTheTrailingEdgeOverThePreviousPage() {
@@ -89,6 +92,50 @@ class PageTransitionTest {
         compose.waitForIdle()
         shot("page-push-album-settled")
         assertTrue(exists("detail.artwork") || exists("detail.header"))
+    }
+
+    @Test
+    fun poppingAnAlbumKeepsTheCoverOnBothPages() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { exists("home.screen") }
+        compose.onNodeWithTag("navBar.library").performClick()
+        compose.waitUntil(5_000) { exists("library.album") }
+        compose.onAllNodesWithTag("library.album").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { exists("detail.header") }
+        compose.mainClock.advanceTimeBy(600)
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
+        compose.mainClock.advanceTimeBy(200)
+        assertTrue("library is entering underneath", exists("library.album") || exists("library.grid"))
+        assertTrue("album page is still leaving", exists("detail.header") || exists("detail.artwork"))
+        shot("page-pop-album-mid")
+        compose.mainClock.autoAdvance = true
+        compose.waitUntil(5_000) { exists("library.album") }
+    }
+
+    @Test
+    fun openingAlbumsFromTheTileKeepsTheFanOnTheWayIn() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { exists("home.screen") }
+        compose.onNodeWithTag("navBar.library").performClick()
+        compose.waitUntil(5_000) { exists("library.grid") }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.albums"))
+        compose.waitUntil(5_000) { exists("library.browse.albums.fan.0", unmerged = true) }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("library.browse.albums").performSemanticsAction(SemanticsActions.OnClick)
+        compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
+        compose.mainClock.advanceTimeBy(200)
+        assertTrue("fan still composed on the library", exists("library.browse.albums.fan", unmerged = true) || exists("library.browse.albums.fan.0", unmerged = true))
+        assertTrue("albums page is entering", exists("libraryList.albums") || exists("library.group.recent"))
+        shot("page-push-albums-tile-mid")
+        compose.mainClock.autoAdvance = true
+        compose.waitUntil(5_000) { exists("libraryList.albums") || exists("library.group.recent") }
     }
 
     @Test

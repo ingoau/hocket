@@ -44,7 +44,8 @@ class LibraryListsTest {
 
     private lateinit var core: TestCore
 
-    private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    private fun exists(tag: String, unmerged: Boolean = false) =
+        compose.onAllNodesWithTag(tag, useUnmergedTree = unmerged).fetchSemanticsNodes().isNotEmpty()
 
     private fun await(tag: String) {
         compose.waitUntil(5_000) { exists(tag) }
@@ -188,6 +189,17 @@ class LibraryListsTest {
         val full = compose.onAllNodesWithTag("library.playlist").fetchSemanticsNodes()
         assertTrue(full.all { it.boundsInRoot.top > top("library.group.all") })
         assertEquals("Playlist ${lib.playlists.minBy { it.name.lowercase() }.name}", full.first().config[SemanticsProperties.ContentDescription].first().substringBefore(","))
+    }
+
+    @Test
+    fun albumsTileFansRecentCovers() {
+        start()
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.albums"))
+        compose.waitUntil(5_000) { exists("library.browse.albums.fan.0", unmerged = true) }
+        assertTrue(exists("library.browse.albums.fan", unmerged = true))
+        assertTrue(exists("library.browse.albums.fan.0", unmerged = true))
+        openList("albums")
+        await("library.group.recent")
     }
 
     @Test

@@ -10,10 +10,12 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.nav.AppRoot
@@ -43,7 +45,8 @@ class PageTransitionMotionScreenshotTest {
     private val outDir: File? = (System.getProperty("hocket.screenshotDir") ?: System.getenv("HOCKET_SCREENSHOT_DIR"))
         ?.takeIf { it.isNotBlank() }?.let(::File)
 
-    private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    private fun exists(tag: String, unmerged: Boolean = false) =
+        compose.onAllNodesWithTag(tag, useUnmergedTree = unmerged).fetchSemanticsNodes().isNotEmpty()
 
     @Test
     fun sequences() {
@@ -58,6 +61,20 @@ class PageTransitionMotionScreenshotTest {
         capturePush(dir, "tab-home-to-library") {
             compose.onNodeWithTag("navBar.library").performSemanticsAction(SemanticsActions.OnClick)
         }
+        compose.waitUntil(5_000) { exists("library.album") }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.albums"))
+        compose.waitUntil(5_000) { exists("library.browse.albums.fan.0", unmerged = true) }
+
+        capturePush(dir, "albums-from-tile") {
+            compose.onNodeWithTag("library.browse.albums").performSemanticsAction(SemanticsActions.OnClick)
+        }
+        compose.waitUntil(5_000) { exists("libraryList.albums") || exists("library.group.recent") }
+
+        capturePush(dir, "albums-tile-pop") {
+            compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        }
+        compose.waitUntil(5_000) { exists("library.browse.albums") }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
         compose.waitUntil(5_000) { exists("library.album") }
 
         capturePush(dir, "album-from-library") {

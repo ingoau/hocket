@@ -61,15 +61,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.runtime.produceState
-import app.hocket.core.Queries
-import app.hocket.core.api.QueryResult
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.api.Album
 import app.hocket.core.api.SortOrder
 import app.hocket.core.client.AlbumListKey
 import app.hocket.ui.LocalCoreClient
@@ -79,6 +77,7 @@ import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.IconArt
 import app.hocket.ui.components.JobsIndicator
 import app.hocket.ui.nav.ArtworkShare
+import app.hocket.ui.nav.LocalSharedArtwork
 import app.hocket.ui.nav.rememberArtworkShareSource
 import app.hocket.ui.components.JobsSheet
 import app.hocket.ui.components.ShimmerHost
@@ -251,16 +250,31 @@ internal fun PinArt(pin: ResolvedPin, modifier: Modifier, artSize: Int = Artwork
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BrowseTiles(nav: NavHostController) {
-    val client = LocalCoreClient.current
-    // The Albums tile shows the covers of the three most played albums (this month, else this year).
-    val topCovers by produceState(emptyList<String>()) {
-        var stats = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
-        if (stats == null || stats.topAlbums.isEmpty()) stats = (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: stats
-        value = stats?.topAlbums.orEmpty().mapNotNull { it.coverArt }.take(3)
-    }
-    @Composable fun Tile(label: String, icon: ImageVector, route: Route, tag: String, modifier: Modifier, shape: androidx.compose.ui.graphics.Shape, corners: Shape, wide: Boolean = false, covers: List<String> = emptyList(), height: Dp = 96.dp) {
+    // The Albums tile fans the same Recent covers the albums page shows at the top.
+    val recent = rememberRecentAlbums(ALBUMS_TILE_COVERS)
+    val a0 = recent.getOrNull(0)
+    val a1 = recent.getOrNull(1)
+    val a2 = recent.getOrNull(2)
+    val s0 = rememberArtworkShareSource(a0?.let { ArtworkShare.albumsTile(it.id) }, a0?.coverArt, zIndex = 3f)
+    val s1 = rememberArtworkShareSource(a1?.let { ArtworkShare.albumsTile(it.id) }, a1?.coverArt, zIndex = 2f)
+    val s2 = rememberArtworkShareSource(a2?.let { ArtworkShare.albumsTile(it.id) }, a2?.coverArt, zIndex = 1f)
+    val session = LocalSharedArtwork.current
+    @Composable fun Tile(
+        label: String,
+        icon: ImageVector,
+        route: Route,
+        tag: String,
+        modifier: Modifier,
+        shape: androidx.compose.ui.graphics.Shape,
+        corners: Shape,
+        wide: Boolean = false,
+        covers: List<Album> = emptyList(),
+        share: List<Modifier> = emptyList(),
+        onPrepare: () -> Unit = {},
+        height: Dp = 96.dp,
+    ) {
         Surface(
-            onClick = { nav.navigate(route) { launchSingleTop = true } },
+            onClick = { onPrepare(); nav.navigate(route) { launchSingleTop = true } },
             shape = corners,
             color = if (wide) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = if (wide) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
@@ -268,7 +282,7 @@ private fun BrowseTiles(nav: NavHostController) {
             modifier = modifier.height(height).testTag("library.browse.$tag"),
         ) {
           Box {
-            if (covers.isNotEmpty()) AlbumFan(covers, Modifier.align(Alignment.CenterEnd).padding(end = 16.dp))
+            if (covers.isNotEmpty()) AlbumFan(covers, share, Modifier.align(Alignment.CenterEnd).padding(end = 16.dp))
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                 Box(Modifier.size(36.dp).background(if (wide) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.14f) else MaterialTheme.colorScheme.secondaryContainer, shape), contentAlignment = Alignment.Center) {
                     Icon(icon, null, Modifier.size(20.dp), tint = if (wide) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer)
@@ -283,7 +297,13 @@ private fun BrowseTiles(nav: NavHostController) {
     val inner = groupShape(top = false, bottom = false, start = false, end = false)
     Column(Modifier.padding(horizontal = 6.dp), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
         Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-            Tile(stringResource(R.string.library_albums), HocketIcons.Filled.Album, Route.Albums, "albums", Modifier.weight(2f), MaterialShapes.Cookie9Sided.toShape(), groupShape(top = true, bottom = false, start = true, end = false), wide = true, covers = topCovers, height = 112.dp)
+            Tile(
+                stringResource(R.string.library_albums), HocketIcons.Filled.Album, Route.Albums, "albums", Modifier.weight(2f),
+                MaterialShapes.Cookie9Sided.toShape(), groupShape(top = true, bottom = false, start = true, end = false),
+                wide = true, covers = recent, share = listOf(s0.modifier, s1.modifier, s2.modifier),
+                onPrepare = { session?.prepareAll(listOfNotNull(s0.entry, s1.entry, s2.entry)) },
+                height = 112.dp,
+            )
             Tile(stringResource(R.string.library_artists), HocketIcons.Filled.Person, Route.Artists, "artists", Modifier.weight(1f), MaterialShapes.Circle.toShape(), groupShape(top = true, bottom = false, start = false, end = true), height = 112.dp)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
@@ -333,18 +353,26 @@ internal fun groupShape(top: Boolean, bottom: Boolean, start: Boolean, end: Bool
 
 /** Up to three album covers fanned out and overlapping, the first on top (the Albums tile's art). */
 @Composable
-private fun AlbumFan(covers: List<String>, modifier: Modifier = Modifier) {
+private fun AlbumFan(albums: List<Album>, share: List<Modifier>, modifier: Modifier = Modifier) {
     val size = 60.dp
     val step = 30.dp
-    Box(modifier.width(size + step * (covers.size - 1)).height(size + 8.dp), contentAlignment = Alignment.CenterStart) {
+    Box(
+        modifier.width(size + step * (albums.size - 1).coerceAtLeast(0)).height(size + 8.dp).testTag("library.browse.albums.fan"),
+        contentAlignment = Alignment.CenterStart,
+    ) {
         // Drawn back to front: the last cover first, so the first sits on top at the left.
-        covers.withIndex().reversed().forEach { (i, cover) ->
+        albums.withIndex().reversed().forEach { (i, album) ->
             val angle = listOf(-8f, 4f, 12f).getOrElse(i) { 0f }
-            app.hocket.ui.components.Artwork(
-                cover, 128, null,
+            Artwork(
+                album.coverArt, 128, null,
                 shape = RoundedCornerShape(10.dp),
                 // The middle cover sits a little higher, so the three read as a fan rather than a row.
-                modifier = Modifier.offset(x = step * i, y = if (i == 1) (-6).dp else 0.dp).size(size).graphicsLayer { rotationZ = angle; shadowElevation = 6f; shape = RoundedCornerShape(10.dp); clip = true },
+                modifier = Modifier
+                    .offset(x = step * i, y = if (i == 1) (-6).dp else 0.dp)
+                    .size(size)
+                    .then(share.getOrElse(i) { Modifier })
+                    .graphicsLayer { rotationZ = angle; shadowElevation = 6f; shape = RoundedCornerShape(10.dp); clip = true }
+                    .testTag("library.browse.albums.fan.$i"),
             )
         }
     }
