@@ -22,6 +22,16 @@ describe("PositionTickFilter", () => {
     expect(f.pass(at(2200, 91_000, { buffering: true }))).toBe(true);
   });
 
+  it("sends a seek made while paused, even one the clock would have reached playing", () => {
+    const f = new PositionTickFilter();
+    const paused = { position: { positionMs: 60_000, takenAt: 0, rate: 1, isPlaying: false } };
+    expect(f.pass(at(0, 60_000, paused))).toBe(true);
+    // Paused at 1:00; 2 s later the seek bar is clicked at 1:02.
+    expect(f.pass(at(2000, 62_000, { position: { positionMs: 62_000, takenAt: 2000, rate: 1, isPlaying: false } }))).toBe(true);
+    // The same paused stamp again is nothing new.
+    expect(f.pass(at(2500, 62_000, { position: { positionMs: 62_000, takenAt: 2500, rate: 1, isPlaying: false } }))).toBe(false);
+  });
+
   it("measures ticks against a window's snapshot and passes every other event", () => {
     const f = new PositionTickFilter();
     expect(f.pass(at(0, 5000))).toBe(true);

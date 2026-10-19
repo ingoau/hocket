@@ -26,10 +26,16 @@ fun TransportState.isPositionTick(next: TransportState): Boolean =
     sameUiSurface(next) && position.continuesTo(next.position, maxGapMs = 2_500.0)
 
 /**
+ * How far a stamp may stray from where the last one extrapolates to and still be the same playback.
+ * The core only reports a stamp that strays 250 ms or more, so past this it is a seek or a stall.
+ */
+const val TICK_TOLERANCE_MS = 300L
+
+/**
  * True when extrapolating this stamp lands on [next] (within [toleranceMs]): the same playback
  * carrying on, not a seek or a restart. A stamp more than [maxGapMs] older is never a continuation.
  */
-fun PositionStamp.continuesTo(next: PositionStamp, toleranceMs: Long = 1_500L, maxGapMs: Double = Double.MAX_VALUE): Boolean {
+fun PositionStamp.continuesTo(next: PositionStamp, toleranceMs: Long = TICK_TOLERANCE_MS, maxGapMs: Double = Double.MAX_VALUE): Boolean {
     val dt = next.takenAt - takenAt
     if (dt < 0.0 || dt > maxGapMs) return false
     val rate = if (isPlaying) rate else 0.0
