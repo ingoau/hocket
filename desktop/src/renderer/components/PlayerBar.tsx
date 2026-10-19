@@ -134,14 +134,19 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   const dragRef = useRef(drag);
   dragRef.current = drag;
   const dur = durationMs ?? 0;
+  // The label and the slider's value change once a second: written then, not every frame
+  // (WavySeek does the same). Cleared when React may have rendered them afresh (below).
+  const lastSecond = useRef<number | undefined>(undefined);
   const paint = () => {
     const shown = dragRef.current !== undefined ? dragRef.current * dur : extrapolate(stamp, Date.now(), offset, durationMs);
     shownRef.current = shown;
     const pct = dur ? (shown / dur) * 100 : 0;
     if (fill.current) fill.current.style.width = `${pct}%`;
     if (knob.current) knob.current.style.left = `${pct}%`;
-    if (timeEl.current) timeEl.current.textContent = fmtTime(shown);
     const seconds = Math.floor(shown / 1000);
+    if (seconds === lastSecond.current) return;
+    lastSecond.current = seconds;
+    if (timeEl.current) timeEl.current.textContent = fmtTime(shown);
     bar.current?.setAttribute("aria-valuenow", String(seconds));
     bar.current?.setAttribute("aria-valuetext", seekValueText(seconds * 1000, dur));
   };
@@ -160,6 +165,7 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [drag !== undefined, commit]);
   useLayoutEffect(() => {
+    lastSecond.current = undefined;
     paint();
     if (!stamp.isPlaying && drag === undefined) return;
     return ticker.subscribe(paint);
