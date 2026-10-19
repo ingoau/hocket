@@ -459,7 +459,10 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                                     selected = selecting && selection.contains(entry.item.key),
                                     selecting = selecting,
                                     extraActions = extra,
-                                    onClick = { client.dispatch(Commands.jumpToQueueItem(entry.item.key)) },
+                                    // The playing row plays on (resumes when paused): a jump to the
+                                    // current item restarts it, and this row sits right above the
+                                    // ones being dragged and tapped while editing the queue.
+                                    onClick = { client.dispatch(if (row.section == Line.Section.Current) Command.Play else Commands.jumpToQueueItem(entry.item.key)) },
                                     onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
                                     onMore = { songMenu.open(entry.track, Commands.queueItems(listOf(entry.item.key))) },
                                     onRate = { ratingFor = entry },

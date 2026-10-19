@@ -2,6 +2,7 @@ package app.hocket.playback
 
 import android.app.Application
 import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
@@ -196,6 +197,32 @@ class CoreSessionQueueTest {
         sent.clear()
         player.seekTo(0, 0)
         assertEquals("k0", (sent.single() as Command.JumpToQueueItem).data.key)
+    }
+
+    @Test
+    fun pickingTheCurrentEntryLeavesItWhereItIs() {
+        setUp()
+        // A controller's queue view picking the playing entry (legacy `skipToQueueItem`) names no
+        // position: it must not send the track back to its start.
+        player.seekToDefaultPosition(2)
+        assertTrue("no seek to 0: $sent", sent.none { it is Command.MediaSessionCommand && it.data.action == MediaSessionAction.Seek })
+        assertTrue("no restart: $sent", sent.none { it is Command.JumpToQueueItem })
+        // A seek inside the current entry still seeks.
+        player.seekTo(2, 30_000)
+        assertEquals(30_000.0, (sent.single() as Command.MediaSessionCommand).data.value)
+    }
+
+    @Test
+    fun playingTheCurrentEntryByIdResumesInsteadOfRestarting() {
+        setUp()
+        // `playFromMediaId` with the playing entry's queue id (some cars and watches resume so).
+        player.setMediaItems(listOf(MediaItem.Builder().setMediaId(MediaId.QueueItem("k2").format()).build()), 0, C.TIME_UNSET)
+        settle()
+        assertTrue("not handed on as a jump: $requests", requests.isEmpty())
+        assertEquals(MediaSessionAction.Play, (sent.single() as Command.MediaSessionCommand).data.action)
+        // Another entry still plays through the library (a jump).
+        player.setMediaItems(listOf(MediaItem.Builder().setMediaId(MediaId.QueueItem("k4").format()).build()), 0, C.TIME_UNSET)
+        assertEquals("play@0" to listOf(MediaId.QueueItem("k4").format()), requests.last())
     }
 
     @Test

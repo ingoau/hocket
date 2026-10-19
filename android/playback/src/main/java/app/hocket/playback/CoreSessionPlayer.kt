@@ -337,6 +337,9 @@ class CoreSessionPlayer(
             // Another queue entry (a controller's queue view): jump to it.
             mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != t.currentIndex && mediaItemIndex in t.entries.indices ->
                 dispatch(Commands.jumpToQueueItem(t.entries[mediaItemIndex].item.key))
+            // The current entry picked from a queue view (`skipToQueueItem`, `seekToDefaultPosition`)
+            // names no position: it is already playing, so it stays where it is, never back to 0.
+            positionMs == C.TIME_UNSET && t.entries.isNotEmpty() && mediaItemIndex == t.currentIndex -> Unit
             else -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, (if (positionMs == C.TIME_UNSET) 0L else positionMs).coerceAtLeast(0).toDouble()))
         }
         return Futures.immediateVoidFuture()
@@ -369,7 +372,16 @@ class CoreSessionPlayer(
     }
 
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
-        if (mediaItems.isNotEmpty()) media?.play(mediaItems.map { it.mediaId }, if (startIndex == C.INDEX_UNSET) 0 else startIndex)
+        val start = if (startIndex == C.INDEX_UNSET) 0 else startIndex
+        // A controller playing the session's own current entry (`playFromMediaId` with its queue id,
+        // as some cars and watches do to resume) means play on: a jump to the current entry would
+        // restart it.
+        val key = (mediaItems.getOrNull(start)?.mediaId?.let(MediaId::parse) as? MediaId.QueueItem)?.key
+        if (key != null && key == queue?.current?.item?.key) {
+            dispatch(Commands.mediaSessionCommand(MediaSessionAction.Play))
+            return Futures.immediateVoidFuture()
+        }
+        if (mediaItems.isNotEmpty()) media?.play(mediaItems.map { it.mediaId }, start)
         return Futures.immediateVoidFuture()
     }
 }
