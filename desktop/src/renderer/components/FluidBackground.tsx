@@ -29,10 +29,10 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
   const batterySaver = useApp((s) => s.batterySaver);
   const animatedSetting = useSetting(SK.displayAnimatedBackground, true);
   const reducedMotion = usePrefersReducedMotion();
-  const url = useArtwork(coverArt, 300);
+  const animated = animatedSetting && !batterySaver && !reducedMotion;
+  const url = useArtwork(coverArt, animated ? 300 : 64);
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);
-  const animated = animatedSetting && !batterySaver && !reducedMotion;
   const [brightest, setBrightest] = useState<Rgb | undefined>(undefined);
   useEffect(() => {
     setBrightest(undefined);
@@ -50,14 +50,14 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     try {
       k = new Kawarp(canvas.current, {
         warpIntensity: 0.85,
-        blurPasses: 10,
+        blurPasses: 4,
         animationSpeed: 0.7,
         transitionDuration: 1400,
         saturation: 1.35,
         tintColor: [0.08, 0.08, 0.12],
         tintIntensity: 0.22,
         dithering: 0.008,
-        scale: 1.15,
+        scale: 0.65,
       });
     } catch (err) {
       console.warn("[background] WebGL unavailable, falling back to a still", err);

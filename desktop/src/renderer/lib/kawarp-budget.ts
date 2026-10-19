@@ -9,6 +9,8 @@
 // own lastFrameTime.
 
 export const BACKGROUND_FPS = 24;
+/** Focused fullscreen never runs at the display rate — Kawarp plus lyrics at 120 Hz is the battery cliff. */
+export const FOCUSED_FPS = 30;
 
 export type KawarpDriver = {
   start: () => void;
@@ -32,11 +34,12 @@ export function startKawarpBudget(k: KawarpDriver, perf: PerfMode): (() => void)
     k.stop();
     return;
   }
-  if (perf === "full") {
-    k.start();
-    return () => k.stop();
-  }
+  // Drive every frame ourselves: Kawarp.start() is unbounded display-rate rAF.
   k.stop();
-  const id = setInterval(() => k.renderFrame(), 1000 / BACKGROUND_FPS);
-  return () => clearInterval(id);
+  const fps = perf === "full" ? FOCUSED_FPS : BACKGROUND_FPS;
+  const id = setInterval(() => k.renderFrame(), 1000 / fps);
+  return () => {
+    clearInterval(id);
+    k.stop();
+  };
 }

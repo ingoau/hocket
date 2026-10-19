@@ -28,7 +28,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   const duration = useApp((s) => s.nowPlaying?.track.durationMs);
   const perf = useApp((s) => s.perf);
   const batterySaver = useApp((s) => s.batterySaver);
-  const fpsCap = useApp((s) => Number(JSON.parse(s.settings[SK.displayLyricsFps]?.value ?? "60")) || 60);
+  const fpsCap = useApp((s) => Number(JSON.parse(s.settings[SK.displayLyricsFps]?.value ?? "30")) || 30);
   const batteryFps = useApp((s) => Number(JSON.parse(s.settings[SK.batteryLyricsFps]?.value ?? "30")) || 30);
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<DomLyricPlayer | undefined>(undefined);

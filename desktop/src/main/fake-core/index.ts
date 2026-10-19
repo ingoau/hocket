@@ -26,7 +26,7 @@ import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/const
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
 const HISTORY_CAP = 200;
-const UPCOMING_VIEW_CAP = 400;
+const UPCOMING_VIEW_CAP = 100;
 /** Played this long (real time), the current track is complete in the stream cache and the next two are prefetched. */
 const CACHE_FILL_AFTER_MS = 5000;
 /** Items skipped in a row as unavailable offline before playback stops (the core's MAX_OFFLINE_SKIPS). */
@@ -1815,7 +1815,7 @@ export class FakeCore implements CoreHandle {
       ["battery.smallArtwork", true, "deviceLocal"],
       ["battery.pausePrefetch", true, "deviceLocal"],
       ["display.animatedBackground", true, "deviceLocal"],
-      ["display.lyricsFps", 60, "deviceLocal"],
+      ["display.lyricsFps", 30, "deviceLocal"],
       ["display.theme", "system", "deviceLocal"],
       ["display.accent", null, "deviceLocal"],
       ["display.dynamicColour", true, "deviceLocal"],

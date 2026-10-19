@@ -15,6 +15,7 @@ import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import type { Primer } from "../lib/use-prime";
+import { evictPages, materializePages } from "../lib/paged-window";
 
 export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -374,20 +375,20 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
   const [total, setTotal] = useState(0);
   const loading = useRef(new Set<number>());
   const generation = useRef(0);
+  const pages = useRef(new Map<number, Track[]>());
+  const around = useRef(0);
   const libraryVersion = useApp((s) => s.libraryVersion);
   const load = useCallback((page: number) => {
-    if (!fetchPage || loading.current.has(page)) return;
+    if (!fetchPage || loading.current.has(page) || pages.current.has(page)) return;
     loading.current.add(page);
     const gen = generation.current;
     void fetchPage(page * pageSize, pageSize)
       .then((res) => {
         if (gen !== generation.current) return;
+        pages.current.set(page, res.items);
+        evictPages(pages.current, around.current);
         setTotal(res.total);
-        setRows((prev) => {
-          const next = prev.length === res.total ? [...prev] : new Array<Track | undefined>(res.total).fill(undefined).map((_, i) => prev[i]);
-          res.items.forEach((tr, i) => { next[page * pageSize + i] = tr; });
-          return next;
-        });
+        setRows(materializePages(pages.current, res.total, pageSize));
       })
       .finally(() => loading.current.delete(page));
   }, [fetchPage, pageSize]);
@@ -401,19 +402,22 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
     const changed = lastDeps.current !== depsKey;
     lastDeps.current = depsKey;
     if (changed) {
+      pages.current = new Map();
+      around.current = 0;
       setRows([]);
       setTotal(0);
       load(0);
       return;
     }
-    const pages = new Set<number>([0]);
-    rows.forEach((r, i) => { if (r) pages.add(Math.floor(i / pageSize)); });
-    for (const p of pages) load(p);
+    const keep = [...pages.current.keys()];
+    pages.current = new Map();
+    for (const p of keep.length ? keep : [0]) load(p);
   }, [depsKey, libraryVersion]);
   const onNeedRange = useCallback((start: number, end: number) => {
+    around.current = Math.floor(((start + end) / 2) / pageSize);
     for (let p = Math.floor(start / pageSize); p <= Math.floor(end / pageSize); p++) {
-      if (rows[p * pageSize] === undefined) load(p);
+      if (!pages.current.has(p)) load(p);
     }
-  }, [rows, load, pageSize]);
-  return { rows, total, onNeedRange, reload: () => { generation.current += 1; loading.current.clear(); load(0); } };
+  }, [load, pageSize]);
+  return { rows, total, onNeedRange, reload: () => { generation.current += 1; loading.current.clear(); pages.current = new Map(); load(0); } };
 }

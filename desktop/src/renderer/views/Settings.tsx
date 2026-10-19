@@ -455,7 +455,7 @@ function BatterySaverRow() {
 
 function LyricsSettings() {
   const external = useSetting(SK.lyricsExternalEnabled, false);
-  const fps = useSetting(SK.displayLyricsFps, 60);
+  const fps = useSetting(SK.displayLyricsFps, 30);
   const batteryFps = useSetting(SK.batteryLyricsFps, 30);
   const set = useApp((s) => s.setSetting);
   return (

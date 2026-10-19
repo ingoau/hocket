@@ -18,6 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "bench": "vitest bench --run",
     "test:e2e": "playwright test",
     "dist": "node scripts/build.mjs && electron-builder --config electron-builder.yml",
     "dist:dir": "node scripts/build.mjs && electron-builder --config electron-builder.yml --dir",
