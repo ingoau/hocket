@@ -253,7 +253,6 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
         if (!involved || transitions.motion == PageMotion.Tab || transitions.motion == PageMotion.Reduced) 0f
         else if (state == EnterExitState.Visible) 0f else 1f
     }
-    val ltr = transitions.layoutDirection == LayoutDirection.Ltr
     Box(
         Modifier
             .fillMaxSize()
@@ -261,7 +260,8 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
                 val f = progress
                 if (f > 0f && entryId == transitions.topEntryId) {
                     val r = LeadingCorner * f
-                    shape = if (ltr) RoundedCornerShape(topStart = r, bottomStart = r) else RoundedCornerShape(topEnd = r, bottomEnd = r)
+                    // The layer resolves start/end from its own layout direction, so start is the leading edge in RTL too.
+                    shape = RoundedCornerShape(topStart = r, bottomStart = r)
                     clip = true
                 }
             }
