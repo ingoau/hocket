@@ -1,6 +1,6 @@
 // Main window shell: server setup as the entire first screen, otherwise the
 // sidebar / content / right panel / player bar layout.
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
@@ -26,6 +26,7 @@ import { Icon } from "./components/Icon";
 import { isOfflineNotice, noticeText } from "./lib/notice";
 import { useQueueDropReveal } from "./lib/queue-drag";
 import { useTheme } from "./lib/theme";
+import { handOnFocus } from "./lib/focus";
 
 const FullscreenPlayer = lazy(() => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer })));
 
@@ -42,8 +43,7 @@ export function App() {
   const fullscreen = useApp((s) => s.fullscreen);
   const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
   const narrow = useMediaQuery(NARROW);
-  const [loadedFs, setLoadedFs] = useState(false);
-  useEffect(() => { if (fullscreen) setLoadedFs(true); }, [fullscreen]);
+  const loadedFs = useFullscreenChunk(ready, fullscreen);
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
@@ -124,6 +124,29 @@ function NowPlayingAnnouncer() {
     if (id) setText(nowPlayingAnnouncement(title, artist));
   }, [id, title, artist]);
   return <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="now-playing-announcer">{text}</div>;
+}
+
+/**
+ * Whether to mount the lazily loaded fullscreen player: once the window is idle after startup
+ * (so it is normally loaded before the first open), or at once when it opens first.
+ */
+function useFullscreenChunk(ready: boolean, fullscreen: boolean): boolean {
+  const [load, setLoad] = useState(false);
+  useEffect(() => {
+    if (load || !ready) return;
+    const id = requestIdleCallback(() => setLoad(true), { timeout: 5000 });
+    return () => cancelIdleCallback(id);
+  }, [ready, load]);
+  // Opened before the chunk arrived: the shell turns inert (and drops focus) before the player
+  // mounts, so hand it the opener now for the player to return focus to on close.
+  useLayoutEffect(() => {
+    if (!fullscreen || load) return;
+    const a = document.activeElement;
+    // From a menu, the menu has already handed its trigger on.
+    if (a instanceof HTMLElement && a !== document.body && !a.closest("[role=menu]")) handOnFocus(a);
+    setLoad(true);
+  }, [fullscreen, load]);
+  return load || fullscreen;
 }
 
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */

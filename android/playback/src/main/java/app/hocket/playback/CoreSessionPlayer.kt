@@ -17,6 +17,7 @@ import app.hocket.core.api.QueueView
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.client.PositionClock
+import app.hocket.core.client.continuesTo
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import android.os.Looper
@@ -152,11 +153,18 @@ class CoreSessionPlayer(
         this.clockOffsetMs = clockOffsetMs
         this.remote = remote
         this.remoteVolume = remote && remoteVolume
-        // Position ticks (~750 ms) only refresh the stamp; Media3 polls the
-        // live supplier below, so rebuilding the playlist over binder is wasted.
-        if (!remoteFlagsChanged && prev.sameUiSurface(state)) return
+        // Position ticks only refresh the stamp; Media3 polls the live supplier below,
+        // so rebuilding the playlist over binder is wasted. A seek is not a tick: it
+        // must reach controllers as a discontinuity.
+        if (!remoteFlagsChanged && prev.isPositionTick(state)) return
+        if (prev.metadata?.trackId == state.metadata?.trackId && state.metadata != null && !prev.position.continuesTo(state.position)) {
+            seekedTo = PositionClock.extrapolate(state.position, now(), clockOffsetMs, state.metadata?.durationMs?.toLong())
+        }
         invalidateState()
     }
+
+    /** A seek made elsewhere (the app, another device) for the next [getState] to report once. */
+    private var seekedTo: Long? = null
 
     /** The track behind queue entry [key] in the current queue view; null when it is not there. */
     fun trackIdForQueueKey(key: String): String? = queue?.let { q ->
@@ -235,7 +243,9 @@ class CoreSessionPlayer(
                 PositionClock.extrapolate(live.position, now(), clockOffsetMs, live.metadata?.durationMs?.toLong() ?: duration)
             }
             builder.setContentBufferedPositionMs { duration }
+            seekedTo?.let { builder.setPositionDiscontinuity(Player.DISCONTINUITY_REASON_SEEK, it) }
         }
+        seekedTo = null
         return builder.build()
     }
 

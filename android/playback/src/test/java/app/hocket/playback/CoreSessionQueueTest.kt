@@ -76,13 +76,33 @@ class CoreSessionQueueTest {
         val start = timelineChanges
         val base = state("t2")
         repeat(40) { i ->
-            player.apply(base.copy(position = PositionStamp((i * 750).toUInt(), i.toDouble(), 1.0, true)))
+            player.apply(base.copy(position = PositionStamp((i * 750).toUInt(), i * 750.0, 1.0, true)))
             settle()
         }
         assertEquals("40 position ticks must not rebuild the Media3 timeline", start, timelineChanges)
         player.apply(base.copy(metadata = base.metadata!!.copy(title = "Other")))
         settle()
         assertTrue("a metadata change still rebuilds", timelineChanges > start)
+    }
+
+    @Test
+    fun aSeekReachesControllersAsADiscontinuity() {
+        setUp()
+        var discontinuities = 0
+        player.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+                discontinuities++
+            }
+        })
+        settle()
+        val base = state("t2")
+        player.apply(base.copy(position = PositionStamp(750u, 750.0, 1.0, true)), clockOffsetMs = 0.0)
+        settle()
+        assertEquals("a tick is not a discontinuity", 0, discontinuities)
+        // Seeked elsewhere (the app's scrubber, another device): same surface, new position.
+        player.apply(base.copy(position = PositionStamp(120_000u, 800.0, 1.0, true)), clockOffsetMs = 0.0)
+        settle()
+        assertTrue("a seek must reach controllers", discontinuities > 0)
     }
 
     @Test

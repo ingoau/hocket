@@ -10,10 +10,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaSessionSurfaceTest {
-    private fun state(playing: Boolean = true, positionMs: UInt = 1000u) = MediaSessionState(
+    private fun state(playing: Boolean = true, positionMs: UInt = 1000u, takenAt: Double = 0.0) = MediaSessionState(
         MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", false, 0u),
         playing,
-        PositionStamp(positionMs, 0.0, 1.0, playing),
+        PositionStamp(positionMs, takenAt, 1.0, playing),
         false,
         RepeatMode.Off,
         1.0,
@@ -36,5 +36,17 @@ class MediaSessionSurfaceTest {
         assertFalse(a.sameUiSurface(a.copy(isPlaying = false)))
         assertFalse(a.sameUiSurface(a.copy(metadata = a.metadata!!.copy(title = "Other"))))
         assertFalse(a.sameUiSurface(a.copy(volume = 0.2)))
+    }
+
+    @Test
+    fun aSeekIsNotAPositionTick() {
+        val a = state(positionMs = 1_000u)
+        assertTrue(a.isPositionTick(state(positionMs = 31_000u, takenAt = 30_000.0)))
+        // Same surface, but the position jumped: controllers and the watch must hear it.
+        assertFalse(a.isPositionTick(state(positionMs = 90_000u, takenAt = 1_000.0)))
+        assertFalse(a.isPositionTick(state(positionMs = 0u, takenAt = 5_000.0)))
+        val paused = state(playing = false, positionMs = 40_000u)
+        assertTrue(paused.isPositionTick(state(playing = false, positionMs = 40_000u, takenAt = 60_000.0)))
+        assertFalse(paused.isPositionTick(state(playing = false, positionMs = 10_000u, takenAt = 60_000.0)))
     }
 }

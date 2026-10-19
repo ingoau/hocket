@@ -24,7 +24,7 @@ import app.hocket.core.api.SearchResults
 import app.hocket.core.api.Snapshot
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.client.PositionClock
-import app.hocket.playback.sameUiSurface
+import app.hocket.playback.isPositionTick
 import app.hocket.playback.pebble.PebbleProtocol.Cmd
 import app.hocket.playback.pebble.PebbleProtocol.Flag
 import app.hocket.playback.pebble.PebbleProtocol.Key
@@ -155,7 +155,8 @@ class PebbleBridge(
         if (nowDirty) return true
         val s = session ?: return true
         val last = lastPushed ?: return true
-        if (!last.sameUiSurface(s)) return true
+        // A seek (or anything the watch draws) changed: its local clock would be wrong.
+        if (!last.isPositionTick(s)) return true
         return nowElapsed - lastNowAt >= NOW_RESYNC_MS
     }
 

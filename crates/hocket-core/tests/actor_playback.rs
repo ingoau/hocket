@@ -972,5 +972,8 @@ async fn rating_off_queue_does_not_emit_queue() {
         .filter(|e| matches!(e, Event::MediaSession { .. }))
         .count();
     assert_eq!(queue, 0, "off-queue ratings must not emit QueueChanged");
-    assert_eq!(session, 0, "off-queue ratings must not rebuild MediaSession");
+    assert_eq!(
+        session, 0,
+        "off-queue ratings must not rebuild MediaSession"
+    );
 }
