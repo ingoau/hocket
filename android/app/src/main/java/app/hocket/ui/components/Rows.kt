@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -305,13 +306,18 @@ fun AlbumCard(
         Column(Modifier.padding(6.dp)) {
             Box {
                 // The press ripple is drawn on the cover only (Navic): the text below stays calm.
-                Artwork(
-                    album.coverArt, ArtworkSizes.GRID, null,
+                Box(
                     Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier)
-                        .sharedArtworkDestination(destinationShareKey)
-                        .clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
-                    RoundedCornerShape(GridArtCorner),
-                )
+                        // Destination stays a sharedElement so the Recent covers are the flying
+                        // copies — they leave the fan on push and fly back into that card on pop.
+                        .sharedArtworkDestination(destinationShareKey, zIndex = 4f),
+                ) {
+                    Artwork(
+                        album.coverArt, ArtworkSizes.GRID, null,
+                        Modifier.fillMaxSize().clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
+                        RoundedCornerShape(GridArtCorner),
+                    )
+                }
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }

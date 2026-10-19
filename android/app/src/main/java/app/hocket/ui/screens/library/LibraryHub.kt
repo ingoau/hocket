@@ -363,17 +363,25 @@ private fun AlbumFan(albums: List<Album>, share: List<Modifier>, modifier: Modif
         // Drawn back to front: the last cover first, so the first sits on top at the left.
         albums.withIndex().reversed().forEach { (i, album) ->
             val angle = listOf(-8f, 4f, 12f).getOrElse(i) { 0f }
-            Artwork(
-                album.coverArt, 128, null,
-                shape = RoundedCornerShape(10.dp),
-                // The middle cover sits a little higher, so the three read as a fan rather than a row.
-                modifier = Modifier
+            val art = Modifier.fillMaxSize().graphicsLayer {
+                rotationZ = angle
+                shadowElevation = 6f
+                shape = RoundedCornerShape(10.dp)
+                clip = true
+            }
+            Box(
+                Modifier
                     .offset(x = step * i, y = if (i == 1) (-6).dp else 0.dp)
                     .size(size)
-                    .then(share.getOrElse(i) { Modifier })
-                    .graphicsLayer { rotationZ = angle; shadowElevation = 6f; shape = RoundedCornerShape(10.dp); clip = true }
                     .testTag("library.browse.albums.fan.$i"),
-            )
+            ) {
+                // Stays painted when the shared copy lifts into the overlay — otherwise the tile
+                // flashes empty white cards while the three covers fly to the albums page.
+                Artwork(album.coverArt, ArtworkSizes.GRID, null, shape = RoundedCornerShape(10.dp), modifier = art)
+                Box(Modifier.matchParentSize().then(share.getOrElse(i) { Modifier })) {
+                    Artwork(album.coverArt, ArtworkSizes.GRID, null, shape = RoundedCornerShape(10.dp), modifier = art)
+                }
+            }
         }
     }
 }

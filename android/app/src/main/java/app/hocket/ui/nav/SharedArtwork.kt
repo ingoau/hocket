@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import app.hocket.ui.a11y.LocalReducedMotion
 import java.util.UUID
 
@@ -75,7 +76,11 @@ internal class ArtworkShareSource(
 )
 
 @Composable
-internal fun rememberArtworkShareSource(key: String?, coverArt: String? = null, zIndex: Float = 1f): ArtworkShareSource {
+internal fun rememberArtworkShareSource(
+    key: String?,
+    coverArt: String? = null,
+    zIndex: Float = 1f,
+): ArtworkShareSource {
     val session = LocalSharedArtwork.current
     // Survives the source page leaving composition while the destination is on screen, so a pop
     // can pair the same instance again and fly the art back (NavHost disposes covered entries).
@@ -94,7 +99,12 @@ internal fun Modifier.sharedArtworkDestination(key: String?, zIndex: Float = 1f)
     then(sharedArtworkModifier(key, source = false, sourceId = null, zIndex = zIndex))
 
 @Composable
-private fun sharedArtworkModifier(key: String?, source: Boolean, sourceId: Any?, zIndex: Float): Modifier {
+private fun sharedArtworkModifier(
+    key: String?,
+    source: Boolean,
+    sourceId: Any?,
+    zIndex: Float,
+): Modifier {
     val session = LocalSharedArtwork.current
     val visibility = LocalNavAnimatedVisibilityScope.current
     val scope = LocalSharedTransitionScope.current
@@ -104,11 +114,12 @@ private fun sharedArtworkModifier(key: String?, source: Boolean, sourceId: Any?,
     val state = with(scope) { rememberSharedContentState(key = key ?: "artwork.idle") }
     val enabled = key != null && !reduced && session.matches(key, source, sourceId)
     if (!enabled) return Modifier
+    val bounds = { _: Rect, _: Rect -> tween<Rect>(PUSH_MS, easing = MiuixEasing) }
     return with(scope) {
         Modifier.sharedElement(
             state,
             animatedVisibilityScope = visibility,
-            boundsTransform = { _, _ -> tween(PUSH_MS, easing = MiuixEasing) },
+            boundsTransform = bounds,
             zIndexInOverlay = zIndex,
         )
     }

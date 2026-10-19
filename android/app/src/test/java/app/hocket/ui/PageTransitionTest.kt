@@ -139,6 +139,31 @@ class PageTransitionTest {
     }
 
     @Test
+    fun poppingAlbumsFliesTheFanBackOntoTheTile() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.waitUntil(5_000) { exists("home.screen") }
+        compose.onNodeWithTag("navBar.library").performClick()
+        compose.waitUntil(5_000) { exists("library.grid") }
+        compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.browse.albums"))
+        compose.waitUntil(5_000) { exists("library.browse.albums.fan.0", unmerged = true) }
+        compose.onNodeWithTag("library.browse.albums").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { exists("libraryList.albums") || exists("library.group.recent") }
+        compose.mainClock.advanceTimeBy(600)
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
+        compose.mainClock.advanceTimeBy(200)
+        assertTrue("fan still composed on the library", exists("library.browse.albums.fan", unmerged = true) || exists("library.browse.albums.fan.0", unmerged = true))
+        assertTrue("albums page is still leaving", exists("libraryList.albums") || exists("library.group.recent"))
+        shot("page-pop-albums-tile-mid")
+        compose.mainClock.autoAdvance = true
+        compose.waitUntil(5_000) { exists("library.browse.albums") }
+    }
+
+    @Test
     fun switchingTabsLeavesTheIncomingPlaceOffsetWithTheTab() {
         val core = TestCore(startPlaying = false)
         compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
