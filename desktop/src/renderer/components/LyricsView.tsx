@@ -16,7 +16,7 @@ import "@applemusic-like-lyrics/core/style.css";
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
-import { extrapolate, ticker } from "../store/position";
+import { extrapolate, frameDue, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
 import { LYRICS_SCALE, LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
@@ -95,27 +95,22 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   }, [stamp, clockOffset, duration]);
 
   // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; 30 cap in battery saver.
+  // On the shared position ticker, so the lyrics, the seek bar and the background paint in the
+  // same frames instead of each loop adding frames of its own.
   useEffect(() => {
     if (!animated || perf === "stopped" || !stamp.isPlaying) return;
     const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(batteryFps, fpsCap) : fpsCap;
-    let raf = 0;
     let last = performance.now();
-    let acc = 0;
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = now - last;
-      acc += dt;
+    return ticker.subscribe(() => {
+      const now = ticker.now;
+      const step = now - last;
+      if (!frameDue(step, fps)) return;
       last = now;
-      if (acc < 1000 / fps) return;
-      const step = acc;
-      acc = 0;
       const p = player.current;
       if (!p) return;
       p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration));
       p.update(step);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    });
   }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
 
   return (

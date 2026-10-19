@@ -105,8 +105,8 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
     };
   }, [url, animated]);
 
-  // Frame budget: Kawarp's rAF loop when focused; ~24 fps ourselves when
-  // unfocused (never pass wall-clock ms into renderFrame — that flickers).
+  // Frame budget: ~30 fps focused, ~24 fps unfocused, painted on the shared
+  // position ticker (never pass wall-clock ms into renderFrame — that flickers).
   useEffect(() => {
     const k = kawarp.current;
     if (!k || !animated) return;

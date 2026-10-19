@@ -8,6 +8,8 @@
 // flicker. Always call renderFrame with no argument so Kawarp advances from its
 // own lastFrameTime.
 
+import { frameDue, ticker } from "../store/position";
+
 export const BACKGROUND_FPS = 24;
 /** Focused fullscreen never runs at the display rate — Kawarp plus lyrics at 120 Hz is the battery cliff. */
 export const FOCUSED_FPS = 30;
@@ -28,8 +30,20 @@ export function perfForWindow(visible: boolean, focused: boolean): PerfMode {
   return focused ? "full" : "background";
 }
 
-/** Start Kawarp's frame loop for this performance mode. Returns a disposer. */
-export function startKawarpBudget(k: KawarpDriver, perf: PerfMode): (() => void) | undefined {
+/** A shared frame source: the position ticker (store/position.ts). */
+export interface FrameClock {
+  subscribe(cb: () => void): () => void;
+  /** The current frame's time (performance.now() ms). */
+  readonly now: number;
+}
+
+/**
+ * Start Kawarp's frame loop for this performance mode. Returns a disposer.
+ * Frames come from `clock` (the position ticker), at most `fps` a second: a timer of its own
+ * painted out of step with the lyrics and the seek bar, so the window produced the frames of
+ * both (two 30 fps loops a frame apart are 60 frames a second).
+ */
+export function startKawarpBudget(k: KawarpDriver, perf: PerfMode, clock: FrameClock = ticker): (() => void) | undefined {
   if (perf === "stopped") {
     k.stop();
     return;
@@ -37,9 +51,14 @@ export function startKawarpBudget(k: KawarpDriver, perf: PerfMode): (() => void)
   // Drive every frame ourselves: Kawarp.start() is unbounded display-rate rAF.
   k.stop();
   const fps = perf === "full" ? FOCUSED_FPS : BACKGROUND_FPS;
-  const id = setInterval(() => k.renderFrame(), 1000 / fps);
+  let last = -Infinity;
+  const unsubscribe = clock.subscribe(() => {
+    if (!frameDue(clock.now - last, fps)) return;
+    last = clock.now;
+    k.renderFrame();
+  });
   return () => {
-    clearInterval(id);
+    unsubscribe();
     k.stop();
   };
 }
