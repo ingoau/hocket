@@ -27,6 +27,7 @@ import { isOfflineNotice, noticeText } from "./lib/notice";
 import { useQueueDropReveal } from "./lib/queue-drag";
 import { useTheme } from "./lib/theme";
 import { handOnFocus } from "./lib/focus";
+import { loadAmll } from "./lib/amll";
 
 const FullscreenPlayer = lazy(() => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer })));
 
@@ -44,6 +45,7 @@ export function App() {
   const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
   const narrow = useMediaQuery(NARROW);
   const loadedFs = useFullscreenChunk(ready, fullscreen);
+  useLyricPlayerPreload();
   useTheme();
   useGlobalKeyboard(true);
   useDeepLinks();
@@ -147,6 +149,16 @@ function useFullscreenChunk(ready: boolean, fullscreen: boolean): boolean {
     setLoad(true);
   }, [fullscreen, load]);
   return load || fullscreen;
+}
+
+/** Synced lyrics have arrived for what is playing: load the lyric player when idle, ahead of a lyrics view. */
+function useLyricPlayerPreload(): void {
+  const synced = useApp((s) => !!s.lyrics?.lyrics && s.lyrics.lyrics.tier !== "unsynced");
+  useEffect(() => {
+    if (!synced) return;
+    const id = requestIdleCallback(() => void loadAmll().catch(() => undefined), { timeout: 3000 });
+    return () => cancelIdleCallback(id);
+  }, [synced]);
 }
 
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */

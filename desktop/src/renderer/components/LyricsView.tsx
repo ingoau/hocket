@@ -11,14 +11,14 @@
 // synced lyrics render as that same list, visible, with static highlighting:
 // no syllable sweep, blur, springs or scaling.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { DomLyricPlayer, type LyricLineMouseEvent } from "@applemusic-like-lyrics/core";
-import "@applemusic-like-lyrics/core/style.css";
+import type { DomLyricPlayer, LyricLineMouseEvent } from "@applemusic-like-lyrics/core";
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { extrapolate, frameDue, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
+import { loadAmll } from "../lib/amll";
 import { LYRICS_SCALE, LYRICS_SIZES, setLyricsSize, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 import { SK } from "@shared/settings-keys";
 import { usePlainLyrics } from "../lib/media";
@@ -42,18 +42,15 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   const mappedRef = useRef(mapped);
   mappedRef.current = mapped;
 
-  // Create/destroy the DOM player for synced tiers.
+  // Create/destroy the DOM player for synced tiers. AMLL loads on demand (lib/amll.ts); until it
+  // has, the pane holds the screen-reader list only, and `loaded` re-runs the effects below
+  // that hand the player its lines and time.
+  const [loaded, setLoaded] = useState(0);
   useEffect(() => {
-    if (!animated || !host.current) return;
-    const p = new DomLyricPlayer();
-    p.setEnableBlur(variant === "large");
-    p.setEnableSpring(variant === "large" && !batterySaver);
-    p.setEnableScale(true);
-    // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
-    p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
-    p.setWordFadeWidth(0.5);
-    host.current.replaceChildren(p.getElement());
-    player.current = p;
+    const el = host.current;
+    if (!animated || !el) return;
+    let p: DomLyricPlayer | undefined;
+    let alive = true;
     // AMLL re-dispatches DOM clicks on a line as "line-click" (not "click").
     const onClick = (e: Event) => {
       const ev = e as LyricLineMouseEvent;
@@ -61,8 +58,23 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       const line = m.lines[ev.lineIndex];
       if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime - m.offsetMs) } });
     };
-    p.addEventListener("line-click", onClick);
+    loadAmll().then((amll) => {
+      if (!alive) return;
+      p = new amll.DomLyricPlayer();
+      p.setEnableBlur(variant === "large");
+      p.setEnableSpring(variant === "large" && !batterySaver);
+      p.setEnableScale(true);
+      // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
+      p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
+      p.setWordFadeWidth(0.5);
+      el.replaceChildren(p.getElement());
+      player.current = p;
+      p.addEventListener("line-click", onClick);
+      setLoaded((n) => n + 1);
+    }, (err: unknown) => console.error("[lyrics] the lyric player failed to load", err));
     return () => {
+      alive = false;
+      if (!p) return;
       p.removeEventListener("line-click", onClick);
       p.dispose();
       player.current = undefined;
@@ -76,7 +88,9 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     p.setLyricLines(mapped.lines as never, extrapolate(stampRef.current, Date.now(), clockOffset, duration));
     p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration), true);
     p.update(0);
-  }, [mapped, batterySaver, animated]);
+    if (stampRef.current.isPlaying) p.resume();
+    else p.pause();
+  }, [mapped, batterySaver, animated, loaded]);
 
   // Seek detection: a jump in the stamp means isSeek=true so AMLL relayouts.
   const lastStamp = useRef(stamp);
