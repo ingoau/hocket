@@ -24,7 +24,8 @@ use crate::api::{
 
 /// Platform side of the seam: publish state, nothing else. Media3 and the
 /// playwire addon implement this; the actor calls it on every relevant
-/// change (track, play/pause, seek, shuffle/repeat, volume, position tick).
+/// change (track, play/pause, seek, shuffle/repeat, volume, a position that
+/// strays from the extrapolation).
 pub trait MediaSessionAdapter: Send + Sync {
     fn set_state(&self, state: MediaSessionState);
 }
@@ -79,6 +80,55 @@ pub fn extrapolate_position(stamp: &PositionStamp, now_ms: f64, duration_ms: Opt
         _ => pos,
     };
     pos.min(f64::from(u32::MAX)) as u32
+}
+
+/// How far a stamp may stray from where the previous one extrapolates to
+/// and still be the same playback carrying on (a position tick, not a seek).
+pub const STAMP_TOLERANCE_MS: f64 = 250.0;
+
+/// `next` says nothing a receiver of `prev` doesn't already know by
+/// extrapolating: same play state and rate, taken no earlier, and within
+/// [`STAMP_TOLERANCE_MS`] of where `prev` has got to by then.
+pub fn stamp_continues(prev: &PositionStamp, next: &PositionStamp) -> bool {
+    if prev.is_playing != next.is_playing || prev.rate != next.rate {
+        return false;
+    }
+    let dt = next.taken_at - prev.taken_at;
+    if dt < 0.0 {
+        return false;
+    }
+    let rate = if prev.is_playing { prev.rate } else { 0.0 };
+    let expected = f64::from(prev.position_ms) + dt * rate;
+    // NaN anywhere compares false: not a continuation.
+    (f64::from(next.position_ms) - expected).abs() <= STAMP_TOLERANCE_MS
+}
+
+/// A `TransportChanged` with `next` would only repeat `prev`: the stamp
+/// carries on and nothing a UI shows changed. The lease's renewed
+/// `expires_at` and the growing `played_ms` alone are not news; they ride
+/// along with the next real change (and every snapshot).
+pub fn transport_continues(prev: &TransportState, next: &TransportState) -> bool {
+    prev.lease.owner == next.lease.owner
+        && prev.lease.epoch == next.lease.epoch
+        && prev.buffering == next.buffering
+        && prev.volume == next.volume
+        && prev.muted == next.muted
+        && prev.volume_device == next.volume_device
+        && stamp_continues(&prev.position, &next.position)
+}
+
+/// A `MediaSession` event with `next` would only repeat `prev`: everything
+/// but the position is the same and the position carries on.
+pub fn media_session_continues(prev: &MediaSessionState, next: &MediaSessionState) -> bool {
+    prev.metadata == next.metadata
+        && prev.is_playing == next.is_playing
+        && prev.shuffle == next.shuffle
+        && prev.repeat == next.repeat
+        && prev.volume == next.volume
+        && prev.muted == next.muted
+        && prev.actions == next.actions
+        && prev.owns_transport == next.owns_transport
+        && stamp_continues(&prev.position, &next.position)
 }
 
 /// Build the state the platform publishes.
@@ -506,5 +556,71 @@ mod tests {
         adapter.set_state(MediaSessionState::default());
         assert_eq!(seen.lock().len(), 1);
         NullMediaSession.set_state(MediaSessionState::default());
+    }
+
+    fn stamp(position_ms: u32, taken_at: f64, is_playing: bool) -> PositionStamp {
+        PositionStamp {
+            position_ms,
+            taken_at,
+            rate: 1.0,
+            is_playing,
+        }
+    }
+
+    #[test]
+    fn a_stamp_continues_only_where_extrapolation_lands() {
+        let playing = stamp(10_000, 1_000.0, true);
+        // The 1 Hz report a second later, with a little jitter.
+        assert!(stamp_continues(&playing, &stamp(11_000, 2_000.0, true)));
+        assert!(stamp_continues(&playing, &stamp(11_200, 2_000.0, true)));
+        // A seek (either way), a pause, a stamp from the past.
+        assert!(!stamp_continues(&playing, &stamp(30_000, 2_000.0, true)));
+        assert!(!stamp_continues(&playing, &stamp(5_000, 2_000.0, true)));
+        assert!(!stamp_continues(&playing, &stamp(11_000, 2_000.0, false)));
+        assert!(!stamp_continues(&playing, &stamp(9_000, 0.0, true)));
+        // Paused: the position must not move.
+        let paused = stamp(10_000, 1_000.0, false);
+        assert!(stamp_continues(&paused, &stamp(10_000, 60_000.0, false)));
+        assert!(!stamp_continues(&paused, &stamp(12_000, 3_000.0, false)));
+        // A NaN never counts as carrying on.
+        assert!(!stamp_continues(&playing, &stamp(11_000, f64::NAN, true)));
+    }
+
+    #[test]
+    fn transport_lease_renewal_and_played_time_alone_are_not_news() {
+        let a = TransportState {
+            position: stamp(10_000, 1_000.0, true),
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.position = stamp(15_000, 6_000.0, true);
+        b.lease.expires_at += 5_000.0;
+        b.played_ms += 5_000;
+        assert!(transport_continues(&a, &b));
+        let mut c = b.clone();
+        c.lease.epoch += 1;
+        assert!(!transport_continues(&a, &c));
+        let mut d = b.clone();
+        d.volume = 0.5;
+        assert!(!transport_continues(&a, &d));
+        let mut e = b;
+        e.buffering = true;
+        assert!(!transport_continues(&a, &e));
+    }
+
+    #[test]
+    fn media_session_continues_only_when_nothing_shown_changed() {
+        let a =
+            derive_media_session_state(&queue(true), &transport(true), 1_000.0, None, true, None);
+        let mut b = a.clone();
+        b.position.position_ms += 1_000;
+        b.position.taken_at += 1_000.0;
+        assert!(media_session_continues(&a, &b));
+        let mut c = b.clone();
+        c.metadata.as_mut().unwrap().loved = false;
+        assert!(!media_session_continues(&a, &c));
+        let mut d = b;
+        d.position.position_ms += 5_000;
+        assert!(!media_session_continues(&a, &d));
     }
 }

@@ -906,37 +906,93 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
     assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));
 }
 
-/// Position reports (~1 Hz) used to emit TransportChanged *and* MediaSession.
-/// The latter rebuilt OS notifications, Android binder playlists and the
-/// Pebble now-playing push. UIs extrapolate from the stamp on TransportChanged.
+/// Steady playback sends nothing a receiver can extrapolate: the backend's
+/// ~1 Hz position reports and the lease renewal every 5 s used to send a
+/// TransportChanged each (and a MediaSession per renewal, rebuilding OS
+/// notifications, Android binder playlists and the Pebble now-playing push),
+/// plus the device list twice per renewal. A seek, or a report that strays
+/// from the stamp, still goes out once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn position_ticks_emit_transport_not_media_session() {
+async fn steady_playback_emits_no_transport_or_session_until_it_strays() {
     let t = synced_core("pos-ms").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayContext {
         args: album_args(&sid, "al0"),
     })
     .await;
-    t.run_for(200.0).await;
+    t.run_for(1_000.0).await;
     t.events.clear();
-    t.run_for(4_500.0).await;
+    let lease_before = t.snapshot().await.transport.lease.expires_at;
+    t.run_for(30_000.0).await;
     let evs = t.events.all();
-    let transport = evs
+    let count = |f: fn(&Event) -> bool| evs.iter().filter(|e| f(e)).count();
+    let transport = count(|e| matches!(e, Event::TransportChanged { .. }));
+    let session = count(|e| matches!(e, Event::MediaSession { .. }));
+    assert_eq!(
+        transport, 0,
+        "steady playback sent {transport} TransportChanged"
+    );
+    assert_eq!(session, 0, "steady playback sent {session} MediaSession");
+    let devices: Vec<&Event> = evs
         .iter()
-        .filter(|e| matches!(e, Event::TransportChanged { .. }))
-        .count();
+        .filter(|e| matches!(e, Event::DevicesChanged { .. }))
+        .collect();
+    assert!(
+        devices.windows(2).all(|w| w[0] != w[1]),
+        "the same device list twice in a row"
+    );
+    assert!(
+        devices.len() <= 6,
+        "{} DevicesChanged in 30 s",
+        devices.len()
+    );
+    // The lease was renewed meanwhile; snapshots carry it all the same.
+    assert!(t.snapshot().await.transport.lease.expires_at > lease_before);
+
+    // A seek goes out once.
+    t.events.clear();
+    t.run(Command::SeekTo {
+        position_ms: 120_000,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    let evs = t.events.all();
+    let stamps: Vec<&TransportState> = evs
+        .iter()
+        .filter_map(|e| match e {
+            Event::TransportChanged { transport } => Some(transport),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    assert!((120_000..121_000).contains(&stamps[0].position.position_ms));
     let session = evs
         .iter()
         .filter(|e| matches!(e, Event::MediaSession { .. }))
         .count();
-    assert!(
-        transport >= 4,
-        "expected ~1 Hz transport stamps over 4.5s, got {transport}"
-    );
-    assert_eq!(
-        session, 0,
-        "MediaSession must not follow position reports (got {session} vs {transport} TransportChanged)"
-    );
+    assert_eq!(session, 1);
+
+    // A report that strays from the stamp (a stall the backend never
+    // reported) goes out too.
+    t.events.clear();
+    let key = t.queue().await.current.unwrap().item.key;
+    t.run(Command::BackendReport {
+        report: BackendReport::Position {
+            key,
+            position_ms: 60_000,
+        },
+    })
+    .await;
+    let stamps: Vec<u32> = t
+        .events
+        .all()
+        .iter()
+        .filter_map(|e| match e {
+            Event::TransportChanged { transport } => Some(transport.position.position_ms),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stamps, vec![60_000]);
 }
 
 /// Rating a track that is not in the session must not rebuild the queue view / OS session.

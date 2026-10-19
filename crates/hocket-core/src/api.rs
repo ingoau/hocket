@@ -2549,6 +2549,10 @@ pub enum Event {
     QueueChanged {
         queue: QueueView,
     },
+    /// Sent when something a receiver can't extrapolate changed: play state,
+    /// a seek or a position that strayed from the stamp, buffering, volume,
+    /// the lease owner. Never for position progress alone, nor for a lease
+    /// renewal or `played_ms` alone (those ride along with the next one).
     TransportChanged {
         transport: TransportState,
     },
@@ -2657,7 +2661,8 @@ pub enum Event {
     Backend {
         command: BackendCommand,
     },
-    /// Drive the OS media session (both platforms).
+    /// Drive the OS media session (both platforms). Like
+    /// `TransportChanged`, never for position progress alone.
     MediaSession {
         state: MediaSessionState,
     },

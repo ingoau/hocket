@@ -506,9 +506,8 @@ impl Actor {
         }
         let _ = lease;
         self.emit_transport();
-        if let Some(e) = &self.engine {
-            let devices = e.devices();
-            self.emit(Event::DevicesChanged { devices });
+        if let Some(devices) = self.engine.as_ref().map(|e| e.devices()) {
+            self.emit_devices(devices);
         }
     }
 
@@ -1067,8 +1066,10 @@ impl Actor {
                 // UIs and the OS media session extrapolate from the stamp;
                 // a MediaSession event here would rebuild notifications,
                 // binder playlists and the Pebble now-playing push ~1 Hz.
+                // The stamp goes out only when the position strayed from
+                // the extrapolation (a stall the backend did not report).
                 let transport = self.transport_state();
-                self.emit(Event::TransportChanged { transport });
+                self.emit_transport_state(transport);
             }
             BackendReport::Ended { key } => {
                 if !current(&key, self) {
@@ -1546,10 +1547,21 @@ impl Actor {
         )
     }
 
+    /// The OS media session's state, unless it would only repeat the last
+    /// one sent (see [`Actor::emit_transport_state`]): each one rebuilds
+    /// notifications, binder playlists and the watch's now-playing screen.
     pub(crate) fn emit_media_session(&mut self) {
         let queue = self.queue_head_view();
         let transport = self.transport_state();
         let state = self.media_session_state(&queue, &transport);
+        if self
+            .emitted_media_session
+            .as_ref()
+            .is_some_and(|last| crate::media_session::media_session_continues(last, &state))
+        {
+            return;
+        }
+        self.emitted_media_session = Some(state.clone());
         self.emit(Event::MediaSession { state });
     }
 

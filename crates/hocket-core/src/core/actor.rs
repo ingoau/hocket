@@ -184,6 +184,12 @@ pub(crate) struct Actor {
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
     pub last_transport: TransportState,
+    /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
+    /// sent: one that would only repeat it is not sent (see
+    /// [`Actor::emit_transport_state`]).
+    pub emitted_transport: Option<TransportState>,
+    pub emitted_media_session: Option<MediaSessionState>,
+    pub emitted_devices: Option<Vec<DeviceInfo>>,
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
     pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
@@ -453,6 +459,9 @@ impl Actor {
             last_doc: None,
             last_saved_queues: vec![],
             last_transport: TransportState::default(),
+            emitted_transport: None,
+            emitted_media_session: None,
+            emitted_devices: None,
             pending_submits: HashMap::new(),
             pending_cas: HashMap::new(),
             outbox_entries: HashMap::new(),
@@ -812,6 +821,7 @@ impl Actor {
         self.emit(Event::NowPlayingChanged {
             entry: snapshot.queue.current.clone(),
         });
+        self.emitted_transport = Some(snapshot.transport.clone());
         self.emit(Event::TransportChanged {
             transport: snapshot.transport.clone(),
         });
@@ -840,6 +850,7 @@ impl Actor {
         self.emit(Event::BatterySaverChanged {
             enabled: snapshot.battery_saver,
         });
+        self.emitted_devices = Some(snapshot.devices.clone());
         self.emit(Event::DevicesChanged {
             devices: snapshot.devices.clone(),
         });
@@ -880,6 +891,7 @@ impl Actor {
                 progress: p.clone(),
             });
         }
+        self.emitted_media_session = Some(snapshot.media_session.clone());
         self.emit(Event::MediaSession {
             state: snapshot.media_session,
         });
