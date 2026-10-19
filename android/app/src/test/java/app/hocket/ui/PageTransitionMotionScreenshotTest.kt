@@ -106,8 +106,9 @@ class PageTransitionMotionScreenshotTest {
         compose.mainClock.autoAdvance = false
         start()
         compose.runOnUiThread { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications() }
-        val frames = 8
-        val step = 70L
+        // Dense enough that a slowed recording still reads as motion, not a cut from start to settled.
+        val frames = 16
+        val step = 32L
         repeat(frames) { i ->
             if (i > 0) compose.mainClock.advanceTimeBy(step)
             shot(dir, "$name-${i.toString().padStart(2, '0')}")
