@@ -61,7 +61,7 @@ static void prv_enqueue(const OutMsg *msg) {
       return;
     }
   }
-  if (msg->type == MsgListReq || msg->type == MsgArtReq) {
+  if (msg->type == MsgListReq || msg->type == MsgArtReq || msg->type == MsgHello) {
     // Only the newest request of a kind matters: replace a queued one (not the one being sent).
     // List requests only replace one for the same path, so another list's request still goes.
     for (int i = s_out_busy ? 1 : 0; i < s_out_count; i++) {
@@ -314,23 +314,40 @@ uint32_t now_position_ms(void) {
 }
 
 static void prv_handle_now(DictionaryIterator *iter) {
-  char title[TEXT_LEN], artist[TEXT_LEN];
+  char title[TEXT_LEN], artist[TEXT_LEN], album[TEXT_LEN], resume[TEXT_LEN];
   prv_str(iter, MESSAGE_KEY_Title, title, sizeof(title));
   prv_str(iter, MESSAGE_KEY_Artist, artist, sizeof(artist));
-  const bool changed = strcmp(title, g_now.title) || strcmp(artist, g_now.artist);
+  prv_str(iter, MESSAGE_KEY_Album, album, sizeof(album));
+  prv_str(iter, MESSAGE_KEY_ResumeLabel, resume, sizeof(resume));
+  const uint32_t duration = prv_u32(iter, MESSAGE_KEY_Duration, 0);
+  const uint32_t position = prv_u32(iter, MESSAGE_KEY_Position, 0);
+  const uint32_t flags = prv_u32(iter, MESSAGE_KEY_Flags, 0);
+  const uint32_t repeat = prv_u32(iter, MESSAGE_KEY_Repeat, 0);
+  const uint32_t rating = prv_u32(iter, MESSAGE_KEY_Rating, 0);
+  const uint32_t volume = prv_u32(iter, MESSAGE_KEY_Volume, 255);
+  const uint32_t art_gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
+  const bool track_changed = strcmp(title, g_now.title) || strcmp(artist, g_now.artist);
+  const bool surface_changed = track_changed ||
+      strcmp(album, g_now.album) || strcmp(resume, g_now.resume_label) ||
+      duration != g_now.duration_ms || flags != g_now.flags || repeat != g_now.repeat ||
+      rating != g_now.rating || volume != g_now.volume || art_gen != g_now.art_gen;
   strcpy(g_now.title, title);
   strcpy(g_now.artist, artist);
-  prv_str(iter, MESSAGE_KEY_Album, g_now.album, sizeof(g_now.album));
-  prv_str(iter, MESSAGE_KEY_ResumeLabel, g_now.resume_label, sizeof(g_now.resume_label));
-  g_now.duration_ms = prv_u32(iter, MESSAGE_KEY_Duration, 0);
-  prv_stamp_position(prv_u32(iter, MESSAGE_KEY_Position, 0));
-  g_now.flags = prv_u32(iter, MESSAGE_KEY_Flags, 0);
-  g_now.repeat = prv_u32(iter, MESSAGE_KEY_Repeat, 0);
-  g_now.rating = prv_u32(iter, MESSAGE_KEY_Rating, 0);
-  g_now.volume = prv_u32(iter, MESSAGE_KEY_Volume, 255);
-  g_now.art_gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
-  now_playing_update(changed);
-  if (changed) lyrics_track_changed();
+  strcpy(g_now.album, album);
+  strcpy(g_now.resume_label, resume);
+  g_now.duration_ms = duration;
+  prv_stamp_position(position);
+  g_now.flags = flags;
+  g_now.repeat = repeat;
+  g_now.rating = rating;
+  g_now.volume = volume;
+  g_now.art_gen = art_gen;
+  if (!surface_changed) {
+    now_playing_progress_only();
+    return;
+  }
+  now_playing_update(track_changed);
+  if (track_changed) lyrics_track_changed();
   list_refresh_local();
   prv_idle_update();
 }
@@ -342,6 +359,15 @@ static GBitmap *s_art;
 static uint16_t s_art_gen;
 static uint32_t s_art_size;
 static int16_t s_art_w;
+
+void art_abort_inflight(void) {
+  if (s_art) {
+    gbitmap_destroy(s_art);
+    s_art = NULL;
+  }
+  s_art_gen = 0;
+  s_art_size = 0;
+}
 
 static void prv_handle_art(DictionaryIterator *iter) {
   const uint16_t gen = prv_u32(iter, MESSAGE_KEY_ArtGen, 0);
@@ -387,6 +413,7 @@ static void prv_handle_art(DictionaryIterator *iter) {
 }
 #else
 #define ART_SUPPORTED 0
+void art_abort_inflight(void) {}
 #endif
 
 static void prv_inbox(DictionaryIterator *iter, void *context) {

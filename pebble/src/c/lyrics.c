@@ -6,7 +6,8 @@
 
 #define MAX_LINES 160
 #define LINE_LEN 64
-#define FOLLOW_MS 250
+#define FOLLOW_MS 500
+#define LYRICS_PREFETCH 12
 #define RETRY_TICKS (5000 / FOLLOW_MS)  // re-request a page the phone has not answered in 5 s
 
 typedef struct {
@@ -37,6 +38,15 @@ static void prv_request(uint16_t offset) {
   send_list_request(s_req_id, "lyrics", offset);
 }
 
+/** Ask for the next page only when the playhead or focus is near the last loaded line. */
+static void prv_prefetch(void) {
+  if (s_waiting || s_count >= s_total) return;
+  int16_t need = s_focus;
+  if (s_current > need) need = s_current;
+  if (need < 0) need = 0;
+  if (need + LYRICS_PREFETCH >= (int16_t)s_count) prv_request(s_count);
+}
+
 static int16_t prv_line_at(uint32_t pos) {
   int16_t current = -1;
   for (int i = 0; i < s_count; i++) {
@@ -65,6 +75,7 @@ static void prv_follow(void *context) {
   // The request or its reply got lost (not connected, the phone busy): ask again.
   if (s_waiting && ++s_wait_ticks >= RETRY_TICKS) prv_request(s_count);
   prv_sync();
+  prv_prefetch();
 }
 
 void lyrics_handle_page(DictionaryIterator *iter) {
@@ -105,9 +116,9 @@ void lyrics_handle_page(DictionaryIterator *iter) {
     }
   }
   s_loaded = true;
-  if (s_count < s_total) prv_request(s_count);
   s_current = -2;  // recompute
   prv_sync();
+  prv_prefetch();
   layer_mark_dirty(s_layer);
 }
 
@@ -206,6 +217,7 @@ static void prv_move(int delta) {
   if (next >= s_count) next = s_count - 1;
   s_focus = next;
   s_manual = s_focus != s_current;
+  prv_prefetch();
   layer_mark_dirty(s_layer);
 }
 
