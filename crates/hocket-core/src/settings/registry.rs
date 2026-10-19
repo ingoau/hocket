@@ -523,7 +523,7 @@ pub static REGISTRY: &[SettingDef] = &[
         DISPLAY_LYRICS_FPS,
         Local,
         SettingKind::Int { min: 24, max: 144 },
-        || json!(60),
+        || json!(30),
     ),
     def(
         DISPLAY_THEME,

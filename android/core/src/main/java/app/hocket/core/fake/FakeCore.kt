@@ -153,7 +153,7 @@ class FakeCore(
         def(SettingKeys.BATTERY_SMALL_ARTWORK, "true", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_PAUSE_PREFETCH, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ANIMATED_BACKGROUND, "true", SettingScope.DeviceLocal)
-        def(SettingKeys.DISPLAY_LYRICS_FPS, "60", SettingScope.DeviceLocal)
+        def(SettingKeys.DISPLAY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
@@ -292,7 +292,7 @@ class FakeCore(
             for (i in from until order.size) {
                 val idx = order[i]
                 entry(QueueItem("ctx-$i-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false))?.let { upcoming += it }
-                if (upcoming.size >= 200) break
+                if (upcoming.size >= 100) break
             }
             if (autoplay && repeat == RepeatMode.Off && upcoming.size < 3) {
                 autoplayTail().forEach { upcoming += it }

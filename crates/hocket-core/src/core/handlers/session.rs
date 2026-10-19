@@ -1088,7 +1088,8 @@ impl Actor {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
-        let derived = derive(doc);
+        let mut derived = derive(doc);
+        derived.window_for_view();
         let mut seen: HashSet<&TrackId> = HashSet::new();
         let mut ids: Vec<TrackId> = vec![];
         for i in derived

@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -226,7 +227,7 @@ internal fun AlbumsTab(serverId: String, control: SortControl, open: (DetailTarg
         val count = if (state.known) state.total else SKELETON_COUNT
         items(count, contentType = { i -> if (state.item(i, client.albumPages.pageSize) == null) "skeleton" else "album" }) { i ->
             val album = state.item(i, client.albumPages.pageSize)
-            if (state.known) LaunchedEffect(i, state.generation) { client.albumPages.ensure(key, i) }
+            if (state.known) SideEffect { client.albumPages.ensure(key, i) }
             if (album == null) AlbumCardSkeleton() else Card(album, Modifier)
         }
     }
@@ -255,7 +256,7 @@ internal fun ArtistsTab(serverId: String, control: SortControl, open: (DetailTar
         val count = if (state.known) state.total else SKELETON_COUNT
         items(count, contentType = { i -> if (state.item(i, client.artistPages.pageSize) == null) "skeleton" else "artist" }) { i ->
             val artist = state.item(i, client.artistPages.pageSize)
-            if (state.known) LaunchedEffect(i, state.generation) { client.artistPages.ensure(key, i) }
+            if (state.known) SideEffect { client.artistPages.ensure(key, i) }
             if (artist == null) ArtistCardSkeleton() else Card(artist, Modifier)
         }
     }
@@ -371,12 +372,13 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
         val count = if (state.known) state.total else SKELETON_COUNT
         items(count, contentType = { i -> if (state.item(i, client.trackPages.pageSize) == null) "skeleton" else "track" }) { i ->
             val track = state.item(i, client.trackPages.pageSize)
-            if (state.known) LaunchedEffect(i, state.generation) { client.trackPages.ensure(key, i) }
+            if (state.known) SideEffect { client.trackPages.ensure(key, i) }
             if (track != null) {
                 TrackRow(track.toSummary(), onClick = {
                     // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
-                    val ctx = Commands.adHocContext(serverId, listLabel, state.pages.toSortedMap().values.flatten().map { it.id }, effectiveSort)
-                    client.dispatch(Commands.playContext(ctx, startIndex = state.pages.toSortedMap().values.flatten().indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
+                    val loaded = state.pages.toSortedMap().values.flatten()
+                    val ctx = Commands.adHocContext(serverId, listLabel, loaded.map { it.id }, effectiveSort)
+                    client.dispatch(Commands.playContext(ctx, startIndex = loaded.indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
                 }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
             } else TrackRowSkeleton()

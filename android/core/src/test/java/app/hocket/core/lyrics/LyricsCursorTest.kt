@@ -169,4 +169,18 @@ class LyricsCursorTest {
         val doc = lyrics(LyricsTier.Unsynced, listOf(line(null, null, "text")))
         assertEquals(LyricsCursor.EMPTY, LyricsCursor.at(doc, 99_999))
     }
+
+    @Test
+    fun locateOnLongLyricsStaysUnderAMillisecondEach() {
+        val lines = (0 until 400).map { i ->
+            val start = i * 500L
+            line(start, start + 480, "line $i")
+        }
+        val doc = lyrics(LyricsTier.Line, lines)
+        val start = System.nanoTime()
+        repeat(8_000) { LyricsCursor.at(doc, (it * 25).toLong()) }
+        val ns = System.nanoTime() - start
+        val per = ns / 8_000.0
+        assertTrue("8000 locates on 400 lines averaged ${per}ns each", per < 1_000_000.0)
+    }
 }

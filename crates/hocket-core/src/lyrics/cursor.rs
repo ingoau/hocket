@@ -67,39 +67,27 @@ impl LyricsCursor {
             self.last_line = None;
             return state;
         }
-        let starts: Vec<Option<f64>> = lyrics
-            .lines
-            .iter()
-            .map(|l| l.start_ms.map(f64::from))
-            .collect();
+        let start_of = |i: usize| lyrics.lines.get(i).and_then(|l| l.start_ms).map(f64::from);
 
         // Primary line: latest start ≤ effective. Try the cached line and its
         // successor first, then fall back to a scan. The shortcut only holds
         // when the timed starts are in order; servers do not promise that
         // (overlapping duet and background lines), and a cursor that answers
         // differently depending on where it was last frame would flicker.
-        let sorted = starts
-            .iter()
-            .flatten()
-            .zip(starts.iter().flatten().skip(1))
-            .all(|(a, b)| a <= b);
+        let sorted = timed_starts_sorted(&lyrics.lines);
         let mut line = None;
         if let (Some(last), true) = (self.last_line, sorted) {
-            let ok_here = starts
-                .get(last)
-                .copied()
-                .flatten()
-                .is_some_and(|s| s <= effective);
-            let next = (last + 1..starts.len()).find(|&i| starts[i].is_some());
-            let next_started = next.is_some_and(|n| starts[n].is_some_and(|s| s <= effective));
+            let ok_here = start_of(last).is_some_and(|s| s <= effective);
+            let next = (last + 1..lyrics.lines.len()).find(|&i| start_of(i).is_some());
+            let next_started = next.is_some_and(|n| start_of(n).is_some_and(|s| s <= effective));
             if ok_here && !next_started {
                 line = Some(last);
             }
         }
         if line.is_none() {
             let mut best: Option<(usize, f64)> = None;
-            for (i, s) in starts.iter().enumerate() {
-                if let Some(s) = *s {
+            for (i, l) in lyrics.lines.iter().enumerate() {
+                if let Some(s) = l.start_ms.map(f64::from) {
                     if s <= effective && best.is_none_or(|(_, bs)| s >= bs) {
                         best = Some((i, s));
                     }
@@ -118,10 +106,11 @@ impl LyricsCursor {
             if s > effective {
                 continue;
             }
-            let end = l
-                .end_ms
-                .map(f64::from)
-                .or_else(|| starts[i + 1..].iter().find_map(|x| *x));
+            let end = l.end_ms.map(f64::from).or_else(|| {
+                lyrics.lines[i + 1..]
+                    .iter()
+                    .find_map(|x| x.start_ms.map(f64::from))
+            });
             let inside = match end {
                 Some(e) => effective < e || (Some(i) == line && e <= s),
                 None => Some(i) == line,
@@ -167,4 +156,17 @@ impl LyricsCursor {
         }
         state
     }
+}
+
+fn timed_starts_sorted(lines: &[crate::api::LyricLine]) -> bool {
+    let mut prev: Option<u32> = None;
+    for l in lines {
+        if let Some(s) = l.start_ms {
+            if prev.is_some_and(|p| p > s) {
+                return false;
+            }
+            prev = Some(s);
+        }
+    }
+    true
 }

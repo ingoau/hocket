@@ -7,6 +7,7 @@
 //! device on this schema version never strips state a newer device wrote.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
@@ -61,16 +62,19 @@ pub fn new_document(
 
 /// Keys this version of the document type serialises. Computed from the type
 /// itself so it can't drift from the struct.
-fn known_keys() -> HashSet<String> {
-    let probe = new_document("probe", "probe".into(), 0.0);
-    match serde_json::to_value(&probe) {
-        Ok(Value::Object(m)) => {
-            let mut keys: HashSet<String> = m.keys().cloned().collect();
-            keys.insert("extra".into());
-            keys
+fn known_keys() -> &'static HashSet<String> {
+    static KEYS: OnceLock<HashSet<String>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let probe = new_document("probe", "probe".into(), 0.0);
+        match serde_json::to_value(&probe) {
+            Ok(Value::Object(m)) => {
+                let mut keys: HashSet<String> = m.keys().cloned().collect();
+                keys.insert("extra".into());
+                keys
+            }
+            _ => HashSet::new(),
         }
-        _ => HashSet::new(),
-    }
+    })
 }
 
 /// Parse a document, preserving unknown top-level fields in `extra`.
@@ -85,7 +89,13 @@ pub fn load_value(value: Value) -> Result<SessionDocument, DocumentError> {
     let Value::Object(map) = value else {
         return Err(DocumentError::NotAnObject);
     };
-    let mut doc: SessionDocument = serde_json::from_value(Value::Object(map.clone()))
+    let known = known_keys();
+    let extras: Vec<(String, String)> = map
+        .iter()
+        .filter(|(k, _)| !known.contains(*k))
+        .map(|(k, v)| (k.clone(), v.to_string()))
+        .collect();
+    let mut doc: SessionDocument = serde_json::from_value(Value::Object(map))
         .map_err(|e| DocumentError::Json(e.to_string()))?;
     if doc.schema_version < SESSION_SCHEMA_MIN {
         return Err(DocumentError::TooOld(
@@ -93,13 +103,10 @@ pub fn load_value(value: Value) -> Result<SessionDocument, DocumentError> {
             SESSION_SCHEMA_MIN,
         ));
     }
-    let known = known_keys();
     // Anything the wire carried under `extra` (written by a peer that already
     // did this dance) stays, and unknown top-level keys are added beside it.
-    for (k, v) in map {
-        if !known.contains(&k) {
-            doc.extra.insert(k, v.to_string());
-        }
+    for (k, v) in extras {
+        doc.extra.insert(k, v);
     }
     Ok(doc)
 }

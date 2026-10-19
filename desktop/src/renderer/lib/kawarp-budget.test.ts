@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BACKGROUND_FPS, perfForWindow, startKawarpBudget, type KawarpDriver } from "./kawarp-budget";
+import { BACKGROUND_FPS, FOCUSED_FPS, perfForWindow, startKawarpBudget, type KawarpDriver } from "./kawarp-budget";
 
 function mockKawarp(): KawarpDriver & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; renderFrame: ReturnType<typeof vi.fn> } {
   return {
@@ -31,13 +31,21 @@ describe("startKawarpBudget", () => {
     expect(k.renderFrame).not.toHaveBeenCalled();
   });
 
-  it("starts Kawarp's rAF loop when focused, and the disposer stops it", () => {
+  it("paints ~30 fps without a timestamp when focused (display-rate rAF is the battery cliff)", () => {
+    vi.useFakeTimers();
     const k = mockKawarp();
     const dispose = startKawarpBudget(k, "full");
-    expect(k.start).toHaveBeenCalledOnce();
-    expect(k.stop).not.toHaveBeenCalled();
-    dispose?.();
+    expect(k.start).not.toHaveBeenCalled();
     expect(k.stop).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1000);
+    expect(k.renderFrame).toHaveBeenCalledTimes(FOCUSED_FPS);
+    for (const call of k.renderFrame.mock.calls) {
+      expect(call, "renderFrame must not be given a time; Kawarp treats that as animation seconds").toEqual([]);
+    }
+    k.renderFrame.mockClear();
+    dispose?.();
+    vi.advanceTimersByTime(1000);
+    expect(k.renderFrame).not.toHaveBeenCalled();
   });
 
   it("paints ~24 fps without a timestamp when unfocused (wall-clock ms would flicker the warp)", () => {

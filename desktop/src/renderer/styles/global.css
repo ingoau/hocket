@@ -562,7 +562,7 @@ h3 { font-size: var(--fs-lg); }
 .right-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
 .pane-body { flex: 1; min-height: 0; overflow: auto; }
 .queue-section { padding: 6px 10px 2px; color: var(--fg-faint); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; position: sticky; top: 0; background: var(--bg-sunken); z-index: 1; }
-.qrow { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 3px; margin: 0 4px; position: relative; overflow: visible; }
+.qrow { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 3px; margin: 0 4px; position: relative; overflow: visible; content-visibility: auto; contain-intrinsic-size: auto 40px; }
 .qrow:hover { background: var(--bg-hover); }
 .qrow.selected { background: var(--selection); }
 .qrow.current { background: var(--accent-soft); }
@@ -776,7 +776,7 @@ button.qrow { width: 100%; }
 /* Text here is white or 80% white; FluidBackground's scrim is sized so both reach 4.5:1 over the artwork. */
 .fullscreen { position: fixed; inset: 0; z-index: 50; background: #000; color: #fff; overflow: hidden; --fg: #fff; --fg-muted: rgba(255,255,255,0.8); --fg-faint: rgba(255,255,255,0.8); --bg-hover: rgba(255,255,255,0.08); --bg-active: rgba(255,255,255,0.14); --border: rgba(255,255,255,0.15); --focus-ring: #fff; --accent-text: #fff; --accent-soft: rgba(255,255,255,0.12); --selection: rgba(255,255,255,0.16); }
 .fullscreen canvas.bg, .fullscreen .bg-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
-.fullscreen .bg-still { filter: blur(60px) saturate(1.4) brightness(0.55); transform: scale(1.2); }
+.fullscreen .bg-still { filter: blur(20px) saturate(1.4) brightness(0.55); transform: scale(1.2); }
 .fullscreen .bg-shade { position: absolute; inset: 0; z-index: 0; }
 
 /* Mini player */

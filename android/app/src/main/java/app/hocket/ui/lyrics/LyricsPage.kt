@@ -85,8 +85,8 @@ import app.hocket.ui.icons.HocketIcons
  * fabricated); unsynced: scrollable text. Lines that overlap (a background vocal or duet voice over
  * the main line) are lit and swept together; the focus (scale, scroll) stays on the main voice.
  * Depth-of-field blur on inactive lines, duet sides, background sub-voices smaller and dimmer, tap
- * to seek, offset control, fluid background. Throttled to 30 fps in battery saver and stopped when
- * not visible.
+ * to seek, offset control, fluid background. Capped at 30 fps (battery saver and reduced motion
+ * slower still) and stopped when not visible.
  *
  * Accessibility: the page is one labelled container ("Lyrics"); each line is one item with its text,
  * a "current line" state on the line being sung and a "background vocal" state on sub-voice lines,
@@ -113,16 +113,12 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     val trackId = current.trackId
     val lyrics = current.lyrics
 
-    // Position at frame rate; 30 fps in battery saver; 4 per second with reduced motion (enough to
+    // Position at 30 fps (battery and plugged); 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible.
     var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(visible, batterySaver, reducedMotion, trackId) {
+    LaunchedEffect(visible, reducedMotion, trackId) {
         if (!visible) return@LaunchedEffect
-        val interval = when {
-            reducedMotion -> 250_000_000L
-            batterySaver -> 33_000_000L
-            else -> 0L
-        }
+        val interval = if (reducedMotion) 250_000_000L else 33_000_000L
         var last = 0L
         while (true) withFrameNanos { now ->
             if (interval == 0L || now - last >= interval) { positionMs = client.positionNow(); last = now }
@@ -292,26 +288,31 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, on
     }
     val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
     LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = padding) {
-        itemsIndexed(doc.lines) { i, line ->
+        itemsIndexed(doc.lines, key = { i, _ -> i }) { i, line ->
             // Lit: every line being sung right now (main, duet, background), and the focused main
             // line held after it ends until the gap state. Each lit line sweeps its own syllables
             // from the same position; a finished background line goes dim with its main line.
             val lit = i in cursor.activeLines || (i == focus && !cursor.inGap)
+            val focused = i == focus
             val distance = if (focus < 0) 2 else kotlin.math.abs(i - focus)
             val side = line.agent?.let { sides[it] } ?: 0
+            // Live cursor only on the singing/focused rows. Past rows keep a stable "held at 1"
+            // sweep; future rows stay at 0 — neither recomposes when the playhead moves.
+            val past = !lit && !focused && (line.startMs?.toLong() ?: Long.MAX_VALUE) <= cursor.effectiveMs
+            val lineCursor = if (lit || focused) cursor else LyricsCursor.EMPTY
             // The core compares `position - offset` against the line start, so seeking to a line's
             // start means `start + offset` in audio time.
-            LyricLineView(i, line, doc.tier, lit, i == focus, distance, side, cursor, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
+            LyricLineView(i, line, doc.tier, lit, focused, distance, side, lineCursor, past, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
         }
         if (cursor.inGap) item { Text(stringResource(R.string.lyrics_instrumental), color = LyricsContrast.active, modifier = Modifier.padding(8.dp)) }
     }
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
     val animatedScale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
     val scale = if (reducedMotion) 1f else animatedScale
-    val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced) 0.dp else (distance.coerceAtMost(4) * 1.2f).dp
+    val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced || distance > 2) 0.dp else (distance * 1.2f).dp
     // Inactive lines keep a contrast floor (LyricsContrast); depth comes from the blur, not a fade.
     val alpha = 1f
     // Background sub-voices: smaller, lighter weight and dimmer than the main voice.
@@ -339,11 +340,13 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     // Syllable sweep from this line's own timing (a background line lit beside its main line sweeps
     // independently); held at 1 once the line has ended, 0 before it starts. With reduced motion
     // the rendered sweep is static: the whole lit line highlighted, nothing moving across it.
-    val sweep = remember(line, tier, cursor.effectiveMs, reducedMotion, lit) {
+    val sweep = remember(line, tier, reducedMotion, lit, focused, past, if (lit || focused) cursor.effectiveMs else 0L) {
         when {
             tier != LyricsTier.Syllable -> emptyList()
             reducedMotion -> List(line.syllables.size) { if (lit) 1f else 0f }
-            else -> LyricsCursor.sweep(line, cursor.effectiveMs)
+            lit || focused -> LyricsCursor.sweep(line, cursor.effectiveMs)
+            past -> List(line.syllables.size) { 1f }
+            else -> List(line.syllables.size) { 0f }
         }
     }
     Column(

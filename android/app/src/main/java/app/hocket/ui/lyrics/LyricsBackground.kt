@@ -106,11 +106,18 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
     val (tex, scrim) = prepared ?: return
     var time by remember { mutableFloatStateOf(0f) }
     val shouldAnimate = animated && !reducedMotion && visible && Build.VERSION.SDK_INT >= 33
+    val nativePaint = remember { android.graphics.Paint() }
     LaunchedEffect(shouldAnimate) {
         if (!shouldAnimate) return@LaunchedEffect
         val start = System.nanoTime()
-        // An infinite animation: test rules (InfiniteAnimationPolicy) stop it rather than wait for it.
-        while (true) withInfiniteAnimationFrameNanos { now -> time = (now - start) / 1_000_000_000f }
+        var last = 0L
+        // ~15 fps: the warp is slow (`time * 0.12`) so 60 Hz was wasted composition.
+        while (true) withInfiniteAnimationFrameNanos { now ->
+            if (now - last >= 66_000_000L) {
+                time = (now - start) / 1_000_000_000f
+                last = now
+            }
+        }
     }
     if (Build.VERSION.SDK_INT >= 33) {
         val shader = remember(tex) {
@@ -122,19 +129,20 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
         Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
             shader.setFloatUniform("size", size.width, size.height)
             shader.setFloatUniform("time", if (shouldAnimate) time else 0f)
+            nativePaint.shader = shader
             drawIntoCanvas { c ->
-                val p = android.graphics.Paint().apply { setShader(shader) }
-                c.nativeCanvas.drawRect(0f, 0f, size.width, size.height, p)
+                c.nativeCanvas.drawRect(0f, 0f, size.width, size.height, nativePaint)
             }
             drawRect(Color.Black.copy(alpha = scrim))
         }
     } else {
+        val shader = remember(tex) { BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR) }
         Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = false }.testTag(tag)) {
+            val m = android.graphics.Matrix(); m.setScale(size.width / tex.width, size.height / tex.height); shader.setLocalMatrix(m)
+            nativePaint.shader = shader
+            nativePaint.isFilterBitmap = true
             drawIntoCanvas { c ->
-                val p = android.graphics.Paint().apply { setShader(BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).also { s ->
-                    val m = android.graphics.Matrix(); m.setScale(size.width / tex.width, size.height / tex.height); s.setLocalMatrix(m)
-                }); isFilterBitmap = true }
-                c.nativeCanvas.drawRect(0f, 0f, size.width, size.height, p)
+                c.nativeCanvas.drawRect(0f, 0f, size.width, size.height, nativePaint)
             }
             drawRect(Color.Black.copy(alpha = scrim))
         }

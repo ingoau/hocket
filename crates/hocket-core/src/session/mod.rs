@@ -43,6 +43,7 @@ pub use document::{load, new_document, save, validate, DocumentError, SESSION_SC
 pub use reducer::{
     derive, offline_skipped, previous_should_restart, reduce, AutoplayItem, DerivedQueue, Effect,
     QueueOp, ReduceCtx, ReduceError, DEFAULT_HISTORY_CAP, OFFLINE_SKIPPED_FIELD,
+    QUEUE_VIEW_UPCOMING,
 };
 pub use saved::{merge_saved_queues, SavedQueuePolicy};
 

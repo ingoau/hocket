@@ -19,7 +19,7 @@ pub mod stream_reader;
 #[cfg(any(feature = "sim", test))]
 pub mod test_support;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -70,11 +70,25 @@ impl From<anyhow::Error> for CoreError {
     }
 }
 
+/// Deliver `event` to every sink without cloning it for the last (or only) one.
+pub(crate) fn fanout_event(sinks: &[Arc<dyn EventSink>], event: Event) {
+    match sinks {
+        [] => {}
+        [s] => s.on_event(event),
+        [rest @ .., last] => {
+            for s in rest {
+                s.on_event(event.clone());
+            }
+            last.on_event(event);
+        }
+    }
+}
+
 /// Messages subsystems and spawned tasks post back to the actor loop.
 /// Subsystems never reach into each other's state: they are called by the
 /// actor with explicit arguments, or they post one of these.
 pub enum Internal {
-    /// The periodic tick (250 ms in production; tests drive it explicitly).
+    /// The periodic tick (250 ms while hot, 1 s while idle; tests drive it explicitly).
     Tick,
     /// A report from the playback backend.
     Backend(BackendReport),
@@ -399,6 +413,7 @@ impl Core {
         let (tx, rx) = mpsc::unbounded_channel();
         let sinks: Arc<Mutex<Vec<Arc<dyn EventSink>>>> = Arc::new(Mutex::new(Vec::new()));
         let processed = Arc::new(AtomicU64::new(0));
+        let hot = Arc::new(AtomicBool::new(true));
         if let BackendChoice::Provided { sink, .. } = &deps.backend {
             sink.connect(tx.clone());
         }
@@ -411,6 +426,7 @@ impl Core {
                 tx.clone(),
                 sinks.clone(),
                 processed.clone(),
+                hot.clone(),
                 deps,
             )?
         };
@@ -428,10 +444,13 @@ impl Core {
         if !manual_tick {
             let tick_tx = tx;
             runtime.spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
-                    interval.tick().await;
+                    let ms = if hot.load(Ordering::Relaxed) {
+                        250
+                    } else {
+                        1_000
+                    };
+                    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
                     if tick_tx.send(ActorMsg::Internal(Internal::Tick)).is_err() {
                         break;
                     }
@@ -455,10 +474,7 @@ impl Core {
     }
 
     pub fn emit(&self, event: Event) {
-        let sinks = self.inner.sinks.lock().clone();
-        for s in sinks {
-            s.on_event(event.clone());
-        }
+        fanout_event(&self.inner.sinks.lock(), event);
     }
 
     /// Fire-and-forget. Never blocks the caller.

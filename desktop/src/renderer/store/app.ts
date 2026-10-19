@@ -380,7 +380,7 @@ function recomputePerf(): void {
   // Position ticker: stopped when hidden; 24 fps in the background; capped by
   // battery saver (30 fps) and the lyrics fps setting when focused.
   ticker.setPaused(perf === "stopped");
-  const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 60)));
+  const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 30)));
   ticker.fps = perf === "background" ? Math.min(BACKGROUND_FPS, cap) : cap;
 }
 

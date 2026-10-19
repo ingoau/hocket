@@ -262,8 +262,8 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             },
     ) {
         Column(Modifier.fillMaxSize().let { if (blur > 0.dp) it.blur(blur, BlurredEdgeTreatment.Rectangle) else it }) {
-            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f), RectangleShape)
-            Artwork(coverArt, ArtworkSizes.FULL, null, Modifier.fillMaxWidth().weight(1f).graphicsLayer { scaleY = -1f }, RectangleShape)
+            Artwork(coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().weight(1f), RectangleShape)
+            Artwork(coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().weight(1f).graphicsLayer { scaleY = -1f }, RectangleShape)
         }
     }
     Box(
