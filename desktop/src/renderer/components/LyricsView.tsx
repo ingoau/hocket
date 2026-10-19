@@ -12,6 +12,7 @@
 // no syllable sweep, blur, springs or scaling.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DomLyricPlayer, type LyricLineMouseEvent } from "@applemusic-like-lyrics/core";
+import "@applemusic-like-lyrics/core/style.css";
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -93,9 +94,9 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     else p.pause();
   }, [stamp, clockOffset, duration]);
 
-  // Frame loop: explicit stop when hidden; ~24 fps in the background; 30 cap in battery saver.
+  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; 30 cap in battery saver.
   useEffect(() => {
-    if (!animated || perf === "stopped") return;
+    if (!animated || perf === "stopped" || !stamp.isPlaying) return;
     const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(batteryFps, fpsCap) : fpsCap;
     let raf = 0;
     let last = performance.now();
@@ -115,7 +116,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration]);
+  }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
 
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
@@ -196,6 +197,7 @@ export function useActiveLine(lines: AmllLine[]): number {
   useEffect(() => {
     const tick = () => setIdx(activeLineIndex(lines, extrapolate(stamp, Date.now(), offset)));
     tick();
+    if (!stamp.isPlaying) return;
     return ticker.subscribe(tick);
   }, [lines, stamp, offset]);
   return idx;

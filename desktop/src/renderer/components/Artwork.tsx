@@ -5,19 +5,27 @@ import { artworkUrl, ARTWORK_SIZES } from "@shared/constants";
 import { bridge } from "../core/bridge";
 import { Icon } from "./Icon";
 
+const ARTWORK_CACHE_CAP = 400;
 const cache = new Map<string, Promise<string | undefined>>();
 
 export function resolveArtwork(id: string | undefined, size: number): Promise<string | undefined> {
   if (!id) return Promise.resolve(undefined);
   const key = `${id}@${size}`;
   let p = cache.get(key);
-  if (!p) {
-    p = bridge()
-      .query({ type: "artwork", data: { id, size } })
-      .then((r) => (r.type === "path" ? artworkUrl(r.data) : undefined))
-      .catch(() => undefined);
+  if (p) {
+    cache.delete(key);
     cache.set(key, p);
-    if (cache.size > 2000) cache.delete(cache.keys().next().value as string);
+    return p;
+  }
+  p = bridge()
+    .query({ type: "artwork", data: { id, size } })
+    .then((r) => (r.type === "path" ? artworkUrl(r.data) : undefined))
+    .catch(() => undefined);
+  cache.set(key, p);
+  while (cache.size > ARTWORK_CACHE_CAP) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
   }
   return p;
 }

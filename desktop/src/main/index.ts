@@ -173,8 +173,26 @@ async function main(): Promise<void> {
   });
 
   // Fan events out to every renderer window; keep the tray in step.
+  // mediaSession / backend / log are main-process only (OS session, player, tracing).
+  // The mini player only paints now-playing + transport; skip queue/library/lyrics/sync there.
+  const miniEvents = new Set<Event["type"]>([
+    "started",
+    "snapshot",
+    "nowPlayingChanged",
+    "transportChanged",
+    "connectionChanged",
+    "settingChanged",
+    "libraryItemsChanged",
+    "batterySaverChanged",
+  ]);
   core.onEvent((event: Event) => {
-    for (const w of windows.all()) w.webContents.send(IPC.event, event);
+    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log") {
+      for (const w of windows.all()) {
+        if (w.isDestroyed()) continue;
+        if (windows.mini && w === windows.mini && !miniEvents.has(event.type)) continue;
+        w.webContents.send(IPC.event, event);
+      }
+    }
     if (event.type === "nowPlayingChanged") {
       const t = event.data.entry?.track;
       tray.update(t ? `${t.title} · ${t.artist ?? ""}` : undefined, lastPlaying);

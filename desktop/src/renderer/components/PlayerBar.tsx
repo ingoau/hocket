@@ -32,8 +32,10 @@ import { ConnectPill } from "./ConnectPill";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
-  const transport = useApp((s) => s.transport);
-  const queue = useApp((s) => s.queue);
+  const playing = useApp((s) => s.transport.position.isPlaying);
+  const buffering = useApp((s) => s.transport.buffering);
+  const shuffle = useApp((s) => s.queue.shuffle);
+  const repeat = useApp((s) => s.queue.repeat);
   // The offline notices get the app-wide banner (App.tsx) instead.
   const notice = useApp((s) => (isOfflineNotice(s.playerNotice) ? undefined : noticeText(s.playerNotice)));
   const panels = useApp((s) => s.panels);
@@ -49,7 +51,6 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const showRating = useSetting(SK.displayPlayerRating, true);
   const d = bridge().dispatch;
   const track = now?.track;
-  const playing = transport.position.isPlaying;
   const lyricsOn = sideOpen && panels.rightView === "lyrics" && !reveal;
   // A right-click (or the context-menu key, Shift+F10) on the lyrics toggle opens the lyrics options.
   const lyricsOptions = useLyricsOptionsTrigger("above");
@@ -85,13 +86,13 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
 
       <div className="center">
         <div className="transport">
-          <button type="button" className={`btn icon toggle ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="shuffle"><Icon name="shuffle" size={20} /></button>
+          <button type="button" className={`btn icon toggle ${shuffle ? "on" : ""}`} aria-pressed={shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !shuffle } })} data-testid="shuffle"><Icon name="shuffle" size={20} /></button>
           <button type="button" className="btn icon" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="previous"><Icon name="previous" size={24} filled /></button>
-          <button type="button" className={`btn icon play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{transport.buffering ? <Icon name="spinner" className="spin" size={22} /> : <Icon name={playing ? "pause" : "play"} size={24} filled />}</button>
+          <button type="button" className={`btn icon play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{buffering ? <Icon name="spinner" className="spin" size={22} /> : <Icon name={playing ? "pause" : "play"} size={24} filled />}</button>
           <button type="button" className="btn icon" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="next"><Icon name="next" size={24} filled /></button>
-          <RepeatButton mode={queue.repeat} />
+          <RepeatButton mode={repeat} />
         </div>
-        <WavySeek variant="bar" durationMs={track?.durationMs} playing={playing && !transport.buffering} />
+        <WavySeek variant="bar" durationMs={track?.durationMs} playing={playing && !buffering && !fullscreen} />
       </div>
 
       <div className="right">

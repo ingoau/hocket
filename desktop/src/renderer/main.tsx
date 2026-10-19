@@ -7,7 +7,6 @@ import "./styles/m3-pages.css";
 import "./styles/controls.css";
 import "./styles/now-playing.css";
 import "./styles/menus.css";
-import "@applemusic-like-lyrics/core/style.css";
 import { App } from "./App";
 import { MiniApp } from "./views/MiniApp";
 import { connectStore } from "./store/app";
@@ -15,7 +14,7 @@ import { connectStore } from "./store/app";
 const params = new URLSearchParams(window.location.search);
 const windowKind = params.get("window") === "mini" ? "mini" : "main";
 
-connectStore();
+connectStore(windowKind);
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>{windowKind === "mini" ? <MiniApp /> : <App />}</StrictMode>,

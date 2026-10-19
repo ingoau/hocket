@@ -9,7 +9,7 @@
 // Keyboard: a listbox with aria-activedescendant (one Tab stop); arrows move,
 // Enter plays from the item, Delete removes, Alt+Up/Down reorders (the
 // keyboard equivalent of dragging), Shift+F10 opens the item's menu.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -241,7 +241,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   );
 }
 
-function QueueRow({ id, entry, kind, large, selected, focused, sortable, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
@@ -262,4 +262,4 @@ function QueueRow({ id, entry, kind, large, selected, focused, sortable, dropAt,
       {entry.item.unavailable ? <span className="sr-only">{t("queue.unavailable")}</span> : null}
     </div>
   );
-}
+});
