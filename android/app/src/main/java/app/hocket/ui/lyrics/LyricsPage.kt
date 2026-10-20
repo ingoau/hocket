@@ -481,10 +481,10 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     // Read while drawing only: the line grows, lights and (background vocals) slides out without
     // recomposing.
     val feel = LocalLyricsFeel.current
-    val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = 1f, stiffness = feel.scaleStiffness), label = "lineScale")
+    val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineScale")
     val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(feel.brightenMs), label = "lineBright")
     val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(feel.blurMs), label = "lineBlur")
-    val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = 1f, stiffness = feel.scaleStiffness), label = "lineShown")
+    val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineShown")
     // Background sub-voices: smaller and lighter than the main voice.
     val baseSize = if (line.background) 18.sp else 28.sp
     val weight = if (line.background) FontWeight.SemiBold else FontWeight.Bold

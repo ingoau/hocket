@@ -10,7 +10,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -29,19 +31,22 @@ internal object LyricsMotion {
     const val LIFT_EM = 0.05f
     /** A first line starting this late gets the breathing dots before it. */
     const val INTRO_GAP_MS = 3_000L
-    /** A move has settled this long after its last line starts moving (the spring is within 0.1%). */
-    const val SETTLE_S = 0.5f
 }
 
 /**
- * The lyrics' timings. [Default] is AMLL's; [Snappy] gets there quicker: stiffer springs, a
- * tighter ripple, a shorter lead and quicker fades.
+ * The lyrics' timings. [Default] is AMLL's; the others are variations on it, to compare:
+ * - [Snappy]: gets there quicker (stiffer springs, a tighter ripple, a shorter lead, quicker fades).
+ * - [Tight]: quicker still, with almost no lead.
+ * - [Gentle]: slower and floatier (soft springs, a wide ripple, long fades).
+ * - [Sheet]: quick, and the lines move together, without the ripple.
+ * - [Wave]: an exaggerated ripple, the lines cascading in one after another.
+ * - [Bouncy]: AMLL's timing on springs that overshoot a little and settle back.
  */
 @Immutable
 internal data class LyricsFeel(
-    /** Scrolling between lines: a critically damped spring of this stiffness over mass 0.9. */
+    /** Scrolling between lines: a spring of this stiffness over mass 0.9. */
     val scrollStiffness: Float,
-    /** Growing into and out of the current line, and background vocals sliding out (critically damped). */
+    /** Growing into and out of the current line, and background vocals sliding out. */
     val scaleStiffness: Float,
     /** Between one line starting to move and the next, seconds; it shrinks by 5% a line below the focus. */
     val staggerS: Float,
@@ -51,15 +56,25 @@ internal data class LyricsFeel(
     val brightenMs: Int,
     /** A line's depth-of-field blur easing to its new radius as the focus moves on. */
     val blurMs: Int,
+    /** Both springs' damping ratio: 1 arrives without overshooting, less overshoots and settles back. */
+    val dampingRatio: Float = 1f,
 ) {
     private val omega = sqrt(scrollStiffness / 0.9f)
 
-    /** The scroll spring's step response: 0 at rest, 1 arrived, never overshooting. */
+    /** The scroll spring's step response: 0 at rest, 1 arrived. */
     fun scrollResponse(seconds: Float): Float {
         if (seconds <= 0f) return 0f
-        val x = omega * seconds
-        return 1f - (1f + x) * exp(-x)
+        if (dampingRatio >= 1f) {
+            val x = omega * seconds
+            return 1f - (1f + x) * exp(-x)
+        }
+        val z = dampingRatio
+        val wd = omega * sqrt(1f - z * z)
+        return 1f - exp(-z * omega * seconds) * (cos(wd * seconds) + z / sqrt(1f - z * z) * sin(wd * seconds))
     }
+
+    /** How long the scroll spring takes to come within 0.1% and stay there, seconds. */
+    val settleS: Float = 9.2f / (dampingRatio.coerceAtMost(1f) * omega)
 
     /** Each line's delay after line [first] when the focus is [focus], seconds. */
     fun staggerDelays(first: Int, focus: Int, count: Int): FloatArray {
@@ -77,6 +92,14 @@ internal data class LyricsFeel(
     companion object {
         val Default = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.035f, leadMs = 120L, brightenMs = 180, blurMs = 400)
         val Snappy = LyricsFeel(scrollStiffness = 520f, scaleStiffness = 420f, staggerS = 0.024f, leadMs = 80L, brightenMs = 130, blurMs = 280)
+        val Tight = LyricsFeel(scrollStiffness = 800f, scaleStiffness = 650f, staggerS = 0.018f, leadMs = 40L, brightenMs = 100, blurMs = 200)
+        val Gentle = LyricsFeel(scrollStiffness = 170f, scaleStiffness = 150f, staggerS = 0.05f, leadMs = 180L, brightenMs = 280, blurMs = 600)
+        val Sheet = LyricsFeel(scrollStiffness = 450f, scaleStiffness = 380f, staggerS = 0f, leadMs = 100L, brightenMs = 150, blurMs = 300)
+        val Wave = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.07f, leadMs = 160L, brightenMs = 180, blurMs = 450)
+        val Bouncy = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.035f, leadMs = 120L, brightenMs = 180, blurMs = 400, dampingRatio = 0.72f)
+
+        /** Every feel by name, for comparing them. */
+        val all = mapOf("default" to Default, "snappy" to Snappy, "tight" to Tight, "gentle" to Gentle, "sheet" to Sheet, "wave" to Wave, "bouncy" to Bouncy)
     }
 }
 
@@ -107,7 +130,7 @@ internal class StaggeredScroll(private val state: LazyListState, private val sco
         var pending = false
         fun elapsed(now: Long, rank: Int = 0): Float =
             if (startNanos < 0 || now < startNanos) 0f else (now - startNanos) / 1e9f - delays[rank.coerceIn(0, delays.lastIndex)]
-        val settleS get() = delays.last() + LyricsMotion.SETTLE_S
+        val settleS get() = delays.last() + feel.settleS
     }
 
     private val kicks = ArrayList<Kick>()
