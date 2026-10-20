@@ -105,7 +105,7 @@ fun DeveloperDiagnosticsScreen(
         }
     }
 
-    val notify: (String) -> Unit = { message -> snackbar?.launch { host.showSnackbar(message) } }
+    val notify: (String) -> Unit = { message -> snackbar?.let { s -> s.launch { s.host.showSnackbar(message) } } }
     val savedText = stringResource(R.string.developer_saved)
     val failedText = stringResource(R.string.developer_save_failed)
     val copiedText = stringResource(R.string.developer_copied)
