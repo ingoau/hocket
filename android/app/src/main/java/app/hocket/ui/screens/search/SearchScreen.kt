@@ -52,6 +52,7 @@ import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
 import app.hocket.core.client.LibraryPatches
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
 import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
 import app.hocket.ui.components.EmptyState
@@ -74,8 +75,10 @@ fun SearchScreen(nav: NavHostController) {
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
     var query by rememberSaveable { mutableStateOf("") }
-    var local by remember { mutableStateOf<SearchResults?>(null) }
-    var remote by remember { mutableStateOf<SearchResults?>(null) }
+    // The last results stay with the (saved) query, so coming back to Search from a result shows
+    // them on the first frame and the result's artwork can fly back into its row.
+    var local by rememberCachedState<SearchResults?>(listOf("search.local", serverId)) { null }
+    var remote by rememberCachedState<SearchResults?>(listOf("search.remote", serverId)) { null }
     var pendingRemote by remember { mutableStateOf(false) }
     var requestCounter by remember { mutableIntStateOf(0) }
     var minHeightPx by remember { mutableIntStateOf(0) }
@@ -83,9 +86,12 @@ fun SearchScreen(nav: NavHostController) {
     val songMenu = app.hocket.ui.components.rememberSongMenu()
 
     LaunchedEffect(Unit) {
+        var restored = local != null
         snapshotFlow { query }.debounce(120).collect { q ->
             val text = q.trim()
             if (text.isEmpty()) { local = null; remote = null; pendingRemote = false; minHeightPx = 0; return@collect }
+            // Back on the tab with the results still showing for this query: keep them, no re-search.
+            if (restored) { restored = false; if (local?.query == text) return@collect }
             val id = "s${requestCounter++}"
             val res = (client.query(Queries.search(serverId, text, 25, includeServer = true, requestId = id)) as? QueryResult.Search)?.data
             local = res

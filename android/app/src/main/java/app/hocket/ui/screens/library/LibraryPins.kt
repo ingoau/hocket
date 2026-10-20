@@ -7,8 +7,9 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -21,6 +22,7 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.rememberCachedState
 import app.hocket.ui.nav.Route
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -201,8 +203,10 @@ fun rememberResolvedPins(): List<ResolvedPin>? {
     val filters by client.filters.collectAsStateWithLifecycle()
     val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val pins = LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value)
-    val resolved by produceState<List<ResolvedPin>?>(null, pins, filters, libraryGen) {
-        value = pins.mapNotNull { p ->
+    // Starts from the last answer, so the hub's pins are there on the first frame of a pop back to it.
+    var resolved by rememberCachedState<List<ResolvedPin>?>(listOf("library.pins", rememberServerId())) { null }
+    LaunchedEffect(pins, filters, libraryGen) {
+        resolved = pins.mapNotNull { p ->
             when (p.pinKind) {
                 PinKind.Album -> (client.query(Queries.album(p.id)) as? QueryResult.AlbumDetail)?.data?.let { ResolvedPin(p, PinKind.Album, it.name, it.coverArt, Commands.albums(listOf(it.id))) }
                 PinKind.Artist -> (client.query(Queries.artist(p.id)) as? QueryResult.ArtistDetail)?.data?.let { ResolvedPin(p, PinKind.Artist, it.name, it.coverArt, Commands.artists(listOf(it.id))) }

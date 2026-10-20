@@ -255,9 +255,9 @@ private fun BrowseTiles(nav: NavHostController) {
     val a0 = recent.getOrNull(0)
     val a1 = recent.getOrNull(1)
     val a2 = recent.getOrNull(2)
-    val s0 = rememberArtworkShareSource(a0?.let { ArtworkShare.albumsTile(it.id) }, a0?.coverArt, zIndex = 3f)
-    val s1 = rememberArtworkShareSource(a1?.let { ArtworkShare.albumsTile(it.id) }, a1?.coverArt, zIndex = 2f)
-    val s2 = rememberArtworkShareSource(a2?.let { ArtworkShare.albumsTile(it.id) }, a2?.coverArt, zIndex = 1f)
+    val s0 = rememberArtworkShareSource(a0?.let { ArtworkShare.albumsTile(it.id) }, a0?.coverArt, zIndex = 3f, rotation = FAN_ANGLES[0])
+    val s1 = rememberArtworkShareSource(a1?.let { ArtworkShare.albumsTile(it.id) }, a1?.coverArt, zIndex = 2f, rotation = FAN_ANGLES[1])
+    val s2 = rememberArtworkShareSource(a2?.let { ArtworkShare.albumsTile(it.id) }, a2?.coverArt, zIndex = 1f, rotation = FAN_ANGLES[2])
     val session = LocalSharedArtwork.current
     @Composable fun Tile(
         label: String,
@@ -351,7 +351,15 @@ internal fun groupShape(top: Boolean, bottom: Boolean, start: Boolean, end: Bool
     bottomEnd = if (bottom && end) outer else inner,
 )
 
-/** Up to three album covers fanned out and overlapping, the first on top (the Albums tile's art). */
+/** Each fan cover's tilt, front to back. */
+private val FAN_ANGLES = listOf(-8f, 4f, 12f)
+
+/**
+ * Up to three album covers fanned out and overlapping, the first on top (the Albums tile's art).
+ * Each cover's [share] modifier carries its tilt, so a flight to the albums page's Recent row
+ * straightens it on the way out and leans it back on the way home; while they fly the fan is empty
+ * (the covers have left it) rather than showing a second copy under them.
+ */
 @Composable
 private fun AlbumFan(albums: List<Album>, share: List<Modifier>, modifier: Modifier = Modifier) {
     val size = 60.dp
@@ -362,25 +370,21 @@ private fun AlbumFan(albums: List<Album>, share: List<Modifier>, modifier: Modif
     ) {
         // Drawn back to front: the last cover first, so the first sits on top at the left.
         albums.withIndex().reversed().forEach { (i, album) ->
-            val angle = listOf(-8f, 4f, 12f).getOrElse(i) { 0f }
-            val art = Modifier.fillMaxSize().graphicsLayer {
-                rotationZ = angle
-                shadowElevation = 6f
-                shape = RoundedCornerShape(10.dp)
-                clip = true
-            }
             Box(
                 Modifier
                     .offset(x = step * i, y = if (i == 1) (-6).dp else 0.dp)
                     .size(size)
-                    .testTag("library.browse.albums.fan.$i"),
+                    .testTag("library.browse.albums.fan.$i")
+                    .then(share.getOrElse(i) { Modifier.graphicsLayer { rotationZ = FAN_ANGLES.getOrElse(i) { 0f } } }),
             ) {
-                // Stays painted when the shared copy lifts into the overlay — otherwise the tile
-                // flashes empty white cards while the three covers fly to the albums page.
-                Artwork(album.coverArt, ArtworkSizes.GRID, null, shape = RoundedCornerShape(10.dp), modifier = art)
-                Box(Modifier.matchParentSize().then(share.getOrElse(i) { Modifier })) {
-                    Artwork(album.coverArt, ArtworkSizes.GRID, null, shape = RoundedCornerShape(10.dp), modifier = art)
-                }
+                Artwork(
+                    album.coverArt, ArtworkSizes.GRID, null, shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        shadowElevation = 6f
+                        shape = RoundedCornerShape(10.dp)
+                        clip = true
+                    },
+                )
             }
         }
     }

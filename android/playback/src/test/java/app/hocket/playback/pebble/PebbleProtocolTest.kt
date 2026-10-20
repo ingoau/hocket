@@ -19,6 +19,24 @@ class PebbleProtocolTest {
     }
 
     @Test
+    fun lyricLinesAreNotCutAtTheListTitleLimit() {
+        val line = "A lyric line that runs well past the forty-seven bytes a list title keeps"
+        val bytes = PebbleProtocol.encodeLyricRows(listOf(PebbleProtocol.Row("1200", line)))
+        assertEquals(line, String(bytes, 6, line.length, Charsets.UTF_8))
+        assertEquals(1 + 5 + line.length + 1 + 1, bytes.size)
+    }
+
+    @Test
+    fun aLyricsPageOfLongLinesCarriesFewerRows() {
+        // A row is [flags]["1"\0][title\0][\0].
+        val long = PebbleProtocol.encodeLyricRows(List(PebbleProtocol.PAGE) { PebbleProtocol.Row("1", "x".repeat(300)) })
+        val longRow = 1 + 2 + PebbleProtocol.LYRIC_MAX + 1 + 1
+        assertEquals(PebbleProtocol.LYRICS_PAGE_BYTES / longRow * longRow, long.size)
+        val short = PebbleProtocol.encodeLyricRows(List(PebbleProtocol.PAGE + 3) { PebbleProtocol.Row("1", "la") })
+        assertEquals(PebbleProtocol.PAGE * (1 + 2 + 3 + 1), short.size)
+    }
+
+    @Test
     fun settingsBlobMatchesTheWatchLayout() {
         val blob = PebbleProtocol.encodeSettings(PebbleProtocol.WatchSettings(gestures = listOf("queue", "lyrics", "library", "back", "actions"), menu = listOf("queue", "lyrics"), actions = listOf("love")))
         assertArrayEquals(byteArrayOf(1, 28, 1, 5, 2, 4, 3, 5, 2, 1, 15, 1, 3, 0), blob)

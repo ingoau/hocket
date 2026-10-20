@@ -120,15 +120,48 @@ object PebbleProtocol {
     private const val TITLE_MAX = 47
     private const val SUB_MAX = 39
 
-    /** `[flags][id\0][title\0][sub\0]…`, each field cut to what the watch keeps, on a UTF-8 boundary. */
-    fun encodeRows(rows: List<Row>): ByteArray {
+    /**
+     * A lyric line's size limit (`LYRIC_MAX` in lyrics.c, which keeps each line in its own buffer): long
+     * enough that a real line is not cut, as a [TITLE_MAX] cut did to many.
+     */
+    const val LYRIC_MAX = 191
+
+    /**
+     * The bytes of rows a lyrics page carries: with the message's other keys it stays well inside the
+     * watch's smallest inbox (2048 bytes), so a page of long lines goes as fewer rows instead.
+     */
+    const val LYRICS_PAGE_BYTES = 1600
+
+    /**
+     * `[flags][id\0][title\0][sub\0]…`, each field cut to what the watch keeps (a title to [titleMax]),
+     * on a UTF-8 boundary.
+     */
+    fun encodeRows(rows: List<Row>, titleMax: Int = TITLE_MAX): ByteArray {
         val out = ByteArrayOutputStream()
-        for (r in rows) {
-            out.write(r.flags and 0xff)
-            for ((text, max) in listOf(r.id to ID_MAX, r.title to TITLE_MAX, r.subtitle to SUB_MAX)) {
-                out.write(utf8Prefix(text, max))
-                out.write(0)
-            }
+        for (r in rows) out.write(encodeRow(r, titleMax))
+        return out.toByteArray()
+    }
+
+    private fun encodeRow(r: Row, titleMax: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(r.flags and 0xff)
+        for ((text, max) in listOf(r.id to ID_MAX, r.title to titleMax, r.subtitle to SUB_MAX)) {
+            out.write(utf8Prefix(text, max))
+            out.write(0)
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * Lyric rows as a page: up to [PAGE] rows from the start of [rows], but only as many as fit
+     * [LYRICS_PAGE_BYTES] (always at least one). The watch asks for the next page from what it got.
+     */
+    fun encodeLyricRows(rows: List<Row>): ByteArray {
+        val out = ByteArrayOutputStream()
+        for (r in rows.take(PAGE)) {
+            val row = encodeRow(r, LYRIC_MAX)
+            if (out.size() > 0 && out.size() + row.size > LYRICS_PAGE_BYTES) break
+            out.write(row)
         }
         return out.toByteArray()
     }
