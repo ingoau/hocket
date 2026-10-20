@@ -137,15 +137,21 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     // springs around them; 30 fps on battery saver; 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible, and no frames at all
     // while paused (the position is frozen until a seek, play or another track).
+    // A fresh stamp from the player can land a little behind the extrapolated position; the
+    // lyrics then run at half speed until it catches up (PlayheadSmoother) instead of stepping back.
     var positionMs by remember { mutableStateOf(0L) }
     LaunchedEffect(visible, reducedMotion, batterySaver, trackId) {
         if (!visible) return@LaunchedEffect
         val interval = if (reducedMotion) 250_000_000L else if (batterySaver) 33_000_000L else 0L
         var last = 0L
+        val smoother = PlayheadSmoother()
         while (true) {
             val mark = client.positionMark()
             withFrameNanos { now ->
-                if (!mark.moving || interval == 0L || now - last >= interval) { positionMs = client.positionNow(); last = now }
+                if (!mark.moving || interval == 0L || now - last >= interval) {
+                    positionMs = smoother.next(client.positionNow(), mark.moving && !reducedMotion)
+                    last = now
+                }
             }
             client.awaitPositionMayMove(mark)
         }
@@ -176,6 +182,37 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         share?.let { request ->
             if (track != null && track.id == doc.trackId && request.line in doc.lines.indices) LyricsShareDialog(doc, track, request, onDismiss = { share = null })
         }
+    }
+}
+
+/**
+ * The lyrics' playhead, kept from stepping back. When the position is re-synced to the player and
+ * lands up to [MAX_HOLD_MS] behind the last one, the playhead holds where it was and then moves on
+ * at half the real position's pace until the two meet (the sweep slows a touch instead of jumping
+ * back). It never runs ahead on its own: while the real position stands still, so does it. A
+ * bigger jump either way (a seek), or a position that is not [moving], is taken as it is.
+ */
+internal class PlayheadSmoother {
+    private var lastRaw = Long.MIN_VALUE
+    private var hold = 0L
+
+    fun next(rawMs: Long, moving: Boolean): Long {
+        val step = rawMs - lastRaw
+        hold = when {
+            !moving || lastRaw == Long.MIN_VALUE -> 0L
+            step < 0 && -step <= MAX_HOLD_MS -> (hold - step).coerceAtMost(MAX_HOLD_MS.toLong())
+            step < 0 || step > MAX_STEP_MS -> 0L
+            else -> (hold - step / 2).coerceAtLeast(0L)
+        }
+        lastRaw = rawMs
+        return rawMs + hold
+    }
+
+    companion object {
+        /** Re-syncs further back than this are taken as they are (a seek, a skip back). */
+        const val MAX_HOLD_MS = 300
+        /** A step forward bigger than this is a seek: whatever was held is dropped. */
+        const val MAX_STEP_MS = 1_000L
     }
 }
 

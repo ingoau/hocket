@@ -415,20 +415,39 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
     }
 }
 
-/** Sung to the left of the edge, unsung to the right (mirrored for right-to-left text), for text drawn [dx] across. */
+/**
+ * Sung to the left of the edge, unsung to the right (mirrored for right-to-left text), for text
+ * drawn [dx] across. The edge moves through the word as a whole, AMLL's way: from just before
+ * the word (all unsung) to its end (all sung), following the syllables' timing in between, so
+ * it never steps back where one syllable hands over to the next.
+ */
 private fun wordBrush(m: MeasuredLine, w: LyricWord, sweep: List<Float>, sung: Color, unsung: Color, fade: Float, dx: Float = 0f): Brush {
     var k = -1
     for (i in w.first..w.last) if (sweep.getOrElse(i) { 0f } < 1f) { k = i; break }
     if (k < 0) return SolidColor(sung)
     val p = sweep.getOrElse(k) { 0f }
     if (k == w.first && p <= 0f) return SolidColor(unsung)
-    val left = m.sylLeft[k] - dx; val right = m.sylRight[k] - dx
-    val width = right - left
-    return if (m.rtl[k]) {
-        val edge = right + fade - p * (width + fade)
-        Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge - fade)
+    var left = Float.MAX_VALUE; var right = -Float.MAX_VALUE
+    for (i in w.first..w.last) { left = min(left, m.sylLeft[i]); right = max(right, m.sylRight[i]) }
+    left -= dx; right -= dx
+    val edge = sweepEdge(left, right, m.sylLeft[k] - dx, m.sylRight[k] - dx, p, fade, m.rtl[k])
+    return if (m.rtl[k]) Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge - fade)
+    else Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge + fade)
+}
+
+/**
+ * Where the sung side of the soft edge ends in a word spanning [left]..[right], while the syllable
+ * at [sylLeft]..[sylRight] is [p] sung; the unsung side starts [fade] further on (to the left for
+ * [rtl] text). From [left] - [fade] (nothing sung) to [right] (all of it), moving only forward.
+ */
+internal fun sweepEdge(left: Float, right: Float, sylLeft: Float, sylRight: Float, p: Float, fade: Float, rtl: Boolean): Float {
+    val width = (right - left).coerceAtLeast(1f)
+    // How far through the word the singing is, by where it is in this syllable.
+    return if (rtl) {
+        val u = ((right - (sylRight - p * (sylRight - sylLeft))) / width).coerceIn(0f, 1f)
+        right + fade - u * (width + fade)
     } else {
-        val edge = left - fade + p * (width + fade)
-        Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge + fade)
+        val u = ((sylLeft + p * (sylRight - sylLeft) - left) / width).coerceIn(0f, 1f)
+        left - fade + u * (width + fade)
     }
 }
