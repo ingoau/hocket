@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import app.hocket.core.Commands
@@ -272,6 +273,9 @@ class ExoBackend(
                 scheduleRecovery(key, delayMs)
             }
         })
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioPositionAdvancing(eventTime: AnalyticsListener.EventTime, playoutStartSystemTimeMs: Long) = onAudioHeard()
+        })
         // The core mirrors the music volume from here on.
         reportSystemVolume()
     }
@@ -454,6 +458,17 @@ class ExoBackend(
         if (range <= 0) return
         val volume = ((player.deviceVolume - info.minVolume).toDouble() / range).coerceIn(0.0, 1.0)
         report(BackendReport.SystemVolume(BackendReportSystemVolumeInner(volume, player.isDeviceMuted)))
+    }
+
+    /**
+     * The sound is heard: ExoPlayer's `onAudioPositionAdvancing`, its first advance since a play or a
+     * seek. ExoPlayer reports playing at once but holds its position until the first sample leaves the
+     * output, which over Bluetooth is 150–300 ms later; reporting now re-stamps the core from when
+     * sound began, so lyrics extrapolating from the stamp don't run ahead by the output latency.
+     */
+    internal fun onAudioHeard() {
+        if (!player.isPlaying) return
+        currentKey()?.let { report(BackendReport.Position(BackendReportPositionInner(it, position()))) }
     }
 
     private fun stopPositionLoop() {
