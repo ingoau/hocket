@@ -416,10 +416,10 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
     val context = androidx.compose.ui.platform.LocalContext.current
     // Background vocals fold away under their line while it is not sung (Apple Music's), except for
     // a screen reader, which reads every line, or with reduced motion (nothing slides).
-    var touchExploration by remember { mutableStateOf(false) }
-    DisposableEffect(context) {
-        val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
-        touchExploration = manager?.isTouchExplorationEnabled == true
+    val manager = remember(context) { context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) }
+    // Seeded now, not after the first frame: a screen reader user's list never starts folded.
+    var touchExploration by remember(manager) { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
         val listener = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { touchExploration = it }
         manager?.addTouchExplorationStateChangeListener(listener)
         onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
@@ -670,7 +670,8 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
                     renderEffect = if (r > 0.1f) androidx.compose.ui.graphics.BlurEffect(r, r, androidx.compose.ui.graphics.TileMode.Decal) else null
                     clip = false
                 }
-                // Inside the layer: room for the words to rise and glow (more with larger fonts).
+                // Inside the layer: room for the words to rise and glow, at least 0.3 em (so more with
+                // larger fonts, and a little more than 4 dp for background vocals already).
                 .padding(vertical = maxOf(if (line.background) 4.dp else 10.dp, riseRoom))
                 // Inside the scale: the bounds as drawn, the size as laid out.
                 .onGloballyPositioned { coords[0] = it }

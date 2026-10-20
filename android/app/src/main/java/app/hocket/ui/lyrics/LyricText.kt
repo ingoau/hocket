@@ -280,8 +280,15 @@ internal class MeasuredLine(
     /** Where a swelling letter's layer goes: the letter with room to grow and glow. */
     fun letterBox(letter: Letter): Rect {
         val reach = fontPx * 0.7f
-        // Not past the line's sides, where the line's own layer ends and would clip it anyway.
-        return Rect((letter.x - reach).coerceAtLeast(0f), letter.y - reach, (letter.x + letter.layout.size.width + reach).coerceAtMost(layout.size.width.toFloat()), letter.y + letter.layout.size.height + reach)
+        // Not past the line's layer (its sides, and the room its padding gives above and below),
+        // which would clip it anyway.
+        val room = fontPx * 0.3f
+        return Rect(
+            (letter.x - reach).coerceAtLeast(0f),
+            (letter.y - reach).coerceAtLeast(-room),
+            (letter.x + letter.layout.size.width + reach).coerceAtMost(layout.size.width.toFloat()),
+            (letter.y + letter.layout.size.height + reach).coerceAtMost(layout.size.height + room),
+        )
     }
 }
 

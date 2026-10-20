@@ -151,9 +151,6 @@ internal class StaggeredScroll(private val state: LazyListState, private val sco
     /** Drops the scroll where it is (the user took the list); lines already shifting finish. */
     fun stop() {
         kicks.clear()
-        // A fold whose effect was cancelled before it could take its shift back: nothing will
-        // apply it now.
-        shifts.removeAll { it.pending }
         applied = 0f
         following = false
         frame.longValue += 1
