@@ -33,6 +33,8 @@ pub const WINDOW_MS: u64 = 60 * 60 * 1000;
 const RING_MAX_BYTES: usize = 32 << 20;
 /// The live file is rotated to `hocket.log.1` past this size.
 const FILE_MAX_BYTES: u64 = 8 << 20;
+/// Lines queued for the writer thread; past this (a stalled disk) new lines skip the file.
+const FILE_QUEUE: usize = 16_384;
 const FILE_NAME: &str = "hocket.log";
 const OLD_FILE_NAME: &str = "hocket.log.1";
 /// The filter while developer mode is on: debug for us, info for the chatty dependencies.
@@ -95,8 +97,12 @@ pub fn set_detailed(on: bool) {
         return;
     }
     if let Some(h) = FILTER.get() {
-        let directive = if on { DETAILED_FILTER } else { c.base.as_str() };
-        if let Ok(f) = EnvFilter::try_new(directive) {
+        let directive = if on {
+            detailed_filter(&c.base)
+        } else {
+            c.base.clone()
+        };
+        if let Ok(f) = EnvFilter::try_new(&directive) {
             let _ = h.reload(f);
         }
     }
@@ -120,7 +126,7 @@ pub fn is_detailed() -> bool {
 pub fn append(level: &str, tag: &str, message: &str) {
     let Some(c) = CAPTURE.get() else { return };
     let level = Level::parse(level);
-    if level.is_verbose() && !c.detailed.load(Ordering::SeqCst) {
+    if level.is_verbose() && !c.detailed.load(Ordering::SeqCst) && !c.verbose_base {
         return;
     }
     let now = now_ms();
@@ -142,8 +148,23 @@ pub fn flush(timeout: Duration) {
         return;
     };
     let (done_tx, done_rx) = mpsc::channel();
-    if tx.send(FileMsg::Flush(done_tx)).is_ok() {
+    if tx.try_send(FileMsg::Flush(done_tx)).is_ok() {
         let _ = done_rx.recv_timeout(timeout);
+    }
+}
+
+/// [`DETAILED_FILTER`] plus the base filter's per-target directives (`HOCKET_LOG=hocket_core::audio=trace`
+/// stays trace); its bare level is replaced by debug.
+fn detailed_filter(base: &str) -> String {
+    let targeted: Vec<&str> = base
+        .split(',')
+        .map(str::trim)
+        .filter(|d| d.contains('='))
+        .collect();
+    if targeted.is_empty() {
+        DETAILED_FILTER.to_string()
+    } else {
+        format!("{DETAILED_FILTER},{}", targeted.join(","))
     }
 }
 
@@ -167,7 +188,7 @@ fn install_panic_hook() {
                 thread.name().unwrap_or("<unnamed>")
             );
             c.push(format_line(now, "ERROR", "panic", &message), now);
-            flush(Duration::from_millis(500));
+            flush(Duration::from_millis(200));
         }
         previous(info);
     }));
@@ -177,8 +198,10 @@ fn install_panic_hook() {
 
 struct Capture {
     ring: Mutex<Ring>,
-    file: Option<mpsc::Sender<FileMsg>>,
+    file: Option<mpsc::SyncSender<FileMsg>>,
     base: String,
+    /// The base filter already lets debug through somewhere (`HOCKET_LOG=debug`): keep platform debug lines too.
+    verbose_base: bool,
     detailed: AtomicBool,
 }
 
@@ -194,6 +217,7 @@ impl Capture {
         Capture {
             ring: Mutex::new(Ring::default()),
             file: None,
+            verbose_base: base.contains("debug") || base.contains("trace"),
             base,
             detailed: AtomicBool::new(false),
         }
@@ -204,7 +228,9 @@ impl Capture {
             line.push('\n');
         }
         if let Some(tx) = &self.file {
-            let _ = tx.send(FileMsg::Line(line.clone()));
+            // Never block a logging thread on the disk: a full queue drops the line from the file
+            // (it is still in the ring).
+            let _ = tx.try_send(FileMsg::Line(line.clone()));
         }
         let mut ring = self.ring.lock();
         ring.bytes += line.len();
@@ -318,14 +344,14 @@ fn read_previous(dir: &Path) -> String {
 
 /// The writer thread: appends lines, flushes whenever the queue runs dry, rotates past
 /// [`FILE_MAX_BYTES`]. I/O errors are swallowed (logging them would loop back here).
-fn spawn_writer(dir: PathBuf) -> Option<mpsc::Sender<FileMsg>> {
+fn spawn_writer(dir: PathBuf) -> Option<mpsc::SyncSender<FileMsg>> {
     fs::create_dir_all(&dir).ok()?;
     let path = dir.join(FILE_NAME);
     let open = |p: &Path| OpenOptions::new().create(true).append(true).open(p).ok();
     let file = open(&path)?;
     let mut size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut out = BufWriter::new(file);
-    let (tx, rx) = mpsc::channel::<FileMsg>();
+    let (tx, rx) = mpsc::sync_channel::<FileMsg>(FILE_QUEUE);
     std::thread::Builder::new()
         .name("hocket-log".into())
         .spawn(move || {
@@ -342,11 +368,17 @@ fn spawn_writer(dir: PathBuf) -> Option<mpsc::Sender<FileMsg>> {
                     }
                     if size > FILE_MAX_BYTES {
                         let _ = out.flush();
-                        let _ = fs::rename(&path, dir.join(OLD_FILE_NAME));
-                        if let Some(f) = open(&path) {
+                        // If the rename fails (Windows: something holds the old file open), start
+                        // the live file over rather than let it grow without bound.
+                        let reopened = if fs::rename(&path, dir.join(OLD_FILE_NAME)).is_ok() {
+                            open(&path)
+                        } else {
+                            File::create(&path).ok()
+                        };
+                        if let Some(f) = reopened {
                             out = BufWriter::new(f);
+                            size = 0;
                         }
-                        size = 0;
                     }
                     next = rx.try_recv().ok();
                 }
@@ -538,6 +570,16 @@ mod tests {
         assert!(out.starts_with(&kept));
         assert!(out.ends_with("    at Foo.bar(Foo.kt:3)\nno newline at the end\n"));
         assert_eq!(c.ring.lock().lines.len(), 1);
+    }
+
+    #[test]
+    fn the_detailed_filter_keeps_the_bases_targeted_directives() {
+        assert_eq!(detailed_filter("info"), DETAILED_FILTER);
+        assert_eq!(
+            detailed_filter("warn, hocket_core::audio=trace"),
+            format!("{DETAILED_FILTER},hocket_core::audio=trace")
+        );
+        assert!(EnvFilter::try_new(detailed_filter("info,mdns_sd=warn")).is_ok());
     }
 
     #[test]

@@ -8,7 +8,7 @@
          and the plaintext keys would leak the server address and username), and the mirror of
          "allow control by other apps" (a device-local choice: restoring it must not let other apps
          in on a new device), the widget's last state (it names cache files) and the launcher shortcuts'
-         token (a per-install secret). -->
+         token (a per-install secret), and the developer log (server hosts and activity; up to 16 MiB). -->
     <exclude domain="file" path="hocket/cache" />
     <exclude domain="file" path="hocket/downloads" />
     <exclude domain="file" path="hocket/hocket.sqlite" />
@@ -16,6 +16,7 @@
     <exclude domain="file" path="hocket/hocket.sqlite-shm" />
     <exclude domain="file" path="hocket/hocket.sqlite-journal" />
     <exclude domain="file" path="hocket/backups" />
+    <exclude domain="file" path="hocket/logs" />
     <exclude domain="sharedpref" path="hocket-core.xml" />
     <exclude domain="sharedpref" path="hocket-credentials.xml" />
     <exclude domain="sharedpref" path="hocket-credential-names.xml" />

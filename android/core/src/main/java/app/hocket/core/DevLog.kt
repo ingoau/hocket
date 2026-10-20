@@ -26,8 +26,19 @@ object DevLog {
     private val ring = ArrayDeque<Pair<Long, String>>()
     private var ringBytes = 0
 
-    /** Whether lines go to the core's buffer (the library is loadable). */
-    val usesCore: Boolean get() = NativeCore.isAvailable()
+    @Volatile private var installed = false
+
+    /** Whether lines go to the core's buffer: the library is loadable and its capture installed. */
+    val usesCore: Boolean get() = installed && NativeCore.isAvailable()
+
+    /**
+     * Installs the core's capture (idempotent; [NativeCore.create] calls it too). Called early from
+     * `Application.onCreate`, so a crash before the core starts is still captured and kept on disk.
+     */
+    fun install(dataDir: java.io.File, level: String = "info") {
+        if (installed || !NativeCore.isAvailable()) return
+        runCatching { app.hocket.core.ffi.initLogging(level, java.io.File(dataDir, "logs").absolutePath) }.onSuccess { installed = true }
+    }
 
     /** [level] is `debug`, `info`, `warn` or `error`; [tag] names the source (`kotlin/PlaybackService`). */
     fun append(level: String, tag: String, message: String) {

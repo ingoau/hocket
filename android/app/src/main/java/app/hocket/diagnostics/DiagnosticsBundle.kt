@@ -35,30 +35,60 @@ import java.util.concurrent.TimeUnit
  * recorded, crashes included) and this app's logcat for the same hour ([logcat]: Kotlin, Media3,
  * the system's lines about us).
  */
-data class DiagnosticsReport(
+class DiagnosticsReport(
     val generatedAt: Long,
     val head: String,
     val coreLog: String,
     val logcat: String,
     val windowMs: Long,
 ) {
-    val fileName: String get() = "hocket-diagnostics-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(generatedAt)) + ".txt"
-    val coreLines: Int get() = coreLog.lineSequence().count { it.isNotEmpty() }
-    val logcatLines: Int get() = logcat.lineSequence().count { it.isNotEmpty() }
-    val bytes: Long get() = (coreLog.length + logcat.length).toLong()
+    // Computed once, where the report is built (off the main thread): the page reads these while
+    // composing, and the logs can be tens of megabytes.
+    val fileName: String = "hocket-diagnostics-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(generatedAt)) + ".txt"
+    val coreLines: Int = countLines(coreLog)
+    val logcatLines: Int = countLines(logcat)
+    val bytes: Long = (coreLog.length + logcat.length).toLong()
+    /** The newest [PREVIEW_LINES] lines of the core log, for the page. */
+    val preview: String = coreTail(PREVIEW_LINES)
     private val minutes: Long get() = windowMs / 60_000
 
-    val text: String
-        get() = buildString {
+    /** The whole bundle, built on first use (by share, save or copy, all off the main thread). */
+    val text: String by lazy {
+        buildString(head.length + coreLog.length + logcat.length + 256) {
             append(head.trimEnd()).append("\n\n")
             append("Core log (last $minutes minutes)\n-----------------------------\n")
             append(coreLog.trimEnd().ifEmpty { "(empty)" }).append("\n\n")
             append("Logcat (last $minutes minutes)\n---------------------------\n")
             append(logcat.trimEnd().ifEmpty { "(empty)" }).append('\n')
         }
+    }
 
-    /** The newest [n] lines of the core log, for the page's preview. */
-    fun coreTail(n: Int): String = coreLog.trimEnd().lines().takeLast(n).joinToString("\n")
+    /** The newest [n] lines of the core log, without splitting all of it. */
+    fun coreTail(n: Int): String {
+        val log = coreLog.trimEnd()
+        var start = log.length
+        repeat(n) {
+            if (start <= 0) return log
+            start = log.lastIndexOf('\n', start - 1)
+            if (start < 0) return log
+        }
+        return log.substring(start + 1)
+    }
+
+    fun copy(coreLog: String = this.coreLog, logcat: String = this.logcat): DiagnosticsReport = DiagnosticsReport(generatedAt, head, coreLog, logcat, windowMs)
+
+    companion object {
+        const val PREVIEW_LINES = 200
+
+        private fun countLines(text: String): Int {
+            var n = 0
+            var lineHasText = false
+            for (c in text) {
+                if (c == '\n') { if (lineHasText) n++; lineHasText = false } else lineHasText = true
+            }
+            return if (lineHasText) n + 1 else n
+        }
+    }
 }
 
 object DiagnosticsBundle {

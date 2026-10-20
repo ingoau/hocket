@@ -55,7 +55,10 @@ import app.hocket.ui.components.LocalAppSnackbar
 import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Advanced: developer mode (detailed logs, shake to open diagnostics) and the developer diagnostics page. */
 @Composable
@@ -67,10 +70,11 @@ fun AdvancedSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** How many core log lines the page previews; share or save carries the whole hour. */
-private const val PREVIEW_LINES = 200
-/** The clipboard goes through a binder transaction (about 1 MB); larger bundles are copied from the end. */
-private const val CLIPBOARD_MAX_CHARS = 400_000
+/**
+ * The clipboard goes through a binder transaction (a 1 MB buffer shared by the whole process, and
+ * UTF-16 doubles the size); larger bundles are copied from their end.
+ */
+private const val CLIPBOARD_MAX_CHARS = 100_000
 
 /**
  * Developer diagnostics: the device and app, the core's diagnostics and the newest log lines, with
@@ -91,13 +95,22 @@ fun DeveloperDiagnosticsScreen(
     var report by remember { mutableStateOf<DiagnosticsReport?>(null) }
     var refreshes by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    LaunchedEffect(refreshes) { report = runCatching { collect(context, client) }.getOrNull() }
+    LaunchedEffect(refreshes) {
+        report = try {
+            collect(context, client)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     val notify: (String) -> Unit = { message -> snackbar?.launch { host.showSnackbar(message) } }
     val savedText = stringResource(R.string.developer_saved)
     val failedText = stringResource(R.string.developer_save_failed)
     val copiedText = stringResource(R.string.developer_copied)
     val copiedTruncatedText = stringResource(R.string.developer_copied_truncated)
+    val copyFailedText = stringResource(R.string.developer_copy_failed)
     val shareTitle = stringResource(R.string.developer_share_title)
     /** Collects a fresh report, runs [action] on it, then refreshes the preview to match. */
     fun withFresh(action: suspend (DiagnosticsReport) -> Unit) {
@@ -105,11 +118,16 @@ fun DeveloperDiagnosticsScreen(
         busy = true
         scope.launch {
             try {
+                // Let the previous report go first: two of them (and the bundle text) at once is a lot
+                // of memory with a big debug log.
+                report = null
                 val fresh = collect(context, client)
                 report = fresh
                 action(fresh)
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 throw e
+            } catch (e: OutOfMemoryError) {
+                notify(failedText)
             } catch (e: Exception) {
                 notify(failedText + ": " + (e.message ?: e.javaClass.simpleName))
             } finally {
@@ -155,11 +173,12 @@ fun DeveloperDiagnosticsScreen(
             }
             FilledTonalButton(onClick = {
                 withFresh {
-                    val text = it.text
-                    val truncated = text.length > CLIPBOARD_MAX_CHARS
-                    val clip = if (truncated) it.head + "\n…\n" + text.takeLast(CLIPBOARD_MAX_CHARS - it.head.length) else text
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(it.fileName, clip))
-                    notify(if (truncated) copiedTruncatedText else copiedText)
+                    val (clip, truncated) = withContext(Dispatchers.Default) {
+                        val text = it.text
+                        if (text.length > CLIPBOARD_MAX_CHARS) (it.head + "\n…\n" + text.takeLast(CLIPBOARD_MAX_CHARS - it.head.length - 3)) to true else text to false
+                    }
+                    val copied = runCatching { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(it.fileName, clip)) }.isSuccess
+                    notify(if (!copied) copyFailedText else if (truncated) copiedTruncatedText else copiedText)
                 }
             }, enabled = !busy, modifier = Modifier.testTag("developer.copy")) {
                 Icon(HocketIcons.Filled.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_copy))
@@ -180,9 +199,9 @@ fun DeveloperDiagnosticsScreen(
         Block(stringResource(R.string.developer_environment), r?.head?.trimEnd() ?: stringResource(R.string.developer_loading), "developer.head")
         Block(
             stringResource(R.string.developer_log),
-            r?.let { it.coreTail(PREVIEW_LINES).ifEmpty { stringResource(R.string.developer_empty) } } ?: stringResource(R.string.developer_loading),
+            r?.let { it.preview.ifEmpty { stringResource(R.string.developer_empty) } } ?: stringResource(R.string.developer_loading),
             "developer.log",
-            note = r?.let { stringResource(R.string.developer_log_tail, PREVIEW_LINES) },
+            note = r?.let { stringResource(R.string.developer_log_tail, DiagnosticsReport.PREVIEW_LINES) },
         )
     }
 }

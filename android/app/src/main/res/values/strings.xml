@@ -597,6 +597,7 @@
     <string name="developer_saved">Diagnostics saved</string>
     <string name="developer_save_failed">Couldn\'t save the diagnostics</string>
     <string name="developer_copied">Diagnostics copied</string>
+    <string name="developer_copy_failed">Couldn\'t copy the diagnostics; share or save them instead</string>
     <string name="developer_copied_truncated">Diagnostics copied (the newest part; share or save for all of it)</string>
     <string name="developer_stats">%1$d core lines · %2$d logcat lines · %3$s · last %4$d min</string>
     <string name="developer_environment">Device and app</string>
