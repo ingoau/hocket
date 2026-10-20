@@ -249,7 +249,20 @@ pub fn ensure(doc: &mut SessionDocument, entropy: &dyn Entropy) {
         )
     });
     if !usable {
-        write(doc, ContextKeys::fresh(entropy, n));
+        // A new base can still spell a stored key (one taken from an earlier
+        // set of slots): draw again until it is clear.
+        let keys = loop {
+            let keys = ContextKeys::fresh(entropy, n);
+            let stored = doc
+                .history
+                .iter()
+                .chain(doc.current.iter())
+                .chain(doc.insertions.iter());
+            if keys.clear_of(stored.map(|i| i.key.as_str())) {
+                break keys;
+            }
+        };
+        write(doc, keys);
     }
 }
 
@@ -294,6 +307,35 @@ mod tests {
         assert!(!k.clear_of(std::iter::empty()));
         k.slots[0] = Slot::Serial(2);
         assert!(!k.clear_of(std::iter::empty()));
+    }
+
+    #[test]
+    fn ensure_skips_a_base_spelling_a_stored_key() {
+        use crate::api::{ContextKind, QueueContext, QueueItem, QueueSource, SortOrder};
+        use crate::session::document::new_document;
+
+        // `k1.0` came from an earlier set of slots and now sits in history;
+        // the next key the entropy hands out is `k1` again.
+        let mut doc = new_document("srv:user", "sess".into(), 0.0);
+        doc.context = Some(QueueContext {
+            server_id: "srv".into(),
+            kind: ContextKind::AdHoc {
+                label: "gen".into(),
+            },
+            label: "gen".into(),
+            sort: SortOrder::Default,
+            tracks: vec!["t0".into(), "t1".into()],
+        });
+        doc.history = vec![QueueItem {
+            key: "k1.0".into(),
+            track_id: "x".into(),
+            source: QueueSource::Inserted,
+            unavailable: false,
+        }];
+        ensure(&mut doc, &DeterministicEntropy::new(0));
+        let k = read(&doc).expect("slots written");
+        assert_eq!(k.key(0).as_deref(), Some("k2.0"));
+        assert!(k.clear_of(doc.history.iter().map(|i| i.key.as_str())));
     }
 
     #[test]
