@@ -1248,11 +1248,19 @@ impl Actor {
     /// They extrapolate from the stamp they hold, so it is never sent on a
     /// timer.
     pub(crate) fn emit_transport_state(&mut self, transport: TransportState) {
-        if self
-            .emitted_transport
-            .as_ref()
-            .is_some_and(|last| crate::media_session::transport_continues(last, &transport))
-        {
+        self.emit_transport_state_within(transport, crate::media_session::STAMP_TOLERANCE_MS);
+    }
+
+    /// [`Self::emit_transport_state`], re-stamping once the position strays
+    /// more than `tolerance_ms` from the last stamp's extrapolation.
+    pub(crate) fn emit_transport_state_within(
+        &mut self,
+        transport: TransportState,
+        tolerance_ms: f64,
+    ) {
+        if self.emitted_transport.as_ref().is_some_and(|last| {
+            crate::media_session::transport_continues_within(last, &transport, tolerance_ms)
+        }) {
             return;
         }
         self.emitted_transport = Some(transport.clone());

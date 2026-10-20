@@ -995,6 +995,57 @@ async fn steady_playback_emits_no_transport_or_session_until_it_strays() {
     assert_eq!(stamps, vec![60_000]);
 }
 
+/// Output latency: the player reports playing before the sound is heard (a
+/// few hundred ms over Bluetooth) and its position then lags the stamp by
+/// that much. Its report re-stamps once it strays past the resync tolerance,
+/// well inside the tolerance that keeps steady ticks quiet, so lyrics don't
+/// run ahead of the audio.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_report_lagging_the_stamp_by_output_latency_restamps() {
+    let t = synced_core("pos-latency").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    let key = t.queue().await.current.unwrap().item.key;
+    let stamps = |t: &TestCore| -> Vec<u32> {
+        t.events
+            .all()
+            .iter()
+            .filter_map(|e| match e {
+                Event::TransportChanged { transport } => Some(transport.position.position_ms),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Within the resync tolerance: nothing to say.
+    let now = t.snapshot().await.transport.position.position_ms;
+    t.events.clear();
+    t.run(Command::BackendReport {
+        report: BackendReport::Position {
+            key: key.clone(),
+            position_ms: now - 20,
+        },
+    })
+    .await;
+    assert_eq!(stamps(&t), Vec::<u32>::new());
+
+    // Bluetooth-sized lag: re-stamped, though under STAMP_TOLERANCE_MS.
+    let now = t.snapshot().await.transport.position.position_ms;
+    t.events.clear();
+    t.run(Command::BackendReport {
+        report: BackendReport::Position {
+            key,
+            position_ms: now - 200,
+        },
+    })
+    .await;
+    assert_eq!(stamps(&t), vec![now - 200]);
+}
+
 /// Rating a track that is not in the session must not rebuild the queue view / OS session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rating_off_queue_does_not_emit_queue() {

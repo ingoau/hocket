@@ -86,10 +86,25 @@ pub fn extrapolate_position(stamp: &PositionStamp, now_ms: f64, duration_ms: Opt
 /// and still be the same playback carrying on (a position tick, not a seek).
 pub const STAMP_TOLERANCE_MS: f64 = 250.0;
 
+/// How far this device's own player may stray from the stamp before its
+/// position report re-stamps. Much tighter than [`STAMP_TOLERANCE_MS`]: the
+/// player's clock starts only once sound comes out, which over Bluetooth is
+/// 150–300 ms after it reports playing, and lyrics show every bit of that.
+pub const RESYNC_TOLERANCE_MS: f64 = 50.0;
+
 /// `next` says nothing a receiver of `prev` doesn't already know by
 /// extrapolating: same play state and rate, taken no earlier, and within
 /// [`STAMP_TOLERANCE_MS`] of where `prev` has got to by then.
 pub fn stamp_continues(prev: &PositionStamp, next: &PositionStamp) -> bool {
+    stamp_continues_within(prev, next, STAMP_TOLERANCE_MS)
+}
+
+/// [`stamp_continues`] with `tolerance_ms` in place of [`STAMP_TOLERANCE_MS`].
+pub fn stamp_continues_within(
+    prev: &PositionStamp,
+    next: &PositionStamp,
+    tolerance_ms: f64,
+) -> bool {
     if prev.is_playing != next.is_playing || prev.rate != next.rate {
         return false;
     }
@@ -100,7 +115,7 @@ pub fn stamp_continues(prev: &PositionStamp, next: &PositionStamp) -> bool {
     let rate = if prev.is_playing { prev.rate } else { 0.0 };
     let expected = f64::from(prev.position_ms) + dt * rate;
     // NaN anywhere compares false: not a continuation.
-    (f64::from(next.position_ms) - expected).abs() <= STAMP_TOLERANCE_MS
+    (f64::from(next.position_ms) - expected).abs() <= tolerance_ms
 }
 
 /// A `TransportChanged` with `next` would only repeat `prev`: the stamp
@@ -108,13 +123,22 @@ pub fn stamp_continues(prev: &PositionStamp, next: &PositionStamp) -> bool {
 /// `expires_at` and the growing `played_ms` alone are not news; they ride
 /// along with the next real change (and every snapshot).
 pub fn transport_continues(prev: &TransportState, next: &TransportState) -> bool {
+    transport_continues_within(prev, next, STAMP_TOLERANCE_MS)
+}
+
+/// [`transport_continues`] with `tolerance_ms` for the stamp.
+pub fn transport_continues_within(
+    prev: &TransportState,
+    next: &TransportState,
+    tolerance_ms: f64,
+) -> bool {
     prev.lease.owner == next.lease.owner
         && prev.lease.epoch == next.lease.epoch
         && prev.buffering == next.buffering
         && prev.volume == next.volume
         && prev.muted == next.muted
         && prev.volume_device == next.volume_device
-        && stamp_continues(&prev.position, &next.position)
+        && stamp_continues_within(&prev.position, &next.position, tolerance_ms)
 }
 
 /// A `MediaSession` event with `next` would only repeat `prev`: everything

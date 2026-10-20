@@ -99,6 +99,9 @@ class ExoBackend(
         private const val TAG = "ExoBackend"
         /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
         private const val POSITION_INTERVAL_MS = 1_000L
+        /** [awaitHeard]: longer than any output's latency; a frame's worth of polling. */
+        private const val HEARD_TIMEOUT_MS = 1_000L
+        private const val HEARD_POLL_MS = 16L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
 
         /** Backoff before recovery attempt [attempt] (0-based) of a network error, or null when out of attempts. */
@@ -251,6 +254,8 @@ class ExoBackend(
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
                     currentKey()?.let { report(BackendReport.Position(BackendReportPositionInner(it, newPosition.positionMs.coerceAtLeast(0).toUInt()))) }
+                    // The output refills after a seek: re-stamp once it is heard again.
+                    if (player.isPlaying) startPositionLoop()
                 }
             }
 
@@ -437,9 +442,11 @@ class ExoBackend(
 
     private fun report(report: BackendReport) = dispatch(Commands.backendReport(report))
 
+    /** (Re)starts the 1 Hz reports, the first once the sound is heard ([awaitHeard]). */
     private fun startPositionLoop() {
-        if (positionJob?.isActive == true) return
+        positionJob?.cancel()
         positionJob = scope.launch {
+            awaitHeard()
             while (isActive && player.isPlaying) {
                 currentKey()?.let { report(BackendReport.Position(BackendReportPositionInner(it, position()))) }
                 delay(POSITION_INTERVAL_MS)
@@ -454,6 +461,20 @@ class ExoBackend(
         if (range <= 0) return
         val volume = ((player.deviceVolume - info.minVolume).toDouble() / range).coerceIn(0.0, 1.0)
         report(BackendReport.SystemVolume(BackendReportSystemVolumeInner(volume, player.isDeviceMuted)))
+    }
+
+    /**
+     * Returns once the position starts moving, or after [HEARD_TIMEOUT_MS]. ExoPlayer reports playing
+     * (and a seek) at once but holds its position until the first sample leaves the output, which over
+     * Bluetooth is 150–300 ms later; reporting at that moment re-stamps the core from when sound began,
+     * so lyrics extrapolating from the stamp don't run ahead by the output latency.
+     */
+    private suspend fun awaitHeard() {
+        val start = player.currentPosition
+        repeat((HEARD_TIMEOUT_MS / HEARD_POLL_MS).toInt()) {
+            if (!player.isPlaying || player.currentPosition != start) return
+            delay(HEARD_POLL_MS)
+        }
     }
 
     private fun stopPositionLoop() {
