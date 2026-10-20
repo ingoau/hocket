@@ -398,7 +398,9 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
     /** One word in the line's coordinates, clipped to its boxes. */
     fun drawWord(scope: DrawScope, m: MeasuredLine, word: Int, frame: LineFrame, bright: Float) = with(scope) {
         val brush = wordBrush(m, model.words[word], frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM)
-        for (box in m.boxes[word]) clipRect(box.left, box.top, box.right, box.bottom) { drawText(m.layout, brush) }
+        // alpha = 1 explicitly: left out, a gradient brush's text takes the paint's last alpha (the
+        // idle tone's), so a word about to be sung drew darker than the words around it.
+        for (box in m.boxes[word]) clipRect(box.left, box.top, box.right, box.bottom) { drawText(m.layout, brush, alpha = 1f) }
     }
 
     /** One letter of a swelling word, in the line's coordinates, glowing as it swells. */
@@ -409,7 +411,7 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
         val glow = emphasis(m, word, letter, frame.timeMs, bright).glow
         val shadow = if (glow > 0.01f) Shadow(Color.White.copy(alpha = glow.coerceIn(0f, 1f)), Offset.Zero, min(0.3f, e.glow * 0.3f) * m.fontPx * 2) else null
         val brush = wordBrush(m, w, frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM, l.x)
-        translate(l.x, l.y) { drawText(l.layout, brush, shadow = shadow) }
+        translate(l.x, l.y) { drawText(l.layout, brush, alpha = 1f, shadow = shadow) }
     }
 }
 

@@ -44,8 +44,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -472,6 +470,7 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     // recomposing.
     val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = 1f, stiffness = LyricsMotion.SCALE_STIFFNESS), label = "lineScale")
     val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(LyricsMotion.BRIGHTEN_MS), label = "lineBright")
+    val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(LyricsMotion.BLUR_MS), label = "lineBlur")
     val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = 1f, stiffness = LyricsMotion.SCALE_STIFFNESS), label = "lineShown")
     // Background sub-voices: smaller and lighter than the main voice.
     val baseSize = if (line.background) 18.sp else 28.sp
@@ -561,14 +560,21 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
                 // it grows and glides smoothly (text drawn scaled steps from pixel to pixel).
                 .graphicsLayer {
                     scaleX = scale.value; scaleY = scaleX; translationY = lag(); transformOrigin = origin
-                    // A blurred line is a layer already (the blur's): no second one inside it.
-                    compositingStrategy = if (reducedMotion || blur > 0.dp) androidx.compose.ui.graphics.CompositingStrategy.Auto else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                    // A blurred line (or one still easing out of its blur) is a layer already, the
+                    // blur's: no second one around it.
+                    compositingStrategy = if (reducedMotion || blur > 0.dp || blurRadius.value > 0f) androidx.compose.ui.graphics.CompositingStrategy.Auto else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
                 }
                 // Inside the moving layer (a blur outside it would cut off a line moved past its box).
-                // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
-                // the halo of text near the sides was cut off (#68); for the same reason a blurred
-                // line has no offscreen layer of its own around the blur.
-                .blur(blur, BlurredEdgeTreatment.Unbounded)
+                // Eased from one radius to the next as the focus moves on, not stepped, and set on
+                // the layer, so it changes without recomposing. Decal edges (unbounded, no clip):
+                // the default edge treatment clips the blurred glyphs to the line's box, so the halo
+                // of text near the sides was cut off (#68); for the same reason a blurred line has
+                // no offscreen layer of its own around the blur.
+                .graphicsLayer {
+                    val r = blurRadius.value.dp.toPx()
+                    renderEffect = if (r > 0.1f) androidx.compose.ui.graphics.BlurEffect(r, r, androidx.compose.ui.graphics.TileMode.Decal) else null
+                    clip = false
+                }
                 // Inside the layer: room for the words to rise and glow.
                 .padding(vertical = if (line.background) 4.dp else 10.dp)
                 // Inside the scale: the bounds as drawn, the size as laid out.

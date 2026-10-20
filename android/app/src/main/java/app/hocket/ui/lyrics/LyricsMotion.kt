@@ -27,6 +27,8 @@ internal object LyricsMotion {
     const val FOCUS_POSITION = 0.35f
     /** A line lighting up or dimming. */
     const val BRIGHTEN_MS = 180
+    /** A line's depth-of-field blur easing to its new radius as the focus moves (about the scroll's time). */
+    const val BLUR_MS = 400
     /** Width of a syllable's soft leading edge. */
     const val FADE_WIDTH_EM = 0.5f
     /** How far a sung word rises (twice that on a background vocal). */
