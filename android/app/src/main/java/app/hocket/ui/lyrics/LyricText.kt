@@ -4,6 +4,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -78,7 +79,7 @@ internal fun SyllableLineText(line: LyricLine, style: TextStyle, tone: LyricTone
     // pixels vertically, so a word rising a pixel or two would step instead of glide; a layer
     // moved by a fraction of a pixel is filtered smoothly (huddlefm's sprites, as GPU layers).
     val pieces = motion && near
-    val paint = remember(model, tone, background) { LinePaint(model, tone, background) }
+    val paint = remember(model, tone, background, motion) { LinePaint(model, tone, background, motion) }
     Layout(
         content = {
             Spacer(Modifier.drawBehind { holder.current?.let { m -> if (!pieces || bright() <= 0.001f) paint.drawStill(this, m, frame.value, bright()) } })
@@ -120,6 +121,7 @@ internal class LineFrame(val sweep: List<Float>, val timeMs: Long)
 /** A word's piece: the paragraph drawn clipped to the word, in a layer that rises with it. */
 @Composable
 private fun WordPiece(holder: MeasuredHolder, paint: LinePaint, word: Int, frame: State<LineFrame>, bright: () -> Float) {
+    val look = remember(paint, word) { derivedStateOf { paint.look(word, frame.value, bright()) } }
     Spacer(
         Modifier
             .graphicsLayer {
@@ -131,10 +133,10 @@ private fun WordPiece(holder: MeasuredHolder, paint: LinePaint, word: Int, frame
             }
             .drawBehind {
                 val m = holder.current ?: return@drawBehind
-                val b = bright()
-                if (b <= 0.001f) return@drawBehind
+                val l = look.value
+                if (l.bright <= 0.001f) return@drawBehind
                 val box = m.wordBox(word)
-                translate(-floor(box.left), -floor(box.top)) { paint.drawWord(this, m, word, frame.value, b) }
+                translate(-floor(box.left), -floor(box.top)) { paint.drawWord(this, m, word, l) }
             },
     )
 }
@@ -278,7 +280,8 @@ internal class MeasuredLine(
     /** Where a swelling letter's layer goes: the letter with room to grow and glow. */
     fun letterBox(letter: Letter): Rect {
         val reach = fontPx * 0.7f
-        return Rect(letter.x - reach, letter.y - reach, letter.x + letter.layout.size.width + reach, letter.y + letter.layout.size.height + reach)
+        // Not past the line's sides, where the line's own layer ends and would clip it anyway.
+        return Rect((letter.x - reach).coerceAtLeast(0f), letter.y - reach, (letter.x + letter.layout.size.width + reach).coerceAtMost(layout.size.width.toFloat()), letter.y + letter.layout.size.height + reach)
     }
 }
 
@@ -309,7 +312,8 @@ internal class MeasuredHolder(private val model: SyllableModel, private val styl
                 val box = layout.getBoundingBox(c)
                 l = min(l, box.left); r = max(r, box.right)
             }
-            if (l > r) { l = 0f; r = 0f }
+            // No glyphs on its row (an empty syllable): no extent, left out of its word's.
+            if (l > r) { l = Float.NaN; r = Float.NaN }
             sylLeft[i] = l; sylRight[i] = r
             rtl[i] = model.sylStart[i] < text.length && layout.getBidiRunDirection(model.sylStart[i]) == ResolvedTextDirection.Rtl
         }
@@ -326,8 +330,8 @@ internal class MeasuredHolder(private val model: SyllableModel, private val styl
             }
         }
         val fontPx = layout.layoutInput.density.run { style.fontSize.toPx() }
-        // Room above and below for the rise, within the line's own padding; none to the sides,
-        // where the line's offscreen layer ends (a word layer reaching past it is dropped).
+        // Room above and below for the rise, within the line's own padding (which grows with the
+        // font to keep it); none to the sides, where the line's offscreen layer ends and clips.
         val margin = fontPx * 0.25f
         val boxes = List(model.words.size) { ArrayList<Rect>(1) }
         for ((row, inRow) in segs.groupBy { it.row }) {
@@ -357,7 +361,7 @@ private val empOut = CubicBezierEasing(0.3f, 0f, 0.58f, 1f)
 private fun emphasisCurve(x: Float) = if (x < 0.5f) empIn.transform(x / 0.5f) else 1f - empOut.transform((x - 0.5f) / 0.5f)
 
 /** How one line's words and letters are painted, for the still line and for its moving pieces. */
-internal class LinePaint(private val model: SyllableModel, private val tone: LyricTone, private val background: Boolean) {
+internal class LinePaint(private val model: SyllableModel, private val tone: LyricTone, private val background: Boolean, private val motion: Boolean) {
     /** A swelling letter's place: moved by [dx], [dy], grown by [scale]. */
     class Swell(val dx: Float, val dy: Float, val scale: Float, val glow: Float)
 
@@ -365,7 +369,8 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
 
     /** How far the word has risen, px: over its own time (a second at least), easing out, with the line's brightness. */
     fun rise(m: MeasuredLine?, word: Int, timeMs: Long, bright: Float): Float {
-        if (m == null || bright <= 0f) return 0f
+        // Without motion nothing rises (reduced motion: the static highlight alone).
+        if (m == null || bright <= 0f || !motion) return 0f
         val w = model.words[word]
         return lift(m) * bright * easeOut.transform(((timeMs - w.startMs).toFloat() / max(1_000L, w.endMs - w.startMs)).coerceIn(0f, 1f))
     }
@@ -386,18 +391,21 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
         )
     }
 
+    /** How word [word] is painted on [frame] at [bright]. */
+    fun look(word: Int, frame: LineFrame, bright: Float) = WordLook.of(model.words[word], frame.sweep, bright)
+
     /** The whole line, unmoved: one draw when it is not lit; word by word (risen, snapped) without pieces. */
     fun drawStill(scope: DrawScope, m: MeasuredLine, frame: LineFrame, bright: Float) = with(scope) {
         if (bright <= 0.001f) { drawText(m.layout, color = tone.idle); return@with }
         for (wi in model.words.indices) {
             val rise = rise(m, wi, frame.timeMs, bright)
-            translate(top = -rise) { drawWord(this, m, wi, frame, bright) }
+            translate(top = -rise) { drawWord(this, m, wi, WordLook.of(model.words[wi], frame.sweep, bright)) }
         }
     }
 
     /** One word in the line's coordinates, clipped to its boxes. */
-    fun drawWord(scope: DrawScope, m: MeasuredLine, word: Int, frame: LineFrame, bright: Float) = with(scope) {
-        val brush = wordBrush(m, model.words[word], frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM)
+    fun drawWord(scope: DrawScope, m: MeasuredLine, word: Int, look: WordLook) = with(scope) {
+        val brush = wordBrush(m, model.words[word], look, tone.sung(look.bright), tone.unsung(look.bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM)
         // alpha = 1 explicitly: left out, a gradient brush's text takes the paint's last alpha (the
         // idle tone's), so a word about to be sung drew darker than the words around it.
         for (box in m.boxes[word]) clipRect(box.left, box.top, box.right, box.bottom) { drawText(m.layout, brush, alpha = 1f) }
@@ -410,7 +418,7 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
         val e = w.emphasis!!
         val glow = emphasis(m, word, letter, frame.timeMs, bright).glow
         val shadow = if (glow > 0.01f) Shadow(Color.White.copy(alpha = glow.coerceIn(0f, 1f)), Offset.Zero, min(0.3f, e.glow * 0.3f) * m.fontPx * 2) else null
-        val brush = wordBrush(m, w, frame.sweep, tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM, l.x)
+        val brush = wordBrush(m, w, WordLook.of(w, frame.sweep, bright), tone.sung(bright), tone.unsung(bright), m.fontPx * LyricsMotion.FADE_WIDTH_EM, l.x)
         translate(l.x, l.y) { drawText(l.layout, brush, alpha = 1f, shadow = shadow) }
     }
 }
@@ -421,18 +429,42 @@ internal class LinePaint(private val model: SyllableModel, private val tone: Lyr
  * the word (all unsung) to its end (all sung), following the syllables' timing in between, so
  * it never steps back where one syllable hands over to the next.
  */
-private fun wordBrush(m: MeasuredLine, w: LyricWord, sweep: List<Float>, sung: Color, unsung: Color, fade: Float, dx: Float = 0f): Brush {
-    var k = -1
-    for (i in w.first..w.last) if (sweep.getOrElse(i) { 0f } < 1f) { k = i; break }
-    if (k < 0) return SolidColor(sung)
-    val p = sweep.getOrElse(k) { 0f }
-    if (k == w.first && p <= 0f) return SolidColor(unsung)
+private fun wordBrush(m: MeasuredLine, w: LyricWord, look: WordLook, sung: Color, unsung: Color, fade: Float, dx: Float = 0f): Brush {
+    if (look.k == WordLook.SUNG) return SolidColor(sung)
+    if (look.k == WordLook.UNSUNG) return SolidColor(unsung)
     var left = Float.MAX_VALUE; var right = -Float.MAX_VALUE
-    for (i in w.first..w.last) { left = min(left, m.sylLeft[i]); right = max(right, m.sylRight[i]) }
+    for (i in w.first..w.last) if (!m.sylLeft[i].isNaN()) { left = min(left, m.sylLeft[i]); right = max(right, m.sylRight[i]) }
+    if (left > right) return SolidColor(unsung)
     left -= dx; right -= dx
-    val edge = sweepEdge(left, right, m.sylLeft[k] - dx, m.sylRight[k] - dx, p, fade, m.rtl[k])
-    return if (m.rtl[k]) Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge - fade)
+    val k = look.k
+    // An empty syllable sweeps as a point where the word's sung part ends.
+    val rtl = m.rtl[k]
+    val sylLeft = if (m.sylLeft[k].isNaN()) (if (rtl) right else left) else m.sylLeft[k] - dx
+    val sylRight = if (m.sylRight[k].isNaN()) sylLeft else m.sylRight[k] - dx
+    val edge = sweepEdge(left, right, sylLeft, sylRight, look.p, fade, rtl)
+    return if (rtl) Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge - fade)
     else Brush.horizontalGradient(listOf(sung, unsung), startX = edge, endX = edge + fade)
+}
+
+/**
+ * How a word is painted this frame: all sung, all unsung, or syllable [k] [p] sung, at the line's
+ * [bright]ness. Equal looks paint the same, so a word piece redraws only when its look changes
+ * (the word being sung, and the line lighting or dimming), not on every frame of the line.
+ */
+@androidx.compose.runtime.Immutable
+internal data class WordLook(val k: Int, val p: Float, val bright: Float) {
+    companion object {
+        const val SUNG = -1
+        const val UNSUNG = -2
+
+        fun of(w: LyricWord, sweep: List<Float>, bright: Float): WordLook {
+            for (i in w.first..w.last) {
+                val p = sweep.getOrElse(i) { 0f }
+                if (p < 1f) return if (i == w.first && p <= 0f) WordLook(UNSUNG, 0f, bright) else WordLook(i, p, bright)
+            }
+            return WordLook(SUNG, 0f, bright)
+        }
+    }
 }
 
 /**

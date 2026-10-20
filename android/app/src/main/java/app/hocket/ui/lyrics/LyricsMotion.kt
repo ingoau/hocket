@@ -34,13 +34,8 @@ internal object LyricsMotion {
 }
 
 /**
- * The lyrics' timings. [Default] is AMLL's; the others are variations on it, to compare:
- * - [Snappy]: gets there quicker (stiffer springs, a tighter ripple, a shorter lead, quicker fades).
- * - [Tight]: quicker still, with almost no lead.
- * - [Gentle]: slower and floatier (soft springs, a wide ripple, long fades).
- * - [Sheet]: quick, and the lines move together, without the ripple.
- * - [Wave]: an exaggerated ripple, the lines cascading in one after another.
- * - [Bouncy]: AMLL's timing on springs that overshoot a little and settle back.
+ * The lyrics' timings. [Default] is AMLL's, and what the app uses; [LocalLyricsFeel] can hand the
+ * page others, to try a different feel (stiffer springs, a wider ripple, a little overshoot).
  */
 @Immutable
 internal data class LyricsFeel(
@@ -91,15 +86,6 @@ internal data class LyricsFeel(
 
     companion object {
         val Default = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.035f, leadMs = 120L, brightenMs = 180, blurMs = 400)
-        val Snappy = LyricsFeel(scrollStiffness = 520f, scaleStiffness = 420f, staggerS = 0.024f, leadMs = 80L, brightenMs = 130, blurMs = 280)
-        val Tight = LyricsFeel(scrollStiffness = 800f, scaleStiffness = 650f, staggerS = 0.018f, leadMs = 40L, brightenMs = 100, blurMs = 200)
-        val Gentle = LyricsFeel(scrollStiffness = 170f, scaleStiffness = 150f, staggerS = 0.05f, leadMs = 180L, brightenMs = 280, blurMs = 600)
-        val Sheet = LyricsFeel(scrollStiffness = 450f, scaleStiffness = 380f, staggerS = 0f, leadMs = 100L, brightenMs = 150, blurMs = 300)
-        val Wave = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.07f, leadMs = 160L, brightenMs = 180, blurMs = 450)
-        val Bouncy = LyricsFeel(scrollStiffness = 300f, scaleStiffness = 260f, staggerS = 0.035f, leadMs = 120L, brightenMs = 180, blurMs = 400, dampingRatio = 0.72f)
-
-        /** Every feel by name, for comparing them. */
-        val all = mapOf("default" to Default, "snappy" to Snappy, "tight" to Tight, "gentle" to Gentle, "sheet" to Sheet, "wave" to Wave, "bouncy" to Bouncy)
     }
 }
 
@@ -165,6 +151,9 @@ internal class StaggeredScroll(private val state: LazyListState, private val sco
     /** Drops the scroll where it is (the user took the list); lines already shifting finish. */
     fun stop() {
         kicks.clear()
+        // A fold whose effect was cancelled before it could take its shift back: nothing will
+        // apply it now.
+        shifts.removeAll { it.pending }
         applied = 0f
         following = false
         frame.longValue += 1
@@ -173,6 +162,7 @@ internal class StaggeredScroll(private val state: LazyListState, private val sco
     /** Jumps to lazy index [index] with its centre at [LyricsMotion.FOCUS_POSITION], no animation. */
     suspend fun snap(index: Int) {
         stop()
+        shifts.clear()
         target = index
         val viewport = state.layoutInfo.viewportSize.height
         state.scrollToItem(index, -(viewport * LyricsMotion.FOCUS_POSITION + state.layoutInfo.viewportStartOffset).toInt())
@@ -259,7 +249,10 @@ internal class StaggeredScroll(private val state: LazyListState, private val sco
         var total = 0f
         for (k in kicks) total += k.delta * feel.scrollResponse(k.elapsed(now))
         // Where the target lands once the live kicks finish, against where it should.
-        if (following && target >= 0) error(target)?.let { err ->
+        if (following && target >= 0) error(target)?.let { laidOut ->
+            // A fold not laid out yet moves the target all the same: aim for where it will be.
+            var err = laidOut
+            for (sh in shifts) if (sh.pending && (if (sh.above) target <= sh.first else target >= sh.first)) err += sh.delta
             val remaining = kicks.sumOf { it.delta.toDouble() }.toFloat() - applied
             val off = err - remaining
             val reachable = if (off > 0) state.canScrollForward else state.canScrollBackward

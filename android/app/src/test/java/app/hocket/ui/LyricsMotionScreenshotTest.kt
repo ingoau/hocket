@@ -45,10 +45,9 @@ class LyricsMotionScreenshotTest {
     }
 
     /** Moves the song to [positionMs] and the frame clock on by the same time, a frame at a time. */
-    private fun at(positionMs: Long, settle: Boolean = true) {
+    private fun at(positionMs: Long) {
         val from = clock - 1_000_000.0
         clock = 1_000_000.0 + positionMs
-        if (!settle) return
         repeat(((positionMs - from).toLong().coerceIn(0, 1_500) / 16).toInt() + 1) { compose.mainClock.advanceTimeByFrame() }
     }
 
