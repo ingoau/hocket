@@ -38,6 +38,8 @@ sealed interface Route {
     @Serializable data object SettingsBattery : Route
     @Serializable data object SettingsBackup : Route
     @Serializable data object SettingsPebble : Route
+    @Serializable data object SettingsAdvanced : Route
+    @Serializable data object DeveloperDiagnostics : Route
 }
 
 /**

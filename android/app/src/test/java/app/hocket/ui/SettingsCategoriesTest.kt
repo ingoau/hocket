@@ -62,9 +62,12 @@ class SettingsCategoriesTest {
         "pebble.closeWhenPausedMinutes",
     )
 
+    /** The Advanced category: all new. */
+    private val advancedRows = setOf("developer.mode", "developer.open")
+
     /** Registry settings the old page did not show, now in their category. */
     private val added = setOf("queue.mode", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
-        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating") + pebbleRows
+        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating") + pebbleRows + advancedRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
     private val screenCategories = mapOf(
@@ -82,6 +85,7 @@ class SettingsCategoriesTest {
         SettingsCategory.Battery to setOf("battery.saver", "battery.autoEngage"),
         SettingsCategory.Pebble to pebbleRows,
         SettingsCategory.Backup to setOf("backup.includeSecrets", "backup.export", "backup.import", "backup.diagnostics"),
+        SettingsCategory.Advanced to advancedRows,
     )
 
     private val settingRow = SemanticsMatcher("a settings row") { node ->

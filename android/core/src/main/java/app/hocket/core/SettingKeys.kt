@@ -58,6 +58,8 @@ object SettingKeys {
     const val PEBBLE_SHOW_PROGRESS_BAR = "pebble.showProgressBar"
     const val PEBBLE_SHOW_ALBUM_ART = "pebble.showAlbumArt"
     const val PEBBLE_AUTO_OPEN = "pebble.autoOpen"
+    /** Developer mode: detailed logging, and shaking the phone opens developer diagnostics. */
+    const val DEVELOPER_MODE = "developer.mode"
     const val SYNC_ENABLED = "sync.enabled"
     const val CONNECT_COORDINATOR_URL = "connect.coordinatorUrl"
     const val CONNECT_LAN_DISCOVERY = "connect.lanDiscovery"

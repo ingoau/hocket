@@ -2,6 +2,7 @@ package app.hocket
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -10,6 +11,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.core.Commands
+import app.hocket.diagnostics.DeveloperTriggers
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.theme.HocketTheme
 
@@ -37,6 +39,9 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /** Ctrl+Shift+D on a hardware keyboard opens developer diagnostics (while developer mode is on). */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = DeveloperTriggers.onKeyDown(event) || super.dispatchKeyEvent(event)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

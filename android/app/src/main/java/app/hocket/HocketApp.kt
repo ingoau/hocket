@@ -42,6 +42,8 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        // Uncaught exceptions go to the developer diagnostics log (and to disk) before the process dies.
+        app.hocket.core.DevLog.installCrashHandler()
         connection = PlaybackServiceConnection(this)
         scope.launch {
             // The client exists for a handle the service delivered that CoreHost still runs: the

@@ -166,6 +166,7 @@ class FakeCore(
         def(SettingKeys.LIBRARY_PINS, "[]", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.DEVELOPER_MODE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
