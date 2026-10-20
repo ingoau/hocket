@@ -121,6 +121,9 @@ pub mod keys {
     pub const PEBBLE_SHOW_PROGRESS_BAR: &str = "pebble.showProgressBar";
     pub const PEBBLE_SHOW_ALBUM_ART: &str = "pebble.showAlbumArt";
     pub const PEBBLE_AUTO_OPEN: &str = "pebble.autoOpen";
+    /// Developer mode: detailed (debug) logging into the capture buffer, and the shake or
+    /// keybind that opens the developer diagnostics page.
+    pub const DEVELOPER_MODE: &str = "developer.mode";
     pub const SYNC_ENABLED: &str = "sync.enabled";
     pub const CONNECT_COORDINATOR_URL: &str = "connect.coordinatorUrl";
     pub const CONNECT_LAN_DISCOVERY: &str = "connect.lanDiscovery";
@@ -666,6 +669,7 @@ pub static REGISTRY: &[SettingDef] = &[
         json!(true)
     }),
     def(PEBBLE_AUTO_OPEN, Local, SettingKind::Bool, || json!(false)),
+    def(DEVELOPER_MODE, Local, SettingKind::Bool, || json!(false)),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
     json_def(CONNECT_COORDINATOR_URL, Local, || Value::Null, url_valid),
     def(

@@ -20,6 +20,7 @@ pub mod autoplay;
 pub mod cache;
 pub mod connect;
 pub mod db;
+pub mod devlog;
 pub mod downloads;
 pub mod filters;
 pub mod jobs;
