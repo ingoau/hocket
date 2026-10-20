@@ -27,7 +27,8 @@ fun TransportState.isPositionTick(next: TransportState): Boolean =
 
 /**
  * How far a stamp may stray from where the last one extrapolates to and still be the same playback.
- * The core only reports a stamp that strays 250 ms or more, so past this it is a seek or a stall.
+ * The core only re-stamps steady playback when it strays (250 ms, or 50 ms for the local player's
+ * own position), so past this it is a seek or a stall.
  */
 const val TICK_TOLERANCE_MS = 300L
 

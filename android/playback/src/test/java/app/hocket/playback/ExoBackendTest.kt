@@ -108,6 +108,14 @@ class ExoBackendTest {
         assertEquals("b", backend.player.currentMediaItem?.mediaId)
     }
 
+    @Test
+    fun audioHeardReportsOnlyWhilePlaying() {
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        dispatched.clear()
+        backend.onAudioHeard()
+        assertTrue("a paused player has nothing to re-stamp", reports().none { it is BackendReport.Position })
+    }
+
     private fun sourceError(cause: Throwable, code: Int): PlaybackException =
         ExoPlaybackException.createForSource(java.io.IOException(cause), code)
 

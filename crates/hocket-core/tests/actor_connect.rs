@@ -161,8 +161,9 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
     .await;
     let frozen = a.transport().await.position.position_ms;
     assert!(frozen >= 9_000, "{frozen}");
-    // Five seconds with no audio. No ticks: the scripted backend knows
-    // nothing of the stall and would report its own (moving) position.
+    // Five seconds with no audio. The player's position holds meanwhile, as
+    // a real one does: its reports re-stamp the room when they stray.
+    a.backend.stall(5_000.0);
     a.clock.advance(5_000.0);
     assert_eq!(
         a.transport().await.position.position_ms,
@@ -228,6 +229,37 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
         t.position.position_ms >= 20_900,
         "{}",
         t.position.position_ms
+    );
+}
+
+/// Output latency: the owner's player holds its position until the sound
+/// is heard, ~200 ms after it reported playing over Bluetooth, so its
+/// reports lag the stamp. The correction re-stamps the room too, so a device
+/// following along (lyrics on another screen) is not left ahead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_output_latency_correction_reaches_the_room() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 10_000.0).await;
+    let before = a.transport().await.position.position_ms;
+    a.backend.stall(200.0);
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    let here = a.transport().await.position.position_ms;
+    let there = b.transport().await.position.position_ms;
+    assert!(
+        here < before + 1_900,
+        "a took its player's lag: {here} from {before}"
+    );
+    assert!(
+        here.abs_diff(there) <= 50,
+        "b follows the corrected position: a at {here}, b at {there}"
     );
 }
 

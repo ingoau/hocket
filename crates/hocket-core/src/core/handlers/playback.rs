@@ -1073,12 +1073,19 @@ impl Actor {
                 // output latency (the player reports playing before the sound
                 // is heard, ~200 ms later over Bluetooth). Lyrics follow this
                 // stamp, so this report is held to a much tighter tolerance
-                // than the one that keeps steady ticks quiet.
+                // than the one that keeps steady ticks quiet. Not the native
+                // engine's: its position steps by the device period and
+                // already starts when the sound is queued.
+                let tolerance = if self.cfg.audio == AudioMode::Native {
+                    crate::media_session::STAMP_TOLERANCE_MS
+                } else {
+                    crate::media_session::RESYNC_TOLERANCE_MS
+                };
                 let transport = self.transport_state();
-                self.emit_transport_state_within(
-                    transport,
-                    crate::media_session::RESYNC_TOLERANCE_MS,
-                );
+                if self.emit_transport_state_within(transport, tolerance) {
+                    // Devices following in the room run from the same stamp.
+                    self.stamp();
+                }
             }
             BackendReport::Ended { key } => {
                 if !current(&key, self) {

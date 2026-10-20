@@ -17,8 +17,9 @@ function sameTransportUi(a: TransportState, b: TransportState): boolean {
 
 /**
  * Position reports: what `prev` extrapolates to (frozen while paused) within [TICK_TOLERANCE_MS],
- * at most 2.5 s on. The core itself only reports a stamp that strays 250 ms or more, so anything
- * past the tolerance (a seek, paused or not) is a change every window must see.
+ * at most 2.5 s on. The core only re-stamps steady playback when it strays (250 ms, or 50 ms for
+ * the local player's own position), so anything past the tolerance (a seek, paused or not) is a
+ * change every window must see.
  */
 export function isPositionTick(prev: TransportState, next: TransportState): boolean {
   if (!sameTransportUi(prev, next)) return false;

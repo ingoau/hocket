@@ -206,6 +206,18 @@ impl ScriptedBackend {
         self.state.lock().playing
     }
 
+    /// Hold the current item for the next `ms` of virtual time, as a real
+    /// player does while it rebuffers (its reports stop moving).
+    pub fn stall(&self, ms: f64) {
+        let mut st = self.state.lock();
+        let now = self.clock.now_ms();
+        let playing = st.playing;
+        if let Some(c) = st.current.as_mut() {
+            c.rebase(now, playing);
+            c.anchor_ms += ms;
+        }
+    }
+
     pub fn volume(&self) -> f64 {
         self.state.lock().volume
     }
