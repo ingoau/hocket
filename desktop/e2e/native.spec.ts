@@ -157,7 +157,7 @@ test.describe("real core against a fake Navidrome", () => {
       const bundle = readFileSync(target, "utf8");
       expect(bundle.match(/hocket: log capture started/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
       expect(bundle).toContain("e2e-native-renderer-marker");
-      expect(bundle).toMatch(/DEBUG hocket_core/);
+      expect(bundle).toContain("hocket: developer mode on: detailed logging");
       expect(bundle).toContain("Hocket core ");
     } finally {
       await app.close();
