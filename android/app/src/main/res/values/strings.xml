@@ -358,7 +358,7 @@
     <string name="lyrics_offset_reset_a11y">Reset lyrics timing</string>
     <string name="lyrics_offset_later_a11y">Show lyrics 0.1 seconds later</string>
     <string name="lyrics_fetch">Look up lyrics</string>
-    <string name="lyrics_instrumental">♪</string>
+    <string name="lyrics_instrumental">Instrumental</string>
     <string name="lyrics_share">Share lyrics</string>
     <string name="lyrics_share_close">Close</string>
     <string name="lyrics_share_lines">Lines (up to %1$d)</string>

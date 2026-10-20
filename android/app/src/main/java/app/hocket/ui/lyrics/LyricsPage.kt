@@ -1,15 +1,26 @@
 package app.hocket.ui.lyrics
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,19 +33,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -79,21 +92,30 @@ import app.hocket.ui.components.EmptyState
 import app.hocket.ui.icons.HocketIcons
 
 /**
- * Native lyrics renderer. Syllable tier: continuous per-syllable gradient sweep from each line's own
- * cue timings, driven by the extrapolated position (`PositionStamp` + clock, `CoreClient.positionNow`)
- * at frame rate, never by event arrival; line tier: per-line highlight (syllables are never
- * fabricated); unsynced: scrollable text. Lines that overlap (a background vocal or duet voice over
- * the main line) are lit and swept together; the focus (scale, scroll) stays on the main voice.
- * Depth-of-field blur on inactive lines, duet sides, background sub-voices smaller and dimmer, tap
- * to seek, offset control, fluid background. Capped at 30 fps (battery saver and reduced motion
- * slower still) and stopped when not visible.
+ * Native lyrics renderer, after Apple Music (by way of AMLL and huddlefm's native renderer, see
+ * [LyricsMotion]). Syllable tier: each syllable lights from its own cue timings with a soft leading
+ * edge, sung words rise a little and short held words swell and glow letter by letter
+ * ([SyllableLineText]); all driven by the extrapolated position (`PositionStamp` + clock,
+ * `CoreClient.positionNow`) at frame rate, never by event arrival. Line tier: the whole line lights
+ * at once (syllables are never fabricated); unsynced: scrollable text. Lines that overlap (a
+ * background vocal or duet voice over the main line) are lit and swept together; the focus (scale,
+ * scroll) stays on the main voice, and background vocals slide out under their line while it is
+ * sung and fold away after. The current line grows and lights on springs; the list scrolls to it a
+ * moment early with the lines rippling into place one after another ([StaggeredScroll]); lines
+ * further away soften (depth of field); long gaps breathe three dots. Duet voices sit on their own
+ * sides. Tap to seek, offset control, fluid background. Position sampled every display frame up to 60 fps (30 fps on
+ * battery saver, slower still with reduced motion) and stopped when not visible; the scroll and the springs run only while
+ * something moves; battery saver drops the depth-of-field blur and the fluid background.
  *
  * Accessibility: the page is one labelled container ("Lyrics"); each line is one item with its text,
  * a "current line" state on the line being sung and a "background vocal" state on sub-voice lines,
  * "Play from this line" as its click and "Share lyrics" as its long-click. Nothing is a live region:
- * lines and syllables are never announced as they pass. With reduced motion (animations removed) the sweep becomes a static
- * highlight of the lit line, blur and line scaling are off, the list jumps instead of scrolling
- * smoothly, the fluid background stands still and the position is sampled 4 times a second.
+ * lines and syllables are never announced as they pass; the instrumental dots are one labelled
+ * item. With a screen reader on, background vocals stay in place (it reads every line). With reduced
+ * motion (animations removed) the sweep becomes a static highlight of the lit line, blur, line
+ * scaling, rising and swelling words and the folding background vocals are off, the list jumps
+ * instead of scrolling, the fluid background stands still and the position is sampled 4 times a
+ * second.
  *
  * Holding a line opens the share screen ([LyricsShareDialog]) with that line on a card.
  *
@@ -113,18 +135,27 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     val trackId = current.trackId
     val lyrics = current.lyrics
 
-    // Position at 30 fps (battery and plugged); 4 per second with reduced motion (enough to
+    // Position every display frame up to 60 fps, so the sweep and the rising words move as smoothly
+    // as the springs around them; 30 fps on battery saver; 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible, and no frames at all
     // while paused (the position is frozen until a seek, play or another track).
+    // A fresh stamp from the player can land a little behind the extrapolated position; the
+    // lyrics then run at half speed until it catches up (PlayheadSmoother) instead of stepping back.
     var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(visible, reducedMotion, trackId) {
+    LaunchedEffect(visible, reducedMotion, batterySaver, trackId) {
         if (!visible) return@LaunchedEffect
-        val interval = if (reducedMotion) 250_000_000L else 33_000_000L
+        // At most about 60 a second: on a 90 or 120 Hz screen every other frame or so (the springs
+        // still run at the screen's rate).
+        val interval = if (reducedMotion) 250_000_000L else if (batterySaver) 33_000_000L else 15_000_000L
         var last = 0L
+        val smoother = PlayheadSmoother()
         while (true) {
             val mark = client.positionMark()
             withFrameNanos { now ->
-                if (!mark.moving || interval == 0L || now - last >= interval) { positionMs = client.positionNow(); last = now }
+                if (!mark.moving || interval == 0L || now - last >= interval) {
+                    positionMs = smoother.next(client.positionNow(), mark.moving && !reducedMotion)
+                    last = now
+                }
             }
             client.awaitPositionMayMove(mark)
         }
@@ -147,8 +178,8 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         val doc = lyrics ?: return@Box
         var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
-            LyricsList(doc, positionMs, reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier),
-                padding = if (embedded) PaddingValues(top = 48.dp, bottom = 160.dp, start = 24.dp, end = 24.dp) else PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp))
+            // A new song starts from a fresh list: no scroll, shift or line state carried over.
+            key(doc.trackId) { LyricsList(doc, positionMs, reducedMotion, lowPower = batterySaver, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier)) }
             // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
             if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
         }
@@ -156,6 +187,37 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         share?.let { request ->
             if (track != null && track.id == doc.trackId && request.line in doc.lines.indices) LyricsShareDialog(doc, track, request, onDismiss = { share = null })
         }
+    }
+}
+
+/**
+ * The lyrics' playhead, kept from stepping back. When the position is re-synced to the player and
+ * lands up to [MAX_HOLD_MS] behind the last one, the playhead holds where it was and then moves on
+ * at half the real position's pace until the two meet (the sweep slows a touch instead of jumping
+ * back). It never runs ahead on its own: while the real position stands still, so does it. A
+ * bigger jump either way (a seek), or a position that is not [moving], is taken as it is.
+ */
+internal class PlayheadSmoother {
+    private var lastRaw = Long.MIN_VALUE
+    private var hold = 0L
+
+    fun next(rawMs: Long, moving: Boolean): Long {
+        val step = rawMs - lastRaw
+        hold = when {
+            !moving || lastRaw == Long.MIN_VALUE -> 0L
+            step < 0 && -step <= MAX_HOLD_MS -> (hold - step).coerceAtMost(MAX_HOLD_MS.toLong())
+            step < 0 || step > MAX_STEP_MS -> 0L
+            else -> (hold - step / 2).coerceAtLeast(0L)
+        }
+        lastRaw = rawMs
+        return rawMs + hold
+    }
+
+    companion object {
+        /** Re-syncs further back than this are taken as they are (a seek, a skip back). */
+        const val MAX_HOLD_MS = 300
+        /** A step forward bigger than this is a seek: whatever was held is dropped. */
+        const val MAX_STEP_MS = 1_000L
     }
 }
 
@@ -256,7 +318,7 @@ object LyricsSemantics {
     val Lit = SemanticsPropertyKey<Boolean>("LyricLit")
     /** The line the view scrolls to and scales up (the main voice, even when a background line is primary). */
     val Focused = SemanticsPropertyKey<Boolean>("LyricFocused")
-    /** The depth-of-field blur radius the line is drawn with, in dp (0 with reduced motion). */
+    /** The depth-of-field blur radius the line is easing to, in dp (0 with reduced motion and on battery saver). */
     val Blur = SemanticsPropertyKey<Float>("LyricBlur")
     var SemanticsPropertyReceiver.lyricSweep by Sweep
     var SemanticsPropertyReceiver.lyricVoice by Voice
@@ -278,51 +340,208 @@ internal fun focusLine(doc: Lyrics, cursor: LyricsCursor): Int {
     return primary
 }
 
-@Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier, padding: PaddingValues = PaddingValues(top = 200.dp, bottom = 320.dp, start = 24.dp, end = 24.dp)) {
-    val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
-    val focus = remember(doc, cursor) { focusLine(doc, cursor) }
-    val listState = rememberLazyListState()
-    var userScrolling by remember { mutableStateOf(false) }
-    LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) userScrolling = true }
-    LaunchedEffect(focus) {
-        if (focus >= 0 && !listState.isScrollInProgress) {
-            if (reducedMotion) listState.scrollToItem(focus, scrollOffset = -220) else listState.animateScrollToItem(focus, scrollOffset = -220)
-            userScrolling = false
-        }
+
+/** The breathing dots in a long gap: placed before line [before], from [startMs] to [endMs] (offset-adjusted). */
+@androidx.compose.runtime.Immutable
+internal data class Interlude(val before: Int, val startMs: Long, val endMs: Long)
+
+/**
+ * Where the breathing dots go, if anywhere: in the cursor's instrumental gap (from its grace period
+ * after the last sung line to the next line), or before a first line that starts
+ * [LyricsMotion.INTRO_GAP_MS] or more in.
+ */
+internal fun interlude(doc: Lyrics, cursor: LyricsCursor): Interlude? {
+    if (doc.tier == LyricsTier.Unsynced) return null
+    val position = cursor.effectiveMs
+    var next = -1
+    var nextStart = Long.MAX_VALUE
+    var sungUntil = Long.MIN_VALUE
+    doc.lines.forEachIndexed { i, line ->
+        val start = line.startMs?.toLong() ?: return@forEachIndexed
+        if (start <= position) sungUntil = maxOf(sungUntil, LyricsCursor.lineEnd(doc.lines, i))
+        else if (start < nextStart) { nextStart = start; next = i }
     }
-    val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = padding) {
-        itemsIndexed(doc.lines, key = { i, _ -> i }) { i, line ->
-            // Lit: every line being sung right now (main, duet, background), and the focused main
-            // line held after it ends until the gap state. Each lit line sweeps its own syllables
-            // from the same position; a finished background line goes dim with its main line.
-            val lit = i in cursor.activeLines || (i == focus && !cursor.inGap)
-            val focused = i == focus
-            val distance = if (focus < 0) 2 else kotlin.math.abs(i - focus)
-            val side = line.agent?.let { sides[it] } ?: 0
-            // Live cursor only on the singing/focused rows. Past rows keep a stable "held at 1"
-            // sweep; future rows stay at 0 — neither recomposes when the playhead moves.
-            val past = !lit && !focused && (line.startMs?.toLong() ?: Long.MAX_VALUE) <= cursor.effectiveMs
-            val lineCursor = if (lit || focused) cursor else LyricsCursor.EMPTY
-            // The core compares `position - offset` against the line start, so seeking to a line's
-            // start means `start + offset` in audio time.
-            LyricLineView(i, line, doc.tier, lit, focused, distance, side, lineCursor, past, reducedMotion, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
-        }
-        if (cursor.inGap) item { Text(stringResource(R.string.lyrics_instrumental), color = LyricsContrast.active, modifier = Modifier.padding(8.dp)) }
-    }
+    if (next < 0) return null
+    if (sungUntil == Long.MIN_VALUE) return if (nextStart >= LyricsMotion.INTRO_GAP_MS) Interlude(next, 0L, nextStart) else null
+    if (!cursor.inGap) return null
+    return Interlude(next, sungUntil + LyricsCursor.GAP_GRACE_MS, nextStart)
+}
+
+/** Depth of field: lines two or more from the focus soften with distance, as AMLL's do toward the edges. */
+internal fun lineBlur(distance: Int): Float = when {
+    distance <= 1 -> 0f
+    distance == 2 -> 0.8f
+    distance == 3 -> 1.6f
+    else -> 2.4f
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, distance: Int, side: Int, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
-    val animatedScale by animateFloatAsState(if (lit) 1f else 0.92f, label = "lineScale")
-    val scale = if (reducedMotion) 1f else animatedScale
-    val blur = if (reducedMotion || lit || tier == LyricsTier.Unsynced || distance > 2) 0.dp else (distance * 1.2f).dp
-    // Inactive lines keep a contrast floor (LyricsContrast); depth comes from the blur, not a fade.
-    val alpha = 1f
-    // Background sub-voices: smaller, lighter weight and dimmer than the main voice.
+private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lowPower: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier) {
+    val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
+    val focus = remember(doc, cursor) { focusLine(doc, cursor) }
+    // The view moves to a line a moment before it is sung.
+    val feel = LocalLyricsFeel.current
+    val ahead = remember(doc, positionMs, feel) { focusLine(doc, LyricsCursor.at(doc, positionMs + feel.leadMs)) }
+    val gap = remember(doc, cursor) { interlude(doc, cursor) }
+    val dotsAt = gap?.before ?: -1
+    fun lazyIndex(line: Int) = if (dotsAt in 0..line) line + 1 else line
+    val target = when {
+        gap != null && cursor.effectiveMs + feel.leadMs < gap.endMs -> dotsAt
+        ahead >= 0 -> lazyIndex(ahead)
+        else -> lazyIndex(doc.lines.indexOfFirst { it.startMs != null }.coerceAtLeast(0))
+    }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val scroller = remember(listState, feel) { StaggeredScroll(listState, scope, feel) }
+    val dragged by listState.interactionSource.collectIsDraggedAsState()
+    // The user's hold on the list: a drag, and the fling (or wheel, key or accessibility scroll)
+    // after it; the scroller's own moves don't count (they take no scroll lock).
+    val held by rememberUpdatedState(dragged || listState.isScrollInProgress)
+    // The user's scroll wins: whatever was moving stops where it is, and the list comes back with
+    // the next line.
+    LaunchedEffect(dragged) { if (dragged) scroller.stop() }
+    LaunchedEffect(target) {
+        if (target < 0 || held) return@LaunchedEffect
+        val previous = scroller.target
+        val visible = listState.layoutInfo.visibleItemsInfo.any { it.index == target }
+        // A seek, the first lines, or coming back from far away: jump. With reduced motion: always.
+        if (reducedMotion || previous < 0 || !visible || kotlin.math.abs(target - previous) > 3) scroller.snap(target)
+        else scroller.follow(target) { held }
+    }
+    val sides = remember(doc) { doc.agents.associate { it.id to it.side.toInt() } }
+    // Duets leave each side's lines a share of the width toward the other voice, as Apple Music does.
+    val duet = remember(doc) { doc.lines.any { l -> l.agent?.let { sides[it] } == 1 } }
+    // The main line each background line is sung over (the adapter puts it right after).
+    val mains = remember(doc) { IntArray(doc.lines.size) { i -> var j = i; while (j >= 0 && doc.lines[j].background) j--; j } }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // Background vocals fold away under their line while it is not sung (Apple Music's), except for
+    // a screen reader, which reads every line, or with reduced motion (nothing slides).
+    val manager = remember(context) { context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) }
+    // Seeded now, not after the first frame: a screen reader user's list never starts folded.
+    var touchExploration by remember(manager) { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        val listener = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { touchExploration = it }
+        manager?.addTouchExplorationStateChangeListener(listener)
+        onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    val collapse = !reducedMotion && !touchExploration
+    val instrumental = stringResource(R.string.lyrics_instrumental)
+
+    @Composable
+    fun LineRow(i: Int, line: LyricLine) {
+        // Lit: every line being sung right now (main, duet, background), and the focused main
+        // line held after it ends until the gap state. Each lit line sweeps its own syllables
+        // from the same position; a finished background line goes dim with its main line.
+        val lit = i in cursor.activeLines || (i == focus && !cursor.inGap)
+        val focused = i == focus
+        val distance = if (focus < 0) 2 else kotlin.math.abs(i - focus)
+        val side = line.agent?.let { sides[it] } ?: 0
+        // Live cursor only on the singing/focused rows. Past rows keep a stable "held at 1"
+        // sweep; future rows stay at 0 — neither recomposes when the playhead moves.
+        val past = !lit && !focused && (line.startMs?.toLong() ?: Long.MAX_VALUE) <= cursor.effectiveMs
+        val lineCursor = if (lit || focused) cursor else LyricsCursor.EMPTY
+        val main = mains[i]
+        val revealed = !line.background || !collapse || lit || (main >= 0 && (main in cursor.activeLines || (main == focus && !cursor.inGap)))
+        val blur = if (reducedMotion || lowPower || lit || doc.tier == LyricsTier.Unsynced) 0f else lineBlur(distance)
+        val lazy = lazyIndex(i)
+        // The core compares `position - offset` against the line start, so seeking to a line's
+        // start means `start + offset` in audio time.
+        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onShift = { scroller.shift(lazy, it) }, shifts = remember(scroller, lazy) { LineShifts(scroller, lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
+    }
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        // Room above and below for the first and last lines to reach the focus line.
+        val padding = PaddingValues(start = 24.dp, end = 24.dp, top = maxHeight * LyricsMotion.FOCUS_POSITION, bottom = maxHeight * (1 - LyricsMotion.FOCUS_POSITION))
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("lyrics.list"), contentPadding = padding) {
+            if (gap == null) {
+                itemsIndexed(doc.lines, key = { i, _ -> i }) { i, line -> LineRow(i, line) }
+            } else {
+                items(dotsAt, key = { it }) { i -> LineRow(i, doc.lines[i]) }
+                item(key = "interlude") {
+                    val side = doc.lines[dotsAt].agent?.let { sides[it] } ?: 0
+                    InterludeDots(gap, cursor.effectiveMs, side, reducedMotion, instrumental, lag = { scroller.lag(dotsAt) }, modifier = Modifier.animateItem())
+                }
+                items(doc.lines.size - dotsAt, key = { dotsAt + it }) { k -> LineRow(dotsAt + k, doc.lines[dotsAt + k]) }
+            }
+        }
+    }
+}
+
+/** A background vocal's space closing after its fade, as [StaggeredScroll.beginShift] runs it. */
+@Stable
+internal class LineShifts(private val scroller: StaggeredScroll, private val index: Int) {
+    fun begin(dy: Float) = scroller.beginShift(index, dy)
+    fun apply(shift: StaggeredScroll.Kick?) = scroller.applyShift(shift)
+    fun cancel(shift: StaggeredScroll.Kick?) = scroller.cancelShift(shift)
+}
+
+private val dotEnter = androidx.compose.animation.core.CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)
+private val dotLight = androidx.compose.animation.core.CubicBezierEasing(0.56f, 0.01f, 0.45f, 1f)
+
+/**
+ * AMLL's interlude: three dots that pop in, breathe, light one by one through the gap, and swell
+ * then vanish just before the next line. With reduced motion they only light up, in place.
+ */
+@Composable
+private fun InterludeDots(gap: Interlude, timeMs: Long, side: Int, reducedMotion: Boolean, label: String, lag: () -> Float, modifier: Modifier = Modifier) {
+    Box(
+        modifier.fillMaxWidth().height(44.dp)
+            .graphicsLayer { translationY = lag() }
+            .semantics { contentDescription = label }
+            .testTag("lyrics.interlude")
+            .drawBehind {
+                val total = (gap.endMs - gap.startMs).toFloat()
+                val elapsed = (timeMs - gap.startMs).toFloat()
+                if (total <= 0f || elapsed >= total) return@drawBehind
+                val e = elapsed.coerceAtLeast(0f)
+                val exit = minOf(600f, total * 0.25f)
+                val enter = minOf(500f, total * 0.2f)
+                val body = maxOf(1f, total - exit)
+                var scale = 1f
+                var alpha = 1f
+                if (!reducedMotion) {
+                    scale = dotEnter.transform((e / enter).coerceIn(0f, 1f))
+                    alpha = (e / (enter * 0.6f)).coerceIn(0f, 1f)
+                    scale *= 1f + 0.07f * kotlin.math.sin(e / 2_500f * kotlin.math.PI.toFloat() * 2f)
+                    if (e > body) {
+                        val x = (e - body) / exit
+                        if (x < 0.65f) scale *= 1f + 0.15f * (1f - (1f - x / 0.65f) * (1f - x / 0.65f))
+                        else { val y = (x - 0.65f) / 0.35f; scale *= 1.15f * (1f - y * y); alpha *= 1f - y }
+                    }
+                }
+                if (alpha <= 0f || scale <= 0f) return@drawBehind
+                val progress = (e / body).coerceIn(0f, 1f)
+                val dot = 10.dp.toPx()
+                val space = 7.dp.toPx()
+                val width = dot * 3 + space * 2
+                // The voice's side, mirrored in a right-to-left layout as its lines are.
+                val atEnd = (side == 1) != (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl)
+                val left = if (atEnd) size.width - width - 2.dp.toPx() else 2.dp.toPx()
+                val pivotX = if (atEnd) size.width else left
+                val cy = size.height / 2
+                withTransform({ scale(scale, scale, Offset(pivotX, cy)) }) {
+                    for (k in 0 until 3) {
+                        val light = dotLight.transform((progress * 3 - k).coerceIn(0f, 1f))
+                        drawCircle(Color.White.copy(alpha = (alpha * (0.25f + 0.7f * light)).coerceIn(0f, 1f)), dot / 2, Offset(left + dot / 2 + k * (dot + space), cy))
+                    }
+                }
+            },
+    )
+}
+
+@Composable
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onShift: (Float) -> Unit, shifts: LineShifts, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
+    // Read while drawing only: the line grows, lights and (background vocals) slides out without
+    // recomposing.
+    val feel = LocalLyricsFeel.current
+    val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineScale")
+    val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(feel.brightenMs), label = "lineBright")
+    val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(feel.blurMs), label = "lineBlur")
+    val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineShown")
+    // Background sub-voices: smaller and lighter than the main voice.
     val baseSize = if (line.background) 18.sp else 28.sp
-    val weight = if (line.background) FontWeight.Medium else FontWeight.Bold
+    val weight = if (line.background) FontWeight.SemiBold else FontWeight.Bold
+    val tone = if (line.background) LyricTone.Background else LyricTone.Main
     val currentState = stringResource(R.string.lyrics_state_current)
     val backgroundState = stringResource(R.string.lyrics_state_background)
     val seekHere = stringResource(R.string.lyrics_seek_here)
@@ -332,8 +551,9 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     // Where the line is laid out and how it is drawn, for its text to fly into the share card and
     // back (not state: read on hold and on close only).
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val lineStyle = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.25, textAlign = if (side == 1) TextAlign.End else TextAlign.Start)
-    val lineColor = if (lit) LyricsContrast.active else if (line.background) LyricsContrast.secondary else LyricsContrast.inactive
+    // Balanced rows (no lone word on the last one), as Apple Music wraps.
+    val lineStyle = TextStyle(fontSize = baseSize, fontWeight = weight, lineHeight = baseSize * 1.2, textAlign = if (side == 1) TextAlign.End else TextAlign.Start, lineBreak = LineBreak.Heading)
+    val lineColor = if (lit) LyricsContrast.active else tone.idle
     val currentLineStyle by rememberUpdatedState(lineStyle)
     val currentLineColor by rememberUpdatedState(lineColor)
     val share: (() -> Unit)? = if (line.text.isBlank()) null else ({
@@ -354,77 +574,118 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
             else -> List(line.syllables.size) { 0f }
         }
     }
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f) }
-            // Inside the scale: the bounds as drawn, the size as laid out.
-            .onGloballyPositioned { coords[0] = it }
-            // Unbounded: the default edge treatment clips the blurred glyphs to the line's box, so
-            // the halo of text near the sides was cut off (#68).
-            .blur(blur, BlurredEdgeTreatment.Unbounded)
-            // Hidden while it is on the share card (its text flies there and back).
-            .alpha(if (hidden) 0f else alpha)
-            // Tap seeks, hold shares; unsynced lines have nowhere to seek to, but can still be held.
-            .then(
-                when {
-                    line.startMs != null -> Modifier.combinedClickable(onClickLabel = seekHere, onClick = onClick, onLongClickLabel = shareLabel, onLongClick = share)
-                    // combinedClickable gives the long-press haptic itself; here it is ours to give.
-                    share != null -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); currentShare?.invoke() }) }
-                    else -> Modifier
-                },
-            )
-            .testTag("lyrics.line.$index")
-            // One item per line: its text (and translation), its state; no live region.
-            .clearAndSetSemantics {
-                contentDescription = a11yText
-                if (a11yState.isNotEmpty()) stateDescription = a11yState
-                if (line.startMs != null) onClick(seekHere) { onClick(); true }
-                if (share != null) onLongClick(shareLabel) { share(); true }
-                this[LyricsSemantics.Sweep] = sweep
-                this[LyricsSemantics.Voice] = if (line.background) "bg" else "main"
-                this[LyricsSemantics.Lit] = lit
-                this[LyricsSemantics.Focused] = focused
-                this[LyricsSemantics.Blur] = blur.value
-            },
-        horizontalAlignment = if (side == 1) Alignment.End else Alignment.Start,
-    ) {
-        val activeColor = LyricsContrast.active
-        // Background vocals are smaller (not "large text"), so they keep the 4.5:1 secondary colour.
-        val inactiveColor = if (line.background) LyricsContrast.secondary else LyricsContrast.inactive
-        val style = lineStyle
-        when {
-            tier == LyricsTier.Syllable && line.syllables.isNotEmpty() -> {
-                // Wrapped by word: a word's syllables (joined ones) stay together on one line.
-                val words = remember(line) {
-                    buildList<List<Int>> {
-                        var word = mutableListOf<Int>()
-                        line.syllables.forEachIndexed { si, syl -> word += si; if (!syl.joined) { add(word); word = mutableListOf() } }
-                        if (word.isNotEmpty()) add(word)
-                    }
-                }
-                FlowRow(horizontalArrangement = if (side == 1) Arrangement.End else Arrangement.Start) {
-                    for (word in words) Row {
-                        for (si in word) {
-                            val s = line.syllables[si]
-                            val progress = sweep.getOrElse(si) { 0f }
-                            val brush = when (progress) {
-                                0f -> Brush.horizontalGradient(listOf(inactiveColor, inactiveColor))
-                                1f -> Brush.horizontalGradient(listOf(activeColor, activeColor))
-                                else -> Brush.horizontalGradient(0f to activeColor, (progress - 0.12f).coerceAtLeast(0f) to activeColor, (progress + 0.12f).coerceAtMost(1f) to inactiveColor, 1f to inactiveColor)
-                            }
-                            Text(s.text + if (s.joined) "" else " ", style = style.copy(brush = brush))
-                        }
-                    }
-                }
-            }
-            tier == LyricsTier.Line && lit && reducedMotion -> Text(line.text, style = style, color = activeColor)
-            tier == LyricsTier.Line && lit -> {
-                // Per-line highlight: a soft sweep across the line by lineProgress; no syllables invented.
-                val p = if (index == cursor.lineIndex) cursor.lineProgress else 1f
-                Text(line.text, style = style.copy(brush = Brush.horizontalGradient(0f to activeColor, (p - 0.15f).coerceAtLeast(0f) to activeColor, (p + 0.15f).coerceAtMost(1f) to inactiveColor, 1f to inactiveColor)))
-            }
-            else -> Text(line.text, style = style, color = if (lit) activeColor else inactiveColor)
+    // The time the words rise and swell by, held once the line goes by so they settle as it dims.
+    val heldTime = remember { LongArray(1) }
+    if (lit || focused) heldTime[0] = cursor.effectiveMs
+    val origin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f)
+    // What the drawn text reaches above its row as it rises (LyricText's margin, a quarter em).
+    val riseRoom = with(androidx.compose.ui.platform.LocalDensity.current) { (baseSize * 0.3f).toDp() }
+    // A background vocal's space: open while it shows. It opens at once (the lines it moves are
+    // held where they were and glide to their places, see StaggeredScroll.shift); it closes once
+    // the vocal has faded, the lines gliding over its space from the moment the fade begins. Both
+    // in a frame callback with the matching shift, so a jump and its hold land in the same frame.
+    val open = remember { mutableStateOf(revealed) }
+    val height = remember { IntArray(1) }
+    if (line.background) LaunchedEffect(revealed) {
+        if (open.value == revealed) return@LaunchedEffect
+        if (reducedMotion) { open.value = revealed; return@LaunchedEffect }
+        if (revealed) {
+            withFrameNanos { onShift(height[0].toFloat()); open.value = true }
+            return@LaunchedEffect
         }
-        line.translation?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = LyricsContrast.secondary) }
+        // Begun inside the try: cancelled right after the frame that began it, it is still
+        // taken back (a begun shift left pending would hold the lines after it forever).
+        var closing: StaggeredScroll.Kick? = null
+        try {
+            withFrameNanos { closing = shifts.begin(-height[0].toFloat()) }
+            androidx.compose.runtime.snapshotFlow { shown.value <= 0.01f }.first { it }
+            withFrameNanos { shifts.apply(closing); open.value = false }
+        } finally {
+            if (open.value) shifts.cancel(closing)
+        }
+    }
+    Box(
+        Modifier.fillMaxWidth().then(
+            if (!line.background) Modifier
+            else Modifier.layout { measurable, constraints ->
+                // The space opens at once and closes once the vocal has faded (see the reveal
+                // effect above); the vocal itself slides and fades in the line's own layer.
+                val placeable = measurable.measure(constraints)
+                height[0] = placeable.height
+                // Folded away: not placed at all, so it takes no taps over the next line and
+                // no accessibility service finds it there.
+                layout(placeable.width, if (open.value) placeable.height else 0) { if (open.value) placeable.place(0, 0) }
+            },
+        ),
+        contentAlignment = if (side == 1) Alignment.TopEnd else Alignment.TopStart,
+    ) {
+        Column(
+            Modifier.fillMaxWidth(if (duet) 0.85f else 1f)
+                // Outside the layer and its padding: the whole row is the touch target.
+                // Tap seeks, hold shares; unsynced lines have nowhere to seek to, but can still be held.
+                .then(
+                    when {
+                        line.startMs != null -> Modifier.combinedClickable(onClickLabel = seekHere, onClick = onClick, onLongClickLabel = shareLabel, onLongClick = share)
+                        // combinedClickable gives the long-press haptic itself; here it is ours to give.
+                        share != null -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); currentShare?.invoke() }) }
+                        else -> Modifier
+                    },
+                )
+                .testTag("lyrics.line.$index")
+                // One item per line: its text (and translation), its state; no live region.
+                .clearAndSetSemantics {
+                    contentDescription = a11yText
+                    if (a11yState.isNotEmpty()) stateDescription = a11yState
+                    if (line.startMs != null) onClick(seekHere) { onClick(); true }
+                    if (share != null) onLongClick(shareLabel) { share(); true }
+                    this[LyricsSemantics.Sweep] = sweep
+                    this[LyricsSemantics.Voice] = if (line.background) "bg" else "main"
+                    this[LyricsSemantics.Lit] = lit
+                    this[LyricsSemantics.Focused] = focused
+                    this[LyricsSemantics.Blur] = blur.value
+                }
+                // Offscreen: the line is drawn once at its own size and the layer scaled and moved, so
+                // it grows and glides smoothly (text drawn scaled steps from pixel to pixel).
+                .graphicsLayer {
+                    // A background vocal also slides out from behind its line and grows from 80%
+                    // (AMLL's reveal), or shrinks back and fades: one layer with the line's own
+                    // motion (a placement layer around this one lost the line while it faded).
+                    val reveal = if (line.background) shown.value.coerceIn(0f, 1f) else 1f
+                    scaleX = scale.value * (0.8f + 0.2f * reveal); scaleY = scaleX
+                    translationY = lag() - (1f - reveal) * 0.8f * height[0]
+                    alpha = reveal
+                    transformOrigin = if (line.background) androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0f) else origin
+                    // A blurred line (or one still easing out of its blur) is a layer already, the
+                    // blur's: no second one around it.
+                    compositingStrategy = if (reducedMotion || blur > 0.dp || blurRadius.value > 0f) androidx.compose.ui.graphics.CompositingStrategy.Auto else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                }
+                // Inside the moving layer (a blur outside it would cut off a line moved past its box).
+                // Eased from one radius to the next as the focus moves on, not stepped, and set on
+                // the layer, so it changes without recomposing. Decal edges (unbounded, no clip):
+                // the default edge treatment clips the blurred glyphs to the line's box, so the halo
+                // of text near the sides was cut off (#68); for the same reason a blurred line has
+                // no offscreen layer of its own around the blur.
+                .graphicsLayer {
+                    val r = blurRadius.value.dp.toPx()
+                    renderEffect = if (r > 0.1f) androidx.compose.ui.graphics.BlurEffect(r, r, androidx.compose.ui.graphics.TileMode.Decal) else null
+                    clip = false
+                }
+                // Inside the layer: room for the words to rise and glow, at least 0.3 em (so more with
+                // larger fonts, and a little more than 4 dp for background vocals already).
+                .padding(vertical = maxOf(if (line.background) 4.dp else 10.dp, riseRoom))
+                // Inside the scale: the bounds as drawn, the size as laid out.
+                .onGloballyPositioned { coords[0] = it }
+                // Hidden while it is on the share card (its text flies there and back).
+                .alpha(if (hidden) 0f else 1f),
+            horizontalAlignment = if (side == 1) Alignment.End else Alignment.Start,
+        ) {
+            if (tier == LyricsTier.Syllable && line.syllables.isNotEmpty()) {
+                SyllableLineText(line, lineStyle, tone, sweep, heldTime[0], bright = { bright.value }, motion = !reducedMotion, background = line.background, near = near, modifier = Modifier.fillMaxWidth())
+            } else {
+                // Line-timed (and unsynced): the whole line lights at once; no syllables invented.
+                BasicText(line.text, style = lineStyle, color = { androidx.compose.ui.graphics.lerp(tone.idle, tone.sung, bright.value) }, modifier = Modifier.fillMaxWidth())
+            }
+            line.translation?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = LyricsContrast.secondary, modifier = Modifier.padding(top = 4.dp)) }
+        }
     }
 }

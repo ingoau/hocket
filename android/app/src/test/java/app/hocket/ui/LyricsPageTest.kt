@@ -3,7 +3,6 @@ package app.hocket.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.api.Event
@@ -58,11 +57,11 @@ class LyricsPageTest {
     private fun focused(line: Int): Boolean = compose.onNodeWithTag("lyrics.line.$line").fetchSemanticsNode().config[LyricsSemantics.Focused]
     private fun voice(line: Int): String = compose.onNodeWithTag("lyrics.line.$line").fetchSemanticsNode().config[LyricsSemantics.Voice]
 
-    /** Moves the clock (no core event) and lets the 30 fps frame loop pick the new position up. */
+    /** Moves the clock (no core event) and lets the frame loop pick the new position up. */
     private fun at(positionMs: Long) {
         clock = 1_000_000.0 + positionMs
-        // 8 × 16 ms frames: the page samples every 33 ms, so one advanceTimeBy(64) is not enough
-        // once the loop is no longer every display frame.
+        // 8 × 16 ms frames: the page samples every frame (every 33 ms on battery saver), so the
+        // springs and the scroll have frames to run too.
         repeat(8) { compose.mainClock.advanceTimeByFrame() }
         compose.waitForIdle()
     }
@@ -226,10 +225,12 @@ class LyricsPageTest {
         at(end + 500)
         assertSweep(doc.lines[line].syllables.map { 1f }, sweep(line))
         assertTrue(lit(line))
-        assertFalse(runCatching { compose.onNodeWithText("♪").assertIsDisplayed() }.isSuccess)
-        // Deep in the gap: the marker shows, the line dims, the sweep stays held at 1 (never swept further).
+        assertFalse(exists("lyrics.interlude"))
+        // Deep in the gap: the breathing dots show (one labelled item), the line dims, the sweep
+        // stays held at 1 (never swept further).
         at(end + 2_500)
-        compose.onNodeWithText("♪").assertIsDisplayed()
+        compose.onNodeWithTag("lyrics.interlude").assertIsDisplayed()
+        assertEquals(listOf("Instrumental"), compose.onNodeWithTag("lyrics.interlude").fetchSemanticsNode().config[SemanticsProperties.ContentDescription])
         assertFalse(lit(line))
         assertSweep(doc.lines[line].syllables.map { 1f }, sweep(line))
     }
@@ -249,7 +250,8 @@ class LyricsPageTest {
         assertTrue("paused: the frozen position is not re-read every frame ($reads reads)", reads <= 2)
         // A seek while paused still moves the lines.
         core.client.dispatch(Commands.seekTo(doc.lines[line].startMs!!.toLong() + 300))
-        advanceUntil("the paused seek to show") { lit(line) }
+        // (The list brings the line into view as it lights.)
+        advanceUntil("the paused seek to show") { exists("lyrics.line.$line") && lit(line) }
     }
 
     @Test
