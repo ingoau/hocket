@@ -4,9 +4,11 @@
 // Command.RunAction so the registry stays the single source of truth.
 import type { ActionTarget } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
+import { SK } from "@shared/settings-keys";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
 import { isNarrow, showSideView, toggleSideView, useApp, type DialogState, type ViewName } from "./app";
+import { settingValue } from "./reducer";
 import { explicitIds } from "./selection";
 
 export interface ActionContext {
@@ -23,7 +25,7 @@ const RENDERER_HANDLED = new Set([
   "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
   "navigateRecent", "ui.back", "ui.forward", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
   "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
-  "deletePlaylist", "unpin", "saveQueueAsPlaylist",
+  "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics",
 ]);
 
 export async function executeAction(rawId: string, target: ActionTarget = { type: "none" }, ctx: ActionContext = {}): Promise<void> {
@@ -94,6 +96,10 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     case "sleepTimer":
       app.openDialog({ kind: "sleepTimer" });
+      return;
+    case "ui.developerDiagnostics":
+      // The shortcut is developer mode's; the page itself is always in Settings → Advanced.
+      if (settingValue<boolean>(app, SK.developerMode, false)) app.navigate({ view: "developer" });
       return;
     case "copyDiagnostics": {
       const r = await b.query({ type: "diagnostics" });

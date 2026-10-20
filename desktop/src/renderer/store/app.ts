@@ -15,7 +15,7 @@ import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
 import { SK } from "@shared/settings-keys";
 import type { MenuFacts } from "../lib/menu-model";
 
-export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
+export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
 
 export interface Route {
   view: ViewName;

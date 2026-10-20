@@ -172,7 +172,8 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle,
 
         /** Creates and starts a core. Throws when the library is not loadable; check [isAvailable] first. */
         fun create(config: CoreConfig, logLevel: String = "info"): NativeCore {
-            app.hocket.core.ffi.initLogging(logLevel)
+            // The capture behind developer diagnostics keeps its rotating file next to the core's data.
+            DevLog.install(java.io.File(config.dataDir), logLevel)
             val configJson = HocketJson.json.encodeToString(CoreConfig.serializer(), config)
             return NativeCore(HocketCore(configJson))
         }

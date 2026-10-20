@@ -52,6 +52,21 @@ export interface AppPrefs {
   closeToTray: boolean;
 }
 
+/** The developer diagnostics page's view of a bundle (main keeps the full text). */
+export interface DiagnosticsSummary {
+  fileName: string;
+  generatedAt: number;
+  /** Environment and the core's diagnostics: everything before the log. */
+  head: string;
+  /** The newest log lines, for the preview. */
+  tail: string;
+  logLines: number;
+  logBytes: number;
+  windowMs: number;
+  /** Whether `share()` can open the OS share sheet (macOS). */
+  canShare: boolean;
+}
+
 export interface HocketBridge {
   prefs: {
     get(): Promise<AppPrefs>;
@@ -110,6 +125,21 @@ export interface HocketBridge {
   clipboard: {
     writeText(text: string): void;
   };
+  /**
+   * The developer diagnostics bundle: environment, the core's diagnostics and the last hour of
+   * logs. Every call builds a fresh one in main; the page only ever sees a summary.
+   */
+  diagnostics: {
+    summary(): Promise<DiagnosticsSummary>;
+    /** Ask where to save, then write the bundle there. Resolves to the path, or undefined when cancelled. */
+    save(): Promise<string | undefined>;
+    /** Put the whole bundle on the clipboard. */
+    copy(): Promise<void>;
+    /** Write the bundle to the app's log folder and show it in the file manager. */
+    reveal(): Promise<string | undefined>;
+    /** macOS: write the bundle and open the share sheet with it. False where there is none. */
+    share(): Promise<boolean>;
+  };
   onDeepLink(listener: (url: string) => void): () => void;
   /**
    * How the full player shows a cover (the core's immersive-artwork classifier): its pixels as
@@ -143,6 +173,11 @@ export const IPC = {
   prefsSet: "hocket:prefs:set",
   uiAction: "hocket:ui-action",
   artworkLayout: "hocket:artwork:layout",
+  diagnosticsSummary: "hocket:diagnostics:summary",
+  diagnosticsSave: "hocket:diagnostics:save",
+  diagnosticsCopy: "hocket:diagnostics:copy",
+  diagnosticsReveal: "hocket:diagnostics:reveal",
+  diagnosticsShare: "hocket:diagnostics:share",
 } as const;
 
 /** The largest cover (each side) the renderer may hand `artworkLayout`; it decodes to 256. */

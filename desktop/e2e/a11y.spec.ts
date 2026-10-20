@@ -133,7 +133,7 @@ test.describe("axe: no violations anywhere", () => {
     await page.getByTestId("nav-settings").click();
     for (const theme of THEMES) {
       await setTheme(page, theme);
-      for (const section of ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"]) {
+      for (const section of ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "advanced", "about"]) {
         await page.getByTestId(`settings-nav-${section}`).click();
         await expect(page.getByTestId(`settings-nav-${section}`)).toHaveAttribute("aria-current", "page");
         await page.waitForTimeout(200);

@@ -1,7 +1,7 @@
 // Electron main process entry. Owns the one core, the windows, the tray, the
 // media session and the OS signals the core needs (visibility, power,
 // network). No business logic lives here: everything is forwarded to the core.
-import { app, dialog, net, powerMonitor, protocol, session } from "electron";
+import { app, dialog, net, powerMonitor, protocol, session, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
@@ -15,6 +15,7 @@ import { formatDeepLink, parseDeepLink } from "@shared/deep-link";
 import { PositionTickFilter } from "@shared/transport";
 import { ArtworkRegistry } from "./artwork";
 import { createCore, loadNative, NativeCoreUnavailable } from "./core-host";
+import { DevLog } from "./devlog";
 import { ServerCredentialStore } from "./credentials";
 import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
     store.set("deviceId", deviceId);
   }
   const dataDir = join(userData, "core");
+  const logDir = join(userData, "logs");
   const cacheDir = process.env.HOCKET_CACHE_DIR ?? join(app.getPath("sessionData"), "stream-cache");
   const platform: CoreConfig["platform"] = process.platform === "darwin" ? "macOs" : process.platform === "win32" ? "windows" : "linux";
   const config: CoreConfig = {
@@ -79,7 +81,7 @@ async function main(): Promise<void> {
   let created: ReturnType<typeof createCore>;
   try {
     // A packaged build never simulates: without the addon it says so and exits.
-    created = createCore(config, { appRoot, forceFake, requireNative: app.isPackaged, fakeTimeScale: Number(process.env.HOCKET_FAKE_TIMESCALE ?? "1") || 1 });
+    created = createCore(config, { appRoot, forceFake, requireNative: app.isPackaged, fakeTimeScale: Number(process.env.HOCKET_FAKE_TIMESCALE ?? "1") || 1, logDir });
   } catch (err) {
     const message = err instanceof NativeCoreUnavailable ? err.message : `The Hocket core failed to start:\n${String(err)}`;
     console.error("[core] fatal:", err);
@@ -88,6 +90,16 @@ async function main(): Promise<void> {
     return;
   }
   const { core, native } = created;
+  // From here on main's console and every window's console and crashes are captured for the
+  // developer diagnostics page (with the native core, into the core's own buffer).
+  const devlog = new DevLog(native?.module);
+  devlog.captureConsole();
+  for (const contents of webContents.getAllWebContents()) devlog.watch(contents);
+  app.on("web-contents-created", (_e, contents) => devlog.watch(contents));
+  process.on("uncaughtExceptionMonitor", (err, origin) => {
+    devlog.append("error", "main", `${origin}: ${err.stack ?? String(err)}`);
+    devlog.flush();
+  });
   const credentials = new ServerCredentialStore(userData);
   mkdirSync(cacheDir, { recursive: true });
   const artwork = new ArtworkRegistry(realpathSync(cacheDir));
@@ -141,6 +153,24 @@ async function main(): Promise<void> {
     artwork,
     credentials,
     artworkLayout: classify,
+    devlog,
+    diagnosticsDir: join(logDir, "diagnostics"),
+    diagnosticsExtra: () => ({
+      core: core.kind === "native" ? `native addon ${native?.module.coreVersion() ?? "?"} (${native?.path ?? "?"})` : "fake core",
+      "media session": mediaSession.status,
+      credentials: credentials.storageKind,
+      windows: windows
+        .all()
+        .filter((w) => !w.isDestroyed())
+        .map((w) => `#${w.id} ${w.getBounds().width}x${w.getBounds().height}${w.isVisible() ? "" : " hidden"}${w.isFocused() ? " focused" : ""}`)
+        .join(", "),
+      "gpu features": Object.entries(app.getGPUFeatureStatus())
+        .filter(([, v]) => !String(v).startsWith("enabled"))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ") || "all enabled",
+      "data dir": dataDir,
+      "log dir": logDir,
+    }),
     meta: () => ({
       version: app.getVersion(),
       platform,
@@ -232,6 +262,7 @@ async function main(): Promise<void> {
     for (const s of settings) {
       try {
         if (s.key === "battery.autoEngage") store.set("batterySaverAuto", JSON.parse(s.value) !== false);
+        if (s.key === "developer.mode") devlog.setDetailed(JSON.parse(s.value) === true);
       } catch {
         /* ignore */
       }

@@ -381,6 +381,12 @@ impl Actor {
             self.audio.output_device
         ));
         out.push_str(&format!(
+            "developer mode: {} (detailed logging {})\n",
+            self.settings
+                .get_bool(crate::settings::keys::DEVELOPER_MODE),
+            crate::devlog::is_detailed()
+        ));
+        out.push_str(&format!(
             "data: {} cache: {}\n",
             self.cfg.data_dir, self.cfg.cache_dir
         ));

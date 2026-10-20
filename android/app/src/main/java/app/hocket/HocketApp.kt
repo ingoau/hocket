@@ -42,6 +42,10 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        // Log capture from the start (the same dir CoreHost gives the core), and uncaught exceptions
+        // go to it (and to disk) before the process dies.
+        app.hocket.core.DevLog.install(java.io.File(filesDir, "hocket"))
+        app.hocket.core.DevLog.installCrashHandler()
         connection = PlaybackServiceConnection(this)
         scope.launch {
             // The client exists for a handle the service delivered that CoreHost still runs: the

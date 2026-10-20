@@ -22,9 +22,9 @@ import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useL
 import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { Select, Slider, Switch } from "../components/controls";
 
-const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "about"] as const;
+const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "advanced", "about"] as const;
 type Section = (typeof SECTIONS)[number];
-const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", about: "info" };
+const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
   const navigate = useApp((s) => s.navigate);
@@ -50,6 +50,7 @@ export function Settings({ section }: { section?: string }) {
           {current === "shortcuts" ? <Shortcuts /> : null}
           {current === "backup" ? <Backup /> : null}
           {current === "diagnostics" ? <Diagnostics /> : null}
+          {current === "advanced" ? <Advanced /> : null}
           {current === "about" ? <About /> : null}
         </div>
       </div>
@@ -693,6 +694,25 @@ function Diagnostics() {
       <Row title={t("settings.copyDiagnostics")} settingKey="diagnostics"><button type="button" className="btn" onClick={() => void executeAction("ui.copyDiagnostics")} data-testid="copy-diagnostics">{t("settings.copyDiagnostics")}</button></Row>
       <Row title={meta?.mediaSession === "attached" ? t("settings.mediaSessionState.attached") : t("settings.mediaSessionState.unavailable")} settingKey="diagnostics"><span className={`badge ${meta?.mediaSession === "attached" ? "ok" : "warn"}`}>{meta?.mediaSession}</span></Row>
       <textarea className="textarea" readOnly value={data ?? ""} rows={16} style={{ width: "100%", marginTop: 12 }} aria-label={t("settings.section.diagnostics")} />
+    </>
+  );
+}
+
+/** Advanced: developer mode (detailed logs and its shortcut) and the developer diagnostics page. */
+function Advanced() {
+  const navigate = useApp((s) => s.navigate);
+  const shortcuts = useApp((s) => s.shortcuts);
+  const platform = useApp((s) => s.meta?.platform ?? "linux");
+  const id = "ui.developerDiagnostics";
+  const bound = shortcuts.find((s) => s.actionId === id);
+  const raw = bound ? bound.shortcut : DEFAULT_KEYMAP.find((k) => k.actionId === id)?.shortcut;
+  const chord = raw ? parseChord(raw) : undefined;
+  return (
+    <>
+      <Toggle settingKey={SK.developerMode} title={t("settings.developerMode")} desc={t("settings.developerModeDesc", { shortcut: chord ? formatChord(chord, platform) : "—" })} />
+      <Row title={t("settings.developerOpen")} desc={t("settings.developerOpenDesc")}>
+        <button type="button" className="btn" onClick={() => navigate({ view: "developer" })} data-testid="open-developer"><Icon name="bug" size={16} /> {t("settings.developerOpen")}</button>
+      </Row>
     </>
   );
 }

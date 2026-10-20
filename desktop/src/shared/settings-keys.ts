@@ -22,6 +22,8 @@ export const SK = {
   displayImmersiveArtwork: "display.immersiveArtwork",
   /** Whether the player shows the star rating (bar, sidebar, fullscreen). Synced. */
   displayPlayerRating: "display.playerRating",
+  /** Developer mode: detailed logging, and the shortcut that opens developer diagnostics. Device-local. */
+  developerMode: "developer.mode",
   syncEnabled: "sync.enabled",
   connectCoordinatorUrl: "connect.coordinatorUrl",
   connectLanDiscovery: "connect.lanDiscovery",

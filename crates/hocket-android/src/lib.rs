@@ -196,13 +196,38 @@ impl HocketCore {
     }
 }
 
-/// Installs a tracing subscriber that forwards to logcat-friendly stderr. Call once.
+/// Installs the tracing subscriber: stderr, plus the capture buffer behind the developer
+/// diagnostics page (`hocket_core::devlog`), mirrored to a rotating file in `log_dir` when given.
+/// Call once; later calls do nothing.
 #[uniffi::export]
-pub fn init_logging(level: String) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(level)
-        .with_ansi(false)
-        .try_init();
+pub fn init_logging(level: String, log_dir: Option<String>) {
+    hocket_core::devlog::install(&level, log_dir.as_deref().map(std::path::Path::new), false);
+}
+
+/// Adds a Kotlin line to the capture buffer. `debug`/`verbose` lines are kept only while
+/// developer mode's detailed logging is on.
+#[uniffi::export]
+pub fn append_log(level: String, tag: String, message: String) {
+    hocket_core::devlog::append(&level, &tag, &message);
+}
+
+/// The captured log of the last `window_ms` milliseconds, oldest first.
+#[uniffi::export]
+pub fn recent_logs(window_ms: u64) -> String {
+    hocket_core::devlog::recent(window_ms)
+}
+
+/// Whether developer mode's detailed logging is on.
+#[uniffi::export]
+pub fn detailed_logging() -> bool {
+    hocket_core::devlog::is_detailed()
+}
+
+/// Writes everything captured so far to the log file, blocking for at most `timeout_ms`. For the
+/// uncaught-exception handler, before the process dies.
+#[uniffi::export]
+pub fn flush_logs(timeout_ms: u64) {
+    hocket_core::devlog::flush(Duration::from_millis(timeout_ms));
 }
 
 /// How the full player shows a cover (`hocket_core::artwork`): its pixels as tightly packed RGBA8

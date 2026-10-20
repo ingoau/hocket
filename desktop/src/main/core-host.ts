@@ -23,7 +23,11 @@ export interface NativeModule {
     detach(): void;
     isAttached(): boolean;
   };
-  initLogging(level: string): void;
+  initLogging(level: string, logDir?: string | null): void;
+  /** Log capture (hocket_core::devlog); addons built before it existed lack these. */
+  appendLog?(level: string, tag: string, message: string): void;
+  recentLogs?(windowMs: number): string;
+  flushLogs?(timeoutMs: number): void;
   coreVersion(): string;
   apiSchemaVersion(): number;
   /** The immersive-artwork classifier (addons built before it existed lack it). */
@@ -156,6 +160,8 @@ export interface CreateCoreOptions {
   /** Packaged builds: a missing or unloadable addon is fatal rather than silently simulated. */
   requireNative: boolean;
   fakeTimeScale?: number;
+  /** Where the native core keeps its rotating log file (the developer diagnostics page reads it back after a crash). */
+  logDir?: string;
 }
 
 export class NativeCoreUnavailable extends Error {
@@ -169,7 +175,7 @@ export function createCore(config: CoreConfig, opts: CreateCoreOptions): { core:
   if (!opts.forceFake) {
     const native = loadNative(opts.appRoot);
     if (native) {
-      native.module.initLogging(process.env.HOCKET_LOG ?? "info");
+      native.module.initLogging(process.env.HOCKET_LOG ?? "info", opts.logDir ?? null);
       console.log(`[core] native addon ${native.module.coreVersion()} from ${native.path}`);
       return { core: new NativeCoreHandle(native.module, config), native };
     }

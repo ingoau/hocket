@@ -4,15 +4,17 @@
 // dropped), and the renderer never names a filesystem path: files are read
 // and written inside the dialog handlers, and the one core command that
 // writes a file (ExportNsp) may only target a path a save dialog just chose.
-import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
+import type { DevLog, DiagnosticsBundle } from "./devlog";
 import type { Windows } from "./windows";
 
 export interface IpcDeps {
@@ -26,6 +28,12 @@ export interface IpcDeps {
   onNetworkReport: (online: boolean) => void;
   prefs: { get(): AppPrefs; set(patch: Partial<AppPrefs>): AppPrefs };
   credentials: { passwordFor(url: string, username: string): string | undefined };
+  /** Log capture behind the developer diagnostics page. */
+  devlog: DevLog;
+  /** Where "show in folder" and the share sheet write bundles (`<userData>/logs/diagnostics`). */
+  diagnosticsDir: string;
+  /** Host facts for the bundle's header (core kind, media session, windows…). */
+  diagnosticsExtra: () => Record<string, string>;
   /** The core's immersive-artwork classifier (JSON in and out), when the native core has it. */
   artworkLayout?: (rgba: Buffer, width: number, height: number, requestJson: string) => string;
 }
@@ -36,6 +44,10 @@ function isSide(v: unknown): v is number {
 }
 
 const MAX_TEXT_FILE = 16 * 1024 * 1024;
+/** Lines of log the page previews. */
+const PREVIEW_LINES = 400;
+/** Bundles kept in the diagnostics folder; older ones are removed when a new one is written. */
+const KEEP_BUNDLES = 5;
 
 function isOurs(windows: Windows, sender: Electron.WebContents): boolean {
   return windows.all().some((w) => w.webContents.id === sender.id);
@@ -273,6 +285,84 @@ export function installIpc(deps: IpcDeps): void {
 
   ipcMain.on(IPC.clipboardWrite, (e, text: unknown) => {
     if (isOurs(windows, e.sender) && typeof text === "string") clipboard.writeText(text);
+  });
+
+  installDiagnosticsIpc(deps);
+}
+
+/** The developer diagnostics page: every call builds a fresh bundle; files are only written where main decides. */
+function installDiagnosticsIpc(deps: IpcDeps): void {
+  const { core, windows, devlog } = deps;
+  const build = async (): Promise<DiagnosticsBundle> => {
+    let coreDiagnostics: string;
+    try {
+      const r = await core.query({ type: "diagnostics" });
+      coreDiagnostics = r.type === "text" ? r.data : `(unexpected answer: ${r.type})`;
+    } catch (err) {
+      coreDiagnostics = `(the core didn't answer: ${String(err)})`;
+    }
+    let extra: Record<string, string> = {};
+    try {
+      extra = deps.diagnosticsExtra();
+    } catch (err) {
+      extra = { host: `(unavailable: ${String(err)})` };
+    }
+    return devlog.bundle({ coreDiagnostics, extra });
+  };
+  const writeToFolder = async (bundle: DiagnosticsBundle): Promise<string> => {
+    await mkdir(deps.diagnosticsDir, { recursive: true });
+    const path = join(deps.diagnosticsDir, bundle.fileName);
+    await writeFile(path, bundle.text, "utf8");
+    const old = (await readdir(deps.diagnosticsDir)).filter((f) => /^hocket-diagnostics-.*\.txt$/.test(f)).sort().slice(0, -KEEP_BUNDLES);
+    await Promise.all(old.map((f) => rm(join(deps.diagnosticsDir, f), { force: true })));
+    return path;
+  };
+
+  ipcMain.handle(IPC.diagnosticsSummary, async (e): Promise<DiagnosticsSummary> => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    const b = await build();
+    const lines = b.log.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    return {
+      fileName: b.fileName,
+      generatedAt: b.generatedAt,
+      head: b.head,
+      tail: lines.slice(-PREVIEW_LINES).join("\n"),
+      logLines: b.logLines,
+      logBytes: b.logBytes,
+      windowMs: b.windowMs,
+      canShare: process.platform === "darwin",
+    };
+  });
+
+  ipcMain.handle(IPC.diagnosticsSave, async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");
+    const bundle = await build();
+    const r = await dialog.showSaveDialog(win, { title: t("developer.saveTitle"), defaultPath: bundle.fileName, filters: [{ name: t("developer.fileFilter"), extensions: ["txt"] }] });
+    if (r.canceled || !r.filePath) return undefined;
+    await writeFile(r.filePath, bundle.text, "utf8");
+    return r.filePath;
+  });
+
+  ipcMain.handle(IPC.diagnosticsCopy, async (e) => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    clipboard.writeText((await build()).text);
+  });
+
+  ipcMain.handle(IPC.diagnosticsReveal, async (e) => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    const path = await writeToFolder(await build());
+    shell.showItemInFolder(path);
+    return path;
+  });
+
+  ipcMain.handle(IPC.diagnosticsShare, async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || !isOurs(windows, e.sender) || process.platform !== "darwin") return false;
+    const path = await writeToFolder(await build());
+    new ShareMenu({ filePaths: [path] }).popup({ window: win });
+    return true;
   });
 }
 

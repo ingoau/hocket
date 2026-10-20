@@ -63,6 +63,7 @@ pub const TEXTS: &[SettingText] = &[
     t("swipe.list.startToEnd", "Song lists: swipe right", "What swiping a song in an album, playlist, search results or the library does, towards the end of the line."),
     t("swipe.list.endToStart", "Song lists: swipe left", "What swiping a song in an album, playlist, search results or the library does, towards the start of the line."),
     t("shortcuts", "Keyboard shortcuts", "Custom key bindings for this device."),
+    t("developer.mode", "Developer mode", "Keep detailed logs, and open developer diagnostics when you shake the phone or press Ctrl+Shift+D."),
     t("sync.enabled", "Sync settings between devices", "Send account-level settings through the coordinator and accept them from other devices."),
     t("connect.coordinatorUrl", "Coordinator URL", "Address of the coordinator for remote sessions (wss://). Devices on the same network find each other without one."),
     t("connect.allowInsecureCoordinator", "Allow unencrypted coordinator", "Let this device send its server credential to a ws:// coordinator on the local network. Only for a coordinator you run yourself; the credential travels in the clear."),

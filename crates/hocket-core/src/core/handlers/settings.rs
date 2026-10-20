@@ -122,6 +122,9 @@ impl Actor {
                 let url = self.settings.get_string(key);
                 self.engine_input(Input::SetCoordinatorUrl(url));
             }
+            keys::DEVELOPER_MODE => {
+                crate::devlog::set_detailed(self.settings.get_bool(key));
+            }
             keys::CONNECT_LAN_DISCOVERY => {
                 let on = self.settings.get_bool(key) && self.cfg.coordinator_listen.is_none();
                 self.engine_input(Input::SetLanDiscovery(on));

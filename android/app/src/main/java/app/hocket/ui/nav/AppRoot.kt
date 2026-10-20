@@ -69,6 +69,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -76,6 +77,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import app.hocket.core.SettingKeys
+import app.hocket.diagnostics.DeveloperTriggerEffect
+import app.hocket.ui.screens.settings.setting
 import app.hocket.BuildConfig
 import app.hocket.HocketApp
 import androidx.compose.ui.platform.LocalContext
@@ -105,9 +109,11 @@ import app.hocket.ui.screens.library.LibraryScreen
 import app.hocket.ui.screens.search.SearchScreen
 import app.hocket.ui.screens.settings.AboutScreen
 import app.hocket.ui.screens.settings.AccountSettingsScreen
+import app.hocket.ui.screens.settings.AdvancedSettingsScreen
 import app.hocket.ui.screens.settings.AppearanceSettingsScreen
 import app.hocket.ui.screens.settings.BackupSettingsScreen
 import app.hocket.ui.screens.settings.BatterySettingsScreen
+import app.hocket.ui.screens.settings.DeveloperDiagnosticsScreen
 import app.hocket.ui.screens.settings.DownloadsSettingsScreen
 import app.hocket.ui.screens.settings.LibrarySettingsScreen
 import app.hocket.ui.screens.settings.LyricsSettingsScreen
@@ -336,6 +342,11 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             nav.addOnDestinationChangedListener(listener)
             onDispose { nav.removeOnDestinationChangedListener(listener) }
+        }
+        // Developer mode: a shake (or Ctrl+Shift+D) opens developer diagnostics.
+        val developerMode = setting(SettingKeys.DEVELOPER_MODE).bool ?: false
+        DeveloperTriggerEffect(developerMode) {
+            if (nav.currentDestination?.hasRoute(Route.DeveloperDiagnostics::class) != true) nav.navigate(Route.DeveloperDiagnostics)
         }
         CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache) {
             val items = navItems()
@@ -597,6 +608,8 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.SettingsLibrary>(transitions) { LibrarySettingsScreen(nav) }
         screen<Route.SettingsBattery>(transitions) { BatterySettingsScreen(nav) }
         screen<Route.SettingsBackup>(transitions) { BackupSettingsScreen(nav) }
+        screen<Route.SettingsAdvanced>(transitions) { AdvancedSettingsScreen(nav) }
+        screen<Route.DeveloperDiagnostics>(transitions) { DeveloperDiagnosticsScreen(nav) }
             }
         }
     }

@@ -2,11 +2,11 @@
 // Requires `pnpm gen` (addon) and `pnpm build`. The suite is skipped when the
 // addon isn't built so the fake-core suite still runs everywhere.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { FakeNavidrome } from "./fake-navidrome";
-import { chooseOption, openPlace } from "./fixtures";
+import { chooseOption, openPlace, stubDialogs } from "./fixtures";
 
 const root = resolve(__dirname, "..");
 const addonBuilt = existsSync(join(root, "native", "index.js"));
@@ -131,6 +131,34 @@ test.describe("real core against a fake Navidrome", () => {
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark", { timeout: 15_000 });
       await openPlace(page, "albums");
       await expect(page.getByTestId("grid-tile").first()).toBeVisible({ timeout: 30_000 });
+
+      // Developer mode: the core switches its capture to debug, the shortcut opens the page, and the
+      // saved bundle carries the core's own lines from both runs (the first run's came back from
+      // the log file) next to the renderer's.
+      await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "developer.mode", value: "true" } }));
+      await page.evaluate(() => console.warn("e2e-native-renderer-marker"));
+      await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+D`);
+      await expect(page.getByTestId("view-developer")).toBeVisible();
+      await expect(page.getByTestId("developer-head")).toContainText("developer mode: true (detailed logging true)");
+      await expect(page.getByTestId("developer-head")).toContainText("core buffer");
+      await expect(page.getByTestId("developer-log")).toContainText("developer mode on: detailed logging");
+      const shots = process.env.HOCKET_SCREENSHOT_DIR;
+      if (shots) {
+        mkdirSync(shots, { recursive: true });
+        await page.getByTestId("developer-refresh").click();
+        await expect(page.getByTestId("developer-log")).toContainText("e2e-native-renderer-marker");
+        await page.waitForTimeout(500);
+        await page.screenshot({ path: join(shots, "desktop-dark-developer-diagnostics-native.png") });
+      }
+      const target = join(userData, "saved-diagnostics.txt");
+      await stubDialogs(app, target);
+      await page.getByTestId("developer-save").click();
+      await expect.poll(() => existsSync(target)).toBe(true);
+      const bundle = readFileSync(target, "utf8");
+      expect(bundle.match(/hocket: log capture started/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(bundle).toContain("e2e-native-renderer-marker");
+      expect(bundle).toContain("hocket: developer mode on: detailed logging");
+      expect(bundle).toContain("Hocket core ");
     } finally {
       await app.close();
     }

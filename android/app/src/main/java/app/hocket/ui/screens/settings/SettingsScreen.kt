@@ -58,6 +58,7 @@ enum class SettingsCategory(val id: String, val route: Route) {
     Pebble("pebble", Route.SettingsPebble),
     Customise("customise", Route.CustomiseSettings),
     Backup("backup", Route.SettingsBackup),
+    Advanced("advanced", Route.SettingsAdvanced),
     About("about", Route.About);
 
     companion object {
@@ -67,7 +68,7 @@ enum class SettingsCategory(val id: String, val route: Route) {
             listOf(Appearance, Playback, Audio, Streaming),
             listOf(Downloads, Lyrics, Library, Battery),
             listOf(Connect, Pebble, Customise),
-            listOf(Backup, About),
+            listOf(Backup, Advanced, About),
         )
     }
 }
@@ -131,6 +132,7 @@ private fun SettingsCategory.icon(): ImageVector = when (this) {
     SettingsCategory.Pebble -> HocketIcons.Filled.Watch
     SettingsCategory.Customise -> HocketIcons.Filled.Tune
     SettingsCategory.Backup -> HocketIcons.Filled.SettingsBackupRestore
+    SettingsCategory.Advanced -> HocketIcons.Filled.Code
     SettingsCategory.About -> HocketIcons.Filled.Info
 }
 
@@ -150,6 +152,7 @@ fun SettingsCategory.title(): String = stringResource(
         SettingsCategory.Pebble -> R.string.settings_category_pebble
         SettingsCategory.Customise -> R.string.settings_section_customise
         SettingsCategory.Backup -> R.string.settings_category_backup
+        SettingsCategory.Advanced -> R.string.settings_category_advanced
         SettingsCategory.About -> R.string.settings_section_about
     },
 )
@@ -213,6 +216,7 @@ private fun SettingsCategory.summary(): String {
         SettingsCategory.Pebble -> stringResource(R.string.pebble_auto_open) + ": " + on(setting(SettingKeys.PEBBLE_AUTO_OPEN).bool ?: false)
         SettingsCategory.Customise -> stringResource(R.string.settings_bottom_bar) + dot + stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_swipe_actions)
         SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
+        SettingsCategory.Advanced -> stringResource(R.string.settings_summary_advanced, on(setting(SettingKeys.DEVELOPER_MODE).bool ?: false))
         SettingsCategory.About -> stringResource(R.string.settings_licence)
     }
 }

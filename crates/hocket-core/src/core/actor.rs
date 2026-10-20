@@ -503,6 +503,7 @@ impl Actor {
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
         actor.apply_storage_settings();
         actor.apply_transcoding_settings();
+        crate::devlog::set_detailed(actor.settings.get_bool(keys::DEVELOPER_MODE));
         if let Some(preset) = deps.server {
             actor.attach_preset_server(preset);
         }
