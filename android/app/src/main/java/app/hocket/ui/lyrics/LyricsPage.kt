@@ -14,7 +14,6 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.Dp
-import kotlin.math.roundToInt
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -34,10 +33,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -336,17 +338,19 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     // The view moves to a line a moment before it is sung.
-    val ahead = remember(doc, positionMs) { focusLine(doc, LyricsCursor.at(doc, positionMs + LyricsMotion.LEAD_MS)) }
+    val feel = LocalLyricsFeel.current
+    val ahead = remember(doc, positionMs, feel) { focusLine(doc, LyricsCursor.at(doc, positionMs + feel.leadMs)) }
     val gap = remember(doc, cursor) { interlude(doc, cursor) }
     val dotsAt = gap?.before ?: -1
     fun lazyIndex(line: Int) = if (dotsAt in 0..line) line + 1 else line
     val target = when {
-        gap != null && cursor.effectiveMs + LyricsMotion.LEAD_MS < gap.endMs -> dotsAt
+        gap != null && cursor.effectiveMs + feel.leadMs < gap.endMs -> dotsAt
         ahead >= 0 -> lazyIndex(ahead)
         else -> lazyIndex(doc.lines.indexOfFirst { it.startMs != null }.coerceAtLeast(0))
     }
     val listState = rememberLazyListState()
-    val scroller = remember(listState) { StaggeredScroll(listState) }
+    val scope = rememberCoroutineScope()
+    val scroller = remember(listState, feel) { StaggeredScroll(listState, scope, feel) }
     val dragged by listState.interactionSource.collectIsDraggedAsState()
     val held by rememberUpdatedState(dragged)
     // The user's scroll wins: whatever was moving stops where it is, and the list comes back with
@@ -391,7 +395,7 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
         val lazy = lazyIndex(i)
         // The core compares `position - offset` against the line start, so seeking to a line's
         // start means `start + offset` in audio time.
-        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
+        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onShift = { scroller.shift(lazy, it) }, shifts = remember(scroller, lazy) { LineShifts(scroller, lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
     }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -410,6 +414,14 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
             }
         }
     }
+}
+
+/** A background vocal's space closing after its fade, as [StaggeredScroll.beginShift] runs it. */
+@Stable
+internal class LineShifts(private val scroller: StaggeredScroll, private val index: Int) {
+    fun begin(dy: Float) = scroller.beginShift(index, dy)
+    fun apply(shift: StaggeredScroll.Kick?) = scroller.applyShift(shift)
+    fun cancel(shift: StaggeredScroll.Kick?) = scroller.cancelShift(shift)
 }
 
 private val dotEnter = androidx.compose.animation.core.CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)
@@ -465,13 +477,14 @@ private fun InterludeDots(gap: Interlude, timeMs: Long, side: Int, reducedMotion
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onShift: (Float) -> Unit, shifts: LineShifts, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
     // Read while drawing only: the line grows, lights and (background vocals) slides out without
     // recomposing.
-    val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = 1f, stiffness = LyricsMotion.SCALE_STIFFNESS), label = "lineScale")
-    val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(LyricsMotion.BRIGHTEN_MS), label = "lineBright")
-    val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(LyricsMotion.BLUR_MS), label = "lineBlur")
-    val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = 1f, stiffness = LyricsMotion.SCALE_STIFFNESS), label = "lineShown")
+    val feel = LocalLyricsFeel.current
+    val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = 1f, stiffness = feel.scaleStiffness), label = "lineScale")
+    val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(feel.brightenMs), label = "lineBright")
+    val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(feel.blurMs), label = "lineBlur")
+    val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = 1f, stiffness = feel.scaleStiffness), label = "lineShown")
     // Background sub-voices: smaller and lighter than the main voice.
     val baseSize = if (line.background) 18.sp else 28.sp
     val weight = if (line.background) FontWeight.SemiBold else FontWeight.Bold
@@ -512,21 +525,36 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     val heldTime = remember { LongArray(1) }
     if (lit || focused) heldTime[0] = cursor.effectiveMs
     val origin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0.5f)
+    // A background vocal's space: open while it shows. It opens at once (the lines it moves are
+    // held where they were and glide to their places, see StaggeredScroll.shift); it closes once
+    // the vocal has faded, the lines gliding over its space from the moment the fade begins. Both
+    // in a frame callback with the matching shift, so a jump and its hold land in the same frame.
+    val open = remember { mutableStateOf(revealed) }
+    val height = remember { IntArray(1) }
+    if (line.background) LaunchedEffect(revealed) {
+        if (open.value == revealed) return@LaunchedEffect
+        if (reducedMotion) { open.value = revealed; return@LaunchedEffect }
+        if (revealed) {
+            withFrameNanos { onShift(height[0].toFloat()); open.value = true }
+            return@LaunchedEffect
+        }
+        val closing = withFrameNanos { shifts.begin(-height[0].toFloat()) }
+        try {
+            androidx.compose.runtime.snapshotFlow { shown.value <= 0.01f }.first { it }
+            withFrameNanos { shifts.apply(closing); open.value = false }
+        } finally {
+            if (open.value) shifts.cancel(closing)
+        }
+    }
     Box(
         Modifier.fillMaxWidth().then(
             if (!line.background) Modifier
             else Modifier.layout { measurable, constraints ->
-                // AMLL's reveal: slides out from behind its line and grows from 80%.
+                // The space opens at once and closes once the vocal has faded (see the reveal
+                // effect above); the vocal itself slides and fades in the line's own layer.
                 val placeable = measurable.measure(constraints)
-                val s = shown.value.coerceIn(0f, 1f)
-                layout(placeable.width, (placeable.height * s).roundToInt()) {
-                    placeable.placeWithLayer(0, 0) {
-                        translationY = -(1f - s) * 0.8f * placeable.height
-                        alpha = s
-                        scaleX = 0.8f + 0.2f * s; scaleY = scaleX
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0f)
-                    }
-                }
+                height[0] = placeable.height
+                layout(placeable.width, if (open.value) placeable.height else 0) { placeable.place(0, 0) }
             },
         ),
         contentAlignment = if (side == 1) Alignment.TopEnd else Alignment.TopStart,
@@ -559,7 +587,14 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
                 // Offscreen: the line is drawn once at its own size and the layer scaled and moved, so
                 // it grows and glides smoothly (text drawn scaled steps from pixel to pixel).
                 .graphicsLayer {
-                    scaleX = scale.value; scaleY = scaleX; translationY = lag(); transformOrigin = origin
+                    // A background vocal also slides out from behind its line and grows from 80%
+                    // (AMLL's reveal), or shrinks back and fades: one layer with the line's own
+                    // motion (a placement layer around this one lost the line while it faded).
+                    val reveal = if (line.background) shown.value.coerceIn(0f, 1f) else 1f
+                    scaleX = scale.value * (0.8f + 0.2f * reveal); scaleY = scaleX
+                    translationY = lag() - (1f - reveal) * 0.8f * height[0]
+                    alpha = reveal
+                    transformOrigin = if (line.background) androidx.compose.ui.graphics.TransformOrigin(if (side == 1) 1f else 0f, 0f) else origin
                     // A blurred line (or one still easing out of its blur) is a layer already, the
                     // blur's: no second one around it.
                     compositingStrategy = if (reducedMotion || blur > 0.dp || blurRadius.value > 0f) androidx.compose.ui.graphics.CompositingStrategy.Auto else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
