@@ -17,6 +17,7 @@ import { Filters } from "./Filters";
 import { FilterBuilder } from "./FilterBuilder";
 import { Stats } from "./Stats";
 import { Settings } from "./Settings";
+import { DeveloperDiagnostics } from "./DeveloperDiagnostics";
 
 /** Detail views: a different id is a different page. */
 const DETAIL = new Set<Route["view"]>(["album", "artist", "playlist", "genre"]);
@@ -70,5 +71,7 @@ function RouteView({ route }: { route: Route }) {
       return <Stats />;
     case "settings":
       return <Settings section={route.param} />;
+    case "developer":
+      return <DeveloperDiagnostics />;
   }
 }

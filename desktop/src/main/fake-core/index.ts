@@ -1837,6 +1837,7 @@ export class FakeCore implements CoreHandle {
       ["home.sections", [], "accountSynced"],
       ["library.pins", [], "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
+      ["developer.mode", false, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],
       ["connect.lanDiscovery", true, "deviceLocal"],

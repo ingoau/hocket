@@ -42,6 +42,8 @@ export const DEFAULT_KEYMAP: DefaultBinding[] = [
   { actionId: "love", shortcut: "Mod+L", labelId: "action.love", category: "library" },
   { actionId: "ui.back", shortcut: "Alt+ArrowLeft", labelId: "action.back", category: "view" },
   { actionId: "ui.forward", shortcut: "Alt+ArrowRight", labelId: "action.forward", category: "view" },
+  // Only while developer mode is on (Settings → Advanced).
+  { actionId: "ui.developerDiagnostics", shortcut: "Mod+Shift+D", labelId: "action.developerDiagnostics", category: "app" },
 ];
 
 /**

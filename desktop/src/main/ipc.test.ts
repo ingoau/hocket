@@ -6,7 +6,15 @@ type Listener = (e: { sender: { id: number } }, ...args: unknown[]) => unknown;
 const handlers = new Map<string, Listener>();
 const listeners = new Map<string, Listener>();
 const dialogs = { showSaveDialog: vi.fn(), showOpenDialog: vi.fn(), showMessageBox: vi.fn() };
-const fsMock = { writeFile: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined), readFile: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "") };
+const fsMock = {
+  writeFile: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
+  readFile: vi.fn<(...args: unknown[]) => Promise<string>>(async () => ""),
+  mkdir: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
+  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(async () => []),
+  rm: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
+};
+const shellMock = { showItemInFolder: vi.fn(), openExternal: vi.fn() };
+const clipboardMock = { writeText: vi.fn() };
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -14,9 +22,12 @@ vi.mock("electron", () => ({
     handle: (ch: string, l: Listener) => handlers.set(ch, l),
   },
   BrowserWindow: { fromWebContents: (wc: { id: number }) => (wc.id === 1 ? { id: 1, setAlwaysOnTop: vi.fn(), setFullScreen: vi.fn() } : undefined) },
-  clipboard: { writeText: vi.fn() },
-  shell: { showItemInFolder: vi.fn(), openExternal: vi.fn() },
+  clipboard: clipboardMock,
+  shell: shellMock,
   dialog: dialogs,
+  ShareMenu: class {
+    popup() {}
+  },
 }));
 vi.mock("node:fs/promises", () => fsMock);
 
@@ -34,6 +45,13 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   // A method that needs `this`, like ServerCredentialStore.passwordFor: an unbound call must fail.
   const store = { secret: "secret", passwordFor: vi.fn(function (this: { secret: string }, _url: string, _username: string): string | undefined { return this.secret; }) };
   const passwordFor = store.passwordFor;
+  const devlog = {
+    bundle: vi.fn(({ coreDiagnostics }: { coreDiagnostics: string }) => {
+      const log = Array.from({ length: 450 }, (_, i) => `line ${i}`).join("\n") + "\n";
+      const head = `Hocket diagnostics\n${coreDiagnostics}\n`;
+      return { fileName: "hocket-diagnostics-20261020-030405.txt", text: head + log, head, log, logLines: 450, logBytes: log.length, windowMs: 3_600_000, generatedAt: 1 };
+    }),
+  };
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
     core: { kind: "fake", dispatch, query, onEvent: () => () => undefined, shutdown: async () => undefined },
@@ -45,6 +63,9 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     onNetworkReport: vi.fn(),
     prefs: { get: () => ({ closeToTray: true }), set: (p) => ({ closeToTray: p.closeToTray ?? true }) },
     credentials: store,
+    devlog: devlog as never,
+    diagnosticsDir: "/data/logs/diagnostics",
+    diagnosticsExtra: () => ({ core: "fake core" }),
   });
   return { dispatch, query, onCommand, artwork, passwordFor };
 }
@@ -180,5 +201,38 @@ describe("ipc", () => {
     fsMock.readFile.mockResolvedValue("garbage");
     expect(await handlers.get(IPC.configImport)!(ours)).toBe(false);
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+  it("diagnostics: refuses strangers, previews the newest lines, and writes only where main decides", async () => {
+    const { query } = setup({ query: async () => ({ type: "text", data: "core says hi" }) as QueryResult });
+    await expect(handlers.get(IPC.diagnosticsSummary)!(stranger)).rejects.toThrow("rejected");
+    const summary = (await handlers.get(IPC.diagnosticsSummary)!(ours)) as { head: string; tail: string; logLines: number };
+    expect(query).toHaveBeenCalledWith({ type: "diagnostics" });
+    expect(summary.head).toContain("core says hi");
+    expect(summary.tail.split("\n")).toHaveLength(400);
+    expect(summary.tail.endsWith("line 449")).toBe(true);
+    expect(summary.logLines).toBe(450);
+
+    dialogs.showSaveDialog.mockResolvedValueOnce({ canceled: true });
+    expect(await handlers.get(IPC.diagnosticsSave)!(ours)).toBeUndefined();
+    expect(fsMock.writeFile).not.toHaveBeenCalled();
+    dialogs.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: "/home/me/d.txt" });
+    expect(await handlers.get(IPC.diagnosticsSave)!(ours)).toBe("/home/me/d.txt");
+    expect(fsMock.writeFile).toHaveBeenLastCalledWith("/home/me/d.txt", expect.stringContaining("line 449"), "utf8");
+
+    await handlers.get(IPC.diagnosticsCopy)!(ours);
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("core says hi"));
+
+    // Show in folder keeps the newest few bundles.
+    fsMock.readdir.mockResolvedValueOnce(["a.txt", ...Array.from({ length: 7 }, (_, i) => `hocket-diagnostics-2026101${i}-000000.txt`)]);
+    const path = await handlers.get(IPC.diagnosticsReveal)!(ours);
+    expect(path).toBe("/data/logs/diagnostics/hocket-diagnostics-20261020-030405.txt");
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(path);
+    expect(fsMock.rm.mock.calls.map((c) => c[0])).toEqual(["/data/logs/diagnostics/hocket-diagnostics-20261010-000000.txt", "/data/logs/diagnostics/hocket-diagnostics-20261011-000000.txt"]);
+  });
+
+  it("diagnostics: a core that fails to answer still yields a bundle", async () => {
+    setup({ query: async () => { throw new Error("gone"); } });
+    const summary = (await handlers.get(IPC.diagnosticsSummary)!(ours)) as { head: string };
+    expect(summary.head).toContain("the core didn't answer");
   });
 });
