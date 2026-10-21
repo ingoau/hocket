@@ -507,6 +507,50 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
     assert!(!t.backend.is_playing());
 }
 
+/// A call takes audio focus while this device owns the transport. The lease
+/// keeps renewing all through the call, and a renewal is no cue to start
+/// playing: the platform player resumes by itself when focus returns, and
+/// nothing else may resume it into the call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lease_renewals_during_a_call_do_not_resume_playback() {
+    let t = synced_core("j").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(1_500.0).await;
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    t.backend.clear_log();
+    // Several lease renewals' worth of call.
+    t.run_for(30_000.0).await;
+    assert!(
+        !t.backend.log().contains(&ScriptedCall::Play),
+        "nothing resumed the player into the call: {:?}",
+        t.backend.log()
+    );
+    assert!(
+        !t.transport().await.position.is_playing,
+        "still shown as paused"
+    );
+
+    // Focus comes back: the platform resumes and says so.
+    let (key, position_ms) = t.backend.current().unwrap();
+    t.run(Command::BackendReport {
+        report: BackendReport::Playing { key, position_ms },
+    })
+    .await;
+    t.run_for(100.0).await;
+    assert!(t.transport().await.position.is_playing, "focus came back");
+}
+
 /// A backend that ends an item without moving on to the follow-up it was
 /// given (a `SetNext` it had not applied yet, a preload it lost): the
 /// session still adopts the follow-up at the boundary, and when no

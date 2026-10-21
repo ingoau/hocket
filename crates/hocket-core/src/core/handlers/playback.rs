@@ -489,13 +489,16 @@ impl Actor {
                     crate::core::Internal::ClearOfflineSkips,
                 ));
             }
+            // A lease change (every renewal is one) is no cue to start
+            // playing while a call holds audio focus: the platform player
+            // resumes by itself when focus returns.
+            let resume = self.playback.want_playing && !self.playback.focus_suspended;
             if !self.playback.loaded {
                 if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                     let position = self.resume_position_for(&item);
-                    let play = self.playback.want_playing;
-                    self.load_item(&item, position, play, None);
+                    self.load_item(&item, position, resume, None);
                 }
-            } else if self.playback.want_playing && !self.playback.playing {
+            } else if resume && !self.playback.playing {
                 self.set_playing(true);
             }
         } else {
