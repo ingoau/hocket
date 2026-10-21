@@ -99,10 +99,12 @@ pub(crate) struct Playback {
     /// `SetNext` still in flight, a preload it dropped) would otherwise
     /// leave the session on an item nothing plays.
     pub adopted_at: Option<EpochMs>,
-    /// Silenced by a transient audio-focus loss (a call). Nothing but the
-    /// user starts playback while it holds: the backend still means to play
-    /// and resumes on its own (reporting `Playing`) when focus returns, or,
-    /// had an item been loaded paused meanwhile, stays paused.
+    /// Silenced by a transient audio-focus loss (a call): the backend still
+    /// means to play and resumes on its own (reporting `Playing`) when focus
+    /// returns, or, had an item been loaded paused meanwhile, stays paused.
+    /// A lease change and the retry after a stream error do not start
+    /// playback while it holds; the user's own actions do, and so, for now,
+    /// do the core's other reloads and skips.
     pub focus_suspended: bool,
     /// A skip in a burst moved to this item but the backend has not been
     /// given it yet: it is loaded once no further skip arrived by this local

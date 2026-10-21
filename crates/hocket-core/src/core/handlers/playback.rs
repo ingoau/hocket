@@ -1212,11 +1212,12 @@ impl Actor {
                     .map(|t| t.title.clone())
                     .unwrap_or_else(|| "track".into());
                 if self.playback.load_failures <= LOAD_RETRIES {
-                    // One retry: transient stream errors are common.
+                    // One retry: transient stream errors are common. Not
+                    // playing over a call, though, should one hold focus.
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         let failures = self.playback.load_failures;
                         let pos = self.playback.position_ms;
-                        let play = self.playback.want_playing;
+                        let play = self.playback.want_playing && !self.playback.focus_suspended;
                         self.load_item(&item, pos, play, None);
                         self.playback.load_failures = failures;
                     }

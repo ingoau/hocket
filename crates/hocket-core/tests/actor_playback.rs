@@ -551,6 +551,52 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
     assert!(t.transport().await.position.is_playing, "focus came back");
 }
 
+/// A stream error during a call is retried, but the retry must not start the
+/// track over the call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stream_error_during_a_call_retries_quietly() {
+    let t = synced_core("l").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(1_500.0).await;
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    t.run_for(100.0).await;
+    let (key, _) = t.backend.current().unwrap();
+    t.backend.clear_log();
+    t.run(Command::BackendReport {
+        report: BackendReport::Error {
+            key,
+            message: "connection reset".into(),
+            fatal: true,
+        },
+    })
+    .await;
+    t.run_for(10_000.0).await;
+    let log = t.backend.log();
+    assert!(
+        log.iter().any(|c| matches!(c, ScriptedCall::Load { .. })),
+        "the track was retried: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|c| matches!(
+            c,
+            ScriptedCall::Play | ScriptedCall::Load { play: true, .. }
+        )),
+        "and nothing started it over the call: {log:?}"
+    );
+    assert!(!t.transport().await.position.is_playing);
+}
+
 /// During a call another app takes audio focus for good. Nothing should
 /// resume when the call ends: the player is paused and the core stops
 /// wanting to play.

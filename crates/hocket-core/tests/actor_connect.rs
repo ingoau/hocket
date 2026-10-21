@@ -735,13 +735,14 @@ async fn previous_goes_back_once_the_playing_devices_lease_lapses() {
 /// `b` plays, following `a`'s room (on a tie the lowest device id leads),
 /// then its core restarts and rejoins inside the lease window. A room keeps
 /// the lease of an owner that disconnected, so the fresh engine adopts a lease
-/// naming `b` while holding nothing. Returns `(b, a)`.
-async fn restarted_while_the_room_still_names_it() -> (TestCore, TestCore) {
+/// naming `b` while holding nothing. `b` started at `start_index` of three
+/// tracks. Returns `(b, a)`.
+async fn restarted_while_the_room_still_names_it(start_index: u32) -> (TestCore, TestCore) {
     let (a, b, net) = pair_on().await;
     b.run(Command::PlayTracks {
         server_id: b.server_id.clone(),
         track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
-        start_index: 0,
+        start_index,
         label: "Sel".into(),
         shuffle: false,
     })
@@ -769,7 +770,7 @@ async fn restarted_while_the_room_still_names_it() -> (TestCore, TestCore) {
 /// room names: this device, which would drop the request for want of it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn play_after_a_restart_the_room_outlived_starts_here() {
-    let (b, a) = restarted_while_the_room_still_names_it().await;
+    let (b, a) = restarted_while_the_room_still_names_it(0).await;
     b.run(Command::Play).await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
     assert!(b.backend.is_playing(), "play took the transport");
@@ -778,7 +779,7 @@ async fn play_after_a_restart_the_room_outlived_starts_here() {
 /// So does starting something new there.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_music_after_a_restart_the_room_outlived_plays_here() {
-    let (b, a) = restarted_while_the_room_still_names_it().await;
+    let (b, a) = restarted_while_the_room_still_names_it(0).await;
     b.run(Command::PlayTracks {
         server_id: b.server_id.clone(),
         track_ids: vec!["t3".into(), "t4".into()],
@@ -790,6 +791,18 @@ async fn new_music_after_a_restart_the_room_outlived_plays_here() {
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
     assert_eq!(b.current_track_id().await.as_deref(), Some("t3"));
     assert!(b.backend.is_playing(), "the new music plays here");
+}
+
+/// And so does Previous. The room's position for the track is this device's
+/// own from before the restart: there is no other player to send a restart
+/// to, so it goes back a track and plays that here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_after_a_restart_the_room_outlived_plays_here() {
+    let (b, a) = restarted_while_the_room_still_names_it(1).await;
+    b.run(Command::Previous).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(b.current_track_id().await.as_deref(), Some("t0"));
+    assert!(b.backend.is_playing(), "the previous track plays here");
 }
 
 /// What would start the player making sound: `Play`, or a load that plays.
