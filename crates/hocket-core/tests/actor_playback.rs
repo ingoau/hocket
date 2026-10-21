@@ -1084,3 +1084,37 @@ async fn rating_off_queue_does_not_emit_queue() {
         "off-queue ratings must not rebuild MediaSession"
     );
 }
+
+/// The play button works after a restart inside the lease window, while the
+/// lease persisted with this device as its owner is still live. A lease this
+/// core does not hold is nobody to ask, so pressing play claims it rather
+/// than wiring a request to a phantom owner that would be routed back here
+/// and dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_works_after_a_restart_inside_the_lease_window() {
+    let t = synced_core("a").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(2_000.0).await;
+    assert!(t.backend.is_playing(), "a owns the transport and plays");
+    let me = t.device_id.clone();
+    assert_eq!(
+        t.snapshot().await.transport.lease.owner.as_deref(),
+        Some(me.as_str())
+    );
+
+    // Same clock and data directory, so the persisted lease is still live.
+    let t = t.restart("a").await;
+    t.run_for(1_000.0).await;
+    assert!(
+        !t.backend.is_playing(),
+        "the restarted core holds nothing and plays nothing"
+    );
+
+    t.run(Command::Play).await;
+    t.run_for(1_000.0).await;
+    assert!(t.backend.is_playing(), "play took the transport");
+}

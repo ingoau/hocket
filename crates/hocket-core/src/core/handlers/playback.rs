@@ -582,7 +582,11 @@ impl Actor {
             self.apply_transport_command(cmd);
             return;
         }
-        let nobody = engine.lease().owner.is_none();
+        // Not "is the lease unowned" but "is there another device to ask":
+        // a lease still naming this device while the engine holds nothing is
+        // no owner at all, and a request addressed to it would come back here
+        // and be dropped. Play claims it instead of vanishing.
+        let nobody = engine.remote_owner().is_none();
         match (&cmd, nobody) {
             (TransportCommand::Play | TransportCommand::TogglePlay, true) => {
                 if self.doc().is_some_and(|d| d.current.is_some()) {
