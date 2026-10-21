@@ -948,6 +948,7 @@ impl Actor {
         };
         if position.is_some_and(crate::session::previous_should_restart) {
             // Previous after a few seconds restarts the track (Symfonium's behaviour).
+            tracing::debug!(target: "hocket::player", ?position, "previous: restarting the track");
             if self.owns_transport() {
                 self.seek_to(0);
             } else {
@@ -955,6 +956,7 @@ impl Actor {
             }
             return;
         }
+        tracing::debug!(target: "hocket::player", ?position, "previous: back a track");
         self.queue_command(Command::Previous);
     }
 

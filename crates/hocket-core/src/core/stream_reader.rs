@@ -382,13 +382,32 @@ impl StreamReader {
             .await;
         let mut handles = sh.handles.lock();
         handles.opening = handles.opening.saturating_sub(1);
-        let (source, info) = opened?;
+        let (source, info) = match opened {
+            Ok(o) => o,
+            Err(e) => {
+                if matches!(e, StreamError::Closed | StreamError::ShutDown) {
+                    tracing::debug!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+                } else {
+                    tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+                }
+                return Err(e);
+            }
+        };
         if sh.stopped.is_cancelled() {
             return Err(StreamError::ShutDown);
         }
         handles.next_id += 1;
         let id = handles.next_id;
         let network = source.pulling();
+        tracing::debug!(
+            target: "hocket::stream",
+            track = %token.track_id,
+            offset,
+            handle = id,
+            background,
+            from = if network { "server" } else { "cache" },
+            "stream opened"
+        );
         handles.open.insert(
             id,
             Arc::new(Handle {
@@ -937,6 +956,7 @@ impl CacheSource {
                         (None, None) => false,
                     };
                     if short {
+                        tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = ended_at, expected = ?seg.stop.or(self.total), "the server's stream ended early");
                         self.persist();
                         self.failed = Some(StreamError::Network("stream ended early".into()));
                         continue;
@@ -985,6 +1005,7 @@ impl CacheSource {
                         self.seg = Some(seg);
                     }
                     Some(Err(e)) => {
+                        tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = seg.next_abs, error = %e, "the server's stream failed");
                         self.persist();
                         self.failed = Some(StreamError::Network(e));
                     }
@@ -1098,6 +1119,7 @@ impl CacheSource {
             (p, None) => Some(format!("bytes={p}-")),
             (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
         };
+        tracing::debug!(target: "hocket::stream", track = %self.token.track_id, ?range, "fetching from the server");
         let url = api.stream_url(&self.token.track_id, &stream_options(self.profile.as_ref()));
         let fetch = self.sh.upstream.fetch(UpstreamRequest { url, range });
         let up = tokio::select! {

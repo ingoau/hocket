@@ -397,6 +397,9 @@ impl Actor {
                 }
             }
         };
+        // Every command the player is given is logged on its way (debug).
+        let backend: Arc<dyn PlaybackBackend> =
+            Arc::new(crate::audio::logged::LoggedBackend::new(backend));
 
         let core_stream = cfg.audio == AudioMode::Native;
         let volume = saved_volume(&db, clock.as_ref());

@@ -583,12 +583,34 @@ impl Actor {
 
     /// A transport command from this device's UI.
     pub(crate) fn transport_command(&mut self, cmd: TransportCommand) {
+        // Where each press went, so a bundle shows one that did nothing.
+        // Volume is left out: a slider drag sends dozens.
+        let quiet = matches!(cmd, TransportCommand::SetVolume { .. });
         let Some(engine) = &self.engine else {
+            if !quiet {
+                tracing::debug!(target: "hocket::player", ?cmd, "no session: dropped");
+            }
             return;
         };
         if engine.owns_transport() {
+            if !quiet {
+                tracing::debug!(target: "hocket::player", ?cmd, "applied here");
+            }
             self.apply_transport_command(cmd);
             return;
+        }
+        if !quiet {
+            match engine.remote_owner() {
+                Some(owner) => {
+                    tracing::debug!(target: "hocket::player", ?cmd, %owner, "sent to the device that plays")
+                }
+                None if matches!(cmd, TransportCommand::Play | TransportCommand::TogglePlay)
+                    && self.doc().is_some_and(|d| d.current.is_some()) =>
+                {
+                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: claiming the transport")
+                }
+                None => tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: dropped"),
+            }
         }
         // Not "is the lease unowned" but "is there another device to ask":
         // a lease still naming this device while the engine holds nothing is
@@ -990,6 +1012,14 @@ impl Actor {
     // -- backend reports -----------------------------------------------------------
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        if !matches!(
+            report,
+            BackendReport::Position { .. }
+                | BackendReport::SystemVolume { .. }
+                | BackendReport::OutputDevicesChanged { .. }
+        ) {
+            tracing::debug!(target: "hocket::player", ?report, "player reported");
+        }
         let current = |k: &QueueKey, me: &Actor| me.playback.backend_key.as_ref() == Some(k);
         if let BackendReport::TransitionedToNext { key } = &report {
             // A backend that moved on to the preloaded item without reporting
