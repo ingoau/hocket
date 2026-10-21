@@ -5328,9 +5328,14 @@ mod tests {
             }),
         });
         assert_eq!(e.held_epoch(), Some(305));
+        let synced = e.confirmed.clone();
 
         e.handle(Input::Disconnected { peer: "up".into() });
         assert!(e.owns_transport() && e.is_detached());
+        // Cut off, a track ends: only our own room hears of it.
+        e.handle(Input::LocalOp {
+            op: SessionOp::TrackEnded,
+        });
         assert_ne!(
             e.held_epoch(),
             Some(305),
@@ -5343,9 +5348,7 @@ mod tests {
             peer: "up2".into(),
             url: "wss://c/".into(),
         });
-        let mut doc = e.confirmed.clone();
-        doc.session_id = "s".into();
-        let mut rep = replica_with(doc);
+        let mut rep = replica_with(synced);
         rep.transport_lease = lease.clone();
         let outs = e.handle(Input::WireIn {
             peer: "up2".into(),
@@ -5357,17 +5360,30 @@ mod tests {
                 extra: Default::default(),
             }),
         });
-        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+        let w = wire_outs(&outs);
+        assert!(w.iter().any(|(_, m)| matches!(
             m,
             Msg::LeaseClaim {
                 epoch_expected: Some(305),
                 ..
             }
         )));
+        assert!(
+            w.iter().any(|(_, m)| matches!(
+                m,
+                Msg::Op {
+                    op: SessionOp::TrackEnded,
+                    epoch: Some(305),
+                    ..
+                }
+            )),
+            "the offline track end is replayed under the coordinator's epoch: {w:?}"
+        );
         assert_eq!(e.held_epoch(), Some(305), "back on the coordinator's epoch");
 
-        // Before the coordinator answers the claim, the track moves on.
-        let outs = e.handle(Input::LocalStamp {
+        // Before the coordinator answers the claim, the next track ends and
+        // a heartbeat falls due.
+        let mut outs = e.handle(Input::LocalStamp {
             key: Some("k2".into()),
             track_id: Some("t2".into()),
             position: PositionStamp {
@@ -5381,22 +5397,36 @@ mod tests {
             scrobbled: false,
             volume: None,
         });
-        let outs: Vec<_> = outs
-            .into_iter()
-            .chain(e.handle(Input::LocalOp {
-                op: SessionOp::Next,
-            }))
-            .collect();
-        let epochs: Vec<_> = wire_outs(&outs)
-            .into_iter()
+        outs.extend(e.handle(Input::LocalOp {
+            op: SessionOp::TrackEnded,
+        }));
+        clock.0.store(30_000, Ordering::SeqCst);
+        outs.extend(e.handle(Input::Tick));
+        let w = wire_outs(&outs);
+        let stamps: Vec<_> = w
+            .iter()
             .filter_map(|(_, m)| match m {
-                Msg::TransportStamp { epoch, .. } => Some(epoch),
-                Msg::Op { epoch, .. } => epoch,
+                Msg::TransportStamp { epoch, .. } => Some(*epoch),
                 _ => None,
             })
             .collect();
-        assert!(!epochs.is_empty(), "{outs:?}");
-        assert!(epochs.iter().all(|&ep| ep == 305), "{epochs:?}");
+        let ops: Vec<_> = w
+            .iter()
+            .filter_map(|(_, m)| match m {
+                Msg::Op { epoch, .. } => Some(*epoch),
+                _ => None,
+            })
+            .collect();
+        let beats: Vec<_> = w
+            .iter()
+            .filter_map(|(_, m)| match m {
+                Msg::LeaseHeartbeat { epoch, .. } => Some(*epoch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stamps, vec![305], "{w:?}");
+        assert_eq!(ops, vec![Some(305)], "{w:?}");
+        assert_eq!(beats, vec![305], "{w:?}");
         assert!(e.owns_transport());
     }
 
