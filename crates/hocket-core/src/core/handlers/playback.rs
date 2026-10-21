@@ -14,6 +14,8 @@ use crate::core::state::{pending_scrobbles_key, PendingScrobble};
 
 /// How long a volume sent to another device wins over its stamps.
 const REMOTE_VOLUME_HOLD_MS: f64 = 1500.0;
+/// A position report this far from where the track should be is logged.
+const POSITION_JUMP_LOG_MS: i64 = 2_000;
 use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
@@ -244,6 +246,7 @@ impl Actor {
             self.playback.loaded = true;
         } else {
             let Some(source) = self.media_source_for(&item.key, &track) else {
+                tracing::info!(target: "hocket::player", key = %item.key, track = %track.id, "no source to play this from");
                 self.player_notice(
                     PlayerNoticeCode::NoServer,
                     "No server connection: add or reconnect your server",
@@ -500,13 +503,18 @@ impl Actor {
             let resume = self.playback.want_playing && !self.playback.focus_suspended;
             if !self.playback.loaded {
                 if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                    tracing::debug!(target: "hocket::player", key = %item.key, play = resume, "holding the transport: loading");
                     let position = self.resume_position_for(&item);
                     self.load_item(&item, position, resume, None);
                 }
             } else if resume && !self.playback.playing {
+                tracing::debug!(target: "hocket::player", "holding the transport: resuming");
                 self.set_playing(true);
             }
         } else {
+            if self.playback.loaded {
+                tracing::debug!(target: "hocket::player", "another device holds the transport: stopping here");
+            }
             // Another device owns transport now: this backend must go quiet
             // and stop accepting late reports for what it had loaded.
             self.render_only();
@@ -599,36 +607,32 @@ impl Actor {
             self.apply_transport_command(cmd);
             return;
         }
-        if !quiet {
-            match engine.remote_owner() {
-                Some(owner) => {
-                    tracing::debug!(target: "hocket::player", ?cmd, %owner, "sent to the device that plays")
-                }
-                None if matches!(cmd, TransportCommand::Play | TransportCommand::TogglePlay)
-                    && self.doc().is_some_and(|d| d.current.is_some()) =>
-                {
-                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: claiming the transport")
-                }
-                None => tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: dropped"),
-            }
-        }
         // Not "is the lease unowned" but "is there another device to ask":
         // a lease still naming this device while the engine holds nothing is
         // no owner at all, and a request addressed to it would come back here
         // and be dropped. Play claims it instead of vanishing.
-        let nobody = engine.remote_owner().is_none();
+        let owner = engine.remote_owner();
+        let nobody = owner.is_none();
         match (&cmd, nobody) {
             (TransportCommand::Play | TransportCommand::TogglePlay, true) => {
                 if self.doc().is_some_and(|d| d.current.is_some()) {
+                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: claiming the transport");
                     self.playback.want_playing = true;
                     self.engine_input(Input::ClaimTransport { takeover: false });
+                } else {
+                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays and nothing is queued: dropped");
                 }
             }
             (TransportCommand::SetVolume { volume, muted }, true) => {
                 self.set_local_volume(*volume, muted.unwrap_or(false))
             }
-            (_, true) => {}
-            (_, false) => self.engine_input(Input::TransportRequest(cmd)),
+            (_, true) => tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: dropped"),
+            (_, false) => {
+                if !quiet {
+                    tracing::debug!(target: "hocket::player", ?cmd, owner = ?owner, "sent to the device that plays");
+                }
+                self.engine_input(Input::TransportRequest(cmd))
+            }
         }
     }
 
@@ -681,6 +685,7 @@ impl Actor {
         if self.playback.loaded {
             self.set_playing(true);
         } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+            tracing::debug!(target: "hocket::player", key = %item.key, "play with nothing loaded: loading");
             let position = self.resume_position_for(&item);
             self.load_item(&item, position, true, None);
         }
@@ -696,11 +701,15 @@ impl Actor {
             .restore_position
             .take_if(|(k, _)| *k == item.key)
         {
+            tracing::debug!(target: "hocket::player", key = %item.key, position_ms = p, "resuming at the position to restore");
             return p;
         }
         if self.playback.doc_key.as_ref() == Some(&item.key) {
-            self.playback.position_ms
+            let p = self.playback.position_ms;
+            tracing::debug!(target: "hocket::player", key = %item.key, position_ms = p, "resuming where it was");
+            p
         } else {
+            tracing::debug!(target: "hocket::player", key = %item.key, last = ?self.playback.doc_key, "starting from the top: the last position was for another queue entry");
             0
         }
     }
@@ -1104,6 +1113,12 @@ impl Actor {
                 if !current(&key, self) {
                     return;
                 }
+                // Ticks are left out, but not one far from where the track
+                // should be: a backend that restarted or stalled by itself.
+                let expected = self.playback.position_now(self.now());
+                if (i64::from(position_ms) - i64::from(expected)).abs() > POSITION_JUMP_LOG_MS {
+                    tracing::debug!(target: "hocket::player", %key, position_ms, expected, "player position is not where it should be");
+                }
                 self.playback.position_ms = position_ms;
                 self.playback.position_at = self.now();
                 if let Some(id) = self.playback.track_id().map(str::to_string) {
@@ -1187,6 +1202,7 @@ impl Actor {
                     // says) is ignored; otherwise follow the document.
                     if !(self.playback.loaded && self.playback.doc_key.as_ref() == Some(&item.key))
                     {
+                        tracing::debug!(target: "hocket::player", key = %item.key, "the backend's transition never came: loading the document's item");
                         self.playback.awaiting_transition = false;
                         let play = self.playback.want_playing;
                         self.load_item(&item, 0, play, None);
@@ -1225,6 +1241,7 @@ impl Actor {
                     self.playback.awaiting_transition = false;
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         if self.playback.doc_key.as_ref() == Some(&item.key) {
+                            tracing::debug!(target: "hocket::player", key = %item.key, "the follow-up never started: loading it");
                             self.playback.load_failures += 1;
                             self.load_item(&item, 0, true, None);
                         }
@@ -1247,6 +1264,7 @@ impl Actor {
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         let failures = self.playback.load_failures;
                         let pos = self.playback.position_ms;
+                        tracing::debug!(target: "hocket::player", key = %item.key, position_ms = pos, failures, "retrying after a playback error");
                         let play = self.playback.want_playing && !self.playback.focus_suspended;
                         self.load_item(&item, pos, play, None);
                         self.playback.load_failures = failures;

@@ -4,11 +4,14 @@
 //! playing or not), play, pause, stop, seek. Debug level, target
 //! `hocket::player`, captured while developer mode is on.
 //!
-//! Volume is left out: a slider drag sends dozens. Nothing logged carries a
+//! Volume is left out: a slider drag sends dozens, and so is a follow-up that
+//! did not change (the queue refreshes it often). Nothing logged carries a
 //! URL, only what kind of source it is, so no stream token or credential
 //! reaches a log.
 
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::api::{MediaSource, OutputDevice};
 use crate::audio::backend::{BackendError, PlaybackBackend};
@@ -19,18 +22,36 @@ const TARGET: &str = "hocket::player";
 /// See the module docs.
 pub struct LoggedBackend {
     inner: Arc<dyn PlaybackBackend>,
+    /// The follow-up last logged (`None` until one is).
+    next: Mutex<Option<Option<String>>>,
 }
 
 impl LoggedBackend {
     pub fn new(inner: Arc<dyn PlaybackBackend>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            next: Mutex::new(None),
+        }
+    }
+
+    /// Whether `key` is a different follow-up from the one last logged
+    /// (and remember it).
+    fn next_changed(&self, key: Option<&str>) -> bool {
+        let key = key.map(str::to_string);
+        let mut last = self.next.lock();
+        if last.as_ref() == Some(&key) {
+            return false;
+        }
+        *last = Some(key);
+        true
     }
 }
 
-/// Where a source's audio comes from, by its URL's form.
+/// Where a source's audio comes from, by its URL's form. A local file is a
+/// download, or a complete copy in the stream cache handed out directly.
 pub fn source_kind(url: &str) -> &'static str {
     if url.starts_with("file:") {
-        "download"
+        "local file"
     } else if url.starts_with(STREAM_URL_PREFIX) {
         "core stream"
     } else {
@@ -75,10 +96,14 @@ impl PlaybackBackend for LoggedBackend {
             if play { "playing" } else { "paused" },
             next.as_ref().map(|n| n.key.as_str()).unwrap_or("none"),
         );
+        self.next_changed(next.as_ref().map(|n| n.key.as_str()));
         logged(|| what, self.inner.load(source, next, position_ms, play))
     }
 
     fn set_next(&self, next: Option<MediaSource>) -> Result<(), BackendError> {
+        if !self.next_changed(next.as_ref().map(|n| n.key.as_str())) {
+            return self.inner.set_next(next);
+        }
         let what = format!(
             "next {}",
             next.as_ref()
@@ -97,6 +122,7 @@ impl PlaybackBackend for LoggedBackend {
     }
 
     fn stop(&self) -> Result<(), BackendError> {
+        self.next_changed(None);
         logged(|| "stop".into(), self.inner.stop())
     }
 
@@ -181,7 +207,7 @@ mod tests {
 
     #[test]
     fn source_kinds_are_told_apart_by_url() {
-        assert_eq!(source_kind("file:///data/music/a.flac"), "download");
+        assert_eq!(source_kind("file:///data/music/a.flac"), "local file");
         assert_eq!(source_kind("hocket-stream://abc123"), "core stream");
         assert_eq!(
             source_kind("https://music.example/rest/stream?id=1"),
@@ -272,6 +298,30 @@ mod tests {
         fn name(&self) -> &'static str {
             "recorder"
         }
+    }
+
+    /// An unchanged follow-up is not logged again, but still reaches the
+    /// backend every time.
+    #[test]
+    fn an_unchanged_follow_up_still_reaches_the_backend() {
+        let inner = Arc::new(Recorder::default());
+        let b = LoggedBackend::new(inner.clone());
+        assert!(b.next_changed(None));
+        assert!(!b.next_changed(None));
+        assert!(b.next_changed(Some("k")));
+        b.set_next(Some(source("k", "file:///k"))).unwrap();
+        b.set_next(Some(source("k", "file:///k"))).unwrap();
+        b.set_next(None).unwrap();
+        b.set_next(None).unwrap();
+        assert_eq!(
+            *inner.0.lock(),
+            [
+                "next Some(\"k\")",
+                "next Some(\"k\")",
+                "next None",
+                "next None"
+            ]
+        );
     }
 
     /// Every call reaches the backend it wraps unchanged, the defaulted

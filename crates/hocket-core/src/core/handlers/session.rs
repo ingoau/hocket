@@ -956,7 +956,8 @@ impl Actor {
             }
             return;
         }
-        tracing::debug!(target: "hocket::player", ?position, "previous: back a track");
+        // The queue decides: back a track, or the top of this one at the start.
+        tracing::debug!(target: "hocket::player", ?position, "previous: asking the queue");
         self.queue_command(Command::Previous);
     }
 

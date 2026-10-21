@@ -1131,8 +1131,11 @@ impl Actor {
         message: impl Into<String>,
         detail: Option<String>,
     ) {
+        let message = message.into();
+        // What the player bar showed: the user saw it, so a bundle should too.
+        tracing::info!(target: "hocket::player", ?code, %message, "player notice");
         self.emit(Event::PlayerNotice {
-            message: Some(message.into()),
+            message: Some(message),
             code: Some(code),
             detail,
         });

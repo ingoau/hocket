@@ -374,40 +374,37 @@ impl StreamReader {
         if sh.stopped.is_cancelled() {
             return Err(StreamError::ShutDown);
         }
-        let token = self.lookup(url_or_token)?;
-        self.reserve()?;
+        let token = match self.lookup(url_or_token) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::info!(target: "hocket::stream", offset, error = %e, "stream open refused");
+                return Err(e);
+            }
+        };
+        if let Err(e) = self.reserve() {
+            tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open refused");
+            return Err(e);
+        }
         let cancel = CancellationToken::new();
         let opened = self
             .open_source(&token, offset, length, background, &cancel)
             .await;
+        if let Err(e) = &opened {
+            if matches!(e, StreamError::Closed | StreamError::ShutDown) {
+                tracing::debug!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+            } else {
+                tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+            }
+        }
         let mut handles = sh.handles.lock();
         handles.opening = handles.opening.saturating_sub(1);
-        let (source, info) = match opened {
-            Ok(o) => o,
-            Err(e) => {
-                if matches!(e, StreamError::Closed | StreamError::ShutDown) {
-                    tracing::debug!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
-                } else {
-                    tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
-                }
-                return Err(e);
-            }
-        };
+        let (source, info) = opened?;
         if sh.stopped.is_cancelled() {
             return Err(StreamError::ShutDown);
         }
         handles.next_id += 1;
         let id = handles.next_id;
         let network = source.pulling();
-        tracing::debug!(
-            target: "hocket::stream",
-            track = %token.track_id,
-            offset,
-            handle = id,
-            background,
-            from = if network { "server" } else { "cache" },
-            "stream opened"
-        );
         handles.open.insert(
             id,
             Arc::new(Handle {
@@ -417,6 +414,18 @@ impl StreamReader {
                 background,
                 network: std::sync::atomic::AtomicBool::new(network),
             }),
+        );
+        drop(handles);
+        // Where the first read comes from: a fetch already under way, or
+        // local bytes (cached, or a download). A later fetch logs itself.
+        tracing::debug!(
+            target: "hocket::stream",
+            track = %token.track_id,
+            offset,
+            handle = id,
+            background,
+            first_read = if network { "server" } else { "local" },
+            "stream opened"
         );
         Ok(StreamInfo { handle: id, ..info })
     }
@@ -518,6 +527,9 @@ impl StreamReader {
             handles.opening += 1;
             idle
         };
+        if !idle.is_empty() {
+            tracing::debug!(target: "hocket::stream", closed = idle.len(), "closing stream handles left idle");
+        }
         for h in idle {
             h.cancel.cancel();
         }
