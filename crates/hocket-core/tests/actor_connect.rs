@@ -9,6 +9,12 @@ use hocket_core::core::test_support::{seeded_server, TestCore};
 use hocket_core::sim::SimTime;
 
 async fn pair() -> (TestCore, TestCore) {
+    let (a, b, _) = pair_on().await;
+    (a, b)
+}
+
+/// [`pair`], also handing back the network so a core can be restarted onto it.
+async fn pair_on() -> (TestCore, TestCore, std::sync::Arc<MemoryNet>) {
     let server = seeded_server(6, 200.0);
     let net = MemoryNet::new();
     let clock = SimTime::new(1_700_000_000_000.0);
@@ -31,7 +37,7 @@ async fn pair() -> (TestCore, TestCore) {
     assert!(ca.connected && cb.connected, "{ca:?} {cb:?}");
     assert_eq!(ca.tier, ConnectionTier::Lan);
     assert_eq!(a.snapshot().await.devices.len(), 2);
-    (a, b)
+    (a, b, net)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -724,4 +730,143 @@ async fn previous_goes_back_once_the_playing_devices_lease_lapses() {
     a.run(Command::Previous).await;
     a.run_for(1_000.0).await;
     assert_eq!(a.current_track_id().await.as_deref(), Some("t0"));
+}
+
+/// `b` plays, following `a`'s room (on a tie the lowest device id leads),
+/// then its core restarts and rejoins inside the lease window. A room keeps
+/// the lease of an owner that disconnected, so the fresh engine adopts a lease
+/// naming `b` while holding nothing. Returns `(b, a)`.
+async fn restarted_while_the_room_still_names_it() -> (TestCore, TestCore) {
+    let (a, b, net) = pair_on().await;
+    b.run(Command::PlayTracks {
+        server_id: b.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(b.backend.is_playing());
+    b.core.shutdown().await;
+    let TestCore {
+        clock, server, dir, ..
+    } = b;
+    let b = TestCore::start_in("b", server, Some(net), 2, clock, dir).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    let s = b.snapshot().await;
+    assert!(s.connection.connected, "b rejoined");
+    assert_eq!(
+        s.transport.lease.owner.as_deref(),
+        Some(b.device_id.as_str()),
+        "the room still names b"
+    );
+    assert!(!b.backend.is_playing(), "the restarted core holds nothing");
+    (b, a)
+}
+
+/// Play there claims the lease, at once, rather than asking the owner the
+/// room names: this device, which would drop the request for want of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_after_a_restart_the_room_outlived_starts_here() {
+    let (b, a) = restarted_while_the_room_still_names_it().await;
+    b.run(Command::Play).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(b.backend.is_playing(), "play took the transport");
+}
+
+/// So does starting something new there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_music_after_a_restart_the_room_outlived_plays_here() {
+    let (b, a) = restarted_while_the_room_still_names_it().await;
+    b.run(Command::PlayTracks {
+        server_id: b.server_id.clone(),
+        track_ids: vec!["t3".into(), "t4".into()],
+        start_index: 0,
+        label: "New".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(b.current_track_id().await.as_deref(), Some("t3"));
+    assert!(b.backend.is_playing(), "the new music plays here");
+}
+
+/// What would start the player making sound: `Play`, or a load that plays.
+fn starts_playing(log: &[hocket_core::audio::scripted::ScriptedCall]) -> bool {
+    use hocket_core::audio::scripted::ScriptedCall;
+    log.iter().any(|c| {
+        matches!(
+            c,
+            ScriptedCall::Play | ScriptedCall::Load { play: true, .. }
+        )
+    })
+}
+
+/// A call takes audio focus on the device that plays, and meanwhile another
+/// device changes the track. The new track loads paused, and the lease
+/// renewals that follow must not start it over the call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+    a.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    a.backend.clear_log();
+    b.run(Command::Next).await;
+    // Several lease renewals' worth of call.
+    TestCore::run_all_for(&[&a, &b], 20_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t1"));
+    let log = a.backend.log();
+    assert!(
+        !starts_playing(&log),
+        "nothing started t1 over the call: {log:?}"
+    );
+}
+
+/// A device that hands the play away during a call has nothing of that call
+/// left to wait for: pressing play there later starts at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_after_handing_off_during_a_call_starts_at_once() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    a.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    a.run(Command::OpenHandoffPicker).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    a.run(Command::HandoffTo {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    b.run(Command::Stop).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.snapshot().await.transport.lease.owner.is_none());
+
+    a.run(Command::Play).await;
+    // Less than a lease renewal: the press itself must start it.
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(a.backend.is_playing(), "play started at once");
 }

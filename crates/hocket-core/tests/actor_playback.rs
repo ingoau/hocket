@@ -551,6 +551,42 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
     assert!(t.transport().await.position.is_playing, "focus came back");
 }
 
+/// During a call another app takes audio focus for good. Nothing should
+/// resume when the call ends: the player is paused and the core stops
+/// wanting to play.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_permanent_focus_loss_during_a_call_pauses_for_good() {
+    let t = synced_core("k").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(1_500.0).await;
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: true },
+    })
+    .await;
+    t.run_for(100.0).await;
+    t.backend.clear_log();
+    t.run(Command::BackendReport {
+        report: BackendReport::AudioFocusLost { transient: false },
+    })
+    .await;
+    t.run_for(30_000.0).await;
+    let log = t.backend.log();
+    assert!(
+        log.contains(&ScriptedCall::Pause),
+        "the player is paused: {log:?}"
+    );
+    assert!(!log.contains(&ScriptedCall::Play), "and nothing resumes it");
+    assert!(!t.transport().await.position.is_playing);
+}
+
 /// A backend that ends an item without moving on to the follow-up it was
 /// given (a `SetNext` it had not applied yet, a preload it lost): the
 /// session still adopts the follow-up at the boundary, and when no
@@ -1127,38 +1163,4 @@ async fn rating_off_queue_does_not_emit_queue() {
         session, 0,
         "off-queue ratings must not rebuild MediaSession"
     );
-}
-
-/// The play button works after a restart inside the lease window, while the
-/// lease persisted with this device as its owner is still live. A lease this
-/// core does not hold is nobody to ask, so pressing play claims it rather
-/// than wiring a request to a phantom owner that would be routed back here
-/// and dropped.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn play_works_after_a_restart_inside_the_lease_window() {
-    let t = synced_core("a").await;
-    let sid = t.server_id.clone();
-    t.run(Command::PlayContext {
-        args: album_args(&sid, "al0"),
-    })
-    .await;
-    t.run_for(2_000.0).await;
-    assert!(t.backend.is_playing(), "a owns the transport and plays");
-    let me = t.device_id.clone();
-    assert_eq!(
-        t.snapshot().await.transport.lease.owner.as_deref(),
-        Some(me.as_str())
-    );
-
-    // Same clock and data directory, so the persisted lease is still live.
-    let t = t.restart("a").await;
-    t.run_for(1_000.0).await;
-    assert!(
-        !t.backend.is_playing(),
-        "the restarted core holds nothing and plays nothing"
-    );
-
-    t.run(Command::Play).await;
-    t.run_for(1_000.0).await;
-    assert!(t.backend.is_playing(), "play took the transport");
 }

@@ -528,10 +528,12 @@ impl Actor {
             .and_then(|d| d.current.as_ref().map(|c| c.key.clone()));
         let new_key = document.current.as_ref().map(|c| c.key.clone());
         let owns = self.owns_transport();
+        // As in `transport_command`: a lease naming this device that it does
+        // not hold is no owner, and new music started here claims it.
         let nobody_owns = self
             .engine
             .as_ref()
-            .map(|e| e.lease().owner.is_none())
+            .map(|e| e.remote_owner().is_none())
             .unwrap_or(true);
 
         // The item to load, once the UI has the new state.

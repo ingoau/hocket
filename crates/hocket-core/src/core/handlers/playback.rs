@@ -276,7 +276,10 @@ impl Actor {
             }
         }
         self.playback.playing = play;
-        self.playback.focus_suspended = false;
+        if play {
+            // A paused load says nothing of focus coming back.
+            self.playback.focus_suspended = false;
+        }
         self.playback.buffering = !transitioned;
         self.playback.started_at = started_at;
         self.playback.started_local = now - f64::from(played_ms);
@@ -339,7 +342,9 @@ impl Actor {
         p.adopted_at = None;
         p.next = None;
         p.next_doc_key = None;
-        p.focus_suspended = false;
+        if play {
+            p.focus_suspended = false;
+        }
         p.load_failures = 0;
         if play {
             p.want_playing = true;
@@ -693,6 +698,9 @@ impl Actor {
         self.playback.loaded = false;
         self.playback.playing = false;
         self.playback.buffering = false;
+        // Nothing of a call's suspension carries over: there is no longer a
+        // player here to resume.
+        self.playback.focus_suspended = false;
         self.playback.backend_key = None;
         self.playback.next = None;
         self.playback.next_doc_key = None;
@@ -1253,12 +1261,14 @@ impl Actor {
                 self.engine_input(Input::PreBufferReady { key });
             }
             BackendReport::AudioFocusLost { transient } => {
-                if !self.playback.playing {
-                    return;
-                }
-                if !transient {
+                if !transient && (self.playback.playing || self.playback.focus_suspended) {
+                    // Another app took focus for good, perhaps while a call
+                    // already had us silent: stay stopped after it too.
                     self.playback.want_playing = false;
                     self.set_playing(false);
+                    return;
+                }
+                if !self.playback.playing {
                     return;
                 }
                 // A call, a navigation prompt: the platform player keeps its

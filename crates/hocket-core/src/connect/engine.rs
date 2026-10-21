@@ -3788,7 +3788,7 @@ impl Engine {
     /// restart inside the lease window): there is nobody to ask, because a
     /// request would be routed straight back here and dropped for want of the
     /// lease. Whoever wants the transport then claims it.
-    pub fn remote_owner(&self) -> Option<DeviceId> {
+    pub(crate) fn remote_owner(&self) -> Option<DeviceId> {
         self.lease
             .owner
             .clone()
