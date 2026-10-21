@@ -374,12 +374,28 @@ impl StreamReader {
         if sh.stopped.is_cancelled() {
             return Err(StreamError::ShutDown);
         }
-        let token = self.lookup(url_or_token)?;
-        self.reserve()?;
+        let token = match self.lookup(url_or_token) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::info!(target: "hocket::stream", offset, error = %e, "stream open refused");
+                return Err(e);
+            }
+        };
+        if let Err(e) = self.reserve() {
+            tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open refused");
+            return Err(e);
+        }
         let cancel = CancellationToken::new();
         let opened = self
             .open_source(&token, offset, length, background, &cancel)
             .await;
+        if let Err(e) = &opened {
+            if matches!(e, StreamError::Closed | StreamError::ShutDown) {
+                tracing::debug!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+            } else {
+                tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
+            }
+        }
         let mut handles = sh.handles.lock();
         handles.opening = handles.opening.saturating_sub(1);
         let (source, info) = opened?;
@@ -398,6 +414,18 @@ impl StreamReader {
                 background,
                 network: std::sync::atomic::AtomicBool::new(network),
             }),
+        );
+        drop(handles);
+        // Where the first read comes from: a fetch already under way, or
+        // local bytes (cached, or a download). A later fetch logs itself.
+        tracing::debug!(
+            target: "hocket::stream",
+            track = %token.track_id,
+            offset,
+            handle = id,
+            background,
+            first_read = if network { "server" } else { "local" },
+            "stream opened"
         );
         Ok(StreamInfo { handle: id, ..info })
     }
@@ -499,6 +527,9 @@ impl StreamReader {
             handles.opening += 1;
             idle
         };
+        if !idle.is_empty() {
+            tracing::debug!(target: "hocket::stream", closed = idle.len(), "closing stream handles left idle");
+        }
         for h in idle {
             h.cancel.cancel();
         }
@@ -937,6 +968,7 @@ impl CacheSource {
                         (None, None) => false,
                     };
                     if short {
+                        tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = ended_at, expected = ?seg.stop.or(self.total), "the server's stream ended early");
                         self.persist();
                         self.failed = Some(StreamError::Network("stream ended early".into()));
                         continue;
@@ -985,6 +1017,7 @@ impl CacheSource {
                         self.seg = Some(seg);
                     }
                     Some(Err(e)) => {
+                        tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = seg.next_abs, error = %e, "the server's stream failed");
                         self.persist();
                         self.failed = Some(StreamError::Network(e));
                     }
@@ -1098,6 +1131,7 @@ impl CacheSource {
             (p, None) => Some(format!("bytes={p}-")),
             (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
         };
+        tracing::debug!(target: "hocket::stream", track = %self.token.track_id, ?range, "fetching from the server");
         let url = api.stream_url(&self.token.track_id, &stream_options(self.profile.as_ref()));
         let fetch = self.sh.upstream.fetch(UpstreamRequest { url, range });
         let up = tokio::select! {

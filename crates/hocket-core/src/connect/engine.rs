@@ -1241,9 +1241,11 @@ impl Engine {
             Input::TransportRequest(cmd) => {
                 if self.held.is_some() {
                     self.out.push(Output::TransportCommand(cmd));
-                } else {
+                } else if self.remote_owner().is_some() {
                     let from = self.cfg.device.id.clone();
                     self.upstream_send(Msg::TransportRequest { command: cmd, from });
+                } else {
+                    self.log("debug", "transport request with no owner to ask");
                 }
             }
             Input::PrimeRequest { track_id } => {
@@ -2437,6 +2439,8 @@ impl Engine {
             Msg::TransportRequest { command, .. } => {
                 if self.held.is_some() {
                     self.out.push(Output::TransportCommand(command));
+                } else {
+                    self.log("debug", "transport request for a lease we do not hold");
                 }
             }
             Msg::PrimeRequest { track_id, .. } => {
@@ -3778,7 +3782,13 @@ impl Engine {
     /// (renewals go to the owner alone), so `expires_at` here is stale for
     /// every other device and is no test of liveness: a lapse arrives as its
     /// own grant with no owner.
-    fn remote_owner(&self) -> Option<DeviceId> {
+    ///
+    /// `None` also covers a lease still naming *this* device while
+    /// [`Engine::owns_transport`] is false (a handoff the room never heard, a
+    /// restart inside the lease window): there is nobody to ask, because a
+    /// request would be routed straight back here and dropped for want of the
+    /// lease. Whoever wants the transport then claims it.
+    pub(crate) fn remote_owner(&self) -> Option<DeviceId> {
         self.lease
             .owner
             .clone()
@@ -4517,6 +4527,121 @@ mod tests {
         );
         assert_eq!(e.sync_base().unwrap().revision, 1);
         assert!(e.pending.is_empty());
+    }
+
+    /// A handoff releases the lease locally the moment the takeover goes out,
+    /// trusting the room to move it. When the room never answers (cut off, the
+    /// target gone) the room's record still names this device while it holds
+    /// nothing. A transport request then has nowhere to go: the room would
+    /// route it straight back here, to be dropped for want of the lease. So
+    /// there is no owner to ask, and the UI claims instead (see
+    /// `transport_command`).
+    #[test]
+    fn a_lease_still_naming_us_that_we_do_not_hold_is_no_owner() {
+        let (mut src, _) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(
+            &mut src,
+            Some(replica_with(room_doc)),
+            vec![dev("b"), dev("c")],
+        );
+        src.handle(Input::ClaimTransport { takeover: false });
+        src.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                ack_of: None,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 1,
+                    expires_at: 99_999.0,
+                },
+            }),
+        });
+        src.handle(Input::LocalStamp {
+            key: Some("k".into()),
+            track_id: Some("t".into()),
+            position: PositionStamp {
+                position_ms: 1000,
+                taken_at: 10_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 1000,
+            started_at: 5.0,
+            scrobbled: false,
+            volume: None,
+        });
+        assert!(src.owns_transport());
+        src.handle(Input::OpenPicker);
+        src.handle(Input::HandoffTo {
+            device_id: "b".into(),
+        });
+
+        // The room never applied the takeover, so its record is still us.
+        assert!(!src.owns_transport(), "handed off locally");
+        assert_eq!(src.lease().owner.as_deref(), Some("a"));
+        assert_eq!(
+            src.remote_owner(),
+            None,
+            "a lease naming us that we do not hold is nobody to ask"
+        );
+
+        // Nothing is wired into that void, and nothing is applied locally.
+        let outs = src.handle(Input::TransportRequest(TransportCommand::TogglePlay));
+        assert!(
+            !wire_outs(&outs)
+                .iter()
+                .any(|(_, m)| matches!(m, Msg::TransportRequest { .. })),
+            "a request addressed to ourselves would only come back and be dropped"
+        );
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::TransportCommand(_))));
+    }
+
+    /// The same mismatch arriving from the room rather than made locally: a
+    /// device that attaches to a room whose replica still names it as
+    /// transport owner (its lease outlived a restart) adopts that record while
+    /// holding nothing.
+    #[test]
+    fn an_adopted_lease_naming_us_leaves_nobody_to_ask() {
+        let (mut e, _) = engine("a");
+        let doc = crate::session::new_document("scope", "s".into(), 0.0);
+        let mut rep = replica_with(doc);
+        rep.transport_lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 9,
+            expires_at: 999_999.0,
+        };
+        attach(&mut e, Some(rep), vec![]);
+        assert_eq!(e.lease().owner.as_deref(), Some("a"), "adopted as given");
+        assert!(!e.owns_transport(), "but this engine holds nothing");
+        assert_eq!(e.remote_owner(), None);
+        let outs = e.handle(Input::TransportRequest(TransportCommand::TogglePlay));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::TransportRequest { .. })));
+    }
+
+    /// The same mismatch as seen by a device that really is a bystander: there
+    /// the owner is someone else, so the request goes to them.
+    #[test]
+    fn a_request_still_goes_to_another_device_that_owns_the_lease() {
+        let (mut e, _) = engine("a");
+        let doc = crate::session::new_document("scope", "s".into(), 0.0);
+        let mut rep = replica_with(doc);
+        rep.transport_lease = TransportLease {
+            owner: Some("b".into()),
+            epoch: 4,
+            expires_at: 99_999.0,
+        };
+        attach(&mut e, Some(rep), vec![dev("b")]);
+        assert_eq!(e.remote_owner().as_deref(), Some("b"));
+        let outs = e.handle(Input::TransportRequest(TransportCommand::TogglePlay));
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::TransportRequest { .. })));
     }
 
     fn attach(

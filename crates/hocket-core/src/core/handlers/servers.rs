@@ -275,6 +275,7 @@ impl Actor {
     fn ensure_current_loaded(&mut self) {
         if self.owns_transport() {
             if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                tracing::debug!(target: "hocket::player", key = %item.key, "a server is reachable again: loading the current item");
                 let play = self.playback.want_playing;
                 let pos = self.playback.position_ms;
                 self.load_item(&item, pos, play, None);
@@ -701,6 +702,23 @@ impl Actor {
             .as_ref()
             .is_some_and(|n| n.kind == NetworkKind::Offline);
         let changed = self.network.as_ref() != Some(&state);
+        // Only what playback cares about: the kind, and whether it is metered.
+        if self
+            .network
+            .as_ref()
+            .is_none_or(|n| n.kind != state.kind || n.metered != state.metered)
+        {
+            let from = self.network.as_ref().map(|n| format!("{:?}", n.kind));
+            self.log(
+                "info",
+                format!(
+                    "network: {} -> {:?}{}",
+                    from.as_deref().unwrap_or("unknown"),
+                    state.kind,
+                    if state.metered { " (metered)" } else { "" }
+                ),
+            );
+        }
         self.downloads.set_network(Some(state.clone()));
         self.network = Some(state.clone());
         if changed {

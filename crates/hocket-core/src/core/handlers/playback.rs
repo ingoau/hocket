@@ -14,6 +14,8 @@ use crate::core::state::{pending_scrobbles_key, PendingScrobble};
 
 /// How long a volume sent to another device wins over its stamps.
 const REMOTE_VOLUME_HOLD_MS: f64 = 1500.0;
+/// A position report this far from where the track should be is logged.
+const POSITION_JUMP_LOG_MS: i64 = 2_000;
 use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
@@ -244,6 +246,7 @@ impl Actor {
             self.playback.loaded = true;
         } else {
             let Some(source) = self.media_source_for(&item.key, &track) else {
+                tracing::info!(target: "hocket::player", key = %item.key, track = %track.id, "no source to play this from");
                 self.player_notice(
                     PlayerNoticeCode::NoServer,
                     "No server connection: add or reconnect your server",
@@ -276,7 +279,10 @@ impl Actor {
             }
         }
         self.playback.playing = play;
-        self.playback.focus_suspended = false;
+        if play {
+            // A paused load says nothing of focus coming back.
+            self.playback.focus_suspended = false;
+        }
         self.playback.buffering = !transitioned;
         self.playback.started_at = started_at;
         self.playback.started_local = now - f64::from(played_ms);
@@ -339,7 +345,9 @@ impl Actor {
         p.adopted_at = None;
         p.next = None;
         p.next_doc_key = None;
-        p.focus_suspended = false;
+        if play {
+            p.focus_suspended = false;
+        }
         p.load_failures = 0;
         if play {
             p.want_playing = true;
@@ -489,16 +497,24 @@ impl Actor {
                     crate::core::Internal::ClearOfflineSkips,
                 ));
             }
+            // A lease change (every renewal is one) is no cue to start
+            // playing while a call holds audio focus: the platform player
+            // resumes by itself when focus returns.
+            let resume = self.playback.want_playing && !self.playback.focus_suspended;
             if !self.playback.loaded {
                 if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                    tracing::debug!(target: "hocket::player", key = %item.key, play = resume, "holding the transport: loading");
                     let position = self.resume_position_for(&item);
-                    let play = self.playback.want_playing;
-                    self.load_item(&item, position, play, None);
+                    self.load_item(&item, position, resume, None);
                 }
-            } else if self.playback.want_playing && !self.playback.playing {
+            } else if resume && !self.playback.playing {
+                tracing::debug!(target: "hocket::player", "holding the transport: resuming");
                 self.set_playing(true);
             }
         } else {
+            if self.playback.loaded {
+                tracing::debug!(target: "hocket::player", "another device holds the transport: stopping here");
+            }
             // Another device owns transport now: this backend must go quiet
             // and stop accepting late reports for what it had loaded.
             self.render_only();
@@ -575,26 +591,48 @@ impl Actor {
 
     /// A transport command from this device's UI.
     pub(crate) fn transport_command(&mut self, cmd: TransportCommand) {
+        // Where each press went, so a bundle shows one that did nothing.
+        // Volume is left out: a slider drag sends dozens.
+        let quiet = matches!(cmd, TransportCommand::SetVolume { .. });
         let Some(engine) = &self.engine else {
+            if !quiet {
+                tracing::debug!(target: "hocket::player", ?cmd, "no session: dropped");
+            }
             return;
         };
         if engine.owns_transport() {
+            if !quiet {
+                tracing::debug!(target: "hocket::player", ?cmd, "applied here");
+            }
             self.apply_transport_command(cmd);
             return;
         }
-        let nobody = engine.lease().owner.is_none();
+        // Not "is the lease unowned" but "is there another device to ask":
+        // a lease still naming this device while the engine holds nothing is
+        // no owner at all, and a request addressed to it would come back here
+        // and be dropped. Play claims it instead of vanishing.
+        let owner = engine.remote_owner();
+        let nobody = owner.is_none();
         match (&cmd, nobody) {
             (TransportCommand::Play | TransportCommand::TogglePlay, true) => {
                 if self.doc().is_some_and(|d| d.current.is_some()) {
+                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: claiming the transport");
                     self.playback.want_playing = true;
                     self.engine_input(Input::ClaimTransport { takeover: false });
+                } else {
+                    tracing::debug!(target: "hocket::player", ?cmd, "nobody plays and nothing is queued: dropped");
                 }
             }
             (TransportCommand::SetVolume { volume, muted }, true) => {
                 self.set_local_volume(*volume, muted.unwrap_or(false))
             }
-            (_, true) => {}
-            (_, false) => self.engine_input(Input::TransportRequest(cmd)),
+            (_, true) => tracing::debug!(target: "hocket::player", ?cmd, "nobody plays: dropped"),
+            (_, false) => {
+                if !quiet {
+                    tracing::debug!(target: "hocket::player", ?cmd, owner = ?owner, "sent to the device that plays");
+                }
+                self.engine_input(Input::TransportRequest(cmd))
+            }
         }
     }
 
@@ -647,6 +685,7 @@ impl Actor {
         if self.playback.loaded {
             self.set_playing(true);
         } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+            tracing::debug!(target: "hocket::player", key = %item.key, "play with nothing loaded: loading");
             let position = self.resume_position_for(&item);
             self.load_item(&item, position, true, None);
         }
@@ -662,11 +701,15 @@ impl Actor {
             .restore_position
             .take_if(|(k, _)| *k == item.key)
         {
+            tracing::debug!(target: "hocket::player", key = %item.key, position_ms = p, "resuming at the position to restore");
             return p;
         }
         if self.playback.doc_key.as_ref() == Some(&item.key) {
-            self.playback.position_ms
+            let p = self.playback.position_ms;
+            tracing::debug!(target: "hocket::player", key = %item.key, position_ms = p, "resuming where it was");
+            p
         } else {
+            tracing::debug!(target: "hocket::player", key = %item.key, last = ?self.playback.doc_key, "starting from the top: the last position was for another queue entry");
             0
         }
     }
@@ -686,6 +729,9 @@ impl Actor {
         self.playback.loaded = false;
         self.playback.playing = false;
         self.playback.buffering = false;
+        // Nothing of a call's suspension carries over: there is no longer a
+        // player here to resume.
+        self.playback.focus_suspended = false;
         self.playback.backend_key = None;
         self.playback.next = None;
         self.playback.next_doc_key = None;
@@ -975,6 +1021,14 @@ impl Actor {
     // -- backend reports -----------------------------------------------------------
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        if !matches!(
+            report,
+            BackendReport::Position { .. }
+                | BackendReport::SystemVolume { .. }
+                | BackendReport::OutputDevicesChanged { .. }
+        ) {
+            tracing::debug!(target: "hocket::player", ?report, "player reported");
+        }
         let current = |k: &QueueKey, me: &Actor| me.playback.backend_key.as_ref() == Some(k);
         if let BackendReport::TransitionedToNext { key } = &report {
             // A backend that moved on to the preloaded item without reporting
@@ -1059,6 +1113,12 @@ impl Actor {
                 if !current(&key, self) {
                     return;
                 }
+                // Ticks are left out, but not one far from where the track
+                // should be: a backend that restarted or stalled by itself.
+                let expected = self.playback.position_now(self.now());
+                if (i64::from(position_ms) - i64::from(expected)).abs() > POSITION_JUMP_LOG_MS {
+                    tracing::debug!(target: "hocket::player", %key, position_ms, expected, "player position is not where it should be");
+                }
                 self.playback.position_ms = position_ms;
                 self.playback.position_at = self.now();
                 if let Some(id) = self.playback.track_id().map(str::to_string) {
@@ -1142,6 +1202,7 @@ impl Actor {
                     // says) is ignored; otherwise follow the document.
                     if !(self.playback.loaded && self.playback.doc_key.as_ref() == Some(&item.key))
                     {
+                        tracing::debug!(target: "hocket::player", key = %item.key, "the backend's transition never came: loading the document's item");
                         self.playback.awaiting_transition = false;
                         let play = self.playback.want_playing;
                         self.load_item(&item, 0, play, None);
@@ -1180,6 +1241,7 @@ impl Actor {
                     self.playback.awaiting_transition = false;
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         if self.playback.doc_key.as_ref() == Some(&item.key) {
+                            tracing::debug!(target: "hocket::player", key = %item.key, "the follow-up never started: loading it");
                             self.playback.load_failures += 1;
                             self.load_item(&item, 0, true, None);
                         }
@@ -1197,11 +1259,13 @@ impl Actor {
                     .map(|t| t.title.clone())
                     .unwrap_or_else(|| "track".into());
                 if self.playback.load_failures <= LOAD_RETRIES {
-                    // One retry: transient stream errors are common.
+                    // One retry: transient stream errors are common. Not
+                    // playing over a call, though, should one hold focus.
                     if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
                         let failures = self.playback.load_failures;
                         let pos = self.playback.position_ms;
-                        let play = self.playback.want_playing;
+                        tracing::debug!(target: "hocket::player", key = %item.key, position_ms = pos, failures, "retrying after a playback error");
+                        let play = self.playback.want_playing && !self.playback.focus_suspended;
                         self.load_item(&item, pos, play, None);
                         self.playback.load_failures = failures;
                     }
@@ -1246,12 +1310,14 @@ impl Actor {
                 self.engine_input(Input::PreBufferReady { key });
             }
             BackendReport::AudioFocusLost { transient } => {
-                if !self.playback.playing {
-                    return;
-                }
-                if !transient {
+                if !transient && (self.playback.playing || self.playback.focus_suspended) {
+                    // Another app took focus for good, perhaps while a call
+                    // already had us silent: stay stopped after it too.
                     self.playback.want_playing = false;
                     self.set_playing(false);
+                    return;
+                }
+                if !self.playback.playing {
                     return;
                 }
                 // A call, a navigation prompt: the platform player keeps its

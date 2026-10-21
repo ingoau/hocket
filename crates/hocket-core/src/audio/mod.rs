@@ -21,6 +21,7 @@ pub mod backend;
 pub mod dsp;
 pub mod external;
 pub mod formats;
+pub mod logged;
 pub mod padding;
 pub mod scripted;
 pub mod sleep;

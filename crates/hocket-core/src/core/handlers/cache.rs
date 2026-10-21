@@ -116,6 +116,7 @@ impl Actor {
             return false;
         }
         self.cache.offline_skips += 1;
+        tracing::debug!(target: "hocket::player", key = %item.key, track = %track.id, "offline, and neither downloaded nor cached: skipping");
         if self.cache.offline_skips > MAX_OFFLINE_SKIPS {
             self.cache.offline_skips = 0;
             self.playback.want_playing = false;
