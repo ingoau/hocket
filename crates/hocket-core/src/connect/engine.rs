@@ -2787,6 +2787,13 @@ impl Engine {
             self.send_ping();
             self.rebase_stamp();
             self.restamp_on_grant = self.held.is_some().then_some(false);
+            // While cut off our own room granted us its own epoch. This room
+            // only knows the one we held here: speak it again, or every stamp
+            // and op sent before the claim is answered gets us fenced, and we
+            // stop playing under a lease that still names us.
+            if let (Some(h), Some(epoch)) = (&mut self.held, self.held_remote_epoch) {
+                h.epoch = epoch;
+            }
             // Say goodbye to anyone we were serving: they'll re-elect.
             let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
@@ -5286,6 +5293,111 @@ mod tests {
             .iter()
             .any(|o| matches!(o, Output::LeaseChanged { owns: false, .. })));
         assert!(!e.owns_transport());
+    }
+
+    /// The owner drops off the coordinator for a second and comes back. While
+    /// cut off its own room granted it a lease under that room's epoch; what
+    /// it sends the coordinator after rejoining must carry the coordinator's
+    /// epoch again, or the coordinator fences it and the music stops while
+    /// the lease still names this device.
+    #[test]
+    fn owner_rejoining_speaks_the_coordinators_epoch() {
+        let (mut e, clock) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        e.handle(Input::LocalOp { op: play_op() });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpAck {
+                op_id: "a-2".into(),
+                revision: 2,
+            }),
+        });
+        e.handle(Input::ClaimTransport { takeover: false });
+        let lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 305,
+            expires_at: 999_999.0,
+        };
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: lease.clone(),
+                ack_of: None,
+            }),
+        });
+        assert_eq!(e.held_epoch(), Some(305));
+
+        e.handle(Input::Disconnected { peer: "up".into() });
+        assert!(e.owns_transport() && e.is_detached());
+        assert_ne!(
+            e.held_epoch(),
+            Some(305),
+            "our own room granted its own epoch"
+        );
+
+        clock.0.store(11_000, Ordering::SeqCst);
+        e.handle(Input::Tick);
+        e.handle(Input::Connected {
+            peer: "up2".into(),
+            url: "wss://c/".into(),
+        });
+        let mut doc = e.confirmed.clone();
+        doc.session_id = "s".into();
+        let mut rep = replica_with(doc);
+        rep.transport_lease = lease.clone();
+        let outs = e.handle(Input::WireIn {
+            peer: "up2".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 11_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: Some(rep),
+                members: vec![],
+                extra: Default::default(),
+            }),
+        });
+        assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
+            m,
+            Msg::LeaseClaim {
+                epoch_expected: Some(305),
+                ..
+            }
+        )));
+        assert_eq!(e.held_epoch(), Some(305), "back on the coordinator's epoch");
+
+        // Before the coordinator answers the claim, the track moves on.
+        let outs = e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 0,
+                taken_at: 11_100.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 0,
+            started_at: 11_100.0,
+            scrobbled: false,
+            volume: None,
+        });
+        let outs: Vec<_> = outs
+            .into_iter()
+            .chain(e.handle(Input::LocalOp {
+                op: SessionOp::Next,
+            }))
+            .collect();
+        let epochs: Vec<_> = wire_outs(&outs)
+            .into_iter()
+            .filter_map(|(_, m)| match m {
+                Msg::TransportStamp { epoch, .. } => Some(epoch),
+                Msg::Op { epoch, .. } => epoch,
+                _ => None,
+            })
+            .collect();
+        assert!(!epochs.is_empty(), "{outs:?}");
+        assert!(epochs.iter().all(|&ep| ep == 305), "{epochs:?}");
+        assert!(e.owns_transport());
     }
 
     /// A device that does not play picks itself (or another device): it asks
