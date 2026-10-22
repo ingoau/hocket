@@ -1173,11 +1173,14 @@ impl Actor {
                     self.local_op(SessionOp::TrackEnded);
                 }
                 if !self.playback.awaiting_transition {
-                    // Nothing followed: stay on the last item, stopped.
+                    // Nothing followed: stay on the last item, stopped. The
+                    // document names it by `doc_key`, which a room that
+                    // re-keyed it has moved off the backend's `key`.
+                    let doc_key = self.playback.doc_key.clone();
                     if self
                         .doc()
                         .and_then(|d| d.current.as_ref())
-                        .is_some_and(|c| c.key == key)
+                        .is_some_and(|c| Some(&c.key) == doc_key.as_ref())
                     {
                         self.playback.playing = false;
                         self.stamp();
