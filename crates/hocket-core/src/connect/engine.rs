@@ -626,6 +626,12 @@ pub struct Engine {
     /// it kept from before, so re-send ours once it grants the lease. Holds
     /// whether that grant comes from our own room (`true`) or a remote one.
     restamp_on_grant: Option<bool>,
+    /// When we last gave a lease up (released, lost or handed off). A grant
+    /// answering a claim sent before then is for a lease we no longer want.
+    let_go_at: Option<EpochMs>,
+    /// The epoch of such a grant, given back: the room's broadcast of it
+    /// follows the answer and is no grant either.
+    given_back: Option<u32>,
     remote_transport: TransportState,
     /// The last stamp another device sent (for resume offers when its lease lapses).
     last_remote_stamp: Option<LastStamp>,
@@ -774,6 +780,8 @@ impl Engine {
             held_remote_epoch: None,
             stamp: None,
             restamp_on_grant: None,
+            let_go_at: None,
+            given_back: None,
             remote_transport: TransportState::default(),
             last_remote_stamp: None,
             pending_take: None,
@@ -1233,6 +1241,7 @@ impl Engine {
             Input::ReleaseTransport => {
                 self.restamp_on_grant = None;
                 if let Some(h) = self.held.take() {
+                    self.let_go_at = Some(self.now_local_ms());
                     self.upstream_send(Msg::LeaseRelease { epoch: h.epoch });
                     self.detached = false;
                     self.emit_lease();
@@ -3423,6 +3432,19 @@ impl Engine {
     ) {
         let now = self.now_local_ms();
         let mine = lease.owner.as_deref() == Some(self.cfg.device.id.as_str());
+        if mine && self.held.is_none() {
+            // A claim still in flight when we let go (a reclaim the room
+            // fenced us out of first, a stop): give the lease straight back
+            // rather than hold it with nothing playing.
+            let stale = matches!((ack_of, self.let_go_at), (Some(t), Some(g)) if t < g);
+            if stale {
+                self.given_back = Some(lease.epoch);
+                self.upstream_send(Msg::LeaseRelease { epoch: lease.epoch });
+            }
+            if stale || self.given_back == Some(lease.epoch) {
+                return;
+            }
+        }
         self.lease = lease.clone();
         self.remote_transport.lease = lease.clone();
         if mine {
@@ -3563,6 +3585,7 @@ impl Engine {
     fn lose_lease(&mut self) {
         self.restamp_on_grant = None;
         if self.held.take().is_some() {
+            self.let_go_at = Some(self.now_local_ms());
             self.detached = false;
             self.held_remote_epoch = None;
             self.out.push(Output::ReleaseTransport);
@@ -3801,6 +3824,7 @@ impl Engine {
         });
         // Release locally right away: the room moves the lease atomically.
         self.held = None;
+        self.let_go_at = Some(self.now_local_ms());
         self.restamp_on_grant = None;
         self.detached = false;
         self.held_remote_epoch = None;
@@ -5600,6 +5624,145 @@ mod tests {
         });
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(!e.owns_transport());
+    }
+
+    /// `a` holds the lease at epoch 316 with a stamp playing or paused, and
+    /// its link has stalled long enough for both it and the room to lapse it.
+    fn owner_after_a_stall(playing: bool) -> (Engine, Arc<TestClock>) {
+        let (mut e, clock) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        e.handle(Input::ClaimTransport { takeover: false });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 316,
+                    expires_at: 30_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 0,
+                taken_at: 12_000.0,
+                rate: 1.0,
+                is_playing: playing,
+            },
+            played_ms: 0,
+            started_at: 12_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        for t in (11_000..=30_000).step_by(1_000) {
+            clock.0.store(t, Ordering::SeqCst);
+            e.handle(Input::Tick);
+        }
+        assert!(e.owns_transport() && e.is_detached());
+        (e, clock)
+    }
+
+    fn lapse(epoch: u32) -> WireMessage {
+        WireMessage::new(Msg::LeaseGranted {
+            lease: TransportLease {
+                owner: None,
+                epoch,
+                expires_at: 30_000.0,
+            },
+            ack_of: None,
+        })
+    }
+
+    /// A paused owner has no music to keep going: it lets a lapsed lease go,
+    /// so other devices see nobody playing and play there.
+    #[test]
+    fn paused_owner_lets_a_lapsed_lease_go() {
+        let (mut e, _) = owner_after_a_stall(false);
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: lapse(317),
+        });
+        assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
+        assert!(!e.owns_transport());
+    }
+
+    /// Stopped while the reclaim is in flight: the grant that answers it
+    /// comes back for a lease we no longer want, so it is given straight back
+    /// (and the room's broadcast of it is no grant either).
+    #[test]
+    fn a_reclaim_granted_after_letting_go_is_given_back() {
+        let (mut e, clock) = owner_after_a_stall(true);
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: lapse(317),
+        });
+        let sent_at = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::LeaseClaim { sent_at, .. } => Some(*sent_at),
+                _ => None,
+            })
+            .expect("claims the lease back");
+        clock.0.store(30_500, Ordering::SeqCst);
+        e.handle(Input::ReleaseTransport);
+        assert!(!e.owns_transport());
+        let granted = TransportLease {
+            owner: Some("a".into()),
+            epoch: 318,
+            expires_at: 50_000.0,
+        };
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: granted.clone(),
+                ack_of: Some(sent_at),
+            }),
+        });
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::LeaseRelease { epoch: 318 })));
+        assert!(!outs
+            .iter()
+            .any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: granted,
+                ack_of: None,
+            }),
+        });
+        assert!(!e.owns_transport());
+
+        // A later claim of ours is granted as usual.
+        clock.0.store(31_000, Ordering::SeqCst);
+        let outs = e.handle(Input::ClaimTransport { takeover: false });
+        let sent_at = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::LeaseClaim { sent_at, .. } => Some(*sent_at),
+                _ => None,
+            })
+            .expect("claims");
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 320,
+                    expires_at: 51_000.0,
+                },
+                ack_of: Some(sent_at),
+            }),
+        });
+        assert!(e.owns_transport());
     }
 
     /// A device that does not play picks itself (or another device): it asks

@@ -141,7 +141,8 @@ impl LeaseMachine {
             None => {
                 // Free (never held, released, or lapsed). A device that believed
                 // it held an older epoch is told so unless it takes over; this
-                // is how a returning offline player learns it was fenced.
+                // is how a returning offline player learns it was fenced. (One
+                // still playing then claims it afresh, epoch unset.)
                 if let Some(e) = epoch_expected {
                     if e != self.lease.epoch && !takeover {
                         return Err(LeaseError::Fenced {
