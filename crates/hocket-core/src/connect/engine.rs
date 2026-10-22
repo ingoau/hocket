@@ -3440,10 +3440,20 @@ impl Engine {
             if stale {
                 self.given_back = Some(lease.epoch);
                 self.upstream_send(Msg::LeaseRelease { epoch: lease.epoch });
-            }
-            if stale || self.given_back == Some(lease.epoch) {
                 return;
             }
+            if self.given_back == Some(lease.epoch) {
+                if ack_of.is_some() {
+                    // A claim made since (play after a stop), renewed under
+                    // the epoch we are giving back: our release frees it
+                    // next, so ask again for a fresh one.
+                    self.claim(None, false);
+                }
+                return;
+            }
+        }
+        if self.given_back.is_some_and(|e| e != lease.epoch) {
+            self.given_back = None;
         }
         self.lease = lease.clone();
         self.remote_transport.lease = lease.clone();
@@ -5763,6 +5773,69 @@ mod tests {
             }),
         });
         assert!(e.owns_transport());
+    }
+
+    /// Stop, then Play, both while the reclaim is in flight. The room grants
+    /// the reclaim, then renews the same epoch for the new claim. The first
+    /// is given back; the second must not be lost with it, so it asks again
+    /// and holds the fresh epoch the room grants after the release.
+    #[test]
+    fn play_after_a_stop_survives_the_reclaim_being_given_back() {
+        fn claim_sent_at(outs: &[Output]) -> f64 {
+            wire_outs(outs)
+                .iter()
+                .find_map(|(_, m)| match m {
+                    Msg::LeaseClaim { sent_at, .. } => Some(*sent_at),
+                    _ => None,
+                })
+                .expect("claims")
+        }
+        let (mut e, clock) = owner_after_a_stall(true);
+        let reclaim = claim_sent_at(&e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: lapse(317),
+        }));
+        clock.0.store(30_500, Ordering::SeqCst);
+        e.handle(Input::ReleaseTransport);
+        clock.0.store(31_000, Ordering::SeqCst);
+        let play = claim_sent_at(&e.handle(Input::ClaimTransport { takeover: false }));
+        let granted = |ack: f64| {
+            WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 318,
+                    expires_at: 50_000.0,
+                },
+                ack_of: Some(ack),
+            })
+        };
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: granted(reclaim),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: granted(play),
+        });
+        assert!(!e.owns_transport(), "318 is on its way back");
+        let again = claim_sent_at(&outs);
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: lapse(319),
+        });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 320,
+                    expires_at: 51_000.0,
+                },
+                ack_of: Some(again),
+            }),
+        });
+        assert!(e.owns_transport());
+        assert_eq!(e.held_epoch(), Some(320));
     }
 
     /// A device that does not play picks itself (or another device): it asks
