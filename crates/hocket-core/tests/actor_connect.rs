@@ -883,3 +883,90 @@ async fn play_after_handing_off_during_a_call_starts_at_once() {
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
     assert!(a.backend.is_playing(), "play started at once");
 }
+
+/// Applies ops as a build from before stable context keys (#97) did: an
+/// album song made current is keyed `<op>-<n>`, where this build keys it
+/// `<op>-<n>.<index>`. Everything else is this build's reducer.
+struct OlderReducer;
+
+impl hocket_core::connect::SessionReducer for OlderReducer {
+    fn apply(
+        &self,
+        doc: &SessionDocument,
+        op: &hocket_core::connect::wire::SessionOp,
+        ctx: &hocket_core::connect::OpContext,
+    ) -> Result<SessionDocument, hocket_core::connect::ReduceFailure> {
+        let mut next =
+            hocket_core::connect::session_adapter::RealReducer::default().apply(doc, op, ctx)?;
+        let before = doc.current.as_ref().map(|c| c.key.clone());
+        if let Some(c) = next.current.as_mut() {
+            if Some(&c.key) != before.as_ref() {
+                if let Some((base, _)) = c.key.rsplit_once('.') {
+                    c.key = base.to_string();
+                }
+            }
+        }
+        Ok(next)
+    }
+}
+
+/// The room (a leads it) runs an older build that keys the current item
+/// differently. When b, playing, rejoins after a network blip and adopts the
+/// room's document, the song keeps playing where it was: a new key for the
+/// same item is not a new item.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_room_rekeying_the_current_item_does_not_restart_it() {
+    use hocket_core::audio::scripted::ScriptedCall;
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new_partitionable();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_with_reducer(
+        "a",
+        server.clone(),
+        Some(net.clone()),
+        1,
+        clock.clone(),
+        std::sync::Arc::new(OlderReducer),
+    )
+    .await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let (ca, cb) = (a.snapshot().await.connection, b.snapshot().await.connection);
+    assert!(ca.connected && cb.connected, "{ca:?} {cb:?}");
+
+    b.run(Command::PlayTracks {
+        server_id: b.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        start_index: 1,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 30_000.0).await;
+    assert!(b.backend.is_playing());
+    let ours = b.queue().await.current.unwrap().item.key;
+    let theirs = a.queue().await.current.unwrap().item.key;
+    assert_ne!(ours, theirs, "the room keyed the item its own way");
+
+    let loads = |t: &TestCore| {
+        t.backend
+            .log()
+            .iter()
+            .filter(|c| matches!(c, ScriptedCall::Load { .. }))
+            .count()
+    };
+    let loads_before = loads(&b);
+    net.set_partitioned(true);
+    TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+    net.set_partitioned(false);
+    TestCore::run_all_for(&[&a, &b], 10_000.0).await;
+
+    assert!(b.snapshot().await.connection.connected, "b rejoined");
+    let current = b.queue().await.current.unwrap();
+    assert_eq!(current.item.key, theirs, "b adopted the room's document");
+    assert_eq!(current.item.track_id, "t1");
+    assert_eq!(loads(&b), loads_before, "{:?}", b.backend.log());
+    assert!(b.backend.is_playing());
+    let (_, pos) = b.backend.current().unwrap();
+    assert!(pos >= 40_000, "still where it was, at {pos}");
+}
