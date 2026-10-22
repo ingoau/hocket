@@ -141,4 +141,25 @@ test.describe("dragging onto the queue", () => {
     // [s0, s1, x2, x3, ...] → [x2, x3, s0, s1, ...]: together, in their order, after the row dropped on.
     await expect.poll(() => titles(page, "upcoming")).toEqual([before[2], before[3], before[0], before[1], ...before.slice(4)]);
   });
+
+  test("a selection dragged up into Playing next lands there together", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const queued = await playNextSong(page, 4);
+    const upcoming = await titles(page, "upcoming");
+    // Select two Continue playing rows; drag one up onto the Playing next row.
+    const next = page.getByTestId("queue-row-next").first();
+    const rows = page.getByTestId("queue-row-upcoming");
+    await rows.nth(1).click();
+    await rows.nth(2).click({ modifiers: ["Shift"] });
+    const a = (await rows.nth(2).locator(".text").boundingBox())!;
+    const b = (await next.locator(".text").boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - 4, { steps: 16 });
+    await page.mouse.up();
+    await expect.poll(() => titles(page, "next")).toEqual([upcoming[1], upcoming[2], queued]);
+    expect(await titles(page, "upcoming")).toEqual([upcoming[0], ...upcoming.slice(3)]);
+  });
 });

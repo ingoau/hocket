@@ -1024,6 +1024,11 @@ export class FakeCore implements CoreHandle {
       let seenCtx = false;
       for (const c of combined) {
         if (c === moved && c.item && intoContext) seenCtx = true;
+        if (c === moved && !c.item && c.ci !== undefined && !intoContext) {
+          // A context item moved into Playing next: an insertion now, under its own key.
+          newIns.push({ key: c.key, trackId: s.context?.tracks?.[c.ci] ?? "", source: { type: "inserted" }, unavailable: false });
+          continue;
+        }
         if (c.item) {
           if (!seenCtx) newIns.push(c.item);
           else newOrderTail.push(this.adoptAsContext(c.item));
@@ -1306,7 +1311,8 @@ export class FakeCore implements CoreHandle {
       repeat: s.repeat,
       autoplay: s.autoplay,
       mode: s.mode,
-      totalUpcoming: upcomingCis.length,
+      // As the real core: Playing next and the rest of the context.
+      totalUpcoming: s.insertions.length + upcomingCis.length,
     };
   }
 

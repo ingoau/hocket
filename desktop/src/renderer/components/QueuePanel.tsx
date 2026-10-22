@@ -147,12 +147,13 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
       return;
     }
     // The selection lands together where the dragged row would have: after the row it was
-    // dropped on when moving down, before it when moving up.
-    if (block.includes(overKey)) return;
+    // dropped on when moving down, before it when moving up. Dropped on one of its own rows,
+    // it gathers around that row.
     const from = reorderable.indexOf(key);
     const at = reorderable.indexOf(overKey);
     if (from < 0 || at < 0) return;
-    const before = at > from ? reorderable.slice(at + 1).find((k) => !block.includes(k)) : overKey;
+    const after = at > from || block.includes(overKey);
+    const before = after ? reorderable.slice(at + 1).find((k) => !block.includes(k)) : overKey;
     for (const m of moveBlock(reorderable, block, before)) d({ type: "moveQueueItem", data: m });
   };
 
@@ -296,7 +297,8 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
         </div>
         {queue.history.length ? clearButton("history", t("queue.clearHistory"), "queue-clear-history", () => { d({ type: "removeQueueItems", data: { keys: queue.history.map((e) => e.item.key) } }); publish(EMPTY_SELECTION); }) : null}
         {queue.playingNext.length ? clearButton("next", t("queue.clearInsertions"), "queue-clear-next", () => d({ type: "clearInsertions" })) : null}
-        {queue.totalUpcoming > queue.upcoming.length ? <div className="queue-more">{t("queue.more", { count: queue.totalUpcoming - queue.upcoming.length })}</div> : null}
+        {/* totalUpcoming counts Playing next too; only Continue playing is windowed. */}
+        {queue.totalUpcoming > queue.playingNext.length + queue.upcoming.length ? <div className="queue-more">{t("queue.more", { count: queue.totalUpcoming - queue.playingNext.length - queue.upcoming.length })}</div> : null}
         {queue.autoplay ? <div className="queue-autoplay-note" data-testid="queue-autoplay-note"><Icon name="autoplay" size={18} />{t("queue.autoplayFooter")}</div> : null}
       </div>
       <span id={`${idPrefix}-hint`} className="sr-only">{t("a11y.queueHint")}</span>

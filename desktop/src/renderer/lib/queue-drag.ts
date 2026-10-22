@@ -134,9 +134,15 @@ export function addToQueue(target: ActionTarget, toIndex = 0): void {
   const before = new Set(useApp.getState().queue.playingNext.map((e) => e.item.key));
   useApp.getState().runAction("playNext", target);
   if (toIndex <= 0) return;
+  const queueBefore = useApp.getState().queue;
   const apply = (): boolean => {
-    const added = useApp.getState().queue.playingNext.filter((e) => !before.has(e.item.key));
-    if (!added.length) return false;
+    const queue = useApp.getState().queue;
+    // Only the first queue change after the drop is ours to place: if it added nothing
+    // (our Play next failed, or something else changed first), stop rather than later
+    // moving someone else's items.
+    if (queue === queueBefore) return false;
+    const added = queue.playingNext.filter((e) => !before.has(e.item.key));
+    if (!added.length) return true;
     const dest = movesToInsertBlock(added.length, toIndex);
     const d = useApp.getState().dispatch;
     dest.forEach((to, i) => {
@@ -149,8 +155,8 @@ export function addToQueue(target: ActionTarget, toIndex = 0): void {
   const unsub = useApp.subscribe(() => {
     if (apply()) unsub();
   });
-  // Generous: the queue view arrives from the core asynchronously, and a busy core is slow.
-  window.setTimeout(unsub, 10_000);
+  // The queue view arrives from the core asynchronously; a busy core can be slow.
+  window.setTimeout(unsub, 5_000);
 }
 
 function overSelector(x: number, y: number, selector: string): boolean {
