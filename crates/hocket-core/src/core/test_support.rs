@@ -70,6 +70,8 @@ pub struct TestOptions {
     pub lyrics_http: Option<Arc<dyn LyricsHttp>>,
     /// Session entropy seed (queue keys, shuffle seeds).
     pub seed: u64,
+    /// The session reducer Connect applies ops with (`None` = this build's).
+    pub reducer: Option<crate::connect::ReducerHandle>,
 }
 
 impl Core {
@@ -94,6 +96,7 @@ impl Core {
                 net: None,
                 lyrics_http: None,
                 seed: 1,
+                reducer: None,
             },
         )
     }
@@ -141,6 +144,7 @@ impl Core {
             seed: Some(opts.seed),
             manual_tick: true,
             stream_upstream: Some(upstream),
+            reducer: opts.reducer,
         };
         let handle = tokio::runtime::Handle::current();
         Core::with_runtime(config, handle, None, deps)
@@ -296,6 +300,51 @@ impl TestCore {
         server_url: &str,
         password: &str,
     ) -> TestCore {
+        Self::start_full(
+            name, server, net, seed, clock, dir, attach_api, server_url, password, None,
+        )
+        .await
+    }
+
+    /// [`TestCore::start_on`] applying session ops with `reducer`, as a
+    /// device (or the room it leads) running another build would.
+    pub async fn start_with_reducer(
+        name: &str,
+        server: FakeServer,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+        reducer: crate::connect::ReducerHandle,
+    ) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            net,
+            seed,
+            clock,
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            Some(reducer),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn start_full(
+        name: &str,
+        server: FakeServer,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+        dir: tempfile::TempDir,
+        attach_api: bool,
+        server_url: &str,
+        password: &str,
+        reducer: Option<crate::connect::ReducerHandle>,
+    ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
             cache_dir: dir.path().join("cache").to_string_lossy().into_owned(),
@@ -325,6 +374,7 @@ impl TestCore {
                 net,
                 lyrics_http: None,
                 seed,
+                reducer,
             },
             upstream.clone(),
         )

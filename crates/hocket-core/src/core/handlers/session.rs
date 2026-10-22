@@ -119,7 +119,10 @@ impl Actor {
             .settings
             .get_bool(crate::settings::keys::CONNECT_LAN_DISCOVERY)
             && self.cfg.coordinator_listen.is_none();
-        let reducer = TunableReducer::shared(self.reducer_policy.clone());
+        let reducer = self
+            .reducer_override
+            .clone()
+            .unwrap_or_else(|| TunableReducer::shared(self.reducer_policy.clone()));
         let mut engine = Engine::new(cfg, self.clock.clone(), reducer, doc.clone(), sync_base);
         // The scrobble dedupe log survives restarts (review connect #16).
         engine.restore_known_scrobbled(known_scrobbled);
@@ -526,7 +529,31 @@ impl Actor {
         let old_key = old
             .as_ref()
             .and_then(|d| d.current.as_ref().map(|c| c.key.clone()));
-        let new_key = document.current.as_ref().map(|c| c.key.clone());
+        let mut new_key = document.current.as_ref().map(|c| c.key.clone());
+        // The room's document can name the item playing here by another key
+        // without anyone moving the queue: a room running another build keys
+        // context items differently, so adopting its document (a resync, a
+        // rollback after a reject) re-keys the current item. Same track, no
+        // op asked for a change: keep playing it where it is.
+        let rekeyed = matches!(cause, DocChange::Sync | DocChange::Rollback)
+            && new_key != old_key
+            && old_key.is_some()
+            && self.playback.doc_key == old_key
+            && old
+                .as_ref()
+                .and_then(|d| d.current.as_ref())
+                .map(|c| &c.track_id)
+                == document.current.as_ref().map(|c| &c.track_id);
+        if rekeyed {
+            tracing::debug!(target: "hocket::player", from = ?old_key, to = ?new_key, "the room re-keyed the current item: keeping it playing");
+            if let Some((k, _)) = self.playback.restore_position.as_mut() {
+                if Some(&*k) == old_key.as_ref() {
+                    *k = new_key.clone().unwrap_or_default();
+                }
+            }
+            self.playback.doc_key = new_key.clone();
+            new_key = old_key.clone();
+        }
         let owns = self.owns_transport();
         // As in `transport_command`: a lease naming this device that it does
         // not hold is no owner, and new music started here claims it.
@@ -615,6 +642,11 @@ impl Actor {
         if document.current.is_some() && (new_key == old_key) && owns && self.playback.loaded {
             // Queue edits around the current item: keep the gapless preload right.
             self.refresh_next();
+        }
+        if rekeyed {
+            // Tell the room (and the saved position) the key it knows.
+            self.stamp();
+            self.save_position();
         }
         // A restored context resolves its tracks with a nested op once this
         // document's bookkeeping is done (below), so it is persisted and

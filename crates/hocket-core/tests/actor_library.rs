@@ -504,6 +504,7 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
             net: None,
             lyrics_http: Some(Arc::new(FakeLyricsHttp(external.into()))),
             seed: 7,
+            reducer: None,
         },
     )
     .unwrap();

@@ -157,6 +157,9 @@ pub(crate) struct Actor {
     /// change, and one that lands after the queue moved on is dropped.
     pub autoplay_prefetched: Option<QueueKey>,
     pub reducer_policy: Arc<ReducerPolicy>,
+    /// Stands in for [`crate::connect::session_adapter::TunableReducer`] when set (tests: a room running
+    /// another build).
+    pub reducer_override: Option<crate::connect::ReducerHandle>,
     pub entropy: Arc<dyn Entropy>,
 
     pub backend: Arc<dyn PlaybackBackend>,
@@ -440,6 +443,7 @@ impl Actor {
             autoplay_advance: false,
             autoplay_prefetched: None,
             reducer_policy,
+            reducer_override: deps.reducer.clone(),
             entropy,
             backend,
             backend_poll,
