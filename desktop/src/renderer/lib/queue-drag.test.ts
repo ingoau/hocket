@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { movesToInsertBlock, parseLibraryTarget } from "./queue-drag";
+import { moveBlock, movesToInsertBlock, parseLibraryTarget } from "./queue-drag";
 
 describe("parseLibraryTarget", () => {
   it("reads a tracks, albums, artists or playlists target", () => {
@@ -29,5 +29,41 @@ describe("movesToInsertBlock", () => {
     // [X, Y, A, B, C] → want [A, B, C, X, Y] (toIndex 3).
     expect(movesToInsertBlock(2, 3)).toEqual([4, 3]);
     expect(movesToInsertBlock(1, 4)).toEqual([4]);
+  });
+});
+
+/** Apply MoveQueueItem semantics (remove, then insert at the final index). */
+function apply(order: string[], moves: { key: string; to_index: number }[]): string[] {
+  const out = [...order];
+  for (const m of moves) {
+    out.splice(out.indexOf(m.key), 1);
+    out.splice(m.to_index, 0, m.key);
+  }
+  return out;
+}
+
+describe("moveBlock", () => {
+  const order = ["a", "b", "c", "d", "e", "f"];
+
+  it("moves a scattered selection down, together and in queue order", () => {
+    expect(apply(order, moveBlock(order, ["e", "a", "c"], "f"))).toEqual(["b", "d", "a", "c", "e", "f"]);
+  });
+
+  it("moves a selection up in front of an item", () => {
+    expect(apply(order, moveBlock(order, ["d", "f"], "b"))).toEqual(["a", "d", "f", "b", "c", "e"]);
+  });
+
+  it("moves a selection to the end", () => {
+    expect(apply(order, moveBlock(order, ["b", "c"], undefined))).toEqual(["a", "d", "e", "f", "b", "c"]);
+  });
+
+  it("leaves items already in place alone", () => {
+    expect(moveBlock(order, ["c", "d"], "e")).toEqual([]);
+    expect(moveBlock(order, ["a", "c"], "d")).toEqual([{ key: "a", to_index: 1 }]);
+  });
+
+  it("does nothing for a target inside the block or not in the queue", () => {
+    expect(moveBlock(order, ["b", "c"], "c")).toEqual([]);
+    expect(moveBlock(order, ["b"], "zz")).toEqual([]);
   });
 });

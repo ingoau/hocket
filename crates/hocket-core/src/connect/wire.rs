@@ -509,6 +509,29 @@ impl SessionOp {
         )
     }
 
+    /// What the op is and the queue keys it names, for a log line (never the
+    /// track lists a queue replacement carries).
+    pub fn summary(&self) -> String {
+        match self {
+            SessionOp::MoveQueueItem { key, to_index } => {
+                format!("moveQueueItem {key} to {to_index}")
+            }
+            SessionOp::RemoveQueueItems { keys } => format!("removeQueueItems {}", keys.join(" ")),
+            SessionOp::JumpToQueueItem { key } => format!("jumpToQueueItem {key}"),
+            SessionOp::SkipUnavailable { key } => format!("skipUnavailable {key}"),
+            SessionOp::PlayNext { track_ids, .. } => {
+                format!("playNext ({} tracks)", track_ids.len())
+            }
+            SessionOp::PlayLater { track_ids, .. } => {
+                format!("playLater ({} tracks)", track_ids.len())
+            }
+            other => serde_json::to_value(other)
+                .ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "op".into()),
+        }
+    }
+
     /// Ops only the transport owner issues (they follow playback itself).
     pub fn is_owner_op(&self) -> bool {
         matches!(

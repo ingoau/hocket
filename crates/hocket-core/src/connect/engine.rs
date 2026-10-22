@@ -3180,8 +3180,9 @@ impl Engine {
         self.log(
             "info",
             format!(
-                "op {op_id} rejected: {reason:?} at room revision {current_revision} (ours {})",
-                previous.revision
+                "op {op_id} rejected: {reason:?} at room revision {current_revision} (ours {}): {}",
+                previous.revision,
+                rejected.op.summary()
             ),
         );
         // Ops after the rejected one were chained on a base the room never
