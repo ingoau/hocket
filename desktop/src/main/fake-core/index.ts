@@ -61,6 +61,8 @@ interface SessionState {
   autoplay: boolean;
   mode: QueueMode;
   revision: number;
+  /** Base of the upcoming context items' keys: new with each context, so a key outlives reorders as the real core's do. */
+  contextKey?: string;
 }
 
 interface UndoRecord {
@@ -906,6 +908,7 @@ export class FakeCore implements CoreHandle {
     this.session = {
       ...this.session,
       context: resolved,
+      contextKey: newKey(),
       order,
       cursor: shuffle ? 0 : start,
       current: { key: newKey(), trackId: tracks[shuffle ? order[0]! : start]!, source: { type: "context", data: { index: shuffle ? order[0]! : start } }, unavailable: false },
@@ -975,7 +978,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private upcomingKey(contextIndex: number): string {
-    return `ctx-${this.session.revision}-${contextIndex}`;
+    return `ctx-${this.session.contextKey ?? "0"}-${contextIndex}`;
   }
 
   private removeItems(keys: string[]): void {
@@ -1008,7 +1011,11 @@ export class FakeCore implements CoreHandle {
       const from = combined.findIndex((c) => c.key === key);
       if (from < 0) return;
       const [moved] = combined.splice(from, 1);
-      combined.splice(Math.max(0, Math.min(toIndex, combined.length)), 0, moved!);
+      const to = Math.max(0, Math.min(toIndex, combined.length));
+      // As the real reducer: an index past the remaining insertions is in the context.
+      const leading = combined.findIndex((c) => !c.item);
+      const intoContext = !!s.context && to >= (leading < 0 ? combined.length : leading);
+      combined.splice(to, 0, moved!);
       // Split back: leading inserted items stay insertions; a context item moved
       // into the insertions region becomes an insertion (YouTube-style splice is
       // the mode's job; the fake keeps it simple and honest).
@@ -1016,6 +1023,12 @@ export class FakeCore implements CoreHandle {
       const newOrderTail: number[] = [];
       let seenCtx = false;
       for (const c of combined) {
+        if (c === moved && c.item && intoContext) seenCtx = true;
+        if (c === moved && !c.item && c.ci !== undefined && !intoContext) {
+          // A context item moved into Playing next: an insertion now, under its own key.
+          newIns.push({ key: c.key, trackId: s.context?.tracks?.[c.ci] ?? "", source: { type: "inserted" }, unavailable: false });
+          continue;
+        }
         if (c.item) {
           if (!seenCtx) newIns.push(c.item);
           else newOrderTail.push(this.adoptAsContext(c.item));
@@ -1298,7 +1311,8 @@ export class FakeCore implements CoreHandle {
       repeat: s.repeat,
       autoplay: s.autoplay,
       mode: s.mode,
-      totalUpcoming: upcomingCis.length,
+      // As the real core: Playing next and the rest of the context.
+      totalUpcoming: s.insertions.length + upcomingCis.length,
     };
   }
 
@@ -1368,6 +1382,7 @@ export class FakeCore implements CoreHandle {
     this.session = {
       ...this.session,
       context: { ...q.context, tracks },
+      contextKey: newKey(),
       order: q.shuffle ? permutation(tracks.length, q.shuffle.seed, q.shuffle.anchor) : tracks.map((_, i) => i),
       cursor: q.cursor,
       current: q.current,

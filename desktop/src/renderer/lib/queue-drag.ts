@@ -104,15 +104,45 @@ export function movesToInsertBlock(addedCount: number, toIndex: number): number[
   return to;
 }
 
+/**
+ * The moves that put `block` (keys of `order`, kept in their queue order) together just
+ * before `before`, or at the end when it is undefined. Each `to_index` is the item's
+ * final index once that move is made, as MoveQueueItem takes it; items already in place
+ * are not moved.
+ */
+export function moveBlock(order: readonly string[], block: readonly string[], before: string | undefined): { key: string; to_index: number }[] {
+  const inBlock = new Set(block);
+  if (before !== undefined && (inBlock.has(before) || !order.includes(before))) return [];
+  const work = [...order];
+  const moves: { key: string; to_index: number }[] = [];
+  // Last first: each one goes in front of the one placed after it.
+  let next = before;
+  for (const key of order.filter((k) => inBlock.has(k)).reverse()) {
+    const from = work.indexOf(key);
+    work.splice(from, 1);
+    const to = next === undefined ? work.length : work.indexOf(next);
+    work.splice(to, 0, key);
+    if (to !== from) moves.push({ key, to_index: to });
+    next = key;
+  }
+  return moves;
+}
+
 /** Play next, then move the inserted block to `toIndex` when that is not already the front. */
 export function addToQueue(target: ActionTarget, toIndex = 0): void {
   if (!isLibraryTarget(target)) return;
   const before = new Set(useApp.getState().queue.playingNext.map((e) => e.item.key));
   useApp.getState().runAction("playNext", target);
   if (toIndex <= 0) return;
+  const queueBefore = useApp.getState().queue;
   const apply = (): boolean => {
-    const added = useApp.getState().queue.playingNext.filter((e) => !before.has(e.item.key));
-    if (!added.length) return false;
+    const queue = useApp.getState().queue;
+    // Only the first queue change after the drop is ours to place: if it added nothing
+    // (our Play next failed, or something else changed first), stop rather than later
+    // moving someone else's items.
+    if (queue === queueBefore) return false;
+    const added = queue.playingNext.filter((e) => !before.has(e.item.key));
+    if (!added.length) return true;
     const dest = movesToInsertBlock(added.length, toIndex);
     const d = useApp.getState().dispatch;
     dest.forEach((to, i) => {
@@ -125,7 +155,8 @@ export function addToQueue(target: ActionTarget, toIndex = 0): void {
   const unsub = useApp.subscribe(() => {
     if (apply()) unsub();
   });
-  window.setTimeout(unsub, 2000);
+  // The queue view arrives from the core asynchronously; a busy core can be slow.
+  window.setTimeout(unsub, 5_000);
 }
 
 function overSelector(x: number, y: number, selector: string): boolean {
@@ -167,12 +198,14 @@ export function useQueueDropReveal(): void {
       window.clearTimeout(hide);
       endLibraryDrag();
     };
-    document.addEventListener("dragover", over);
+    // Capture: the queue's rows stop dragover from bubbling, and without it here a hide
+    // scheduled on the way in (the gutter) would hide the queue under the pointer.
+    document.addEventListener("dragover", over, true);
     document.addEventListener("drop", drop);
     document.addEventListener("dragend", end);
     return () => {
       window.clearTimeout(hide);
-      document.removeEventListener("dragover", over);
+      document.removeEventListener("dragover", over, true);
       document.removeEventListener("drop", drop);
       document.removeEventListener("dragend", end);
     };
