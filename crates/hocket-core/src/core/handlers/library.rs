@@ -1033,6 +1033,15 @@ impl Actor {
 
     pub(crate) fn unpin(&mut self, target: PinTarget) {
         let Some(sid) = self.server_id() else { return };
+        // A paused job would otherwise outlive its pin and keep holding its
+        // tracks from a later pin of the same target.
+        for job in self
+            .downloads
+            .unfinished_jobs(&sid, &target)
+            .unwrap_or_default()
+        {
+            let _ = self.jobs.cancel(&job);
+        }
         if let Err(e) = self.downloads.unpin(&sid, &target) {
             self.toast(format!("Couldn't remove download: {e}"), None);
             return;
