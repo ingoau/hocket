@@ -2458,6 +2458,10 @@ impl Engine {
                     // Our own room lapsed us (a long suspend); it holds nothing
                     // authoritative, so just take it back.
                     self.claim(None, true);
+                } else if lease.owner.is_none() && self.held.is_some() && self.playing_here() {
+                    // The room lapsed us while we kept playing (a link that
+                    // stalled without closing) and nobody took over.
+                    self.reclaim(from_loopback);
                 } else {
                     self.on_lease_granted(lease, ack_of, from_loopback)
                 }
@@ -2468,7 +2472,7 @@ impl Engine {
                     // it cannot fence a lease it never granted.
                     self.claim(None, true);
                 } else {
-                    self.on_lease_fenced(lease)
+                    self.on_lease_fenced(lease, from_loopback)
                 }
             }
             Msg::Presence { devices } => {
@@ -3491,13 +3495,39 @@ impl Engine {
         self.emit_devices();
     }
 
-    fn on_lease_fenced(&mut self, lease: TransportLease) {
+    fn on_lease_fenced(&mut self, lease: TransportLease, from_loopback: bool) {
+        // Still ours: what was fenced went out before we learned the epoch.
+        // Free: it lapsed while our heartbeats were stuck on a stalled link,
+        // and music still playing here is no reason to stop. A paused owner
+        // lets it go, as does one whose lease went to another device.
+        let keep = match lease.owner.as_deref() {
+            Some(owner) => owner == self.cfg.device.id,
+            None => self.playing_here(),
+        };
         self.lease = lease.clone();
         self.remote_transport.lease = lease;
         self.pending_take = None;
         if self.held.is_some() {
-            self.lose_lease();
+            if keep {
+                self.reclaim(from_loopback);
+            } else {
+                self.lose_lease();
+            }
         }
+    }
+
+    /// Whether our last stamp says something is playing here.
+    fn playing_here(&self) -> bool {
+        self.stamp.as_ref().is_some_and(|s| s.position.is_playing)
+    }
+
+    /// Claim back a lease the room no longer credits us with while we still
+    /// play under it. Never a takeover: if another device claimed it
+    /// meanwhile, the room refuses and we release then. The room heard none
+    /// of our stamps under the old epoch, so the grant brings ours again.
+    fn reclaim(&mut self, from_loopback: bool) {
+        self.restamp_on_grant = Some(from_loopback);
+        self.claim(None, false);
     }
 
     /// Move our stamp onto the clock we follow now, so it keeps meaning the
@@ -5428,6 +5458,148 @@ mod tests {
         assert_eq!(ops, vec![Some(305)], "{w:?}");
         assert_eq!(beats, vec![305], "{w:?}");
         assert!(e.owns_transport());
+    }
+
+    /// The owner's link to the coordinator stalls without closing: its
+    /// heartbeats go unanswered, the coordinator lapses the lease, and when
+    /// the link comes back the lapse and the fences for what was stuck
+    /// arrive. Nobody took over, so the owner claims the lease back and
+    /// keeps playing instead of stopping.
+    #[test]
+    fn owner_reclaims_a_lease_lapsed_over_a_stalled_link() {
+        let (mut e, clock) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        e.handle(Input::ClaimTransport { takeover: false });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 316,
+                    expires_at: 30_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        assert_eq!(e.held_epoch(), Some(316));
+
+        // The link stalls: heartbeats and a stamp go out, nothing comes back.
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 0,
+                taken_at: 12_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 0,
+            started_at: 12_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        for t in (11_000..=30_000).step_by(1_000) {
+            clock.0.store(t, Ordering::SeqCst);
+            e.handle(Input::Tick);
+        }
+        assert!(e.owns_transport() && e.is_detached());
+
+        // It comes back: first the coordinator's lapse.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: None,
+                    epoch: 317,
+                    expires_at: 30_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(e.owns_transport());
+        let sent_at = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::LeaseClaim {
+                    epoch_expected: None,
+                    takeover: false,
+                    sent_at,
+                } => Some(*sent_at),
+                _ => None,
+            })
+            .expect("claims the lease back");
+
+        // A fence for a stuck heartbeat, answered before the claim.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseFenced {
+                current_epoch: 317,
+                lease: TransportLease {
+                    owner: None,
+                    epoch: 317,
+                    expires_at: 30_000.0,
+                },
+            }),
+        });
+        assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(e.owns_transport());
+
+        // The claim is granted: our stamp goes out again under the new epoch.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 318,
+                    expires_at: 50_000.0,
+                },
+                ack_of: Some(sent_at),
+            }),
+        });
+        assert_eq!(e.held_epoch(), Some(318));
+        assert!(!e.is_detached());
+        let stamps: Vec<_> = wire_outs(&outs)
+            .into_iter()
+            .filter_map(|(_, m)| match m {
+                Msg::TransportStamp { key, epoch, .. } => Some((key, epoch)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stamps, vec![(Some("k2".to_string()), 318)]);
+
+        // A fence for something sent before the grant arrived names us at
+        // the epoch we now hold: no reason to stop.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseFenced {
+                current_epoch: 318,
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 318,
+                    expires_at: 50_000.0,
+                },
+            }),
+        });
+        assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(e.owns_transport());
+
+        // Had another device taken the lease meanwhile, we would stop.
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseFenced {
+                current_epoch: 319,
+                lease: TransportLease {
+                    owner: Some("b".into()),
+                    epoch: 319,
+                    expires_at: 70_000.0,
+                },
+            }),
+        });
+        assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
+        assert!(!e.owns_transport());
     }
 
     /// A device that does not play picks itself (or another device): it asks
