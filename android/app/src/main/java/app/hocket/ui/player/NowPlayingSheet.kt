@@ -506,7 +506,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         hero.immersive = immersiveEdge != null
         // The skip swipe's neighbours, with their layouts and colours worked out ahead (cached), so
         // a neighbour slides in in its own style and the commit changes nothing on screen.
-        val neighbours by rememberNeighbours()
+        // Held while a skip settles (see [SkipCarousel.shown]); the mini player holds its own.
+        val liveNeighbours by rememberNeighbours()
+        val neighbours = carousel.shown(liveNeighbours)
         val previousCover = neighbours.previous?.track?.coverArt
         val nextCover = neighbours.next?.track?.coverArt
         val previousLayout = rememberArtworkLayout(previousCover, preference, dark = appDark).value?.layout.immersiveOrNull()
@@ -517,8 +519,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // The swipe's fraction towards a neighbour in steps (1 = previous, -1 = next): the backdrop
         // and the colours follow it, recomposing a few times a swipe, not every frame.
         val towards by remember(carousel) { derivedStateOf { (carousel.fraction() * SCHEME_STEPS).roundToInt() / SCHEME_STEPS.toFloat() } }
-        // What the previous slot shows: the current song again when Previous will restart it.
-        val previousShown = if (carousel.restartPeek) Triple(coverArt, artworkLayout, scene.seed) else Triple(previousCover, previousLayout, previousSeed)
+        val previousShown = Triple(previousCover, previousLayout, previousSeed)
         // The full player is dark (it sits on darkened artwork), themed from the artwork, except in
         // artwork mode over a light immersive continuation (a white cover carried on in white): dark
         // controls there. The scheme crossfades on a track or mode change while the player is
@@ -671,7 +672,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // player is what accessibility sees).
                 if (!fullPlayerAccessible) {
                     Box(Modifier.fillMaxWidth().height(miniHeight).graphicsLayer { alpha = 1f - (state.progress * 4f).coerceAtMost(1f) }) {
-                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, neighbours = neighbours)
+                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours)
                     }
                 }
                 // The one artwork that flies from the mini player's thumbnail to the full player's

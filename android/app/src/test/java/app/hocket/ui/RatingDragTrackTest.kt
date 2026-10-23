@@ -27,7 +27,6 @@ import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.OfflineState
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.player.Neighbours
-import app.hocket.ui.player.previousRestarts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

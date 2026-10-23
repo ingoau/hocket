@@ -83,7 +83,7 @@ import app.hocket.ui.theme.Motion
  * position never is (the progress line is not exposed; the full player's seek bar carries it).
  */
 @Composable
-internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: HeroGeometry, thumbHidden: () -> Boolean, neighbours: Neighbours = Neighbours.None) {
+internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: HeroGeometry, thumbHidden: () -> Boolean, liveNeighbours: Neighbours = Neighbours.None) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -95,6 +95,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     val carousel = remember { SkipCarousel() }
+    val neighbours = carousel.shown(liveNeighbours)
     val threshold = with(density) { 72.dp.toPx() }
     val title = track?.title ?: ""
     val artist = track?.artist ?: stringResource(R.string.unknown_artist)
@@ -110,7 +111,6 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val syncing = rememberConnectSyncing()
     val line = MaterialTheme.colorScheme.primary.let { if (syncing) it.copy(alpha = CONNECT_SYNC_ALPHA) else it }
     val lineTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
     // The item's description already carries both lines; the scrolling texts themselves stay out of
     // the tree (a marquee is laid out wider than its box on purpose).
     val marquee = if (reducedMotion) Modifier else Modifier.clearAndSetSemantics { }.basicMarquee(iterations = 1, initialDelayMillis = 3_000, velocity = 30.dp)
@@ -130,7 +130,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                     drawRect(line, topLeft = Offset(0f, size.height - h), size = Size(size.width * f, h))
                 }
                 // The skip swipe: the artwork and the text slide, the neighbour's sliding in.
-                .then(with(carousel) { Modifier.gesture(client, scope, haptics, enabled = true, reduced = reducedMotion, hasNext = { currentNeighbours.value.next != null }, rubberThreshold = threshold) })
+                .then(with(carousel) { Modifier.gesture(client, scope, haptics, enabled = true, reduced = reducedMotion, rubberThreshold = threshold) })
                 // Taps outside the info (the thumbnail, the card's edges) expand too; pointer only,
                 // the info item below carries the accessible click.
                 .pointerInput(onExpand) { detectTapGestures(onTap = { onExpand() }) }
@@ -186,8 +186,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                         }
                     }
                     if (!reducedMotion) {
-                        val previous = if (carousel.restartPeek) track else neighbours.previous?.track
-                        previous?.let { MiniNeighbour(it, carousel, side = -1f, tag = "miniPlayer.previous") }
+                        neighbours.previous?.track?.let { MiniNeighbour(it, carousel, side = -1f, tag = "miniPlayer.previous") }
                         neighbours.next?.track?.let { MiniNeighbour(it, carousel, side = 1f, tag = "miniPlayer.next") }
                     }
                 }

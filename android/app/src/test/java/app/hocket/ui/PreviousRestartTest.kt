@@ -27,7 +27,6 @@ import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.OfflineState
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.player.Neighbours
-import app.hocket.ui.player.previousRestarts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -37,16 +36,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-/** Previous restarts a track some device plays, as in the core. */
+/** Previous (the button, not the skip swipe) restarts a track some device plays, as in the core. */
 class PreviousRestartTest : PlayerRulesTestBase() {
-
-    @Test
-    fun previousRestartsATrackPlayingAnywhere() {
-        assertTrue(previousRestarts(leaseHeld = true, positionMs = 5_000, historyEmpty = false))
-        assertFalse("nobody plays (nothing loaded yet)", previousRestarts(leaseHeld = false, positionMs = 5_000, historyEmpty = false))
-        assertFalse(previousRestarts(leaseHeld = true, positionMs = 1_000, historyEmpty = false))
-        assertTrue("nothing before it", previousRestarts(leaseHeld = false, positionMs = 0, historyEmpty = true))
-    }
 
     @Test
     fun theFakeRestartsWhileAnotherDevicePlays() {
