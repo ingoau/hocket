@@ -120,6 +120,8 @@ class PebbleBridge(
     private var nowDirty = false
     /** The settings blob the watch last took; the same one is not sent again. */
     private var lastSettings: ByteArray? = null
+    /** Why the last attempt to hand a message over failed, for the log. */
+    private var lastFailure = "nacked or unanswered"
 
     // -- core events (main thread) -----------------------------------------------------------------
 
@@ -204,8 +206,8 @@ class PebbleBridge(
         val type = num(data, Key.TYPE)
         when (type) {
             Type.HELLO -> Unit
-            Type.CMD -> PebbleLog.d("<- cmd ${PebbleLog.cmd(num(data, Key.CMD))} arg=${num(data, Key.ARG)} path=${text(data, Key.PATH)} item=${text(data, Key.ITEM)}")
-            Type.LIST_REQ -> PebbleLog.d("<- list-req #${num(data, Key.REQ_ID)} ${text(data, Key.PATH)}@${num(data, Key.OFFSET)}")
+            Type.CMD -> PebbleLog.d("<- cmd ${PebbleLog.cmd(num(data, Key.CMD))} arg=${num(data, Key.ARG)} path=${PebbleLog.path(text(data, Key.PATH))} item=${text(data, Key.ITEM)}")
+            Type.LIST_REQ -> PebbleLog.d("<- list-req #${num(data, Key.REQ_ID)} ${PebbleLog.path(text(data, Key.PATH))}@${num(data, Key.OFFSET)}")
             Type.ART_REQ -> PebbleLog.d("<- art-req gen=${num(data, Key.ART_GEN)}")
             else -> PebbleLog.w("<- unknown message ${PebbleLog.type(type)} (keys ${data.keys})")
         }
@@ -287,20 +289,22 @@ class PebbleBridge(
                 Delivery.Failed -> Unit
             }
         }
-        PebbleLog.w("-> $type not delivered after ${SEND_RETRIES + 1} attempts")
+        PebbleLog.w("-> $type not delivered after ${SEND_RETRIES + 1} attempts: $lastFailure")
         false
     }
 
     private suspend fun deliver(message: PebbleDictionary): Delivery {
+        lastFailure = "nacked or unanswered"
         transmit?.let { return it(message) }
         val results = runCatching { sender.sendDataToPebble(PebbleProtocol.APP_UUID, message) }
-            .onFailure { PebbleLog.w("send failed: ${it.message}") }
+            .onFailure { lastFailure = "${it.javaClass.simpleName}: ${it.message}"; PebbleLog.d("send attempt failed: $lastFailure") }
             .getOrElse { return Delivery.Failed }
         // null: the Pebble app is unreachable; empty: no watch connected.
         if (results.isNullOrEmpty()) return Delivery.AppGone
         if (results.values.any { it is TransmissionResult.Success }) return Delivery.Sent
         if (results.values.all { it is TransmissionResult.FailedDifferentAppOpen || it is TransmissionResult.FailedWatchNotConnected || it is TransmissionResult.FailedNoPermissions }) return Delivery.AppGone
-        PebbleLog.w("send failed: ${results.values}")
+        lastFailure = results.values.toString()
+        PebbleLog.d("send attempt failed: $lastFailure")
         return Delivery.Failed
     }
 
@@ -462,9 +466,9 @@ class PebbleBridge(
     private suspend fun onListRequest(reqId: Int, rawPath: String, offset: Int) {
         val started = SystemClock.elapsedRealtime()
         val (total, rows, title) = runCatching { list(rawPath, offset.coerceAtLeast(0)) }
-            .onFailure { PebbleLog.w("list $rawPath failed: ${it.message}") }
+            .onFailure { PebbleLog.w("list ${PebbleLog.path(rawPath)} failed: ${it.message}") }
             .getOrDefault(Triple(0, emptyList(), null))
-        PebbleLog.d("list #$reqId $rawPath@$offset: ${rows.size} of $total rows in ${SystemClock.elapsedRealtime() - started} ms")
+        PebbleLog.d("list #$reqId ${PebbleLog.path(rawPath)}@$offset: ${rows.size} of $total rows in ${SystemClock.elapsedRealtime() - started} ms")
         val message = mutableMapOf(
             Key.TYPE to u8(Type.LIST),
             Key.REQ_ID to u16(reqId),
@@ -616,8 +620,8 @@ class PebbleBridge(
     // -- album art -----------------------------------------------------------------------------------
 
     private fun onArtRequest(gen: Int, size: Int) {
-        val path = session?.metadata?.artworkPath ?: return
-        if (gen != PebbleProtocol.artGeneration(path)) return
+        val path = session?.metadata?.artworkPath ?: return PebbleLog.d("art gen $gen: no cover for the playing track")
+        if (gen != PebbleProtocol.artGeneration(path)) return PebbleLog.d("art gen $gen: stale (now ${PebbleProtocol.artGeneration(path)})")
         // The watch retries when chunks are slow; a transfer of this cover still going carries on.
         if (artJob?.isActive == true && artJobGen == gen) return
         artJob?.cancel()
@@ -625,8 +629,8 @@ class PebbleBridge(
         artJob = scope.launch {
             val art = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }
-                    .onFailure { PebbleLog.w("art for gen $gen failed: ${it.message}") }.getOrNull()
-            } ?: return@launch
+                    .onFailure { PebbleLog.w("art gen $gen failed: ${it.message}") }.getOrNull()
+            } ?: return@launch PebbleLog.w("art gen $gen: the cover could not be read")
             val started = SystemClock.elapsedRealtime()
             var offset = 0
             while (offset < art.data.size) {

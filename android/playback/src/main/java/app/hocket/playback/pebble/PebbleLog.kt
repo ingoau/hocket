@@ -1,25 +1,22 @@
 package app.hocket.playback.pebble
 
-import android.util.Log
 import app.hocket.core.DevLog
 
 /**
  * The watch link's log: into the core's capture ([DevLog], `kotlin/Pebble`), so the developer
- * diagnostics page has it next to the core's lines for the last hour, and to logcat for a live
- * `adb logcat`. Debug lines (every message each way) are kept only in developer mode.
+ * diagnostics page has it next to the core's lines for the last hour. Not to logcat: the bundle
+ * reads that too, and would get every line twice and the debug ones outside developer mode. Debug
+ * lines (every message each way) are kept only in developer mode.
  */
 internal object PebbleLog {
-    private const val TAG = "Pebble"
-    private const val DEV_TAG = "kotlin/Pebble"
+    private const val TAG = "kotlin/Pebble"
 
-    fun d(message: String) = log(Log.DEBUG, "debug", message)
-    fun i(message: String) = log(Log.INFO, "info", message)
-    fun w(message: String) = log(Log.WARN, "warn", message)
+    fun d(message: String) = DevLog.append("debug", TAG, message)
+    fun i(message: String) = DevLog.append("info", TAG, message)
+    fun w(message: String) = DevLog.append("warn", TAG, message)
 
-    private fun log(priority: Int, level: String, message: String) {
-        runCatching { Log.println(priority, TAG, message) }
-        DevLog.append(level, DEV_TAG, message)
-    }
+    /** A list path without what the user typed (`search:<text>` becomes `search:…`). */
+    fun path(path: String): String = if (path.startsWith("search:")) "search:…" else path
 
     /** A message type's name ([PebbleProtocol.Type]). */
     fun type(type: Int): String = when (type) {

@@ -63,11 +63,11 @@ class PebbleListenerService : BasePebbleListenerService() {
     }
 
     override fun onAppOpened(watchappUUID: UUID, watch: WatchIdentifier) {
-        if (watchappUUID == PebbleProtocol.APP_UUID) coroutineScope.launch { bridge()?.appOpened() }
+        if (watchappUUID == PebbleProtocol.APP_UUID) coroutineScope.launch { bridge()?.appOpened() ?: PebbleLog.w("watchapp opened, but no playback service after ${BIND_TIMEOUT_MS / 1000} s") }
     }
 
     override fun onAppClosed(watchappUUID: UUID, watch: WatchIdentifier) {
-        if (watchappUUID == PebbleProtocol.APP_UUID) bridge.value?.appClosed()
+        if (watchappUUID == PebbleProtocol.APP_UUID) bridge.value?.appClosed() ?: PebbleLog.i("watchapp closed (no playback service bound)")
     }
 
     companion object {

@@ -121,6 +121,9 @@ class PebbleBridgeTest {
 
     @Test
     fun theLinkIsLoggedForDeveloperDiagnostics() = runTest {
+        // DevLog's ring is process-wide: only what this test logs counts.
+        val marker = "marker-${java.util.UUID.randomUUID()}"
+        DevLog.append("info", "kotlin/Test", marker)
         val b = bridge()
         b.onEvent(session(state(0)))
         repeat(PebbleBridge.SEND_RETRIES + 1) { answers += Delivery.Failed }
@@ -129,11 +132,15 @@ class PebbleBridgeTest {
         runCurrent()
         b.appClosed()
         // What the diagnostics page shows as the core log.
-        val log = DevLog.recent().lines().filter { "kotlin/Pebble:" in it }
+        val log = DevLog.recent().substringAfter(marker).lines().filter { "kotlin/Pebble:" in it }
         assertTrue(log.toString(), log.any { "<- hello: watchapp" in it && "proto ${PebbleProtocol.PROTO}" in it })
         assertTrue(log.toString(), log.any { "-> hello-reply not delivered after ${PebbleBridge.SEND_RETRIES + 1} attempts" in it })
         assertTrue(log.toString(), log.any { "DEBUG" in it && "-> now" in it })
         assertTrue(log.toString(), log.any { "watchapp closed" in it })
+        b.onMessage(mapOf(Key.TYPE to PebbleDictionaryItem.UInt8(Type.LIST_REQ.toUByte()), Key.PATH to PebbleDictionaryItem.Text("search:secret words")))
+        runCurrent()
+        assertTrue(DevLog.recent().substringAfter(marker).contains("search:…"))
+        assertTrue(!DevLog.recent().contains("secret words"))
     }
 
     @Test
