@@ -113,6 +113,9 @@ const ADVERT_MIN_INTERVAL_MS: f64 = 10_000.0;
 /// lease over itself, from the owner's last stamp.
 pub const PULL_FALLBACK_MS: f64 = 3_000.0;
 
+/// Diagnostics answer parts waiting to be sent, at most (two whole answers).
+const DIAGNOSTICS_QUEUE_PARTS: usize = 2 * diagnostics::MAX_PARTS as usize;
+
 /// Persisted next to the document: the last state confirmed with a remote room.
 pub type SyncBase = SyncPoint;
 
@@ -1520,7 +1523,9 @@ impl Engine {
     }
 
     /// Queue a diagnostics answer: capped, in parts, the first at once and
-    /// the rest one per tick so heartbeats and stamps keep flowing.
+    /// the rest one per tick so heartbeats and stamps keep flowing. A newer
+    /// answer to the same device replaces what is left of an older one, and
+    /// at most [`DIAGNOSTICS_QUEUE_PARTS`] parts wait in all (the oldest go).
     fn answer_diagnostics(
         &mut self,
         request_id: String,
@@ -1530,12 +1535,11 @@ impl Engine {
     ) {
         let from = self.cfg.device.id.clone();
         let from_name = self.cfg.device.name.clone();
+        self.diagnostics_out
+            .retain(|m| !matches!(m, Msg::DiagnosticsReply { to: t, .. } if *t == to));
         let parts = match declined {
             Some(_) => vec![String::new()],
-            None => diagnostics::split(
-                &diagnostics::cap(&text, diagnostics::MAX_ANSWER_BYTES),
-                diagnostics::PART_BYTES,
-            ),
+            None => diagnostics::parts(&text),
         };
         let count = parts.len() as u32;
         for (i, text) in parts.into_iter().enumerate() {
@@ -1550,6 +1554,9 @@ impl Engine {
                 declined: declined.clone(),
                 asked: vec![],
             });
+        }
+        while self.diagnostics_out.len() > DIAGNOSTICS_QUEUE_PARTS {
+            self.diagnostics_out.pop_front();
         }
         if let Some(m) = self.diagnostics_out.pop_front() {
             self.upstream_send(m);
@@ -1736,7 +1743,12 @@ impl Engine {
             session_id: Some(self.doc.session_id.clone()),
             session_revision: self.doc.revision,
             held_epoch: self.held_remote_epoch,
-            extra: Default::default(),
+            extra: [(
+                diagnostics::HELLO_FLAG.to_string(),
+                serde_json::Value::Bool(true),
+            )]
+            .into_iter()
+            .collect(),
         }
     }
 

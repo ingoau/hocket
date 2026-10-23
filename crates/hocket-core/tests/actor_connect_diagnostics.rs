@@ -129,3 +129,35 @@ async fn nothing_is_asked_while_developer_mode_is_off_here() {
     TestCore::run_all_for(&[&a, &b, &c], 1_000.0).await;
     assert!(requested(&b).is_none() && requested(&c).is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_developer_mode_off_while_a_bundle_is_built_sends_nothing() {
+    let (a, b, c) = trio().await;
+    developer_mode(&a, true).await;
+    developer_mode(&b, true).await;
+    for t in [&a, &b, &c] {
+        t.events.clear();
+    }
+    let b_core = b.core.clone();
+    let text = collect(&a, &[&a, &b, &c], |_| {
+        if let Some((request_id, _)) = requested(&b) {
+            b.events.clear();
+            let _ = b_core.dispatch(Command::SetSetting {
+                key: "developer.mode".into(),
+                value: "false".into(),
+            });
+            let _ = b_core.dispatch(Command::AnswerDiagnosticsRequest {
+                request_id,
+                text: "b's bundle, built a moment too late".into(),
+            });
+        }
+    })
+    .await;
+    assert!(!text.contains("a moment too late"), "{text}");
+    assert_eq!(
+        text.matches("(declined: developer mode is off on this device)")
+            .count(),
+        2,
+        "{text}"
+    );
+}

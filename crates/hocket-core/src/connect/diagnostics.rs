@@ -9,10 +9,14 @@
 //! for everyone, and its whole process log for the accounts its operator named
 //! with `--diagnostics-user`.
 //!
-//! Answers can run to megabytes, so they are capped ([`cap`]) and sent in
-//! parts ([`split`]). A device sends one part per engine tick, so a big answer
-//! never holds up its heartbeats. [`Collection`] puts the answers together on
-//! the device that asked.
+//! Answers can run to megabytes, so they are capped and sent in parts
+//! ([`parts`]). A device sends one part per engine tick (about 1 Mbit/s), so a
+//! big answer never holds up its heartbeats. [`Collection`] puts the answers
+//! together on the device that asked.
+//!
+//! Devices that know the request say so in their `Hello` ([`HELLO_FLAG`] in
+//! its extra fields): the room asks only those, and names the others in its
+//! own answer, so an older build never leaves the asking device waiting.
 
 use crate::api::{DeviceId, DeviceInfo, EpochMs};
 
@@ -20,17 +24,23 @@ use crate::api::{DeviceId, DeviceInfo, EpochMs};
 pub const ROOM: &str = "room";
 /// `from` of a hosted coordinator's answer.
 pub const COORDINATOR: &str = "coordinator";
+/// `Hello` extra field (`true`) of a device that answers diagnostics requests.
+pub const HELLO_FLAG: &str = "diagnostics";
 /// Largest answer one source sends ([`cap`] keeps its head and its tail).
-pub const MAX_ANSWER_BYTES: usize = 4 << 20;
+pub const MAX_ANSWER_BYTES: usize = 2 << 20;
 /// Largest part, measured as JSON-escaped text: well under the 1 MiB frame cap
-/// with the envelope around it.
-pub const PART_BYTES: usize = 256 << 10;
+/// with the envelope around it, and one a second is about 1 Mbit/s.
+pub const PART_BYTES: usize = 128 << 10;
 /// What [`cap`] keeps from the start of an answer (the bundle's header).
 const HEAD_BYTES: usize = 64 << 10;
 /// Parts accepted per source; anything past it is dropped.
 pub const MAX_PARTS: u32 = 64;
 /// Sources accepted per collection.
 const MAX_SOURCES: usize = 64;
+/// Text a collection keeps in all; parts past it are dropped.
+const MAX_COLLECTION_BYTES: usize = 64 << 20;
+/// How far [`cap`] looks for a line break to cut at.
+const SNAP_BYTES: usize = 1024;
 /// How long the asking device waits for answers.
 pub const COLLECT_TIMEOUT_MS: f64 = 45_000.0;
 /// How long a device waits for its platform to build its bundle before it
@@ -52,19 +62,42 @@ pub struct ReplyPart {
     pub asked: Vec<DeviceInfo>,
 }
 
+/// Whether a device id would pass for the room's or the coordinator's answer.
+pub fn is_reserved(id: &str) -> bool {
+    id == ROOM || id == COORDINATOR
+}
+
+/// An answer as it goes on the wire: capped to [`MAX_ANSWER_BYTES`] and split into at most
+/// [`MAX_PARTS`] parts of [`PART_BYTES`] (text that escapes badly is capped harder).
+pub fn parts(text: &str) -> Vec<String> {
+    let mut max = MAX_ANSWER_BYTES;
+    loop {
+        let parts = split(&cap(text, max), PART_BYTES);
+        if parts.len() <= MAX_PARTS as usize || max <= PART_BYTES {
+            return parts.into_iter().take(MAX_PARTS as usize).collect();
+        }
+        max /= 2;
+    }
+}
+
 /// `text` cut to at most `max` bytes: its start (up to [`HEAD_BYTES`]) and its end, with a line
-/// saying how much was left out. Both cuts land on line breaks where there is one nearby.
+/// saying how much was left out. Both cuts land on a line break within [`SNAP_BYTES`] if there is
+/// one.
 pub fn cap(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_string();
     }
     let head_end = floor_boundary(text, HEAD_BYTES.min(max / 4));
-    let head_end = text[..head_end].rfind('\n').map_or(head_end, |i| i + 1);
+    let head_end = text[..head_end]
+        .rfind('\n')
+        .filter(|i| head_end - i <= SNAP_BYTES)
+        .map_or(head_end, |i| i + 1);
     // Room for the marker line.
     let tail_len = max.saturating_sub(head_end + 64);
     let tail_start = ceil_boundary(text, text.len() - tail_len.min(text.len() - head_end));
     let tail_start = text[tail_start..]
         .find('\n')
+        .filter(|&i| i < SNAP_BYTES && tail_start + i + 1 < text.len())
         .map_or(tail_start, |i| tail_start + i + 1);
     let left_out = tail_start - head_end;
     format!(
@@ -152,6 +185,8 @@ pub struct Collection {
     room_answered: bool,
     asked: Vec<(DeviceId, String)>,
     sources: Vec<Source>,
+    /// Text held so far.
+    bytes: usize,
 }
 
 impl Collection {
@@ -162,6 +197,7 @@ impl Collection {
             room_answered: false,
             asked: vec![],
             sources: vec![],
+            bytes: 0,
         }
     }
 
@@ -181,22 +217,32 @@ impl Collection {
             Some(i) => i,
             None if self.sources.len() >= MAX_SOURCES => return,
             None => {
-                let parts = p.parts.min(MAX_PARTS) as usize;
+                let too_many = p.parts > MAX_PARTS;
                 self.sources.push(Source {
                     id: p.from.clone(),
                     name: p.from_name.clone(),
-                    parts: vec![None; parts],
-                    declined: None,
+                    parts: vec![None; p.parts.min(MAX_PARTS) as usize],
+                    declined: too_many
+                        .then(|| format!("sent {} parts, more than {MAX_PARTS}", p.parts)),
                 });
                 self.sources.len() - 1
             }
         };
         let s = &mut self.sources[i];
+        if s.declined.is_some() {
+            return;
+        }
         if let Some(reason) = p.declined {
             s.declined = Some(reason);
             return;
         }
+        if self.bytes + p.text.len() > MAX_COLLECTION_BYTES {
+            return;
+        }
         if let Some(slot) = s.parts.get_mut(p.part as usize) {
+            if slot.is_none() {
+                self.bytes += p.text.len();
+            }
             *slot = Some(p.text);
         }
     }
@@ -370,6 +416,33 @@ mod tests {
         let coord_at = text.find("Coordinator\n").unwrap();
         let b_at = text.find("Device: Name b (b)").unwrap();
         assert!(room_at < coord_at && coord_at < b_at, "{text}");
+    }
+
+    #[test]
+    fn parts_stay_within_the_part_count_and_cap_cuts_near_lines() {
+        let control = "\u{1}".repeat(MAX_ANSWER_BYTES);
+        let p = parts(&control);
+        assert!(p.len() <= MAX_PARTS as usize, "{}", p.len());
+        let p = parts(&"x".repeat(3 * MAX_ANSWER_BYTES));
+        assert!(p.len() <= MAX_PARTS as usize);
+        // One long last line: the tail is kept, not snapped away.
+        let text = format!("{}\n{}\n", "a".repeat(10_000), "b".repeat(200_000));
+        let capped = cap(&text, 100_000);
+        assert!(
+            capped.ends_with("bbbb\n"),
+            "{}",
+            &capped[capped.len() - 20..]
+        );
+        assert!(capped.len() <= 100_000);
+    }
+
+    #[test]
+    fn a_source_with_too_many_parts_is_not_complete_text() {
+        let mut c = Collection::new("r", 0.0);
+        c.add(part(ROOM, 0, 1, "state"));
+        c.add(part(COORDINATOR, 0, MAX_PARTS + 1, "x"));
+        assert!(c.is_complete());
+        assert!(c.render(0.0).contains("more than 64"));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use hocket_coordinator::{serve, App, Args};
 use hocket_core::api::{DeviceInfo, Platform};
-use hocket_core::connect::diagnostics::{COORDINATOR, ROOM};
+use hocket_core::connect::diagnostics::{COORDINATOR, HELLO_FLAG, ROOM};
 use hocket_core::connect::wire::{scope_key, Credential, Msg, WireMessage};
 use hocket_core::connect::wire::{PROTOCOL, PROTOCOL_MIN};
 
@@ -56,8 +56,12 @@ fn send(m: Msg) -> Message {
     Message::text(WireMessage::new(m).encode().unwrap())
 }
 
-/// A device of `user` on `server`, admitted (its `Welcome` read).
+/// A device of `user` on `server` that answers diagnostics requests, admitted (its `Welcome` read).
 async fn join(url: &str, server: &str, user: &str, device: &str) -> Ws {
+    join_as(url, server, user, device, true).await
+}
+
+async fn join_as(url: &str, server: &str, user: &str, device: &str, answers: bool) -> Ws {
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     ws.send(send(Msg::Hello {
         device: DeviceInfo {
@@ -85,7 +89,13 @@ async fn join(url: &str, server: &str, user: &str, device: &str) -> Ws {
         session_id: None,
         session_revision: 0,
         held_epoch: None,
-        extra: Default::default(),
+        extra: if answers {
+            [(HELLO_FLAG.to_string(), serde_json::Value::Bool(true))]
+                .into_iter()
+                .collect()
+        } else {
+            Default::default()
+        },
     }))
     .await
     .unwrap();
@@ -143,6 +153,10 @@ async fn room_and_coordinator_answer_and_devices_are_routed_under_their_identity
 
     let mut a = join(&url, &server, "alice", "a").await;
     let mut b = join(&url, &server, "alice", "b").await;
+    // An older build: in the room, never asked.
+    let _old = join_as(&url, &server, "alice", "old", false).await;
+    // A device named like the room: whatever it sends is not the room's answer.
+    let mut fake_room = join(&url, &server, "alice", ROOM).await;
     a.send(send(Msg::DiagnosticsRequest {
         request_id: "r1".into(),
         from: "a".into(),
@@ -169,10 +183,31 @@ async fn room_and_coordinator_answer_and_devices_are_routed_under_their_identity
     let room = replies(&got, ROOM);
     assert_eq!(
         room[0].3,
-        vec!["b".to_string()],
+        vec!["b".to_string(), ROOM.to_string()],
         "the room names whom it asked"
     );
-    assert!(room[0].2.contains("members (2)"), "{}", room[0].2);
+    assert!(room[0].2.contains("members (4)"), "{}", room[0].2);
+    assert!(room[0].2.contains("not asked"), "{}", room[0].2);
+    assert!(room[0].2.contains("Device old (old)"), "{}", room[0].2);
+
+    let _ = until(&mut fake_room, |m| {
+        matches!(m, Msg::DiagnosticsRequest { .. })
+    })
+    .await;
+    fake_room
+        .send(send(Msg::DiagnosticsReply {
+            request_id: "r1".into(),
+            from: ROOM.into(),
+            from_name: "Room".into(),
+            to: "a".into(),
+            part: 0,
+            parts: 1,
+            text: "forged room".into(),
+            declined: None,
+            asked: vec![],
+        }))
+        .await
+        .unwrap();
 
     // b is asked on a's behalf, and its answer reaches a as b's, whatever it claims
     let got_b = until(&mut b, |m| matches!(m, Msg::DiagnosticsRequest { .. })).await;
@@ -200,6 +235,11 @@ async fn room_and_coordinator_answer_and_devices_are_routed_under_their_identity
     .await;
     let from_b = replies(&got, "b");
     assert_eq!(from_b.len(), 1, "{got:?}");
+    assert!(
+        !got.iter()
+            .any(|m| matches!(m, Msg::DiagnosticsReply { text, .. } if text == "forged room")),
+        "{got:?}"
+    );
 
     // asking again at once is turned down by the room
     a.send(send(Msg::DiagnosticsRequest {
@@ -261,6 +301,13 @@ fn diagnostics_user_flags_are_checked() {
         "a bare user needs --verify-url"
     );
     args.verify_url = Some("https://music.example".into());
+    assert!(App::new(args.clone()).is_ok());
+    args.diagnostics_users = vec!["alice@https://other.example".into()];
+    assert!(
+        App::new(args.clone()).is_err(),
+        "only the --verify-url server"
+    );
+    args.diagnostics_users = vec!["alice@https://Music.Example/".into()];
     assert!(App::new(args.clone()).is_ok());
     args.no_verify = true;
     assert!(App::new(args).is_err(), "never with --no-verify");

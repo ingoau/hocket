@@ -12,7 +12,7 @@
 //! inside the hosted coordinator binary. Pure and clock-injected: the host
 //! feeds [`RoomInput`]s and performs every [`RoomOutput`].
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
@@ -139,14 +139,15 @@ struct Member {
     /// Pre-buffered and ready for this key.
     ready_key: Option<QueueKey>,
     picker_open: bool,
-    /// When this member last asked for diagnostics (see [`diagnostics::REQUEST_INTERVAL_MS`]).
-    last_diagnostics_request: Option<EpochMs>,
+    /// Said in its `Hello` that it answers diagnostics requests ([`diagnostics::HELLO_FLAG`]).
+    answers_diagnostics: bool,
 }
 
 #[derive(Debug, Clone)]
 struct PendingHello {
     device: DeviceInfo,
     protocol: u32,
+    answers_diagnostics: bool,
 }
 
 /// A socket that has not been admitted yet, and how far its LAN
@@ -201,6 +202,9 @@ pub struct Room {
     last_sweep: EpochMs,
     /// Recent joins, leaves, refusals and lease changes, for diagnostics.
     events: VecDeque<(EpochMs, String)>,
+    /// When each device last asked for diagnostics (kept across reconnects; see
+    /// [`diagnostics::REQUEST_INTERVAL_MS`]).
+    diagnostics_requests: HashMap<DeviceId, EpochMs>,
     out: Vec<RoomOutput>,
 }
 
@@ -247,6 +251,7 @@ impl Room {
             unconfirmed: vec![],
             last_sweep: now,
             events: VecDeque::new(),
+            diagnostics_requests: HashMap::new(),
             out: vec![],
         }
     }
@@ -733,8 +738,23 @@ impl Room {
                 protocol_max,
                 scope,
                 credential,
+                extra,
                 ..
-            } => self.on_hello(&peer, device, protocol_min, protocol_max, scope, credential),
+            } => {
+                let answers_diagnostics = extra
+                    .get(diagnostics::HELLO_FLAG)
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                self.on_hello(
+                    &peer,
+                    device,
+                    protocol_min,
+                    protocol_max,
+                    scope,
+                    credential,
+                    answers_diagnostics,
+                )
+            }
             Msg::Challenge { nonce } if self.member_by_peer(&peer).is_none() => {
                 self.on_challenge(&peer, nonce)
             }
@@ -825,6 +845,7 @@ impl Room {
         protocol_max: u32,
         scope: String,
         credential: Option<Credential>,
+        answers_diagnostics: bool,
     ) {
         let protocol = match negotiate(protocol_min, protocol_max) {
             Ok(p) => p,
@@ -889,15 +910,21 @@ impl Room {
                 return;
             }
             self.pending.retain(|(p, _)| p != peer);
-            self.pending
-                .push((peer.to_string(), PendingHello { device, protocol }));
+            self.pending.push((
+                peer.to_string(),
+                PendingHello {
+                    device,
+                    protocol,
+                    answers_diagnostics,
+                },
+            ));
             self.out.push(RoomOutput::Verify {
                 peer: peer.to_string(),
                 credential: cred,
             });
             return;
         }
-        self.admit(peer, device, protocol);
+        self.admit(peer, device, protocol, answers_diagnostics);
     }
 
     fn on_verified(&mut self, peer: &str, ok: bool) {
@@ -913,10 +940,21 @@ impl Room {
             );
             return;
         }
-        self.admit(peer, pending.device, pending.protocol);
+        self.admit(
+            peer,
+            pending.device,
+            pending.protocol,
+            pending.answers_diagnostics,
+        );
     }
 
-    fn admit(&mut self, peer: &str, mut device: DeviceInfo, protocol: u32) {
+    fn admit(
+        &mut self,
+        peer: &str,
+        mut device: DeviceInfo,
+        protocol: u32,
+        answers_diagnostics: bool,
+    ) {
         let now = self.now();
         self.unknown.retain(|u| u.peer != peer);
         // A device reconnecting on a new socket replaces its old one.
@@ -950,7 +988,7 @@ impl Room {
             last_seen: now,
             ready_key: None,
             picker_open: false,
-            last_diagnostics_request: None,
+            answers_diagnostics,
         });
         // Always sent, even when empty: the joiner adopts the room's session
         // identity from it (or pushes its own document into a trivial one).
@@ -1511,7 +1549,11 @@ impl Room {
                 declined,
                 ..
             } => {
-                // Routed under the member's identity, never the one the frame claimed.
+                // Routed under the member's identity, never the one the frame claimed;
+                // a device named like the room or the coordinator could pass for them.
+                if diagnostics::is_reserved(&device_id) {
+                    return;
+                }
                 if let Some(p) = self.peer_of_device(&to) {
                     self.send(
                         &p,
@@ -1542,24 +1584,27 @@ impl Room {
         request_id: String,
         now: EpochMs,
     ) {
-        let reply = |text: String, declined: Option<String>, asked: Vec<DeviceInfo>| {
-            Msg::DiagnosticsReply {
-                request_id: request_id.clone(),
-                from: diagnostics::ROOM.into(),
-                from_name: "Room".into(),
-                to: me.device.id.clone(),
-                part: 0,
-                parts: 1,
-                text,
-                declined,
-                asked,
-            }
+        let reply = |part: u32,
+                     parts: u32,
+                     text: String,
+                     declined: Option<String>,
+                     asked: Vec<DeviceInfo>| Msg::DiagnosticsReply {
+            request_id: request_id.clone(),
+            from: diagnostics::ROOM.into(),
+            from_name: "Room".into(),
+            to: me.device.id.clone(),
+            part,
+            parts,
+            text,
+            declined,
+            asked,
         };
-        if me
-            .last_diagnostics_request
-            .is_some_and(|t| now - t < diagnostics::REQUEST_INTERVAL_MS)
-        {
+        self.diagnostics_requests
+            .retain(|_, t| now - *t < diagnostics::REQUEST_INTERVAL_MS);
+        if self.diagnostics_requests.contains_key(&me.device.id) {
             let msg = reply(
+                0,
+                1,
                 String::new(),
                 Some("asked again too soon; try in a few seconds".into()),
                 vec![],
@@ -1567,27 +1612,59 @@ impl Room {
             self.send(peer, msg);
             return;
         }
-        if let Some(m) = self.member_mut_by_peer(peer) {
-            m.last_diagnostics_request = Some(now);
-        }
+        self.diagnostics_requests.insert(me.device.id.clone(), now);
         self.note(format!(
             "diagnostics requested by {} ({})",
             me.device.name, me.device.id
         ));
-        let asked: Vec<DeviceInfo> = self
+        let (asked, older): (Vec<DeviceInfo>, Vec<DeviceInfo>) = self
             .presence_list()
             .into_iter()
             .filter(|d| d.id != me.device.id)
+            .partition(|d| {
+                self.members
+                    .iter()
+                    .any(|m| m.device.id == d.id && m.answers_diagnostics)
+            });
+        let mut text = self.diagnostics_text();
+        if !older.is_empty() {
+            text.push_str("\nnot asked (a build that doesn't answer diagnostics requests):\n");
+            for d in &older {
+                text.push_str(&format!(
+                    "  - {} ({}) app {}\n",
+                    d.name, d.id, d.app_version
+                ));
+            }
+        }
+        // The asked list rides on the first part, so the asking device knows whom to wait for.
+        let parts = diagnostics::parts(&text);
+        let count = parts.len() as u32;
+        let mut asked = Some(asked.clone());
+        for (i, part) in parts.into_iter().enumerate() {
+            let msg = reply(
+                i as u32,
+                count,
+                part,
+                None,
+                asked.take().unwrap_or_default(),
+            );
+            self.send(peer, msg);
+        }
+        let targets: Vec<PeerId> = self
+            .members
+            .iter()
+            .filter(|m| m.peer != peer && m.answers_diagnostics)
+            .map(|m| m.peer.clone())
             .collect();
-        let msg = reply(self.diagnostics_text(), None, asked);
-        self.send(peer, msg);
-        self.broadcast(
-            Msg::DiagnosticsRequest {
-                request_id,
-                from: me.device.id.clone(),
-            },
-            Some(peer),
-        );
+        for p in targets {
+            self.send(
+                &p,
+                Msg::DiagnosticsRequest {
+                    request_id: request_id.clone(),
+                    from: me.device.id.clone(),
+                },
+            );
+        }
     }
 
     fn on_tick(&mut self) {

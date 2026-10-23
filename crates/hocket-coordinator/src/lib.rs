@@ -170,14 +170,16 @@ impl DiagnosticsUser {
 
     /// Whether a credential this coordinator verified names this account.
     /// With `--verify-url` only the username was verified (the server named
-    /// in the credential is the client's word); otherwise the pair was.
+    /// in the credential is the client's word, so it is never compared; the
+    /// flags are checked to name that server), otherwise the pair was.
     fn matches(&self, server_url: &str, username: &str, verify_url_set: bool) -> bool {
         if self.username != username {
             return false;
         }
         match &self.server_url {
+            _ if verify_url_set => true,
             Some(url) => scope_key(url, username) == scope_key(server_url, username),
-            None => verify_url_set,
+            None => false,
         }
     }
 }
@@ -194,13 +196,24 @@ fn diagnostics_users(args: &Args) -> anyhow::Result<Vec<DiagnosticsUser>> {
             "--diagnostics-user needs verified credentials: it cannot be used with --no-verify"
         );
     }
-    if args.verify_url.is_none() {
-        if let Some(u) = users.iter().find(|u| u.server_url.is_none()) {
+    if let Some(verify) = &args.verify_url {
+        // Every credential is checked against that server alone: naming another one would grant
+        // the log to whoever has this username there.
+        if let Some(u) = users.iter().find(|u| {
+            u.server_url
+                .as_deref()
+                .is_some_and(|url| scope_key(url, "") != scope_key(verify, ""))
+        }) {
             anyhow::bail!(
-                "--diagnostics-user {:?} names no server: write USER@https://server, or set --verify-url",
+                "--diagnostics-user {:?} names a server other than --verify-url",
                 u.username
             );
         }
+    } else if let Some(u) = users.iter().find(|u| u.server_url.is_none()) {
+        anyhow::bail!(
+            "--diagnostics-user {:?} names no server: write USER@https://server, or set --verify-url",
+            u.username
+        );
     }
     Ok(users)
 }
@@ -465,8 +478,7 @@ impl App {
         if let Some((_, user)) = identity {
             info!(user, full, "diagnostics requested");
         }
-        let text = diagnostics::cap(&self.diagnostics_text(full), diagnostics::MAX_ANSWER_BYTES);
-        let parts = diagnostics::split(&text, diagnostics::PART_BYTES);
+        let parts = diagnostics::parts(&self.diagnostics_text(full));
         let count = parts.len() as u32;
         let frames: Vec<String> = parts
             .into_iter()
@@ -1119,6 +1131,8 @@ mod tests {
         assert!(u.matches("https://music.example", "me@example.com", false));
         assert!(!u.matches("https://other.example", "me@example.com", false));
         assert!(!u.matches("https://music.example", "someone", false));
+        // With --verify-url the credential's server is the client's word: never compared.
+        assert!(u.matches("https://other.example", "me@example.com", true));
         let bare = DiagnosticsUser::parse("alice").unwrap();
         assert_eq!(bare.server_url, None);
         assert!(bare.matches("https://anything", "alice", true));

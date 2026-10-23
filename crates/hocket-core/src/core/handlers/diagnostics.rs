@@ -13,7 +13,10 @@ use crate::settings::keys;
 /// A request from another device, waiting for the platform's bundle.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingAnswer {
+    /// The request to answer (the newest from that device).
     pub request_id: String,
+    /// The request the platform was asked to build a bundle for.
+    pub platform_request_id: String,
     pub to: DeviceId,
     pub deadline: f64,
 }
@@ -79,12 +82,16 @@ impl Actor {
             });
             return;
         }
-        if self.diagnostics_answers.iter().any(|a| a.to == from) {
-            return; // still building the previous answer for it
+        if let Some(a) = self.diagnostics_answers.iter_mut().find(|a| a.to == from) {
+            // Still building the previous answer for it: that one answers this request instead
+            // (the asking device only waits for the newest).
+            a.request_id = request_id;
+            return;
         }
         tracing::info!(target: "hocket::connect", from = %from_device, "diagnostics requested by another device");
         self.diagnostics_answers.push(PendingAnswer {
             request_id: request_id.clone(),
+            platform_request_id: request_id.clone(),
             to: from,
             deadline: self.now() + diagnostics::PLATFORM_ANSWER_TIMEOUT_MS,
         });
@@ -99,17 +106,30 @@ impl Actor {
         let Some(i) = self
             .diagnostics_answers
             .iter()
-            .position(|a| a.request_id == request_id)
+            .position(|a| a.platform_request_id == request_id)
         else {
             return; // too late: the core's own answer went already
         };
         let a = self.diagnostics_answers.remove(i);
+        let (text, declined) = self.unless_turned_off(text);
         self.engine_input(Input::AnswerDiagnostics {
-            request_id,
+            request_id: a.request_id,
             to: a.to,
             text,
-            declined: None,
+            declined,
         });
+    }
+
+    /// Developer mode may have gone off while the bundle was being built: then nothing is sent.
+    fn unless_turned_off(&self, text: String) -> (String, Option<String>) {
+        if self.developer_mode() {
+            (text, None)
+        } else {
+            (
+                String::new(),
+                Some("developer mode is off on this device".into()),
+            )
+        }
     }
 
     /// Timeouts: collections answer with what arrived; requests the platform left unanswered
@@ -129,6 +149,16 @@ impl Actor {
             .position(|a| now >= a.deadline)
         {
             let a = self.diagnostics_answers.remove(i);
+            if !self.developer_mode() {
+                let (text, declined) = self.unless_turned_off(String::new());
+                self.engine_input(Input::AnswerDiagnostics {
+                    request_id: a.request_id,
+                    to: a.to,
+                    text,
+                    declined,
+                });
+                continue;
+            }
             let text = format!(
                 "(the app did not build its bundle in time: the core's own diagnostics and log follow)\n\n{}\nCore log\n--------\n{}",
                 self.diagnostics(),
