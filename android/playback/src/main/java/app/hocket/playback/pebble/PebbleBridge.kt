@@ -2,7 +2,6 @@ package app.hocket.playback.pebble
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.HocketJson
@@ -72,7 +71,6 @@ class PebbleBridge(
     }
 
     companion object {
-        private const val TAG = "PebbleBridge"
         /** Session updates come in bursts (a skip changes metadata, then position); the watch hears once. */
         const val NOW_DEBOUNCE_MS = 150L
         /**
@@ -122,6 +120,8 @@ class PebbleBridge(
     private var nowDirty = false
     /** The settings blob the watch last took; the same one is not sent again. */
     private var lastSettings: ByteArray? = null
+    /** Why the last attempt to hand a message over failed, for the log. */
+    private var lastFailure = "nacked or unanswered"
 
     // -- core events (main thread) -----------------------------------------------------------------
 
@@ -162,7 +162,8 @@ class PebbleBridge(
         // Auto-open: this device started playing (not the first state seen, not a remote device).
         val started = before != null && !(before.isPlaying && before.ownsTransport) && state.isPlaying && state.ownsTransport
         if (started && bool(SettingKeys.PEBBLE_AUTO_OPEN, false) && !open) {
-            scope.launch { runCatching { sender.startAppOnTheWatch(PebbleProtocol.APP_UUID) }.onFailure { Log.w(TAG, "start app failed: ${it.message}") } }
+            PebbleLog.i("auto-open: playback started here, opening the watchapp")
+            scope.launch { runCatching { sender.startAppOnTheWatch(PebbleProtocol.APP_UUID) }.onFailure { PebbleLog.w("start app failed: ${it.message}") } }
         }
         if (shouldPushNow()) pushNowSoon()
     }
@@ -180,9 +181,13 @@ class PebbleBridge(
 
     // -- the watch -----------------------------------------------------------------------------------
 
-    fun appOpened() { open = true }
+    fun appOpened() {
+        if (!open) PebbleLog.i("watchapp opened")
+        open = true
+    }
 
     fun appClosed() {
+        if (open) PebbleLog.i("watchapp closed")
         open = false
         lastSettings = null
         nowJob?.cancel()
@@ -196,8 +201,17 @@ class PebbleBridge(
     }
 
     suspend fun onMessage(data: PebbleDictionary) {
+        if (!open) PebbleLog.i("watchapp open (a message arrived)")
         open = true
-        when (num(data, Key.TYPE)) {
+        val type = num(data, Key.TYPE)
+        when (type) {
+            Type.HELLO -> Unit
+            Type.CMD -> PebbleLog.d("<- cmd ${PebbleLog.cmd(num(data, Key.CMD))} arg=${num(data, Key.ARG)} path=${PebbleLog.path(text(data, Key.PATH))} item=${text(data, Key.ITEM)}")
+            Type.LIST_REQ -> PebbleLog.d("<- list-req #${num(data, Key.REQ_ID)} ${PebbleLog.path(text(data, Key.PATH))}@${num(data, Key.OFFSET)}")
+            Type.ART_REQ -> PebbleLog.d("<- art-req gen=${num(data, Key.ART_GEN)}")
+            else -> PebbleLog.w("<- unknown message ${PebbleLog.type(type)} (keys ${data.keys})")
+        }
+        when (type) {
             // Off the watch's message too: its outbox waits for this ack, and the replies would hold it.
             Type.HELLO -> { val proto = num(data, Key.PROTO); val build = text(data, Key.BUILD); scope.launch { onHello(proto, build) } }
             Type.CMD -> onCommand(num(data, Key.CMD), num(data, Key.ARG), text(data, Key.PATH), text(data, Key.ITEM))
@@ -208,6 +222,8 @@ class PebbleBridge(
     }
 
     private suspend fun onHello(proto: Int, build: String) {
+        val stale = proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion
+        PebbleLog.i("<- hello: watchapp ${build.ifEmpty { "(no build)" }} proto $proto; phone bundles ${PebbleInstaller.bundledVersion} proto ${PebbleProtocol.PROTO}${if (stale) ", offering the update" else ""}")
         send(mapOf(Key.TYPE to u8(Type.HELLO_REPLY), Key.PROTO to u32(PebbleProtocol.PROTO), Key.BUILD to PebbleDictionaryItem.Text(PebbleInstaller.bundledVersion)))
         // A watchapp saying hello starts afresh: it may have restarted with the settings it persisted.
         lastSettings = null
@@ -215,7 +231,7 @@ class PebbleBridge(
         if (settingsLoaded) sendSettings()
         sendNow()
         if (build.isNotEmpty()) PebbleInstaller.recordWatchVersion(context, build)
-        if (proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion) PebbleInstaller.notifyUpdate(context)
+        if (stale) PebbleInstaller.notifyUpdate(context)
     }
 
     private fun pushNowSoon() {
@@ -256,31 +272,39 @@ class PebbleBridge(
      * a couple of times, instead of leaving the watch stale until the next change.
      */
     private suspend fun send(message: PebbleDictionary): Boolean = sendLock.withLock {
+        val type = PebbleLog.type(num(message, Key.TYPE))
         for (attempt in 0..SEND_RETRIES) {
             if (attempt > 0) delay(SEND_RETRY_MS * attempt)
             when (deliver(message)) {
-                Delivery.Sent -> return@withLock true
+                Delivery.Sent -> {
+                    PebbleLog.d("-> $type${if (attempt > 0) " (attempt ${attempt + 1})" else ""}")
+                    return@withLock true
+                }
                 Delivery.AppGone -> {
                     // Closed under us without a close event: stop pushing until it says hello.
+                    if (open) PebbleLog.i("-> $type: watchapp unreachable, pushes stop until it says hello")
                     open = false
                     return@withLock false
                 }
                 Delivery.Failed -> Unit
             }
         }
+        PebbleLog.w("-> $type not delivered after ${SEND_RETRIES + 1} attempts: $lastFailure")
         false
     }
 
     private suspend fun deliver(message: PebbleDictionary): Delivery {
+        lastFailure = "nacked or unanswered"
         transmit?.let { return it(message) }
         val results = runCatching { sender.sendDataToPebble(PebbleProtocol.APP_UUID, message) }
-            .onFailure { Log.w(TAG, "send failed: ${it.message}") }
+            .onFailure { lastFailure = "${it.javaClass.simpleName}: ${it.message}"; PebbleLog.d("send attempt failed: $lastFailure") }
             .getOrElse { return Delivery.Failed }
         // null: the Pebble app is unreachable; empty: no watch connected.
         if (results.isNullOrEmpty()) return Delivery.AppGone
         if (results.values.any { it is TransmissionResult.Success }) return Delivery.Sent
         if (results.values.all { it is TransmissionResult.FailedDifferentAppOpen || it is TransmissionResult.FailedWatchNotConnected || it is TransmissionResult.FailedNoPermissions }) return Delivery.AppGone
-        Log.w(TAG, "send failed: ${results.values}")
+        lastFailure = results.values.toString()
+        PebbleLog.d("send attempt failed: $lastFailure")
         return Delivery.Failed
     }
 
@@ -440,9 +464,11 @@ class PebbleBridge(
     // -- lists ---------------------------------------------------------------------------------------
 
     private suspend fun onListRequest(reqId: Int, rawPath: String, offset: Int) {
+        val started = SystemClock.elapsedRealtime()
         val (total, rows, title) = runCatching { list(rawPath, offset.coerceAtLeast(0)) }
-            .onFailure { Log.w(TAG, "list $rawPath failed: ${it.message}") }
+            .onFailure { PebbleLog.w("list ${PebbleLog.path(rawPath)} failed: ${it.message}") }
             .getOrDefault(Triple(0, emptyList(), null))
+        PebbleLog.d("list #$reqId ${PebbleLog.path(rawPath)}@$offset: ${rows.size} of $total rows in ${SystemClock.elapsedRealtime() - started} ms")
         val message = mutableMapOf(
             Key.TYPE to u8(Type.LIST),
             Key.REQ_ID to u16(reqId),
@@ -594,16 +620,18 @@ class PebbleBridge(
     // -- album art -----------------------------------------------------------------------------------
 
     private fun onArtRequest(gen: Int, size: Int) {
-        val path = session?.metadata?.artworkPath ?: return
-        if (gen != PebbleProtocol.artGeneration(path)) return
+        val path = session?.metadata?.artworkPath ?: return PebbleLog.d("art gen $gen: no cover for the playing track")
+        if (gen != PebbleProtocol.artGeneration(path)) return PebbleLog.d("art gen $gen: stale (now ${PebbleProtocol.artGeneration(path)})")
         // The watch retries when chunks are slow; a transfer of this cover still going carries on.
         if (artJob?.isActive == true && artJobGen == gen) return
         artJob?.cancel()
         artJobGen = gen
         artJob = scope.launch {
             val art = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }.getOrNull()
-            } ?: return@launch
+                runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }
+                    .onFailure { PebbleLog.w("art gen $gen failed: ${it.message}") }.getOrNull()
+            } ?: return@launch PebbleLog.w("art gen $gen: the cover could not be read")
+            val started = SystemClock.elapsedRealtime()
             var offset = 0
             while (offset < art.data.size) {
                 val end = minOf(offset + PebbleProtocol.ART_CHUNK, art.data.size)
@@ -621,9 +649,13 @@ class PebbleBridge(
                 }
                 // A chunk the watch never took would leave a gap it throws the cover away for
                 // (main.c); it asks again on its own, so stop here.
-                if (!send(message)) return@launch
+                if (!send(message)) {
+                    PebbleLog.w("art gen $gen stopped at $offset of ${art.data.size} bytes")
+                    return@launch
+                }
                 offset = end
             }
+            PebbleLog.d("art gen $gen sent: ${art.width}x${art.height}, ${art.data.size} bytes in ${SystemClock.elapsedRealtime() - started} ms")
         }
     }
 
@@ -664,7 +696,7 @@ class PebbleBridge(
     private fun dispatch(command: Command) = core().dispatch(command)
 
     private suspend fun query(q: app.hocket.core.api.Query): QueryResult? =
-        runCatching { core().query(q) }.onFailure { Log.w(TAG, "query failed: ${it.message}") }.getOrNull()
+        runCatching { core().query(q) }.onFailure { PebbleLog.w("query ${q::class.simpleName} failed: ${it.message}") }.getOrNull()
 
     private suspend fun albumTracks(id: String) = (query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data.orEmpty()
     private suspend fun albumName(id: String) = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data?.name

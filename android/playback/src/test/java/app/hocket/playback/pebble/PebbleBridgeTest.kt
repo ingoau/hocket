@@ -5,6 +5,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.CoreHandle
+import app.hocket.core.DevLog
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
 import app.hocket.core.api.EventMediaSessionInner
@@ -116,6 +117,30 @@ class PebbleBridgeTest {
         runCurrent()
         // HelloReply nacked once, then taken; Now follows.
         assertEquals(listOf(Type.HELLO_REPLY, Type.HELLO_REPLY, Type.NOW), types())
+    }
+
+    @Test
+    fun theLinkIsLoggedForDeveloperDiagnostics() = runTest {
+        // DevLog's ring is process-wide: only what this test logs counts.
+        val marker = "marker-${java.util.UUID.randomUUID()}"
+        DevLog.append("info", "kotlin/Test", marker)
+        val b = bridge()
+        b.onEvent(session(state(0)))
+        repeat(PebbleBridge.SEND_RETRIES + 1) { answers += Delivery.Failed }
+        b.onMessage(hello())
+        advanceTimeBy(5_000)
+        runCurrent()
+        b.appClosed()
+        // What the diagnostics page shows as the core log.
+        val log = DevLog.recent().substringAfter(marker).lines().filter { "kotlin/Pebble:" in it }
+        assertTrue(log.toString(), log.any { "<- hello: watchapp" in it && "proto ${PebbleProtocol.PROTO}" in it })
+        assertTrue(log.toString(), log.any { "-> hello-reply not delivered after ${PebbleBridge.SEND_RETRIES + 1} attempts" in it })
+        assertTrue(log.toString(), log.any { "DEBUG" in it && "-> now" in it })
+        assertTrue(log.toString(), log.any { "watchapp closed" in it })
+        b.onMessage(mapOf(Key.TYPE to PebbleDictionaryItem.UInt8(Type.LIST_REQ.toUByte()), Key.PATH to PebbleDictionaryItem.Text("search:secret words")))
+        runCurrent()
+        assertTrue(DevLog.recent().substringAfter(marker).contains("search:…"))
+        assertTrue(!DevLog.recent().contains("secret words"))
     }
 
     @Test
