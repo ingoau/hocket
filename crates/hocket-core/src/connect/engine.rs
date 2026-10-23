@@ -1047,6 +1047,17 @@ impl Engine {
         } else {
             let mut t = self.remote_transport.clone();
             t.lease = self.lease.clone();
+            // Nobody holds the lease, so nothing plays, whatever the last
+            // stamp said: a lapsed owner's "playing" would otherwise run on
+            // to the end of the track here. A lease still naming us after we
+            // let go (the room has yet to hear) is nobody's either.
+            if t.lease
+                .owner
+                .as_ref()
+                .is_none_or(|o| *o == self.cfg.device.id)
+            {
+                t.position.is_playing = false;
+            }
             t
         }
     }
@@ -1241,6 +1252,7 @@ impl Engine {
             Input::ReleaseTransport => {
                 self.restamp_on_grant = None;
                 if let Some(h) = self.held.take() {
+                    self.keep_own_stamp();
                     self.let_go_at = Some(self.now_local_ms());
                     self.upstream_send(Msg::LeaseRelease { epoch: h.epoch });
                     self.detached = false;
@@ -3593,9 +3605,20 @@ impl Engine {
         });
     }
 
+    /// On letting go of the lease: ours was the room's last word on the
+    /// play, so what was shown while we held it carries on, not a stamp from
+    /// before we did.
+    fn keep_own_stamp(&mut self) {
+        if let Some(s) = &self.stamp {
+            self.remote_transport.position = s.position.clone();
+            self.remote_transport.played_ms = s.played_ms;
+        }
+    }
+
     fn lose_lease(&mut self) {
         self.restamp_on_grant = None;
         if self.held.take().is_some() {
+            self.keep_own_stamp();
             self.let_go_at = Some(self.now_local_ms());
             self.detached = false;
             self.held_remote_epoch = None;
@@ -3835,6 +3858,7 @@ impl Engine {
         });
         // Release locally right away: the room moves the lease atomically.
         self.held = None;
+        self.keep_own_stamp();
         self.let_go_at = Some(self.now_local_ms());
         self.restamp_on_grant = None;
         self.detached = false;
@@ -5703,6 +5727,126 @@ mod tests {
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
         assert!(!e.owns_transport());
+    }
+
+    /// Letting a paused play's lease go leaves it paused where it was, not
+    /// the room's stamp from before we held it (another device, playing)
+    /// running on to the end of the track.
+    #[test]
+    fn a_released_paused_play_stays_paused() {
+        let (mut e, clock) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.transport.position = PositionStamp {
+            position_ms: 100_000,
+            taken_at: 1_000.0,
+            rate: 1.0,
+            is_playing: true,
+        };
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        e.handle(Input::ClaimTransport { takeover: false });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 316,
+                    expires_at: 30_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 209_375,
+                taken_at: 12_000.0,
+                rate: 1.0,
+                is_playing: false,
+            },
+            played_ms: 0,
+            started_at: 2_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: lapse(317),
+        });
+        assert!(!e.owns_transport());
+        clock.0.store(600_000, Ordering::SeqCst);
+        let t = e.transport();
+        assert!(!t.position.is_playing, "{t:?}");
+        assert_eq!(e.position_ms(), 209_375);
+    }
+
+    /// Stopped here, before the room hears of it: the lease still names us
+    /// but nothing plays, and what shows is our own stamp, not the room's
+    /// from before we held the lease.
+    #[test]
+    fn a_stopped_play_shows_our_stamp_before_the_room_hears() {
+        let (mut e, clock) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.transport.position = PositionStamp {
+            position_ms: 100_000,
+            taken_at: 1_000.0,
+            rate: 1.0,
+            is_playing: true,
+        };
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        e.handle(Input::ClaimTransport { takeover: false });
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::LeaseGranted {
+                lease: TransportLease {
+                    owner: Some("a".into()),
+                    epoch: 316,
+                    expires_at: 30_000.0,
+                },
+                ack_of: None,
+            }),
+        });
+        e.handle(Input::LocalStamp {
+            key: Some("k2".into()),
+            track_id: Some("t2".into()),
+            position: PositionStamp {
+                position_ms: 5_000,
+                taken_at: 12_000.0,
+                rate: 1.0,
+                is_playing: true,
+            },
+            played_ms: 0,
+            started_at: 2_000.0,
+            scrobbled: false,
+            volume: None,
+        });
+        e.handle(Input::ReleaseTransport);
+        assert!(!e.owns_transport());
+        assert_eq!(e.transport().lease.owner.as_deref(), Some("a"));
+        clock.0.store(60_000, Ordering::SeqCst);
+        let t = e.transport();
+        assert!(!t.position.is_playing, "{t:?}");
+        assert_eq!(e.position_ms(), 5_000);
+    }
+
+    /// Nobody holds the lease: nothing plays, even if the owner's last stamp
+    /// (it went quiet mid-track) said it did.
+    #[test]
+    fn nothing_plays_while_nobody_holds_the_lease() {
+        let (mut e, _) = engine("a");
+        let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
+        room_doc.revision = 1;
+        room_doc.transport.position = PositionStamp {
+            position_ms: 100_000,
+            taken_at: 1_000.0,
+            rate: 1.0,
+            is_playing: true,
+        };
+        attach(&mut e, Some(replica_with(room_doc)), vec![]);
+        assert!(e.transport().lease.owner.is_none());
+        assert!(!e.transport().position.is_playing);
     }
 
     /// Stopped while the reclaim is in flight: the grant that answers it
