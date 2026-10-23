@@ -29,9 +29,11 @@ class PebbleListenerService : BasePebbleListenerService() {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder?) {
             bridge.value = (service as? PlaybackService.LocalBinder)?.service?.pebble
+            if (bridge.value == null) PebbleLog.w("playback service bound without a Pebble bridge")
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
+            PebbleLog.w("playback service disconnected")
             bridge.value = null
         }
     }
@@ -39,9 +41,11 @@ class PebbleListenerService : BasePebbleListenerService() {
     override fun onCreate() {
         super.onCreate()
         bound = bindService(PlaybackServiceConnection.bindIntent(this), connection, Context.BIND_AUTO_CREATE)
+        PebbleLog.i("Pebble app bound the listener${if (bound) "" else "; binding the playback service failed"}")
     }
 
     override fun onDestroy() {
+        PebbleLog.i("Pebble app unbound the listener")
         if (bound) runCatching { unbindService(connection) }
         super.onDestroy()
     }
@@ -50,7 +54,10 @@ class PebbleListenerService : BasePebbleListenerService() {
 
     override suspend fun onMessageReceived(watchappUUID: UUID, data: PebbleDictionary, watch: WatchIdentifier): ReceiveResult {
         if (watchappUUID != PebbleProtocol.APP_UUID) return ReceiveResult.Nack
-        val b = bridge() ?: return ReceiveResult.Nack
+        val b = bridge() ?: run {
+            PebbleLog.w("nacked a watch message: no playback service after ${BIND_TIMEOUT_MS / 1000} s")
+            return ReceiveResult.Nack
+        }
         b.onMessage(data)
         return ReceiveResult.Ack
     }
