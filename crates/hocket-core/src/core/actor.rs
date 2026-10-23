@@ -186,7 +186,6 @@ pub(crate) struct Actor {
     pub pending_effects: Option<Vec<crate::session::Effect>>,
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
-    pub last_transport: TransportState,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -465,7 +464,6 @@ impl Actor {
             pending_effects: None,
             last_doc: None,
             last_saved_queues: vec![],
-            last_transport: TransportState::default(),
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
