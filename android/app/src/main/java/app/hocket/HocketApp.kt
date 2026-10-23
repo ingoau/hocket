@@ -16,7 +16,9 @@ import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -105,15 +107,30 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     /**
      * Another device in the Connect room asks for this phone's diagnostics (the core passes requests
      * on only while developer mode is on here): answer with the bundle the diagnostics page would
-     * share. Without a client (no UI bound) the core answers with its own diagnostics and log.
+     * share. One at a time, all of it off the main thread (a bundle can be tens of megabytes); a
+     * request that isn't answered here (no client yet, a failure, one already being built) gets the
+     * core's own diagnostics and log after 10 s.
      */
     private fun answerDiagnosticsRequests(client: CoreClient): Job =
         scope.launch {
+            var building = false
             client.diagnosticsRequests.collect { request ->
+                if (building) return@collect
+                building = true
                 launch {
-                    val report = runCatching { app.hocket.diagnostics.DiagnosticsBundle.collect(this@HocketApp, client) }.getOrNull() ?: return@launch
-                    val text = kotlinx.coroutines.withContext(Dispatchers.Default) { report.text }
-                    client.dispatch(Command.AnswerDiagnosticsRequest(CommandAnswerDiagnosticsRequestInner(request.request_id, text)))
+                    try {
+                        val report = app.hocket.diagnostics.DiagnosticsBundle.collect(this@HocketApp, client)
+                        withContext(Dispatchers.Default) {
+                            client.dispatch(Command.AnswerDiagnosticsRequest(CommandAnswerDiagnosticsRequestInner(request.request_id, report.text)))
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        // Out of memory included: the core answers on its own.
+                        android.util.Log.w("HocketApp", "couldn't answer a diagnostics request: ${t.javaClass.simpleName}")
+                    } finally {
+                        building = false
+                    }
                 }
             }
         }

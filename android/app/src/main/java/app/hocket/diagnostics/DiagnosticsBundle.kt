@@ -55,14 +55,16 @@ class DiagnosticsReport(
     private val minutes: Long get() = windowMs / 60_000
 
     /** The whole bundle, built on first use (by share, save or copy, all off the main thread). */
-    val text: String by lazy {
-        buildString(head.length + coreLog.length + logcat.length + otherDevices.length + 256) {
+    val text: String by lazy { if (otherDevices.isBlank()) ownText else ownText + "\n" + otherDevices.trimEnd() + "\n" }
+
+    /** This phone's part of [text]: everything but [otherDevices]. */
+    val ownText: String by lazy {
+        buildString(head.length + coreLog.length + logcat.length + 256) {
             append(head.trimEnd()).append("\n\n")
             append("Core log (last $minutes minutes)\n-----------------------------\n")
             append(coreLog.trimEnd().ifEmpty { "(empty)" }).append("\n\n")
             append("Logcat (last $minutes minutes)\n---------------------------\n")
             append(logcat.trimEnd().ifEmpty { "(empty)" }).append('\n')
-            if (otherDevices.isNotBlank()) append('\n').append(otherDevices.trimEnd()).append('\n')
         }
     }
 

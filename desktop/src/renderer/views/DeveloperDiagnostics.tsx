@@ -21,6 +21,8 @@ export function DeveloperDiagnostics() {
   const [allDevices, setAllDevices] = useState(false);
   // Other devices only ever answer while developer mode is on here too.
   const options: DiagnosticsOptions = { allDevices: devMode && allDevices };
+  /** The running action also asks the other devices (as it started, whatever the switches say now). */
+  const [collectingOthers, setCollectingOthers] = useState(false);
 
   const refresh = useCallback(() => {
     void bridge()
@@ -38,6 +40,7 @@ export function DeveloperDiagnostics() {
   /** Runs one action; the page refreshes afterwards so the preview matches what was written. */
   const run = (action: () => Promise<string | undefined>) => {
     setBusy(true);
+    setCollectingOthers(options.allDevices === true);
     void action()
       .then((message) => {
         if (message) showToast(message);
@@ -45,6 +48,7 @@ export function DeveloperDiagnostics() {
       .catch((err: unknown) => showToast(t("developer.failed", { error: err instanceof Error ? err.message : String(err) })))
       .finally(() => {
         setBusy(false);
+        setCollectingOthers(false);
         refresh();
       });
   };
@@ -83,7 +87,7 @@ export function DeveloperDiagnostics() {
             ) : null}
             <button type="button" className="btn" disabled={busy} onClick={() => run(async () => { await bridge().diagnostics.copy(options); return t("developer.copied"); })} data-testid="developer-copy"><Icon name="copy" size={16} /> {t("developer.copy")}</button>
             <button type="button" className="btn" disabled={busy} onClick={() => run(async () => { const p = await bridge().diagnostics.reveal(options); return p ? t("developer.revealed", { name: fileName(p) }) : undefined; })} data-testid="developer-reveal"><Icon name="folder" size={16} /> {t("developer.reveal")}</button>
-            {busy && options.allDevices ? <span className="muted small" data-testid="developer-collecting">{t("developer.collecting")}</span> : null}
+            {busy && collectingOthers ? <span className="muted small" role="status" data-testid="developer-collecting">{t("developer.collecting")}</span> : null}
             {summary ? <span className="muted small developer-stats" data-testid="developer-stats">{t("developer.stats", { lines: summary.logLines, size: fmtBytes(summary.logBytes), minutes: Math.round(summary.windowMs / 60_000) })}</span> : null}
           </div>
           <section className="card developer-section">

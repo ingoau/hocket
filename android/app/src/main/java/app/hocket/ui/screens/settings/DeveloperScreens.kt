@@ -39,7 +39,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -100,6 +102,8 @@ fun DeveloperDiagnosticsScreen(
     var allDevices by remember { mutableStateOf(false) }
     // Other devices only ever answer while developer mode is on here too.
     val withOthers = (devMode.bool ?: false) && allDevices
+    /** The running action also asks the other devices (as it started, whatever the switches say now). */
+    var collectingOthers by remember { mutableStateOf(false) }
     LaunchedEffect(refreshes) {
         report = try {
             collect(context, client)
@@ -121,6 +125,8 @@ fun DeveloperDiagnosticsScreen(
     fun withFresh(action: suspend (DiagnosticsReport) -> Unit) {
         if (busy) return
         busy = true
+        val others = withOthers
+        collectingOthers = others
         scope.launch {
             try {
                 // Let the previous report go first: two of them (and the bundle text) at once is a lot
@@ -128,7 +134,8 @@ fun DeveloperDiagnosticsScreen(
                 report = null
                 val here = collect(context, client)
                 report = here
-                val fresh = if (withOthers) here.copy(otherDevices = collectOthers(client)) else here
+                // copy() counts the lines again: off the main thread, the logs can be tens of megabytes.
+                val fresh = if (others) collectOthers(client).let { o -> withContext(Dispatchers.Default) { here.copy(otherDevices = o) } } else here
                 action(fresh)
             } catch (e: CancellationException) {
                 throw e
@@ -138,6 +145,7 @@ fun DeveloperDiagnosticsScreen(
                 notify(failedText + ": " + (e.message ?: e.javaClass.simpleName))
             } finally {
                 busy = false
+                collectingOthers = false
             }
         }
     }
@@ -199,7 +207,15 @@ fun DeveloperDiagnosticsScreen(
                 withFresh {
                     val (clip, truncated) = withContext(Dispatchers.Default) {
                         val text = it.text
-                        if (text.length > CLIPBOARD_MAX_CHARS) (it.head + "\n…\n" + text.takeLast(CLIPBOARD_MAX_CHARS - it.head.length - 3)) to true else text to false
+                        if (text.length <= CLIPBOARD_MAX_CHARS) return@withContext text to false
+                        // This phone's newest lines, then the start of the other devices' part (the
+                        // room and the first devices), each in its own share of the room.
+                        val others = it.otherDevices.trimEnd()
+                        val othersBudget = if (others.isEmpty()) 0 else minOf(others.length, CLIPBOARD_MAX_CHARS / 2)
+                        val ownBudget = CLIPBOARD_MAX_CHARS - othersBudget - 8
+                        val own = it.ownText.let { t -> if (t.length <= ownBudget) t else it.head + "\n…\n" + t.takeLast(ownBudget - it.head.length - 3) }
+                        val tail = if (others.isEmpty()) "" else "\n" + others.take(othersBudget) + if (othersBudget < others.length) "\n…\n" else "\n"
+                        (own + tail) to true
                     }
                     val copied = runCatching { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(it.fileName, clip)) }.isSuccess
                     notify(if (!copied) copyFailedText else if (truncated) copiedTruncatedText else copiedText)
@@ -211,12 +227,12 @@ fun DeveloperDiagnosticsScreen(
                 Icon(HocketIcons.Filled.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_refresh))
             }
         }
-        if (busy && withOthers) {
+        if (busy && collectingOthers) {
             Text(
                 stringResource(R.string.developer_collecting),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("developer.collecting"),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }.testTag("developer.collecting"),
             )
         }
         val r = report
