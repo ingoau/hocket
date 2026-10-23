@@ -240,7 +240,7 @@ impl QueueOp {
             Command::SetAutoplay { enabled } => QueueOp::SetAutoplay { enabled: *enabled },
             Command::SetQueueMode { mode } => QueueOp::SetQueueMode { mode: *mode },
             Command::Next => QueueOp::Next,
-            Command::Previous => QueueOp::Previous,
+            Command::Previous | Command::PreviousTrack => QueueOp::Previous,
             Command::SkipUnavailable { key } => QueueOp::SkipUnavailable { key: key.clone() },
             Command::RestoreSavedQueue { id } => QueueOp::RestoreSavedQueue {
                 id: id.clone(),
@@ -331,6 +331,8 @@ pub struct DerivedQueue {
     pub total_upcoming: u32,
     /// See [`crate::api::QueueView::wrap_next`].
     pub wrap_next: Option<QueueItem>,
+    /// See [`crate::api::QueueView::previous`].
+    pub previous: Option<QueueItem>,
 }
 
 impl DerivedQueue {
@@ -353,6 +355,7 @@ impl DerivedQueue {
             mode: self.mode,
             total_upcoming: self.total_upcoming,
             wrap_next: self.wrap_next.map(&mut entry),
+            previous: self.previous.map(&mut entry),
         }
     }
 
@@ -454,6 +457,7 @@ pub fn derive_window(doc: &SessionDocument, limit: usize) -> DerivedQueue {
         .flatten()
         .filter(|index| (*index as usize) < ts.len())
         .map(|index| context_item(keys.as_ref(), ts, index));
+    let previous = previous_item(doc, &p, ts);
     DerivedQueue {
         context_label: doc.context.as_ref().map(|c| c.label.clone()),
         history: doc.history.clone(),
@@ -466,7 +470,27 @@ pub fn derive_window(doc: &SessionDocument, limit: usize) -> DerivedQueue {
         autoplay: doc.autoplay,
         mode: doc.mode,
         wrap_next,
+        previous,
     }
+}
+
+/// What Previous short of its restart makes current, as `Reducer::previous`
+/// with no target: the last history item not marked unavailable, else the
+/// context's item before the current one in play order. `None` where it
+/// restarts the current track.
+fn previous_item(doc: &SessionDocument, p: &Permutation, ts: &[TrackId]) -> Option<QueueItem> {
+    if let Some(item) = doc.history.iter().rev().find(|h| !h.unavailable) {
+        return Some(item.clone());
+    }
+    let position = match doc.current.as_ref()?.source {
+        QueueSource::Context { index } => p.to_position(index).filter(|q| *q > 0)? - 1,
+        _ if !p.is_empty() && doc.cursor > 0 => doc.cursor - 1,
+        _ => return None,
+    };
+    let index = p
+        .to_context(position)
+        .filter(|i| (*i as usize) < ts.len())?;
+    Some(context_item(context_keys::read(doc).as_ref(), ts, index))
 }
 
 /// Top-level document field (kept in [`SessionDocument::extra`], so the
@@ -1918,6 +1942,52 @@ mod tests {
         let (d4, _) = step(&d3, &e, QueueOp::SetAutoplay { enabled: true });
         let (_, fx) = step(&d4, &e, QueueOp::TrackEnded);
         assert_eq!(fx, vec![Effect::NeedsAutoplay]);
+    }
+
+    /// `previous` is what Previous (short of its restart) makes current, and
+    /// `None` exactly where it restarts the track instead: across starts,
+    /// shuffle, insertions and items skipped as unavailable.
+    #[test]
+    fn previous_is_what_going_back_plays() {
+        for seed in 0..40u64 {
+            let e = DeterministicEntropy::new(seed);
+            let mut d = play(
+                &new_document("s", "id".into(), 0.0),
+                &e,
+                album("a", 6),
+                Some((seed % 4) as u32),
+                seed % 3 == 0,
+            );
+            for i in 0..12u64 {
+                let derived = derive(&d);
+                let (back, fx) = step(&d, &e, QueueOp::Previous);
+                match &derived.previous {
+                    Some(item) => assert_eq!(
+                        back.current.as_ref().map(|c| &c.track_id),
+                        Some(&item.track_id),
+                        "seed {seed} step {i}"
+                    ),
+                    None => assert!(
+                        fx.contains(&Effect::RestartCurrent),
+                        "seed {seed} step {i}: went to {:?}",
+                        back.current
+                    ),
+                }
+                let op = match (seed + i * 7) % 5 {
+                    0 | 1 => QueueOp::Next,
+                    2 => QueueOp::Previous,
+                    3 => QueueOp::PlayNext {
+                        server_id: "srv".into(),
+                        track_ids: vec![format!("x{i}")],
+                    },
+                    _ => match d.current.as_ref() {
+                        Some(c) => QueueOp::SkipUnavailable { key: c.key.clone() },
+                        None => QueueOp::Next,
+                    },
+                };
+                d = step(&d, &e, op).0;
+            }
+        }
     }
 
     #[test]

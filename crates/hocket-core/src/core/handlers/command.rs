@@ -49,6 +49,7 @@ impl Actor {
             Command::Stop => self.transport_command(TransportCommand::Stop),
             Command::Next => self.queue_command(Command::Next),
             Command::Previous => self.previous(),
+            Command::PreviousTrack => self.queue_command(Command::PreviousTrack),
             Command::SeekTo { position_ms } => {
                 self.transport_command(TransportCommand::SeekTo { position_ms })
             }

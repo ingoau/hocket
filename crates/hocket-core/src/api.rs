@@ -690,6 +690,12 @@ pub struct QueueView {
     /// `None` when the queue does not wrap.
     #[serde(default)]
     pub wrap_next: Option<QueueEntry>,
+    /// What going back a track ([`Command::PreviousTrack`], Previous short
+    /// of its restart) makes current: the last history entry still playable,
+    /// or with none the context's entry before this one in play order.
+    /// `None` when there is nothing before (going back restarts the track).
+    #[serde(default)]
+    pub previous: Option<QueueEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1789,6 +1795,10 @@ pub enum Command {
     Stop,
     Next,
     Previous,
+    /// Back a track, never restarting this one however far in it is (the
+    /// skip swipe): Previous without its restart, the queue deciding (it
+    /// restarts the track only when there is nothing before it).
+    PreviousTrack,
     SeekTo {
         position_ms: Ms,
     },

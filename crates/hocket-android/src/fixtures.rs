@@ -359,6 +359,7 @@ mod tests {
                 mode: QueueMode::Apple,
                 total_upcoming: 1,
                 wrap_next: Some(entry("ctx-0", QueueSource::Context { index: 0 })),
+                previous: Some(entry("h1", QueueSource::Context { index: 0 })),
             })),
         );
         push(

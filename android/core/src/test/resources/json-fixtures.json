@@ -579,6 +579,39 @@
             }
           ]
         }
+      },
+      "previous": {
+        "item": {
+          "key": "h1",
+          "trackId": "t-h1",
+          "source": {
+            "type": "context",
+            "data": {
+              "index": 0
+            }
+          },
+          "unavailable": false
+        },
+        "track": {
+          "id": "t-h1",
+          "serverId": "srv",
+          "title": "Title",
+          "artist": "Artist",
+          "album": "Album",
+          "albumId": "al1",
+          "artistId": null,
+          "durationMs": 213000,
+          "coverArt": "al1",
+          "rating": 3,
+          "loved": true,
+          "offline": "cached",
+          "artists": [
+            {
+              "id": "ar1",
+              "name": "Artist"
+            }
+          ]
+        }
       }
     }
   },

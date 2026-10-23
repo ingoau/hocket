@@ -621,7 +621,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     val infoLabel = stringResource(R.string.player_about_title)
     val artistsLabel = stringResource(R.string.player_artists_action)
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
-    val previous = if (carousel.restartPeek) track else neighbours.previous?.track
+    val previous = neighbours.previous?.track
     val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
     // The thumbnail's side as the last layout worked it out (it follows the title and artist lines'
     // metrics, which change only with the font scale).
@@ -1059,7 +1059,6 @@ internal fun PlayerArtwork(
     val showLabel = stringResource(R.string.player_show_artwork)
     val togglePreview = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onPreviewToggle(seed ?: ArtworkColors.seedFor(coverArt)) }
     val currentThumbMode = androidx.compose.runtime.rememberUpdatedState(thumbMode)
-    val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
     // Pages one span apart: a card's width and margin between cards, the full width where an
     // immersive artwork is one of them (it fills the page edge to edge).
     val anyImmersive = immersive != null || neighbourLayouts.first != null || neighbourLayouts.second != null
@@ -1081,7 +1080,7 @@ internal fun PlayerArtwork(
                 translationX = hero.swipe()
             }
             .then(with(carousel) {
-                Modifier.gesture(client, scope, haptics, enabled = !thumbMode, reduced = reduced, hasNext = { currentNeighbours.value.next != null }, rubberThreshold = threshold)
+                Modifier.gesture(client, scope, haptics, enabled = !thumbMode, reduced = reduced, rubberThreshold = threshold)
             })
             // Long-press everywhere; a tap only as the thumbnail (back to the artwork). Pointer
             // gestures, mirrored by the actions below.
@@ -1109,7 +1108,7 @@ internal fun PlayerArtwork(
         }
         // The neighbours, off screen at rest (so their covers are loaded before a swipe shows them).
         if (!thumbMode && !reduced) {
-            val previous = if (carousel.restartPeek) PeekCover(coverArt, immersive) else neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourLayouts.first) }
+            val previous = neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourLayouts.first) }
             val next = neighbours.next?.let { PeekCover(it.track.coverArt, neighbourLayouts.second) }
             previous?.let { NeighbourCover(it, hero, scale, side = 1f, span, tag = "player.artwork.previous") }
             next?.let { NeighbourCover(it, hero, scale, side = -1f, span, tag = "player.artwork.next") }

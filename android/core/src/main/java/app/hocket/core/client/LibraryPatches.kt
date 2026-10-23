@@ -45,10 +45,14 @@ object LibraryPatches {
         val current = q.current?.let { entry(it, items) }
         val playingNext = q.playingNext.map { entry(it, items) }
         val upcoming = q.upcoming.map { entry(it, items) }
-        if (sameRefs(history, q.history) && current === q.current && sameRefs(playingNext, q.playingNext) && sameRefs(upcoming, q.upcoming)) {
+        val wrapNext = q.wrapNext?.let { entry(it, items) }
+        val previous = q.previous?.let { entry(it, items) }
+        if (sameRefs(history, q.history) && current === q.current && sameRefs(playingNext, q.playingNext) && sameRefs(upcoming, q.upcoming) &&
+            wrapNext === q.wrapNext && previous === q.previous
+        ) {
             return q
         }
-        return q.copy(history = history, current = current, playingNext = playingNext, upcoming = upcoming)
+        return q.copy(history = history, current = current, playingNext = playingNext, upcoming = upcoming, wrapNext = wrapNext, previous = previous)
     }
 
     private fun sameRefs(a: List<QueueEntry>, b: List<QueueEntry>): Boolean {
