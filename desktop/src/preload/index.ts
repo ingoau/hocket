@@ -2,7 +2,7 @@
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
-import type { AppMeta, AppPrefs, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -61,10 +61,10 @@ const bridge: HocketBridge = {
   },
   diagnostics: {
     summary: () => ipcRenderer.invoke(IPC.diagnosticsSummary) as Promise<DiagnosticsSummary>,
-    save: () => ipcRenderer.invoke(IPC.diagnosticsSave) as Promise<string | undefined>,
-    copy: () => ipcRenderer.invoke(IPC.diagnosticsCopy) as Promise<void>,
-    reveal: () => ipcRenderer.invoke(IPC.diagnosticsReveal) as Promise<string | undefined>,
-    share: () => ipcRenderer.invoke(IPC.diagnosticsShare) as Promise<boolean>,
+    save: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsSave, options) as Promise<string | undefined>,
+    copy: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsCopy, options) as Promise<void>,
+    reveal: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsReveal, options) as Promise<string | undefined>,
+    share: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsShare, options) as Promise<boolean>,
   },
   onDeepLink: (listener) => subscribe<string>(IPC.deepLink, listener),
   onUiAction: (listener) => subscribe<string>(IPC.uiAction, listener),

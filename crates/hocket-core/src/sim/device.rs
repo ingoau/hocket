@@ -498,6 +498,8 @@ impl SimDevice {
             | Output::TransportChanged { .. }
             | Output::SettingsMerged(_)
             | Output::UndoEntryReceived { .. }
+            | Output::DiagnosticsRequested { .. }
+            | Output::DiagnosticsReply(_)
             | Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.note(format!("{level}: {message}")),
         }

@@ -2047,6 +2047,12 @@ pub enum Command {
     ExportConfig {
         include_secrets: bool,
     },
+    /// The platform's diagnostics bundle, answering
+    /// [`Event::DiagnosticsRequested`]. Sent to the device that asked.
+    AnswerDiagnosticsRequest {
+        request_id: String,
+        text: String,
+    },
     /// Import a config document (`ExportConfig` output). Account-synced
     /// settings it changes are broadcast to the other devices like a local
     /// edit. Device-local settings (audio output, transcoding, storage,
@@ -2286,6 +2292,11 @@ pub enum Query {
     },
     /// Diagnostics bundle (crash logs, versions) as text for copy-to-clipboard.
     Diagnostics,
+    /// The diagnostics of the Connect room and every other device in it, as
+    /// text for the end of this device's bundle. Waits for the answers (up to
+    /// 45 s). Only while developer mode is on here; each other device answers
+    /// only while its own is on.
+    RoomDiagnostics,
     /// Export a config document.
     ConfigDocument {
         include_secrets: bool,
@@ -2655,6 +2666,15 @@ pub enum Event {
     },
     ConfigExported {
         document: String,
+    },
+    /// Another device in the Connect room asks for this device's diagnostics
+    /// (developer mode is on here). Build the bundle the diagnostics page
+    /// would save and answer with [`Command::AnswerDiagnosticsRequest`];
+    /// without an answer within 10 s the core sends its own diagnostics and
+    /// log instead.
+    DiagnosticsRequested {
+        request_id: String,
+        from_device: String,
     },
 
     /// Drive an external backend (Android). Not emitted in native mode.

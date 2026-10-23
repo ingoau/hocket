@@ -224,6 +224,13 @@ pub(crate) struct Actor {
     pub lyrics_for: Option<TrackId>,
     pub media_art_pending: Option<(String, u32)>,
     pub log_ring: VecDeque<String>,
+    /// `Query::RoomDiagnostics` waiting for the room's answers.
+    pub diagnostics_collections: Vec<(
+        crate::connect::diagnostics::Collection,
+        tokio::sync::oneshot::Sender<QueryResult>,
+    )>,
+    /// Other devices' diagnostics requests waiting for the platform's bundle.
+    pub diagnostics_answers: Vec<crate::core::handlers::diagnostics::PendingAnswer>,
 
     pub started: bool,
     pub shutting_down: bool,
@@ -492,6 +499,8 @@ impl Actor {
             lyrics_for: None,
             media_art_pending: None,
             log_ring: VecDeque::new(),
+            diagnostics_collections: vec![],
+            diagnostics_answers: vec![],
             started: false,
             shutting_down: false,
             in_flight: 0,
@@ -927,6 +936,7 @@ impl Actor {
             self.last_engine_tick = now;
             self.engine_input(Input::Tick);
         }
+        self.diagnostics_tick(now);
         self.prefetch_tick(now);
         self.flush_pending_load(false);
         self.playback_tick(now);

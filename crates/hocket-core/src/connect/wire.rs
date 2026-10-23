@@ -852,6 +852,43 @@ pub enum Msg {
         playlists: Vec<PlaylistEdit>,
     },
 
+    // -- developer diagnostics -------------------------------------------
+    /// → room. Developer diagnostics: collect a bundle from every other
+    /// device in the room. The room answers for itself at once (a
+    /// [`Msg::DiagnosticsReply`] from [`diagnostics::ROOM`] that names the
+    /// devices it asked) and passes the request on to them with `from` set
+    /// to the sender. A device answers only while its own developer mode is
+    /// on. See [`crate::connect::diagnostics`]. Peers that do not know it
+    /// ignore it.
+    ///
+    /// [`diagnostics::ROOM`]: crate::connect::diagnostics::ROOM
+    DiagnosticsRequest {
+        request_id: String,
+        from: DeviceId,
+    },
+    /// → room, routed to `to`; or → client from the room (or the hosted
+    /// coordinator) itself. One part of an answer: `text` is part `part` of
+    /// `parts` (0-based), or `declined` says why there is none. The room
+    /// fills in `from` and `fromName` for a device's answer.
+    DiagnosticsReply {
+        request_id: String,
+        /// The answering device, or [`crate::connect::diagnostics::ROOM`] /
+        /// [`crate::connect::diagnostics::COORDINATOR`].
+        from: String,
+        #[serde(default)]
+        from_name: String,
+        to: DeviceId,
+        part: u32,
+        parts: u32,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        declined: Option<String>,
+        /// The room's own answer only: the devices it passed the request to.
+        #[serde(default)]
+        asked: Vec<DeviceInfo>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -897,6 +934,8 @@ impl Msg {
         "settingsSync",
         "undoEntryShared",
         "libraryEdited",
+        "diagnosticsRequest",
+        "diagnosticsReply",
         "unknown",
     ];
 
@@ -944,6 +983,8 @@ impl Msg {
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
+            Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
+            Msg::DiagnosticsReply { .. } => "diagnosticsReply",
             Msg::Unknown => "unknown",
         }
     }

@@ -211,6 +211,10 @@ impl Actor {
                 QueryResult::Source(source)
             }
             Query::Diagnostics => QueryResult::Text(self.diagnostics()),
+            Query::RoomDiagnostics => {
+                self.room_diagnostics_query(reply);
+                return;
+            }
             Query::ConfigDocument { include_secrets } => {
                 QueryResult::Text(self.config_document(include_secrets))
             }
@@ -362,7 +366,7 @@ impl Actor {
         }
     }
 
-    fn diagnostics(&self) -> String {
+    pub(crate) fn diagnostics(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
             "Hocket core {} (api schema {})\n",

@@ -825,6 +825,7 @@ class FakeCore(
             is Command.ResetSetting -> settings[c.data.key]?.let { setSetting(c.data.key, defaults[c.data.key] ?: it.value) }
             is Command.SetSettingsSync -> setSetting(SettingKeys.SYNC_ENABLED, c.data.enabled.toString())
             is Command.ExportConfig -> emit(Event.ConfigExported(EventConfigExportedInner(configDocument(c.data.include_secrets))))
+            is Command.AnswerDiagnosticsRequest -> Unit
             is Command.ImportConfig -> toast("Configuration restored")
             is Command.SetAudioSettings -> { audio = c.data.settings; emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             is Command.SetOutputDevice -> { audio = audio.copy(outputDevice = c.data.id); emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
@@ -1405,6 +1406,8 @@ class FakeCore(
         is Query.Artwork -> QueryResult.Path(null)
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
+        // The fake core is never in a Connect room with anyone.
+        Query.RoomDiagnostics -> QueryResult.Text("Other devices: not collected (the fake core has no Connect room).\n")
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
     }
 

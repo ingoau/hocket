@@ -66,5 +66,8 @@ describe("DevLog", () => {
     expect(b.text.startsWith(b.head)).toBe(true);
     expect(b.text).toContain("ERROR renderer#1: boom");
     expect(b.logLines).toBe(1);
+    expect(b.text).not.toContain("Other devices");
+    const all = log.bundle({ coreDiagnostics: "Hocket core 0.1.0\n", otherDevices: "Other devices in the Connect room\n" });
+    expect(all.text.indexOf("Other devices")).toBeGreaterThan(all.text.indexOf("ERROR renderer#1: boom"));
   });
 });

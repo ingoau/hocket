@@ -164,6 +164,9 @@ class CoreClient(
     private val _exports = MutableSharedFlow<Event>(extraBufferCapacity = 4)
     /** `NspExported` and `ConfigExported`, for the share sheet. */
     val exports: SharedFlow<Event> = _exports.asSharedFlow()
+    private val _diagnosticsRequests = MutableSharedFlow<EventDiagnosticsRequestedInner>(extraBufferCapacity = 4)
+    /** Another device in the Connect room asks for this one's diagnostics (developer mode is on here). */
+    val diagnosticsRequests: SharedFlow<EventDiagnosticsRequestedInner> = _diagnosticsRequests.asSharedFlow()
     private val _actionsChanged = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
@@ -475,6 +478,7 @@ class CoreClient(
             is Event.ShortcutsChanged -> Unit // desktop only
             is Event.ActionsChanged -> _actionsChanged.tryEmit(event.data.surface)
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
+            is Event.DiagnosticsRequested -> _diagnosticsRequests.tryEmit(event.data)
             // Who owns transport after a handoff, and voice search waiting for playback, follow this
             // (not only snapshots). The core sends it on real changes, never on position reports.
             is Event.MediaSession -> _mediaSession.value = event.data.state

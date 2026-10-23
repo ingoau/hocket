@@ -230,6 +230,7 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "configExported":
       return { ...state, exported: { kind: "config", document: e.data.document, at: Date.now() } };
     case "backend":
+    case "diagnosticsRequested": // main answers it
       return state;
     case "mediaSession":
       // OS media session is owned by the main process; the renderer uses transport / nowPlaying.

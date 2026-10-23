@@ -40,7 +40,7 @@ Deterministic simulation. The core exposes a harness with a virtual clock and an
 - JSON over WebSocket, Rust types as schema authority, TypeScript generated from them. Being able to read the protocol in a log is worth more than the bytes saved.
 - Session documents carry a schema version; the handshake negotiates a minimum common protocol and refuses below a hard floor. **Older devices must round-trip unknown fields untouched**, or a stale device silently strips new state every time it writes.
 - Forward-only numbered migrations locally. The mirror is a cache, so a failed migration can drop and re-sync; downloads, outbox, saved queues and settings are not rebuildable and get real migrations plus a backup.
-- No network telemetry. Local crash logs with a copy-diagnostics action.
+- No network telemetry. Local crash logs with a copy-diagnostics action. *(Since: with developer mode on, a bundle can also collect the Connect room's state and the other devices' bundles over Connect. Each device answers only while its own developer mode is on. The hosted coordinator adds its version, and its whole process log only for the accounts its operator names with `--diagnostics-user`. Nothing goes anywhere but the user's own devices.)*
 - Strings externalised from the first commit.
 
 

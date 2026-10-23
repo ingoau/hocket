@@ -598,6 +598,8 @@ export class FakeCore implements CoreHandle {
       case "exportConfig":
         this.emit({ type: "configExported", data: { document: JSON.stringify(this.configDocument(cmd.data.include_secrets), null, 2) } });
         return;
+      case "answerDiagnosticsRequest":
+        return;
       case "importConfig":
         this.importConfig(cmd.data.document);
         return;
@@ -2429,6 +2431,9 @@ export class FakeCore implements CoreHandle {
       }
       case "diagnostics":
         return { type: "text", data: this.diagnostics() };
+      case "roomDiagnostics":
+        // The fake core is never in a Connect room with anyone.
+        return { type: "text", data: "Other devices: not collected (the fake core has no Connect room).\n" };
       case "configDocument":
         return { type: "text", data: JSON.stringify(this.configDocument(q.data.include_secrets), null, 2) };
       default: {

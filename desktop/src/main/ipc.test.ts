@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Command, Query, QueryResult } from "@core/api";
+import type { Command, Event, Query, QueryResult } from "@core/api";
 import { IPC } from "@shared/bridge-types";
 
 type Listener = (e: { sender: { id: number } }, ...args: unknown[]) => unknown;
@@ -46,15 +46,18 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   const store = { secret: "secret", passwordFor: vi.fn(function (this: { secret: string }, _url: string, _username: string): string | undefined { return this.secret; }) };
   const passwordFor = store.passwordFor;
   const devlog = {
-    bundle: vi.fn(({ coreDiagnostics }: { coreDiagnostics: string }) => {
+    bundle: vi.fn(({ coreDiagnostics, otherDevices }: { coreDiagnostics: string; otherDevices?: string }) => {
       const log = Array.from({ length: 450 }, (_, i) => `line ${i}`).join("\n") + "\n";
       const head = `Hocket diagnostics\n${coreDiagnostics}\n`;
-      return { fileName: "hocket-diagnostics-20261020-030405.txt", text: head + log, head, log, logLines: 450, logBytes: log.length, windowMs: 3_600_000, generatedAt: 1 };
+      return { fileName: "hocket-diagnostics-20261020-030405.txt", text: head + log + (otherDevices ?? ""), head, log, logLines: 450, logBytes: log.length, windowMs: 3_600_000, generatedAt: 1 };
     }),
+    append: vi.fn(),
   };
+  const eventListeners: ((e: Event) => void)[] = [];
+  const emit = (e: Event) => eventListeners.forEach((l) => l(e));
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
-    core: { kind: "fake", dispatch, query, onEvent: () => () => undefined, shutdown: async () => undefined },
+    core: { kind: "fake", dispatch, query, onEvent: (l) => { eventListeners.push(l); return () => undefined; }, shutdown: async () => undefined },
     windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
@@ -67,7 +70,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     diagnosticsDir: "/data/logs/diagnostics",
     diagnosticsExtra: () => ({ core: "fake core" }),
   });
-  return { dispatch, query, onCommand, artwork, passwordFor };
+  return { dispatch, query, onCommand, artwork, passwordFor, emit };
 }
 
 describe("ipc", () => {
@@ -228,6 +231,31 @@ describe("ipc", () => {
     expect(path).toBe("/data/logs/diagnostics/hocket-diagnostics-20261020-030405.txt");
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(path);
     expect(fsMock.rm.mock.calls.map((c) => c[0])).toEqual(["/data/logs/diagnostics/hocket-diagnostics-20261010-000000.txt", "/data/logs/diagnostics/hocket-diagnostics-20261011-000000.txt"]);
+  });
+
+  it("diagnostics: other devices are asked for only when the page says so", async () => {
+    const { query } = setup({
+      query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? "Other devices: phone says hi" : "core says hi" }) as QueryResult,
+    });
+    await handlers.get(IPC.diagnosticsCopy)!(ours);
+    expect(query).not.toHaveBeenCalledWith({ type: "roomDiagnostics" });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.not.stringContaining("phone says hi"));
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: "yes" });
+    expect(query).not.toHaveBeenCalledWith({ type: "roomDiagnostics" });
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(query).toHaveBeenCalledWith({ type: "roomDiagnostics" });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));
+  });
+
+  it("diagnostics: another device's request is answered with this device's bundle", async () => {
+    const { dispatch, emit } = setup({ query: async () => ({ type: "text", data: "core says hi" }) as QueryResult });
+    emit({ type: "diagnosticsRequested", data: { request_id: "r1", from_device: "Pixel" } });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    const cmd = dispatch.mock.calls[0]![0] as Extract<Command, { type: "answerDiagnosticsRequest" }>;
+    expect(cmd.type).toBe("answerDiagnosticsRequest");
+    expect(cmd.data.request_id).toBe("r1");
+    expect(cmd.data.text).toContain("core says hi");
+    expect(cmd.data.text).toContain("line 449");
   });
 
   it("diagnostics: a core that fails to answer still yields a bundle", async () => {

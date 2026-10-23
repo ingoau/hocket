@@ -222,7 +222,7 @@ async function main(): Promise<void> {
   // Position reports (~1 Hz while playing) stay here: every window extrapolates from the stamp it has.
   const ticks = new PositionTickFilter();
   core.onEvent((event: Event) => {
-    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && ticks.pass(event)) {
+    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && event.type !== "diagnosticsRequested" && ticks.pass(event)) {
       for (const w of windows.all()) {
         if (w.isDestroyed()) continue;
         if (windows.mini && w === windows.mini && !miniEvents.has(event.type)) continue;

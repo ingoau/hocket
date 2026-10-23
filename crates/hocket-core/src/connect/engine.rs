@@ -33,6 +33,7 @@ use crate::api::{
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
+use crate::connect::diagnostics::{self, ReplyPart};
 use crate::connect::discovery::{scope_hash, PeerAdvert};
 use crate::connect::election::{elect_id, Candidate};
 use crate::connect::lease::HeldLease;
@@ -111,6 +112,9 @@ const ADVERT_MIN_INTERVAL_MS: f64 = 10_000.0;
 /// know the request, an owner that is gone or wedged) this device takes the
 /// lease over itself, from the owner's last stamp.
 pub const PULL_FALLBACK_MS: f64 = 3_000.0;
+
+/// Diagnostics answer parts waiting to be sent, at most (two whole answers).
+const DIAGNOSTICS_QUEUE_PARTS: usize = 2 * diagnostics::MAX_PARTS as usize;
 
 /// Persisted next to the document: the last state confirmed with a remote room.
 pub type SyncBase = SyncPoint;
@@ -314,6 +318,21 @@ pub enum Input {
         playlists: Vec<PlaylistEdit>,
     },
 
+    // -- developer diagnostics ---------------------------------------------
+    /// Ask the room and every other device in it for diagnostics. Answers
+    /// arrive as [`Output::DiagnosticsReply`].
+    RequestDiagnostics {
+        request_id: String,
+    },
+    /// Answer an [`Output::DiagnosticsRequested`]: `text` (capped, sent in
+    /// parts, one per tick) or `declined`.
+    AnswerDiagnostics {
+        request_id: String,
+        to: DeviceId,
+        text: String,
+        declined: Option<String>,
+    },
+
     Tick,
 }
 
@@ -440,6 +459,14 @@ pub enum Output {
         items: Vec<LibraryItemState>,
         playlists: Vec<PlaylistEdit>,
     },
+    /// Another device asks for this device's diagnostics: answer with
+    /// [`Input::AnswerDiagnostics`] (or decline).
+    DiagnosticsRequested {
+        request_id: String,
+        from: DeviceId,
+    },
+    /// One part of an answer to our [`Input::RequestDiagnostics`].
+    DiagnosticsReply(ReplyPart),
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
     Log {
@@ -691,6 +718,8 @@ pub struct Engine {
 
     to_room: VecDeque<WireMessage>,
     from_room: VecDeque<WireMessage>,
+    /// Parts of diagnostics answers still to send, one per tick.
+    diagnostics_out: VecDeque<Msg>,
     out: Vec<Output>,
 }
 
@@ -809,6 +838,7 @@ impl Engine {
             last_advert_at: 0.0,
             to_room: VecDeque::new(),
             from_room: VecDeque::new(),
+            diagnostics_out: VecDeque::new(),
             out: vec![],
         };
         e.attach_loopback();
@@ -1345,6 +1375,16 @@ impl Engine {
                     });
                 }
             }
+            Input::RequestDiagnostics { request_id } => {
+                let from = self.cfg.device.id.clone();
+                self.upstream_send(Msg::DiagnosticsRequest { request_id, from });
+            }
+            Input::AnswerDiagnostics {
+                request_id,
+                to,
+                text,
+                declined,
+            } => self.answer_diagnostics(request_id, to, text, declined),
             Input::Tick => self.on_tick(),
         }
         self.drain_loops();
@@ -1479,6 +1519,47 @@ impl Engine {
                 started_at,
                 device_id,
             });
+        }
+    }
+
+    /// Queue a diagnostics answer: capped, in parts, the first at once and
+    /// the rest one per tick so heartbeats and stamps keep flowing. A newer
+    /// answer to the same device replaces what is left of an older one, and
+    /// at most [`DIAGNOSTICS_QUEUE_PARTS`] parts wait in all (the oldest go).
+    fn answer_diagnostics(
+        &mut self,
+        request_id: String,
+        to: DeviceId,
+        text: String,
+        declined: Option<String>,
+    ) {
+        let from = self.cfg.device.id.clone();
+        let from_name = self.cfg.device.name.clone();
+        self.diagnostics_out
+            .retain(|m| !matches!(m, Msg::DiagnosticsReply { to: t, .. } if *t == to));
+        let parts = match declined {
+            Some(_) => vec![String::new()],
+            None => diagnostics::parts(&text),
+        };
+        let count = parts.len() as u32;
+        for (i, text) in parts.into_iter().enumerate() {
+            self.diagnostics_out.push_back(Msg::DiagnosticsReply {
+                request_id: request_id.clone(),
+                from: from.clone(),
+                from_name: from_name.clone(),
+                to: to.clone(),
+                part: i as u32,
+                parts: count,
+                text,
+                declined: declined.clone(),
+                asked: vec![],
+            });
+        }
+        while self.diagnostics_out.len() > DIAGNOSTICS_QUEUE_PARTS {
+            self.diagnostics_out.pop_front();
+        }
+        if let Some(m) = self.diagnostics_out.pop_front() {
+            self.upstream_send(m);
         }
     }
 
@@ -1662,7 +1743,12 @@ impl Engine {
             session_id: Some(self.doc.session_id.clone()),
             session_revision: self.doc.revision,
             held_epoch: self.held_remote_epoch,
-            extra: Default::default(),
+            extra: [(
+                diagnostics::HELLO_FLAG.to_string(),
+                serde_json::Value::Bool(true),
+            )]
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -2680,6 +2766,36 @@ impl Engine {
                         items,
                         playlists,
                     });
+                }
+            }
+            Msg::DiagnosticsRequest { request_id, from } => {
+                if from != self.cfg.device.id {
+                    self.out
+                        .push(Output::DiagnosticsRequested { request_id, from });
+                }
+            }
+            Msg::DiagnosticsReply {
+                request_id,
+                from,
+                from_name,
+                to,
+                part,
+                parts,
+                text,
+                declined,
+                asked,
+            } => {
+                if to == self.cfg.device.id {
+                    self.out.push(Output::DiagnosticsReply(ReplyPart {
+                        request_id,
+                        from,
+                        from_name,
+                        part,
+                        parts,
+                        text,
+                        declined,
+                        asked,
+                    }));
                 }
             }
             Msg::Hello { .. }
@@ -4117,6 +4233,9 @@ impl Engine {
             // First tick: pick a tier (start the listener, connect the coordinator).
             self.started = true;
             self.reevaluate();
+        }
+        if let Some(m) = self.diagnostics_out.pop_front() {
+            self.upstream_send(m);
         }
 
         // Own room timers (lease lapse for inbound peers, member timeouts).
