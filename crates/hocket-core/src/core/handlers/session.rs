@@ -1137,6 +1137,7 @@ impl Actor {
             .chain(derived.playing_next.iter())
             .chain(derived.upcoming.iter())
             .chain(derived.wrap_next.iter())
+            .chain(derived.previous.iter())
         {
             if seen.insert(&i.track_id) {
                 ids.push(i.track_id.clone());

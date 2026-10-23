@@ -318,6 +318,9 @@ export class FakeCore implements CoreHandle {
       case "previous":
         this.previous();
         return;
+      case "previousTrack":
+        this.previous(false);
+        return;
       case "seekTo":
         this.seek(cmd.data.position_ms);
         return;
@@ -1118,9 +1121,10 @@ export class FakeCore implements CoreHandle {
     this.emitAll();
   }
 
-  private previous(): void {
+  /** Previous; `restart` false is PreviousTrack, which never restarts a track it can go back from. */
+  private previous(restart = true): void {
     const s = this.session;
-    if (this.positionNow() > 3000 || !s.history.length) {
+    if ((restart && this.positionNow() > 3000) || !s.history.length) {
       this.seek(0);
       return;
     }

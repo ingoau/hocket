@@ -302,8 +302,12 @@ class FakeCore(
         // Like the core: with Repeat All and nothing left, the first item in play order comes next.
         val wrapNext = order.firstOrNull()?.takeIf { context != null && repeat == RepeatMode.All && insertions.isEmpty() && upcoming.isEmpty() }
             ?.let { idx -> entry(QueueItem("ctx-wrap-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false)) }
+        // What going back plays, as [previous] does: the last of the history, else the context's item before.
+        val back = history.lastOrNull()?.let(::entry)
+            ?: order.getOrNull(cursor - 1)?.takeIf { current?.source is QueueSource.Context }
+                ?.let { idx -> entry(QueueItem("ctx-back-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false)) }
         return QueueView(context?.label, history.mapNotNull(::entry), current?.let(::entry), insertions.mapNotNull(::entry), upcoming,
-            shuffle != null, repeat, autoplay, mode, (order.size - cursor - 1).coerceAtLeast(0).toUInt(), wrapNext)
+            shuffle != null, repeat, autoplay, mode, (order.size - cursor - 1).coerceAtLeast(0).toUInt(), wrapNext, back)
     }
 
     private var autoplayCache: List<QueueEntry>? = null

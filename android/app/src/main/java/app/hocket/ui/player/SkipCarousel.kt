@@ -25,7 +25,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
-import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
@@ -42,7 +41,9 @@ import kotlin.math.sign
  * What a skip swipe peeks at: the next item (the first of "playing next", else the first upcoming,
  * autoplay's included) and the previous one (the last of the history). At the end of the queue it is
  * the core's [QueueView.wrapNext]: with Repeat All, the context's first item in play order (the
- * shuffled order's first with shuffle on). Nothing for Repeat One or Off.
+ * shuffled order's first with shuffle on). Nothing for Repeat One or Off. The previous one is the
+ * core's [QueueView.previous], what going back plays: the last history item still playable, or
+ * the context's item before (from an album started part way in, say); nothing where there is none.
  */
 @Immutable
 internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?) {
@@ -51,19 +52,9 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
 
         fun of(queue: QueueView): Neighbours {
             val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull() ?: queue.wrapNext
-            return Neighbours(previous = queue.history.lastOrNull(), next = next)
+            return Neighbours(previous = queue.previous, next = next)
         }
     }
-}
-
-/**
- * Whether a swipe back with no history to peek at still goes back: the current song is a context
- * item after the context's first (in play order; with shuffle on only the core knows it, so any).
- */
-internal fun canGoBack(queue: QueueView): Boolean {
-    if (queue.history.isNotEmpty()) return true
-    val source = queue.current?.item?.source as? QueueSource.Context ?: return false
-    return queue.shuffle || source.data.index > 0u
 }
 
 /** The current queue's [Neighbours], recomputed only when the queue changes. */
@@ -81,10 +72,9 @@ internal fun rememberNeighbours(): State<Neighbours> {
  * current one; otherwise it springs back. A new drag while it settles sends the skip at once and
  * carries on from its page (so N quick swipes skip N songs).
  * A swipe back always goes back a song ([Command.PreviousTrack], never Previous's restart of this
- * one). Where there is no neighbour it rubber-bands as the old skip swipe did, and past
- * [rubberThreshold] still skips: past the end of the queue it ends it, and back from a context's
- * later track with no history it goes to the one before ([canGoBack]; with nothing before the
- * current song, a swipe back does nothing). While a skip settles the neighbours shown are held
+ * one). Where there is no neighbour it rubber-bands as the old skip swipe did: past
+ * [rubberThreshold] a swipe past the end of the queue still ends it, and with nothing before the
+ * current song a swipe back does nothing. While a skip settles the neighbours shown are held
  * ([shown]) until the strip is back at 0, so the new song's own neighbours never flash in the page
  * it settled on.
  */
@@ -140,8 +130,8 @@ internal class SkipCarousel {
                 abs(raw) > rubberThreshold -> sign(raw) * (rubberThreshold + (abs(raw) - rubberThreshold) * 0.3f)
                 else -> raw
             }
-            // Without a slot only a swipe on (ending the queue) or back to an earlier context track does anything.
-            val over = if (slot && !reduced) abs(shown) > span / 2f else (raw < 0f || canGoBack(client.queue.value)) && abs(if (reduced) raw else shown) > rubberThreshold
+            // Without a slot only a swipe on (ending the queue) does anything.
+            val over = if (slot && !reduced) abs(shown) > span / 2f else (raw < 0f || (reduced && slot)) && abs(if (reduced) raw else shown) > rubberThreshold
             if (over != drag.crossed) {
                 drag.crossed = over
                 haptics.performHapticFeedback(if (over) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentTick)
@@ -170,7 +160,7 @@ internal class SkipCarousel {
                     val slot = slotFor(d)
                     val flung = abs(v) > fling && sign(v) == sign(d) && abs(d) > minFling
                     when {
-                        reduced -> if ((abs(raw) > rubberThreshold || flung) && (raw < 0f || canGoBack(client.queue.value))) skip(client, forward = raw < 0f)
+                        reduced -> if ((abs(raw) > rubberThreshold || flung) && (raw < 0f || slotFor(raw))) skip(client, forward = raw < 0f)
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
                             // The song the skip is from: if another takes its place before the
@@ -199,9 +189,9 @@ internal class SkipCarousel {
                                 }
                             }
                         }
-                        !slot && (shown < 0f || canGoBack(client.queue.value)) && abs(shown) > rubberThreshold -> {
+                        !slot && shown < 0f && abs(shown) > rubberThreshold -> {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                            skip(client, forward = shown < 0f)
+                            skip(client, forward = true)
                             offset.animateTo(0f, Motion.snap, initialVelocity = v)
                         }
                         else -> offset.animateTo(0f, Motion.snap, initialVelocity = v)
