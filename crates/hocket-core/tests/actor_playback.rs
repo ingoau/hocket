@@ -35,6 +35,40 @@ async fn synced_core(name: &str) -> TestCore {
     t
 }
 
+/// The skip swipe's PreviousTrack goes back however far into the track it
+/// is (Previous would restart it), and from a context's later track with no
+/// history too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_track_never_restarts() {
+    let t = synced_core("a").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::Next).await;
+    t.run_for(5_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+
+    // Started from the third track: nothing in history, the album before it.
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            start_index: Some(2),
+            ..album_args(&sid, "al0")
+        },
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    assert!(t.queue().await.history.is_empty());
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn play_album_then_next_previous_and_undo() {
     let t = synced_core("a").await;

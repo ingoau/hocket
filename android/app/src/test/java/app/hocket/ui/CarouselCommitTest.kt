@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import app.hocket.core.api.Command
+import app.hocket.core.api.QueueSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,11 +96,35 @@ class CarouselCommitTest : PlayerRulesTestBase() {
         assertEquals("back a song, not restarted", first, core.client.nowPlaying.value?.item?.key)
     }
 
+    /** No history, but the album's earlier tracks (it was started from its third): back a track still. */
+    @Test
+    fun aSwipeBackFromALaterTrackWithNoHistoryGoesBack() {
+        var clock = 1_000_000.0
+        val core = TestCore(now = { clock })
+        startExpanded(core)
+        val q = core.client.queue.value
+        assertTrue(q.history.isEmpty())
+        val index = (q.current?.item?.source as QueueSource.Context).data.index
+        assertTrue(index > 0u)
+        clock += 30_000.0
+        core.client.requestSnapshot()
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        swipeToPrevious()
+        settle()
+        assertEquals(index - 1u, (core.client.nowPlaying.value?.item?.source as QueueSource.Context).data.index)
+    }
+
     @Test
     fun aSwipeBackWithNothingBeforeDoesNothing() {
         var clock = 1_000_000.0
         val core = TestCore(now = { clock })
         startExpanded(core)
+        // Back to the album's first track (under 3 s in, so Previous goes back).
+        while ((core.client.queue.value.current?.item?.source as QueueSource.Context).data.index > 0u) {
+            core.client.dispatch(Command.Previous)
+            compose.waitForIdle()
+        }
         assertTrue(core.client.queue.value.history.isEmpty())
         clock += 30_000.0
         core.client.requestSnapshot()

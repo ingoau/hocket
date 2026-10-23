@@ -240,7 +240,7 @@ impl QueueOp {
             Command::SetAutoplay { enabled } => QueueOp::SetAutoplay { enabled: *enabled },
             Command::SetQueueMode { mode } => QueueOp::SetQueueMode { mode: *mode },
             Command::Next => QueueOp::Next,
-            Command::Previous => QueueOp::Previous,
+            Command::Previous | Command::PreviousTrack => QueueOp::Previous,
             Command::SkipUnavailable { key } => QueueOp::SkipUnavailable { key: key.clone() },
             Command::RestoreSavedQueue { id } => QueueOp::RestoreSavedQueue {
                 id: id.clone(),

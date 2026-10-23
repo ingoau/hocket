@@ -1518,7 +1518,7 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::SetAutoplay { .. } => "autoplay",
         Command::SetQueueMode { .. } => "queueMode",
         Command::Next => "next",
-        Command::Previous => "previous",
+        Command::Previous | Command::PreviousTrack => "previous",
         Command::SkipUnavailable { .. } => "skipUnavailable",
         Command::RestoreSavedQueue { .. } => "restoreSavedQueue",
         Command::PinSavedQueue { .. } => "pinSavedQueue",
@@ -1554,7 +1554,7 @@ fn command_label(cmd: &Command) -> String {
         }
         Command::SetQueueMode { mode } => format!("Queue mode {mode:?}"),
         Command::Next => "Next track".into(),
-        Command::Previous => "Previous track".into(),
+        Command::Previous | Command::PreviousTrack => "Previous track".into(),
         Command::SkipUnavailable { .. } => "Skip unavailable".into(),
         Command::RestoreSavedQueue { .. } => "Restore queue".into(),
         Command::PinSavedQueue { pinned, .. } => {

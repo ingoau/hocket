@@ -451,12 +451,17 @@ class FakeCore(
 
     private fun contextItem(pos: Int): QueueItem? = order.getOrNull(pos)?.let { idx -> QueueItem(newKey(), contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false) }
 
-    private fun previous() {
+    private fun previous(restartFromPosition: Boolean = true) {
         // The core's rule (handlers::session::previous with session::previous_should_restart): from
         // 3 s into a track some device plays (here or another), or with nothing before it, Previous
-        // restarts the track.
-        if (transportOwner != null && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
-        val prev = history.removeLastOrNull() ?: run { startPlayback(0, stamp.isPlaying); return }
+        // restarts the track. PreviousTrack ([restartFromPosition] false) only for nothing before it.
+        if (restartFromPosition && transportOwner != null && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
+        val prev = history.removeLastOrNull() ?: run {
+            // History exhausted: the context's item before this one, as the core falls back to.
+            if (current?.source is QueueSource.Context && cursor > 0) { cursor--; current = contextItem(cursor) }
+            startPlayback(0, stamp.isPlaying)
+            return
+        }
         current?.let { cur ->
             when (cur.source) {
                 is QueueSource.Inserted -> insertions.add(0, cur)
@@ -647,6 +652,7 @@ class FakeCore(
             Command.Stop -> { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel(); if (transportOwner == deviceId) { transportOwner = null; epoch++ }; emitTransport() }
             Command.Next -> { advance(natural = false); emitQueue(); emitTransport() }
             Command.Previous -> { previous(); emitQueue(); emitTransport() }
+            Command.PreviousTrack -> { previous(restartFromPosition = false); emitQueue(); emitTransport() }
             is Command.SeekTo -> { startPlayback(c.data.position_ms.toLong(), stamp.isPlaying); emitTransport() }
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }

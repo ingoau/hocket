@@ -1789,6 +1789,10 @@ pub enum Command {
     Stop,
     Next,
     Previous,
+    /// Back a track, never restarting this one however far in it is (the
+    /// skip swipe): Previous without its restart, the queue deciding (it
+    /// restarts the track only when there is nothing before it).
+    PreviousTrack,
     SeekTo {
         position_ms: Ms,
     },

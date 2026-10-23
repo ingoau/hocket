@@ -23,14 +23,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
-import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
+import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -55,6 +56,16 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
     }
 }
 
+/**
+ * Whether a swipe back with no history to peek at still goes back: the current song is a context
+ * item after the context's first (in play order; with shuffle on only the core knows it, so any).
+ */
+internal fun canGoBack(queue: QueueView): Boolean {
+    if (queue.history.isNotEmpty()) return true
+    val source = queue.current?.item?.source as? QueueSource.Context ?: return false
+    return queue.shuffle || source.data.index > 0u
+}
+
 /** The current queue's [Neighbours], recomputed only when the queue changes. */
 @Composable
 internal fun rememberNeighbours(): State<Neighbours> {
@@ -69,9 +80,10 @@ internal fun rememberNeighbours(): State<Neighbours> {
  * meanwhile), and once the new track is current snaps back to 0, the neighbour now being the
  * current one; otherwise it springs back. A new drag while it settles sends the skip at once and
  * carries on from its page (so N quick swipes skip N songs).
- * A swipe back always goes back a song (a jump to the previous item, never Previous's restart of
- * this one). Where there is no neighbour it rubber-bands as the old skip swipe did (and a swipe
- * past the end of the queue, past [rubberThreshold], still ends it; with nothing before the
+ * A swipe back always goes back a song ([Command.PreviousTrack], never Previous's restart of this
+ * one). Where there is no neighbour it rubber-bands as the old skip swipe did, and past
+ * [rubberThreshold] still skips: past the end of the queue it ends it, and back from a context's
+ * later track with no history it goes to the one before ([canGoBack]; with nothing before the
  * current song, a swipe back does nothing). While a skip settles the neighbours shown are held
  * ([shown]) until the strip is back at 0, so the new song's own neighbours never flash in the page
  * it settled on.
@@ -128,8 +140,8 @@ internal class SkipCarousel {
                 abs(raw) > rubberThreshold -> sign(raw) * (rubberThreshold + (abs(raw) - rubberThreshold) * 0.3f)
                 else -> raw
             }
-            // Without a slot only a swipe on (ending the queue) does anything.
-            val over = if (slot && !reduced) abs(shown) > span / 2f else (raw < 0f || reduced) && abs(if (reduced) raw else shown) > rubberThreshold
+            // Without a slot only a swipe on (ending the queue) or back to an earlier context track does anything.
+            val over = if (slot && !reduced) abs(shown) > span / 2f else (raw < 0f || canGoBack(client.queue.value)) && abs(if (reduced) raw else shown) > rubberThreshold
             if (over != drag.crossed) {
                 drag.crossed = over
                 haptics.performHapticFeedback(if (over) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentTick)
@@ -158,13 +170,13 @@ internal class SkipCarousel {
                     val slot = slotFor(d)
                     val flung = abs(v) > fling && sign(v) == sign(d) && abs(d) > minFling
                     when {
-                        reduced -> if (abs(raw) > rubberThreshold || flung) skip(client, forward = raw < 0f)
+                        reduced -> if ((abs(raw) > rubberThreshold || flung) && (raw < 0f || canGoBack(client.queue.value))) skip(client, forward = raw < 0f)
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
                             // The song the skip is from: if another takes its place before the
                             // skip is sent (it ended, or another device skipped), that was the skip.
                             val neighbours = live()
-                            val commit = Pending(forward, client.nowPlaying.value?.item?.key, back = neighbours.previous?.item?.key)
+                            val commit = Pending(forward, client.nowPlaying.value?.item?.key)
                             commit.job = coroutineContext[kotlinx.coroutines.Job]
                             pending = commit
                             held = neighbours
@@ -173,7 +185,7 @@ internal class SkipCarousel {
                                 offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
                                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                                 send(client, commit)
-                                withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != commit.before } }
+                                awaitChange(client, commit)
                                 // Let the new track's cover compose before the strip jumps back under it.
                                 withFrameNanos { }
                                 withFrameNanos { }
@@ -187,9 +199,9 @@ internal class SkipCarousel {
                                 }
                             }
                         }
-                        !slot && shown < 0f && abs(shown) > rubberThreshold -> {
+                        !slot && (shown < 0f || canGoBack(client.queue.value)) && abs(shown) > rubberThreshold -> {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                            dispatch(client, forward = true)
+                            skip(client, forward = shown < 0f)
                             offset.animateTo(0f, Motion.snap, initialVelocity = v)
                         }
                         else -> offset.animateTo(0f, Motion.snap, initialVelocity = v)
@@ -199,8 +211,8 @@ internal class SkipCarousel {
         )
     }
 
-    /** A skip settling: its direction, the song it is from, the one before that (going back), and whether it was sent. */
-    private class Pending(val forward: Boolean, val before: String?, val back: String?) {
+    /** A skip settling: its direction, the song it is from, and whether it was sent. */
+    private class Pending(val forward: Boolean, val before: String?) {
         var sent = false
         var job: kotlinx.coroutines.Job? = null
     }
@@ -214,8 +226,7 @@ internal class SkipCarousel {
     private fun send(client: CoreClient, commit: Pending) {
         if (commit.sent) return
         commit.sent = true
-        if (client.nowPlaying.value?.item?.key != commit.before) return
-        if (commit.forward) dispatch(client, forward = true) else commit.back?.let { client.dispatch(Commands.jumpToQueueItem(it)) }
+        if (client.nowPlaying.value?.item?.key == commit.before) skip(client, commit.forward)
     }
 
     /**
@@ -232,23 +243,33 @@ internal class SkipCarousel {
         send(client, commit)
         rebase?.cancel()
         rebase = scope.launch {
-            withTimeoutOrNull(1_500) { client.nowPlaying.first { it?.item?.key != commit.before } }
-            withFrameNanos { }
-            drag.raw -= page
-            held = null
-            offset.snapTo(offset.value - page)
+            try {
+                awaitChange(client, commit)
+                withFrameNanos { }
+                drag.raw -= page
+                held = null
+                offset.snapTo(offset.value - page)
+            } finally {
+                // Cancelled (the artwork left): nothing settling any more.
+                held = null
+            }
         }
     }
 
     /** The finger's own travel in this drag (px), and whether it is past the commit point. */
     private class DragTrack { var raw = 0f; var crossed = false }
 
-    private fun dispatch(client: CoreClient, forward: Boolean) = client.dispatch(if (forward) Command.Next else Command.Previous)
+    /** Next, or back to the song before this one (never Previous's restart of this one). */
+    private fun skip(client: CoreClient, forward: Boolean) = client.dispatch(if (forward) Command.Next else Command.PreviousTrack)
 
-    /** Next, or back to the song before this one (never Previous's restart of this one; nothing when there is none). */
-    private fun skip(client: CoreClient, forward: Boolean) {
-        if (forward) dispatch(client, forward = true)
-        else client.queue.value.history.lastOrNull()?.item?.key?.let { client.dispatch(Commands.jumpToQueueItem(it)) }
+    /**
+     * Until [commit]'s song is replaced in both the queue and now playing (they arrive as separate
+     * events), so the neighbours read next are the new song's. At most 1.5 s.
+     */
+    private suspend fun awaitChange(client: CoreClient, commit: Pending) {
+        withTimeoutOrNull(1_500) {
+            combine(client.queue, client.nowPlaying) { q, e -> q.current?.item?.key != commit.before && e?.item?.key != commit.before }.first { it }
+        }
     }
 
     companion object {

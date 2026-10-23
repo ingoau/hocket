@@ -465,7 +465,7 @@ impl SessionOp {
             Command::SetAutoplay { enabled } => SessionOp::SetAutoplay { enabled: *enabled },
             Command::SetQueueMode { mode } => SessionOp::SetQueueMode { mode: *mode },
             Command::Next => SessionOp::Next,
-            Command::Previous => SessionOp::Previous,
+            Command::Previous | Command::PreviousTrack => SessionOp::Previous,
             Command::SkipUnavailable { key } => SessionOp::SkipUnavailable { key: key.clone() },
             Command::RestoreSavedQueue { id } => SessionOp::RestoreSavedQueue {
                 id: id.clone(),
