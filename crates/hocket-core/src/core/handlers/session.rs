@@ -510,6 +510,10 @@ impl Actor {
                 items,
                 playlists,
             } => self.on_library_edit_received(from, items, playlists),
+            Output::DiagnosticsRequested { request_id, from } => {
+                self.on_diagnostics_requested(request_id, from)
+            }
+            Output::DiagnosticsReply(part) => self.on_diagnostics_reply(part),
             Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.log(level, message),
         }

@@ -97,6 +97,7 @@
 
 pub mod auth;
 pub mod clock;
+pub mod diagnostics;
 pub mod discovery;
 pub mod election;
 pub mod engine;

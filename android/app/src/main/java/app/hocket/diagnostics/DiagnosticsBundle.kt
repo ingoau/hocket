@@ -32,8 +32,9 @@ import java.util.concurrent.TimeUnit
 /**
  * What the developer diagnostics page saves and shares: [head] (the device and app, then the core's
  * own diagnostics), the core's log of the last hour ([coreLog]: Rust tracing plus what [DevLog]
- * recorded, crashes included) and this app's logcat for the same hour ([logcat]: Kotlin, Media3,
- * the system's lines about us).
+ * recorded, crashes included), this app's logcat for the same hour ([logcat]: Kotlin, Media3,
+ * the system's lines about us) and, when asked for, the Connect room's and the other devices'
+ * bundles ([otherDevices], as the core collected them).
  */
 class DiagnosticsReport(
     val generatedAt: Long,
@@ -41,6 +42,7 @@ class DiagnosticsReport(
     val coreLog: String,
     val logcat: String,
     val windowMs: Long,
+    val otherDevices: String = "",
 ) {
     // Computed once, where the report is built (off the main thread): the page reads these while
     // composing, and the logs can be tens of megabytes.
@@ -54,12 +56,13 @@ class DiagnosticsReport(
 
     /** The whole bundle, built on first use (by share, save or copy, all off the main thread). */
     val text: String by lazy {
-        buildString(head.length + coreLog.length + logcat.length + 256) {
+        buildString(head.length + coreLog.length + logcat.length + otherDevices.length + 256) {
             append(head.trimEnd()).append("\n\n")
             append("Core log (last $minutes minutes)\n-----------------------------\n")
             append(coreLog.trimEnd().ifEmpty { "(empty)" }).append("\n\n")
             append("Logcat (last $minutes minutes)\n---------------------------\n")
             append(logcat.trimEnd().ifEmpty { "(empty)" }).append('\n')
+            if (otherDevices.isNotBlank()) append('\n').append(otherDevices.trimEnd()).append('\n')
         }
     }
 
@@ -75,7 +78,8 @@ class DiagnosticsReport(
         return log.substring(start + 1)
     }
 
-    fun copy(coreLog: String = this.coreLog, logcat: String = this.logcat): DiagnosticsReport = DiagnosticsReport(generatedAt, head, coreLog, logcat, windowMs)
+    fun copy(coreLog: String = this.coreLog, logcat: String = this.logcat, otherDevices: String = this.otherDevices): DiagnosticsReport =
+        DiagnosticsReport(generatedAt, head, coreLog, logcat, windowMs, otherDevices)
 
     companion object {
         const val PREVIEW_LINES = 200
@@ -116,6 +120,14 @@ object DiagnosticsBundle {
         }
         DiagnosticsReport(now, head, coreLog, cat, windowMs)
     }
+
+    /**
+     * The Connect room's and the other devices' diagnostics (the core waits up to 45 s for them;
+     * each device answers only while its own developer mode is on).
+     */
+    suspend fun otherDevices(client: CoreClient): String =
+        withTimeoutOrNull(60_000) { (client.query(Query.RoomDiagnostics) as? QueryResult.Text)?.data }
+            ?: "Other devices: not collected (the core didn't answer)\n"
 
     /** Writes the report to the share cache and opens the share sheet for it. */
     suspend fun share(context: Context, report: DiagnosticsReport, chooserTitle: String) {

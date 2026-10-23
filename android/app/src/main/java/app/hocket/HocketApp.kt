@@ -3,6 +3,8 @@ package app.hocket
 import android.app.Application
 import androidx.lifecycle.ProcessLifecycleOwner
 import app.hocket.core.CoreHandle
+import app.hocket.core.api.Command
+import app.hocket.core.api.CommandAnswerDiagnosticsRequestInner
 import app.hocket.core.client.CoreClient
 import app.hocket.playback.CoreHost
 import app.hocket.playback.ForegroundBinder
@@ -14,6 +16,7 @@ import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +42,8 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()
+    /** Answers the other devices' diagnostics requests for the current client. */
+    private var diagnosticsAnswers: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -83,6 +88,7 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     /** Swap in a different core (UI tests). */
     fun attach(handle: CoreHandle?) {
         val previous = _client.value
+        if (previous?.core !== handle) diagnosticsAnswers?.cancel()
         if (handle == null) {
             previous?.close()
             _client.value = null
@@ -93,7 +99,24 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         val client = CoreClient(handle, scope)
         _client.value = client
         client.requestSnapshot()
+        diagnosticsAnswers = answerDiagnosticsRequests(client)
     }
+
+    /**
+     * Another device in the Connect room asks for this phone's diagnostics (the core passes requests
+     * on only while developer mode is on here): answer with the bundle the diagnostics page would
+     * share. Without a client (no UI bound) the core answers with its own diagnostics and log.
+     */
+    private fun answerDiagnosticsRequests(client: CoreClient): Job =
+        scope.launch {
+            client.diagnosticsRequests.collect { request ->
+                launch {
+                    val report = runCatching { app.hocket.diagnostics.DiagnosticsBundle.collect(this@HocketApp, client) }.getOrNull() ?: return@launch
+                    val text = kotlinx.coroutines.withContext(Dispatchers.Default) { report.text }
+                    client.dispatch(Command.AnswerDiagnosticsRequest(CommandAnswerDiagnosticsRequestInner(request.request_id, text)))
+                }
+            }
+        }
 
     override fun newImageLoader(context: coil3.PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

@@ -33,6 +33,13 @@
 //!   changes coalesced within [`SAVE_DEBOUNCE`] and heartbeat-only changes
 //!   (a lease `expiresAt` moving) written at most every
 //!   [`TOUCH_SAVE_INTERVAL`].
+//!
+//! Developer diagnostics: a member's `DiagnosticsRequest` gets the room's own
+//! state (from the room) and a coordinator section (from here): the version
+//! for anyone, plus this process's whole log and its flags for the accounts
+//! named with `--diagnostics-user`. That log covers every room, so the
+//! account is matched against the credential this socket was verified with,
+//! never against anything the request says.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -55,12 +62,15 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use hocket_core::connect::auth::ip_is_private;
+use hocket_core::connect::diagnostics;
 use hocket_core::connect::replica::{
     FileReplicaStore, MemoryReplicaStore, ReplicaError, ReplicaStore,
 };
 use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
-use hocket_core::connect::wire::{Credential, Msg, RefuseReason, ReplicaState, WireMessage};
+use hocket_core::connect::wire::{
+    scope_key, Credential, Msg, RefuseReason, ReplicaState, WireMessage,
+};
 use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
@@ -79,6 +89,8 @@ pub const VERIFY_BODY_CAP: usize = 64 * 1024;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Heartbeat-only changes are written at most this often per room.
 pub const TOUCH_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Pause between the parts of the coordinator's diagnostics answer.
+pub const DIAGNOSTICS_PART_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -117,6 +129,80 @@ pub struct Args {
     /// New WebSocket connections per minute per client address.
     #[arg(long, default_value_t = 60)]
     pub per_ip_rate: u32,
+    /// An account whose devices may receive this coordinator's whole log
+    /// (every room: other users' names, servers, device names and addresses;
+    /// never credentials) in developer diagnostics. `USER@https://server`,
+    /// or just `USER` with `--verify-url`. Repeatable. Refused with
+    /// `--no-verify`. Everyone else gets the coordinator's version only.
+    #[arg(long = "diagnostics-user", value_name = "USER[@URL]")]
+    pub diagnostics_users: Vec<String>,
+}
+
+/// One `--diagnostics-user`: a username and, unless every credential is
+/// verified against `--verify-url`, the server it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticsUser {
+    pub username: String,
+    pub server_url: Option<String>,
+}
+
+impl DiagnosticsUser {
+    /// `user@https://server` (a username may hold `@` itself: the server
+    /// starts at the last `@http://` or `@https://`) or a bare `user`.
+    pub fn parse(spec: &str) -> anyhow::Result<DiagnosticsUser> {
+        let spec = spec.trim();
+        let at = ["@https://", "@http://"]
+            .iter()
+            .filter_map(|p| spec.to_ascii_lowercase().rfind(p))
+            .max();
+        let (username, server_url) = match at {
+            Some(i) => (&spec[..i], Some(spec[i + 1..].to_string())),
+            None => (spec, None),
+        };
+        if username.is_empty() {
+            anyhow::bail!("--diagnostics-user {spec:?} has no username");
+        }
+        Ok(DiagnosticsUser {
+            username: username.to_string(),
+            server_url,
+        })
+    }
+
+    /// Whether a credential this coordinator verified names this account.
+    /// With `--verify-url` only the username was verified (the server named
+    /// in the credential is the client's word); otherwise the pair was.
+    fn matches(&self, server_url: &str, username: &str, verify_url_set: bool) -> bool {
+        if self.username != username {
+            return false;
+        }
+        match &self.server_url {
+            Some(url) => scope_key(url, username) == scope_key(server_url, username),
+            None => verify_url_set,
+        }
+    }
+}
+
+/// The `--diagnostics-user` list, checked against the other flags.
+fn diagnostics_users(args: &Args) -> anyhow::Result<Vec<DiagnosticsUser>> {
+    let users = args
+        .diagnostics_users
+        .iter()
+        .map(|s| DiagnosticsUser::parse(s))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if !users.is_empty() && args.no_verify {
+        anyhow::bail!(
+            "--diagnostics-user needs verified credentials: it cannot be used with --no-verify"
+        );
+    }
+    if args.verify_url.is_none() {
+        if let Some(u) = users.iter().find(|u| u.server_url.is_none()) {
+            anyhow::bail!(
+                "--diagnostics-user {:?} names no server: write USER@https://server, or set --verify-url",
+                u.username
+            );
+        }
+    }
+    Ok(users)
 }
 
 impl Args {
@@ -132,6 +218,7 @@ impl Args {
             max_connections: 4096,
             per_ip_connections: 1024,
             per_ip_rate: 1_000_000,
+            diagnostics_users: vec![],
         }
     }
 }
@@ -281,6 +368,9 @@ pub struct App {
     verifications: AtomicU64,
     /// Write ordering per scope (see [`SaveSlot`]).
     saves: Mutex<HashMap<String, Arc<SaveSlot>>>,
+    /// `--diagnostics-user`, parsed.
+    diagnostics_users: Vec<DiagnosticsUser>,
+    started: Instant,
 }
 
 impl App {
@@ -290,6 +380,7 @@ impl App {
             None => Arc::new(MemoryReplicaStore::new()),
         };
         let http = http_client(None)?;
+        let diagnostics_users = diagnostics_users(&args)?;
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -300,7 +391,119 @@ impl App {
             admission: Mutex::new(Admission::default()),
             verifications: AtomicU64::new(0),
             saves: Mutex::new(HashMap::new()),
+            diagnostics_users,
+            started: Instant::now(),
         }))
+    }
+
+    /// Whether a socket verified with this account may have the whole log.
+    pub fn may_read_full_log(&self, server_url: &str, username: &str) -> bool {
+        self.diagnostics_users
+            .iter()
+            .any(|u| u.matches(server_url, username, self.args.verify_url.is_some()))
+    }
+
+    /// The coordinator's section of a diagnostics bundle.
+    fn diagnostics_text(&self, full: bool) -> String {
+        let mut out = format!(
+            "hocket-coordinator {} (protocol {}..={})\n",
+            env!("CARGO_PKG_VERSION"),
+            hocket_core::connect::wire::PROTOCOL_MIN,
+            hocket_core::connect::wire::PROTOCOL
+        );
+        if !full {
+            out.push_str(
+                "The coordinator's own log is only sent to the accounts its operator named with --diagnostics-user.\n",
+            );
+            return out;
+        }
+        let a = &self.args;
+        out.push_str(&format!(
+            "up {} s; {} rooms open, {} connections, {} verifications\n",
+            self.started.elapsed().as_secs(),
+            self.room_count(),
+            self.connection_count(),
+            self.verification_count()
+        ));
+        out.push_str(&format!(
+            "listen {} data_dir {:?} verify_url {:?} no_verify {} allow_private_servers {}\n",
+            a.listen, a.data_dir, a.verify_url, a.no_verify, a.allow_private_servers
+        ));
+        out.push_str(&format!(
+            "max_members {} max_connections {} per_ip_connections {} per_ip_rate {}/min; {} diagnostics users\n",
+            a.max_members,
+            a.max_connections,
+            a.per_ip_connections,
+            a.per_ip_rate,
+            self.diagnostics_users.len()
+        ));
+        out.push_str(&format!(
+            "\nProcess log (last {} minutes)\n----------------------------\n",
+            hocket_core::devlog::WINDOW_MS / 60_000
+        ));
+        let log = hocket_core::devlog::recent(hocket_core::devlog::WINDOW_MS);
+        if log.is_empty() {
+            out.push_str("(nothing captured: the log capture is not installed in this process)\n");
+        } else {
+            out.push_str(&log);
+        }
+        out
+    }
+
+    /// Answer a member's diagnostics request with the coordinator's section:
+    /// the first part at once (so it reaches the asking device ahead of the
+    /// room's answer, and the device knows to wait for the rest), the rest
+    /// paced on a task.
+    fn answer_diagnostics(
+        &self,
+        tx: &mpsc::UnboundedSender<Message>,
+        request_id: String,
+        to: String,
+        identity: Option<&(String, String)>,
+    ) {
+        let full = identity.is_some_and(|(url, user)| self.may_read_full_log(url, user));
+        if let Some((_, user)) = identity {
+            info!(user, full, "diagnostics requested");
+        }
+        let text = diagnostics::cap(&self.diagnostics_text(full), diagnostics::MAX_ANSWER_BYTES);
+        let parts = diagnostics::split(&text, diagnostics::PART_BYTES);
+        let count = parts.len() as u32;
+        let frames: Vec<String> = parts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, text)| {
+                WireMessage::new(Msg::DiagnosticsReply {
+                    request_id: request_id.clone(),
+                    from: diagnostics::COORDINATOR.into(),
+                    from_name: "Coordinator".into(),
+                    to: to.clone(),
+                    part: i as u32,
+                    parts: count,
+                    text,
+                    declined: None,
+                    asked: vec![],
+                })
+                .encode()
+                .ok()
+            })
+            .collect();
+        let mut frames = frames.into_iter();
+        if let Some(first) = frames.next() {
+            let _ = tx.send(Message::Text(first.into()));
+        }
+        let rest: Vec<String> = frames.collect();
+        if rest.is_empty() {
+            return;
+        }
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            for f in rest {
+                tokio::time::sleep(DIAGNOSTICS_PART_INTERVAL).await;
+                if tx.send(Message::Text(f.into())).is_err() {
+                    return;
+                }
+            }
+        });
     }
 
     fn next_peer(&self) -> PeerId {
@@ -718,6 +921,9 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
     });
 
     let mut scope: Option<String> = None;
+    // The account this socket's credential was verified for.
+    let mut identity: Option<(String, String)> = None;
+    let mut last_diagnostics: Option<Instant> = None;
     loop {
         let limit = if scope.is_some() {
             READ_TIMEOUT
@@ -774,9 +980,22 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
             }
             (Some(s), _) => s.clone(),
         };
+        if let Msg::DiagnosticsRequest { request_id, from } = &msg.msg {
+            let admitted = app.has_member(&current_scope, from);
+            let too_soon = last_diagnostics.is_some_and(|t| {
+                t.elapsed().as_secs_f64() * 1000.0 < diagnostics::REQUEST_INTERVAL_MS
+            });
+            if admitted && !too_soon {
+                last_diagnostics = Some(Instant::now());
+                app.answer_diagnostics(&tx, request_id.clone(), from.clone(), identity.as_ref());
+            }
+        }
         let to_verify = app.drive(&current_scope, RoomInput::Message(peer.clone(), msg));
         for (p, credential) in to_verify {
             let ok = app.verify(&credential).await;
+            if ok && p == peer {
+                identity = Some((credential.server_url.clone(), credential.username.clone()));
+            }
             drop(credential);
             app.drive(&current_scope, RoomInput::Verified { peer: p, ok });
         }
@@ -890,6 +1109,22 @@ mod tests {
         // a fragment cannot swallow the path
         let t = verify_target("http://127.0.0.1:4533#", true).await.unwrap();
         assert_eq!(t.url.path(), "/rest/ping.view");
+    }
+
+    #[test]
+    fn diagnostics_users_parse_and_match() {
+        let u = DiagnosticsUser::parse("me@example.com@https://Music.Example/").unwrap();
+        assert_eq!(u.username, "me@example.com");
+        assert_eq!(u.server_url.as_deref(), Some("https://Music.Example/"));
+        assert!(u.matches("https://music.example", "me@example.com", false));
+        assert!(!u.matches("https://other.example", "me@example.com", false));
+        assert!(!u.matches("https://music.example", "someone", false));
+        let bare = DiagnosticsUser::parse("alice").unwrap();
+        assert_eq!(bare.server_url, None);
+        assert!(bare.matches("https://anything", "alice", true));
+        assert!(!bare.matches("https://anything", "alice", false));
+        assert!(!bare.matches("https://anything", "Alice", true));
+        assert!(DiagnosticsUser::parse("@https://music.example").is_err());
     }
 
     #[test]

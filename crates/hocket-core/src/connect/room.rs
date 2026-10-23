@@ -12,10 +12,12 @@
 //! inside the hosted coordinator binary. Pure and clock-injected: the host
 //! feeds [`RoomInput`]s and performs every [`RoomOutput`].
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
 use crate::connect::auth::{self, LanKey, Role};
+use crate::connect::diagnostics;
 use crate::connect::lease::{LeaseError, LeaseEvent, LeaseMachine};
 use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim};
 use crate::connect::wire::{
@@ -33,6 +35,8 @@ const SWEEP_INTERVAL_MS: f64 = 60_000.0;
 /// Sockets connected but not admitted are capped at this many per room
 /// (beyond it they are closed at once).
 pub const UNKNOWN_CAP: usize = 64;
+/// Room events kept for diagnostics ([`Room::diagnostics_text`]).
+const EVENTS_CAP: usize = 200;
 
 /// How a room authenticates inbound LAN peers (anything but the loopback).
 #[derive(Clone, PartialEq, Eq)]
@@ -135,6 +139,8 @@ struct Member {
     /// Pre-buffered and ready for this key.
     ready_key: Option<QueueKey>,
     picker_open: bool,
+    /// When this member last asked for diagnostics (see [`diagnostics::REQUEST_INTERVAL_MS`]).
+    last_diagnostics_request: Option<EpochMs>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +199,8 @@ pub struct Room {
     admitted_any: bool,
     unconfirmed: Vec<UnconfirmedScrobble>,
     last_sweep: EpochMs,
+    /// Recent joins, leaves, refusals and lease changes, for diagnostics.
+    events: VecDeque<(EpochMs, String)>,
     out: Vec<RoomOutput>,
 }
 
@@ -238,6 +246,7 @@ impl Room {
             admitted_any: false,
             unconfirmed: vec![],
             last_sweep: now,
+            events: VecDeque::new(),
             out: vec![],
         }
     }
@@ -475,6 +484,102 @@ impl Room {
         self.clock.now_ms()
     }
 
+    /// Remember a room event for [`Room::diagnostics_text`].
+    fn note(&mut self, event: String) {
+        let now = self.now();
+        if self.events.len() >= EVENTS_CAP {
+            self.events.pop_front();
+        }
+        self.events.push_back((now, event));
+    }
+
+    /// The room's state and recent events, for a developer diagnostics bundle (the room's
+    /// answer to a [`Msg::DiagnosticsRequest`]). Only this scope's own state: a hosted
+    /// coordinator sends it to any member.
+    pub fn diagnostics_text(&self) -> String {
+        let now = self.now();
+        let ts = |ms: EpochMs| crate::devlog::format_timestamp(ms.max(0.0) as u64);
+        let ago = |ms: EpochMs| format!("{:.0} s ago", ((now - ms) / 1000.0).max(0.0));
+        let r = &self.replica;
+        let mut out = String::new();
+        out.push_str(&format!("scope: {}\n", self.cfg.scope));
+        out.push_str(&format!(
+            "built with core {} (protocol {}..={}), verify={} lan_auth={:?} max_members={}\n",
+            env!("CARGO_PKG_VERSION"),
+            crate::connect::wire::PROTOCOL_MIN,
+            crate::connect::wire::PROTOCOL,
+            self.cfg.verify,
+            self.cfg.lan_auth,
+            self.cfg.max_members
+        ));
+        out.push_str(&format!(
+            "session: {} revision {}, replica updated {}\n",
+            r.document.session_id,
+            r.document.revision,
+            ago(r.updated_at)
+        ));
+        let lease = self.lease.lease();
+        match &lease.owner {
+            Some(owner) => out.push_str(&format!(
+                "lease: owner {owner} epoch {} expires {} (live owner {:?})\n",
+                lease.epoch,
+                ts(lease.expires_at),
+                self.lease.live_owner(now)
+            )),
+            None => out.push_str(&format!("lease: nobody (epoch {})\n", lease.epoch)),
+        }
+        match &r.last_stamp {
+            Some(s) => out.push_str(&format!(
+                "last stamp: {} ({}) key={:?} playing={} position={} ms taken {}\n",
+                s.device_name,
+                s.device_id,
+                s.key,
+                s.position.is_playing,
+                s.position.position_ms,
+                ago(s.position.taken_at)
+            )),
+            None => out.push_str("last stamp: none\n"),
+        }
+        out.push_str(&format!(
+            "replica: {} saved queues, {} settings, {} scrobbles in the dedupe log, {} known devices\n",
+            r.saved_queues.len(),
+            r.settings.len(),
+            r.scrobbles.len(),
+            r.devices.len()
+        ));
+        out.push_str(&format!(
+            "sockets: {} waiting for verification, {} not admitted yet; {} unconfirmed scrobble claims\n",
+            self.pending.len(),
+            self.unknown.len(),
+            self.unconfirmed.len()
+        ));
+        out.push_str(&format!("members ({}):\n", self.members.len()));
+        for m in &self.members {
+            let d = &m.device;
+            out.push_str(&format!(
+                "  - {} ({}) {:?} app {} protocol {} peer {} last heard {}{}{}\n",
+                d.name,
+                d.id,
+                d.platform,
+                d.app_version,
+                m.protocol,
+                m.peer,
+                ago(m.last_seen),
+                if m.picker_open { ", picker open" } else { "" },
+                if m.ready_key.is_some() {
+                    ", pre-buffered"
+                } else {
+                    ""
+                },
+            ));
+        }
+        out.push_str(&format!("\nrecent room events ({}):\n", self.events.len()));
+        for (at, e) in &self.events {
+            out.push_str(&format!("{} {e}\n", ts(*at)));
+        }
+        out
+    }
+
     /// Drive the room. Perform every output in order.
     pub fn handle(&mut self, input: RoomInput) -> Vec<RoomOutput> {
         match input {
@@ -574,6 +679,10 @@ impl Room {
 
     fn broadcast_lease(&mut self) {
         let lease = self.lease.lease().clone();
+        self.note(format!(
+            "lease: owner {:?} epoch {}",
+            lease.owner, lease.epoch
+        ));
         let now = self.now();
         self.replica.set_lease(lease.clone(), now);
         self.dirty = true;
@@ -598,6 +707,7 @@ impl Room {
     }
 
     fn refuse(&mut self, peer: &str, reason: RefuseReason, message: &str) {
+        self.note(format!("refused {peer}: {reason:?}: {message}"));
         self.send(
             peer,
             Msg::Refuse {
@@ -840,6 +950,7 @@ impl Room {
             last_seen: now,
             ready_key: None,
             picker_open: false,
+            last_diagnostics_request: None,
         });
         // Always sent, even when empty: the joiner adopts the room's session
         // identity from it (or pushes its own document into a trivial one).
@@ -857,6 +968,13 @@ impl Room {
         self.dirty = true;
         self.broadcast_presence();
         tracing::info!(scope = %self.cfg.scope, peer, protocol, members = self.members.len(), "member joined");
+        let joined = self.members.last().map(|m| m.device.clone());
+        if let Some(d) = joined {
+            self.note(format!(
+                "joined: {} ({}) {:?} app {} protocol {protocol} on {peer}",
+                d.name, d.id, d.platform, d.app_version
+            ));
+        }
     }
 
     fn on_disconnected(&mut self, peer: &str) {
@@ -870,6 +988,10 @@ impl Room {
             c.held.retain(|(p, _)| p != peer);
         }
         tracing::info!(scope = %self.cfg.scope, peer, device = %m.device.id, "member left");
+        self.note(format!(
+            "left: {} ({}) on {peer}",
+            m.device.name, m.device.id
+        ));
         if m.picker_open {
             self.broadcast(
                 Msg::HandoffPickerClose {
@@ -1377,13 +1499,102 @@ impl Room {
                     Some(peer),
                 );
             }
+            Msg::DiagnosticsRequest { request_id, .. } => {
+                self.on_diagnostics_request(peer, &me, request_id, now)
+            }
+            Msg::DiagnosticsReply {
+                request_id,
+                to,
+                part,
+                parts,
+                text,
+                declined,
+                ..
+            } => {
+                // Routed under the member's identity, never the one the frame claimed.
+                if let Some(p) = self.peer_of_device(&to) {
+                    self.send(
+                        &p,
+                        Msg::DiagnosticsReply {
+                            request_id,
+                            from: device_id,
+                            from_name: me.device.name.clone(),
+                            to,
+                            part,
+                            parts,
+                            text,
+                            declined,
+                            asked: vec![],
+                        },
+                    );
+                }
+            }
         }
+    }
+
+    /// Answer a diagnostics request with the room's own state and pass it on to every other
+    /// member. At most one per member per [`diagnostics::REQUEST_INTERVAL_MS`]: every answer can
+    /// be megabytes.
+    fn on_diagnostics_request(
+        &mut self,
+        peer: &str,
+        me: &Member,
+        request_id: String,
+        now: EpochMs,
+    ) {
+        let reply = |text: String, declined: Option<String>, asked: Vec<DeviceInfo>| {
+            Msg::DiagnosticsReply {
+                request_id: request_id.clone(),
+                from: diagnostics::ROOM.into(),
+                from_name: "Room".into(),
+                to: me.device.id.clone(),
+                part: 0,
+                parts: 1,
+                text,
+                declined,
+                asked,
+            }
+        };
+        if me
+            .last_diagnostics_request
+            .is_some_and(|t| now - t < diagnostics::REQUEST_INTERVAL_MS)
+        {
+            let msg = reply(
+                String::new(),
+                Some("asked again too soon; try in a few seconds".into()),
+                vec![],
+            );
+            self.send(peer, msg);
+            return;
+        }
+        if let Some(m) = self.member_mut_by_peer(peer) {
+            m.last_diagnostics_request = Some(now);
+        }
+        self.note(format!(
+            "diagnostics requested by {} ({})",
+            me.device.name, me.device.id
+        ));
+        let asked: Vec<DeviceInfo> = self
+            .presence_list()
+            .into_iter()
+            .filter(|d| d.id != me.device.id)
+            .collect();
+        let msg = reply(self.diagnostics_text(), None, asked);
+        self.send(peer, msg);
+        self.broadcast(
+            Msg::DiagnosticsRequest {
+                request_id,
+                from: me.device.id.clone(),
+            },
+            Some(peer),
+        );
     }
 
     fn on_tick(&mut self) {
         let now = self.now();
         if let Some(LeaseEvent::Changed { previous_owner, .. }) = self.lease.tick(now) {
             tracing::info!(scope = %self.cfg.scope, ?previous_owner, "transport lease lapsed");
+            self.note(format!("transport lease of {previous_owner:?} lapsed"));
             self.broadcast_lease();
         }
         let idle: Vec<PeerId> = self
@@ -1394,6 +1605,7 @@ impl Room {
             .collect();
         for p in idle {
             tracing::info!(scope = %self.cfg.scope, peer = %p, "member timed out");
+            self.note(format!("timed out: {p}"));
             self.send(
                 &p,
                 Msg::Bye {

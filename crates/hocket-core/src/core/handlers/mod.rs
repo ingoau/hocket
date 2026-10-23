@@ -4,6 +4,7 @@
 pub(crate) mod cache;
 pub(crate) mod command;
 pub(crate) mod connect;
+pub(crate) mod diagnostics;
 pub(crate) mod library;
 pub(crate) mod playback;
 pub(crate) mod prefetch;

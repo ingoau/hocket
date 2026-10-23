@@ -87,6 +87,29 @@ class DeveloperDiagnosticsTest {
         awaitTag("settings.categories")
     }
 
+    @Test
+    fun theOtherDevicesAreCollectedOnlyWhenSwitchedOn() {
+        val core = TestCore(startPlaying = false)
+        core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        var asked = 0
+        compose.setThemedContent(core) {
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { asked++; "Other devices: the phone says hi\n" })
+        }
+        core.start()
+        awaitTag("developer.allDevicesSwitch")
+        compose.onNodeWithTag("developer.copy").performClick()
+        compose.waitUntil(5_000) { clipboardText()?.contains("Hocket diagnostics") == true }
+        assertEquals(0, asked)
+        compose.onNodeWithTag("developer.allDevicesSwitch").assertIsOff().performClick()
+        compose.onNodeWithTag("developer.copy").performClick()
+        compose.waitUntil(5_000) { clipboardText()?.contains("the phone says hi") == true }
+        assertEquals(1, asked)
+    }
+
+    private fun clipboardText(): String? =
+        androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+            .getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()
+
     private fun textOf(tag: String): String =
         compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString("") { it.text }
 

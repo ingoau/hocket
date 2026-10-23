@@ -150,6 +150,8 @@ cd pebble && HOCKET_DEMO=1 pebble build          # sample data, for emulator scr
 
 # Coordinator
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket
+# … and let one account's devices receive its whole log in developer diagnostics
+cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --diagnostics-user 'me@https://music.example.net'
 ```
 
 Linux builds of the core need `libasound2-dev` (cpal). The desktop app's OS media

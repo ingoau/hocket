@@ -9,7 +9,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
@@ -290,10 +290,19 @@ export function installIpc(deps: IpcDeps): void {
   installDiagnosticsIpc(deps);
 }
 
-/** The developer diagnostics page: every call builds a fresh bundle; files are only written where main decides. */
+/** `{ allDevices: true }` from the page; anything else is this device only. */
+function allDevices(options: unknown): boolean {
+  return typeof options === "object" && options !== null && (options as DiagnosticsOptions).allDevices === true;
+}
+
+/**
+ * The developer diagnostics page: every call builds a fresh bundle; files are only written where main
+ * decides. Also answers the other devices of the Connect room, which ask the core for this device's
+ * bundle (the core only passes their requests on while developer mode is on here).
+ */
 function installDiagnosticsIpc(deps: IpcDeps): void {
   const { core, windows, devlog } = deps;
-  const build = async (): Promise<DiagnosticsBundle> => {
+  const build = async (withOtherDevices = false): Promise<DiagnosticsBundle> => {
     let coreDiagnostics: string;
     try {
       const r = await core.query({ type: "diagnostics" });
@@ -307,8 +316,25 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     } catch (err) {
       extra = { host: `(unavailable: ${String(err)})` };
     }
-    return devlog.bundle({ coreDiagnostics, extra });
+    let otherDevices: string | undefined;
+    if (withOtherDevices) {
+      try {
+        const r = await core.query({ type: "roomDiagnostics" });
+        otherDevices = r.type === "text" ? r.data : `(unexpected answer: ${r.type})`;
+      } catch (err) {
+        otherDevices = `Other devices: not collected (${String(err)})`;
+      }
+    }
+    return devlog.bundle({ coreDiagnostics, extra, otherDevices });
   };
+  core.onEvent((event) => {
+    if (event.type !== "diagnosticsRequested") return;
+    const { request_id, from_device } = event.data;
+    devlog.append("info", "diagnostics", `${from_device} asked for this device's diagnostics`);
+    void build()
+      .then((b) => core.dispatch({ type: "answerDiagnosticsRequest", data: { request_id, text: b.text } }))
+      .catch((err: unknown) => devlog.append("warn", "diagnostics", `couldn't build the bundle for ${from_device}: ${String(err)}`));
+  });
   const writeToFolder = async (bundle: DiagnosticsBundle): Promise<string> => {
     await mkdir(deps.diagnosticsDir, { recursive: true });
     const path = join(deps.diagnosticsDir, bundle.fileName);
@@ -335,32 +361,32 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     };
   });
 
-  ipcMain.handle(IPC.diagnosticsSave, async (e) => {
+  ipcMain.handle(IPC.diagnosticsSave, async (e, options: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");
-    const bundle = await build();
+    const bundle = await build(allDevices(options));
     const r = await dialog.showSaveDialog(win, { title: t("developer.saveTitle"), defaultPath: bundle.fileName, filters: [{ name: t("developer.fileFilter"), extensions: ["txt"] }] });
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, bundle.text, "utf8");
     return r.filePath;
   });
 
-  ipcMain.handle(IPC.diagnosticsCopy, async (e) => {
+  ipcMain.handle(IPC.diagnosticsCopy, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    clipboard.writeText((await build()).text);
+    clipboard.writeText((await build(allDevices(options))).text);
   });
 
-  ipcMain.handle(IPC.diagnosticsReveal, async (e) => {
+  ipcMain.handle(IPC.diagnosticsReveal, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    const path = await writeToFolder(await build());
+    const path = await writeToFolder(await build(allDevices(options)));
     shell.showItemInFolder(path);
     return path;
   });
 
-  ipcMain.handle(IPC.diagnosticsShare, async (e) => {
+  ipcMain.handle(IPC.diagnosticsShare, async (e, options: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender) || process.platform !== "darwin") return false;
-    const path = await writeToFolder(await build());
+    const path = await writeToFolder(await build(allDevices(options)));
     new ShareMenu({ filePaths: [path] }).popup({ window: win });
     return true;
   });

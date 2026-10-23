@@ -1,5 +1,7 @@
 //! Headless coordinator binary. Owner: core-connect. See the crate docs in `lib.rs`.
 
+use std::io::IsTerminal;
+
 use clap::Parser;
 use tracing::info;
 
@@ -7,13 +9,10 @@ use hocket_coordinator::{serve, App, Args};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=warn".into()),
-        )
-        .with_target(false)
-        .init();
+    // The usual stderr log, plus the in-memory capture of the last hour that
+    // `--diagnostics-user` accounts can receive (nothing is written to disk).
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=warn".into());
+    hocket_core::devlog::install(&filter, None, std::io::stderr().is_terminal());
     let args = Args::parse();
     let app = App::new(args.clone())?;
     let shutdown = async {

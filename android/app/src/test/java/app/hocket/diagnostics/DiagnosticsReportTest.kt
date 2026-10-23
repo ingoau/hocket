@@ -39,6 +39,14 @@ class DiagnosticsReportTest {
     }
 
     @Test
+    fun theOtherDevicesComeLastAndOnlyWhenCollected() {
+        assertFalse(report.text.contains("Other devices"))
+        val all = report.copy(otherDevices = "Other devices in the Connect room\n\nRoom\n----\nmembers (2):\n")
+        assertTrue(all.text.endsWith("members (2):\n"))
+        assertTrue(all.text.indexOf("Other devices") > all.text.indexOf("I Hocket: hello"))
+    }
+
+    @Test
     fun thePreviewIsTheNewestLines() {
         val tail = report.coreTail(2).lines()
         assertEquals(listOf("2026-10-20T03:04:05.000Z  INFO hocket_core: line 299", "2026-10-20T03:04:05.000Z  INFO hocket_core: line 300"), tail)

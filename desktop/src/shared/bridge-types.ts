@@ -67,6 +67,15 @@ export interface DiagnosticsSummary {
   canShare: boolean;
 }
 
+/** What a saved, copied or shared bundle covers. */
+export interface DiagnosticsOptions {
+  /**
+   * Also ask the Connect room and every other device in it for theirs (each answers only while
+   * its own developer mode is on). Takes up to 45 seconds.
+   */
+  allDevices?: boolean;
+}
+
 export interface HocketBridge {
   prefs: {
     get(): Promise<AppPrefs>;
@@ -132,13 +141,13 @@ export interface HocketBridge {
   diagnostics: {
     summary(): Promise<DiagnosticsSummary>;
     /** Ask where to save, then write the bundle there. Resolves to the path, or undefined when cancelled. */
-    save(): Promise<string | undefined>;
+    save(options?: DiagnosticsOptions): Promise<string | undefined>;
     /** Put the whole bundle on the clipboard. */
-    copy(): Promise<void>;
+    copy(options?: DiagnosticsOptions): Promise<void>;
     /** Write the bundle to the app's log folder and show it in the file manager. */
-    reveal(): Promise<string | undefined>;
+    reveal(options?: DiagnosticsOptions): Promise<string | undefined>;
     /** macOS: write the bundle and open the share sheet with it. False where there is none. */
-    share(): Promise<boolean>;
+    share(options?: DiagnosticsOptions): Promise<boolean>;
   };
   onDeepLink(listener: (url: string) => void): () => void;
   /**

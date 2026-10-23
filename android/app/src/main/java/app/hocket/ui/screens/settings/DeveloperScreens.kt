@@ -79,13 +79,15 @@ private const val CLIPBOARD_MAX_CHARS = 100_000
 /**
  * Developer diagnostics: the device and app, the core's diagnostics and the newest log lines, with
  * Share (the share sheet, as a text file), Save (a document the user picks) and Copy. Every action
- * collects a fresh report. Reached from Advanced, or by shaking the phone in developer mode.
- * [collect] is swappable for tests (no logcat or native core under Robolectric).
+ * collects a fresh report, with the other devices' in the Connect room when that is switched on
+ * (developer mode only). Reached from Advanced, or by shaking the phone in developer mode.
+ * [collect] and [collectOthers] are swappable for tests (no logcat or native core under Robolectric).
  */
 @Composable
 fun DeveloperDiagnosticsScreen(
     nav: NavHostController,
     collect: suspend (Context, CoreClient) -> DiagnosticsReport = { context, client -> DiagnosticsBundle.collect(context, client) },
+    collectOthers: suspend (CoreClient) -> String = { DiagnosticsBundle.otherDevices(it) },
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -95,6 +97,9 @@ fun DeveloperDiagnosticsScreen(
     var report by remember { mutableStateOf<DiagnosticsReport?>(null) }
     var refreshes by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
+    var allDevices by remember { mutableStateOf(false) }
+    // Other devices only ever answer while developer mode is on here too.
+    val withOthers = (devMode.bool ?: false) && allDevices
     LaunchedEffect(refreshes) {
         report = try {
             collect(context, client)
@@ -121,8 +126,9 @@ fun DeveloperDiagnosticsScreen(
                 // Let the previous report go first: two of them (and the bundle text) at once is a lot
                 // of memory with a big debug log.
                 report = null
-                val fresh = collect(context, client)
-                report = fresh
+                val here = collect(context, client)
+                report = here
+                val fresh = if (withOthers) here.copy(otherDevices = collectOthers(client)) else here
                 action(fresh)
             } catch (e: CancellationException) {
                 throw e
@@ -164,6 +170,24 @@ fun DeveloperDiagnosticsScreen(
                 Switch(checked = on, onCheckedChange = { devMode.setBool(it) }, modifier = Modifier.testTag("developer.modeSwitch"))
             }
         }
+        if (on) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("developer.allDevicesCard"),
+            ) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(HocketIcons.Filled.Devices, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.developer_all_devices), style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(R.string.developer_all_devices_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(checked = allDevices, onCheckedChange = { allDevices = it }, modifier = Modifier.testTag("developer.allDevicesSwitch"))
+                }
+            }
+        }
         FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { withFresh { DiagnosticsBundle.share(context, it, shareTitle) } }, enabled = !busy, modifier = Modifier.testTag("developer.share")) {
                 Icon(HocketIcons.Filled.Share, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_share))
@@ -186,6 +210,14 @@ fun DeveloperDiagnosticsScreen(
             OutlinedButton(onClick = { refreshes++ }, enabled = !busy, modifier = Modifier.testTag("developer.refresh")) {
                 Icon(HocketIcons.Filled.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_refresh))
             }
+        }
+        if (busy && withOthers) {
+            Text(
+                stringResource(R.string.developer_collecting),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("developer.collecting"),
+            )
         }
         val r = report
         if (r != null) {
