@@ -398,10 +398,7 @@ impl Actor {
             Output::DocumentChanged { document, cause } => {
                 self.on_document_changed(document, cause)
             }
-            Output::TransportChanged { transport } => {
-                self.last_transport = transport;
-                self.emit_transport();
-            }
+            Output::TransportChanged { .. } => self.emit_transport(),
             Output::LeaseChanged {
                 owns,
                 detached,
@@ -970,10 +967,9 @@ impl Actor {
 
     pub(crate) fn previous(&mut self) {
         // The track is loaded here, or another device plays it and the
-        // room's position stamp says how far in it is. The engine's lease,
-        // not `last_transport` (not refreshed when a lease lapses), and the
-        // same test as `transport_command`, which drops the seek when there
-        // is no other device to send it to.
+        // room's position stamp says how far in it is. The same test as
+        // `transport_command`, which drops the seek when there is no other
+        // device to send it to.
         let position = if self.playback.loaded {
             Some(self.playback.position_now(self.now()))
         } else {
@@ -1339,7 +1335,11 @@ impl Actor {
             has_session: doc.is_some_and(|d| d.context.is_some()),
             has_current: current.is_some(),
             is_playing: self.playback.playing
-                || self.last_transport.position.is_playing && !self.owns_transport(),
+                || !self.owns_transport()
+                    && self
+                        .engine
+                        .as_ref()
+                        .is_some_and(|e| e.transport().position.is_playing),
             can_undo: self.undo.can_undo(),
             can_redo: self.undo.can_redo(),
             shuffle: doc.is_some_and(|d| d.shuffle.is_some()),
