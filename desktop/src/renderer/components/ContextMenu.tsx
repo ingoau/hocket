@@ -22,12 +22,14 @@ import { executeAction, type ActionContext } from "../store/actions";
 import { Icon } from "./Icon";
 import { Artwork } from "./Artwork";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
+import { ShareSubmenu } from "./ShareSubmenu";
 import { handOnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 import { fetchMenuFacts } from "../lib/menu-facts";
 import { toastUndoable } from "../lib/ui-toast";
 import { ratingText } from "../lib/a11y";
 import { buildMenu, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
+import { openGenius } from "../lib/share";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
@@ -104,8 +106,8 @@ interface Cell {
   line: number;
   label: string;
   enabled: boolean;
-  /** Opens the Add to playlist submenu instead of running. */
-  submenu?: boolean;
+  /** Opens this submenu (Add to playlist, Share) instead of running. */
+  submenu?: string;
   /** A star: its rating. */
   star?: number;
   /** Where ↑↓ land on this line (the current rating's star). */
@@ -127,8 +129,8 @@ export function ContextMenu() {
   const [active, setActive] = useState(-1);
   /** The active cell was reached by keyboard (it gets a ring), not the pointer. */
   const [keys, setKeys] = useState(false);
-  /** The Add to playlist submenu, with where it opens from. */
-  const [sub, setSub] = useState<{ left: number; right: number; top: number } | null>(null);
+  /** The open submenu (Add to playlist or Share), with where it opens from. */
+  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number } | null>(null);
   const subOpen = useRef(false);
   subOpen.current = !!sub;
   const model = useMemo(() => (menu ? buildMenu(menu.actions, menu.items ?? [], menu.facts, { inPlaylist: !!menu.context?.playlistId }) : []), [menu]);
@@ -226,12 +228,12 @@ export function ContextMenu() {
     if (message) toastUndoable(message, go);
     else go();
   });
-  const openSub = (cell: number) => {
+  const openSub = (cell: number, id: string) => {
     const row = document.getElementById(`cm-item-${cell}`);
     if (!ref.current || !row) return;
     const box = ref.current.getBoundingClientRect();
     setActive(cell);
-    setSub({ left: box.left, right: box.right, top: row.getBoundingClientRect().top });
+    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top });
   };
   const closeSub = () => {
     if (!sub) return;
@@ -274,7 +276,11 @@ export function ContextMenu() {
         line++;
         break;
       case "submenu":
-        push({ label: r.label, enabled: r.enabled, submenu: true, run: () => undefined });
+        push({ label: r.label, enabled: r.enabled, submenu: r.id, run: () => undefined });
+        line++;
+        break;
+      case "genius":
+        push({ label: r.label, enabled: r.enabled, run: () => finish(() => { if (facts) void openGenius(facts); }) });
         line++;
         break;
       case "action":
@@ -305,7 +311,7 @@ export function ContextMenu() {
   const activate = (i: number) => {
     const c = cells[i];
     if (!c?.enabled) return;
-    if (c.submenu) openSub(i);
+    if (c.submenu) openSub(i, c.submenu);
     else c.run();
   };
   const enabledIdx = cells.map((c, i) => (c.enabled ? i : -1)).filter((i) => i >= 0);
@@ -372,7 +378,11 @@ export function ContextMenu() {
     if (!e.movementX && !e.movementY) return;
     setKeys(false);
     if (active !== i) setActive(i);
-    if (sub && !cells[i]?.submenu) closeSub();
+    const id = cells[i]?.submenu;
+    if (sub && id !== sub.id) {
+      if (id) openSub(i, id);
+      else closeSub();
+    }
   };
   const cellProps = (i: number) => ({
     id: `cm-item-${i}`,
@@ -445,16 +455,23 @@ export function ContextMenu() {
           <div
             key={r.id}
             {...cellProps(first)}
-            onMouseMove={(e) => { hover(first)(e); if (!sub && r.enabled && (e.movementX || e.movementY)) openSub(first); }}
+            onMouseMove={(e) => { hover(first)(e); if (r.enabled && (e.movementX || e.movementY) && sub?.id !== r.id) openSub(first, r.id); }}
             role="menuitem"
             aria-haspopup="menu"
-            aria-expanded={!!sub}
-            className={`mi cm-subrow ${r.enabled ? "" : "disabled"} ${active === first || sub ? "active" : ""}`}
+            aria-expanded={sub?.id === r.id}
+            className={`mi cm-subrow ${r.enabled ? "" : "disabled"} ${active === first || sub?.id === r.id ? "active" : ""}`}
             data-action={r.id}
           >
             {lead}
             <span className="grow truncate">{r.label}</span>
             <Icon name="chevronRight" size={14} className="cm-chev" />
+          </div>
+        );
+      case "genius":
+        return (
+          <div key="genius" {...cellProps(first)} role="menuitem" className={`mi ${r.enabled ? "" : "disabled"} ${active === first ? "active" : ""}`} data-action="genius">
+            {lead}
+            <span className="grow truncate">{r.label}</span>
           </div>
         );
       case "action": {
@@ -508,8 +525,11 @@ export function ContextMenu() {
         {facts?.header ? <Header header={facts.header} /> : null}
         {model.map(renderRow)}
       </div>
-      {sub && facts?.trackIds?.length ? (
+      {sub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
         <PlaylistSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
+      ) : null}
+      {sub?.id === "share" && facts ? (
+        <ShareSubmenu facts={facts} target={menu.target} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
       ) : null}
     </Fragment>
   );

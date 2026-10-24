@@ -19,6 +19,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import app.hocket.R
 import app.hocket.core.Commands
+import app.hocket.share.ShareRequest
+import app.hocket.share.ShareRequestEffect
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.OfflineState
@@ -109,6 +111,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
     }
     var pickerFor by remember { mutableStateOf<ActionTarget?>(null) }
     var infoFor by remember { mutableStateOf<TrackSummary?>(null) }
+    var share by remember { mutableStateOf<ShareRequest?>(null) }
     controller.shown?.let { (request, actions) ->
         val track = request.track
         val dot = stringResource(R.string.dot_separator)
@@ -138,9 +141,11 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
                 onGoToAlbum = track.albumId?.let { id -> navigator?.let { { it.openAlbum(id) } } },
                 onGoToArtist = track.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
                 onInfo = { infoFor = track },
+                onShare = { share = ShareRequest(it, subject, request.target) },
             )
         }
     }
+    ShareRequestEffect(share) { share = null }
     pickerFor?.let { t -> PlaylistPicker(target = t, onDismiss = { pickerFor = null }) }
     infoFor?.let { t ->
         ModalBottomSheet(onDismissRequest = { infoFor = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("songMenu.infoSheet")) {

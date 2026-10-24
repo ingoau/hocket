@@ -2485,6 +2485,12 @@ export class FakeCore implements CoreHandle {
         throw new Error("roomDiagnostics is answered by query()");
       case "configDocument":
         return { type: "text", data: JSON.stringify(this.configDocument(q.data.include_secrets), null, 2) };
+      case "createShare": {
+        const ids = q.data.ids.filter((id) => id.length > 0);
+        return { type: "share", data: ids.length ? { url: `https://navidrome.example/share/${ids.join("-")}` } : undefined };
+      }
+      case "exportAudio":
+        return { type: "audioFile", data: undefined };
       default: {
         const never: never = q;
         void never;

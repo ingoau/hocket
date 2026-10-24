@@ -1,8 +1,10 @@
 // The context menu's layout, from the registry's descriptors and the renderer's own items: a header
 // for an item target, the play actions as one icon-only strip, the six rate actions as an inline
 // Rating row, Love / Download / Pin as checkboxes (one row for each pair the registry offers), Add
-// to playlist as a submenu, then everything else in the registry's order with the destructive item
-// last. Pure: the menu component draws and runs what this returns.
+// to playlist as a submenu, Share as a second submenu (Navidrome, Song.link, the file), Open in Genius
+// for one song, then
+// everything else in the registry's order with the destructive item last. Pure: the menu component
+// draws and runs what this returns.
 import type { ActionDescriptor } from "@core/api";
 import { t } from "@shared/strings";
 import type { MenuItem } from "../store/app";
@@ -48,6 +50,7 @@ export type MenuRow =
   | { kind: "rating"; value: number; mixed: boolean; count: number; enabled: boolean }
   | { kind: "check"; id: "love" | "download" | "pin"; label: string; checked: Check; note?: string; runId: string; ids: string[]; enabled: boolean }
   | { kind: "submenu"; id: string; label: string; enabled: boolean }
+  | { kind: "genius"; label: string; enabled: boolean }
   | { kind: "action"; action: ActionDescriptor; label: string; destructive: boolean }
   | { kind: "item"; item: MenuItem }
   | { kind: "choices"; heading: MenuItem; items: MenuItem[] }
@@ -149,6 +152,9 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   }
   check("pin", undefined, (on) => t(on === true ? "menu.pinned" : "menu.pin"));
 
+  if (shareApplies(facts)) top.push({ kind: "submenu", id: "share", label: t("menu.share"), enabled: true });
+  if (geniusApplies(facts)) top.push({ kind: "genius", label: t("menu.openGenius"), enabled: true });
+
   // Song info / Album info is the app's own (the core's registry has no details action): after the
   // navigation rows, for one song or one album.
   const infoKind = facts?.count === 1 && (facts.kind === "song" || facts.kind === "album");
@@ -175,6 +181,18 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   if (danger.length && rows.length) rows.push({ kind: "sep" });
   for (const a of danger) rows.push({ kind: "action", action: a, label: labelFor(a, facts), destructive: true });
   return rows;
+}
+
+/** Share belongs on an item menu: a song, album or playlist, or one artist (Song.link). */
+export function shareApplies(facts: MenuFacts | undefined): boolean {
+  if (!facts || facts.count < 1) return false;
+  if (facts.kind === "artist") return facts.count === 1;
+  return facts.kind === "song" || facts.kind === "album" || facts.kind === "playlist";
+}
+
+/** Open in Genius searches one song by its title and artist. */
+export function geniusApplies(facts: MenuFacts | undefined): boolean {
+  return facts?.kind === "song" && facts.count === 1;
 }
 
 /** A row's words: the registry's, except where the menu design names it for its target. */

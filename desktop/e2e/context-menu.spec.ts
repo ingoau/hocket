@@ -33,6 +33,19 @@ test.describe("context menu", () => {
     await expect(menu.getByRole("menuitemcheckbox", { name: /Love/ })).toHaveAttribute("aria-checked", "false");
     await expect(menu.locator('[data-action="removeFromPlaylist"]')).toHaveText(/^Remove from Slow SundaysDel$/);
 
+    await expect(menu.getByRole("menuitem", { name: "Open in Genius" })).toBeVisible();
+    // Share opens beside the menu: Navidrome, Song.link and the file.
+    await menu.locator('[data-action="share"]').hover();
+    const share = page.getByTestId("share-submenu");
+    await expect(share.getByRole("menuitem", { name: "Navidrome" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "Song.link" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "File" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "Open in Genius" })).toHaveCount(0);
+    await share.getByRole("menuitem", { name: "Navidrome" }).click();
+    await expect(page.getByTestId("toast").filter({ hasText: "Link copied" })).toBeVisible();
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(menu).toBeVisible();
+
     // Hovering Add to playlist opens the submenu, its search focused.
     await menu.locator('[data-action="addToPlaylist"]').hover();
     const sub = page.getByTestId("playlist-submenu");

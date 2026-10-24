@@ -17,7 +17,7 @@ const shape = (rows: MenuRow[]) => rows.map((r) => (r.kind === "action" ? r.acti
 describe("context menu layout", () => {
   it("lays a song's menu out as the design: strip, rating, checks, submenu, pin, navigation, remove last", () => {
     expect(shape(buildMenu(songActions, [], song, { inPlaylist: true }))).toEqual([
-      "strip", "rating", "love:true", "download:false", "submenu", "pin:false", "sep", "goToAlbum", "goToArtist", "ui.info", "sep", "removeFromPlaylist",
+      "strip", "rating", "love:true", "download:false", "submenu", "pin:false", "submenu", "genius", "sep", "goToAlbum", "goToArtist", "ui.info", "sep", "removeFromPlaylist",
     ]);
   });
 
@@ -27,6 +27,7 @@ describe("context menu layout", () => {
     expect(love).toMatchObject({ label: "Loved", runId: "unlove", ids: ["love", "unlove"] });
     expect(rows.find((r) => r.kind === "check" && r.id === "download")).toMatchObject({ label: "Download", runId: "download" });
     expect(rows.find((r) => r.kind === "submenu")).toMatchObject({ label: "Add to playlist" });
+    expect(rows.find((r) => r.kind === "genius")).toMatchObject({ label: "Open in Genius" });
     const labels = rows.flatMap((r) => (r.kind === "action" ? [r.label] : []));
     expect(labels).toEqual(["goToAlbum", "goToArtist", "Song info", "Remove from Late night"]);
     expect(rows.find((r) => r.kind === "strip")).toMatchObject({ cells: [{ label: "Play" }, { label: "Shuffle" }, { label: "Play next" }, { label: "Play later" }] });
@@ -46,6 +47,7 @@ describe("context menu layout", () => {
     expect(rows.find((r) => r.kind === "check" && r.id === "love")).toMatchObject({ checked: "mixed", label: "Love", note: "2 of 3", runId: "love" });
     expect(rows.find((r) => r.kind === "check" && r.id === "download")).toMatchObject({ checked: false, label: "Download 3 songs" });
     expect(rows.flatMap((r) => (r.kind === "action" ? [r.label] : [])).pop()).toBe("Remove 3 from Late night");
+    expect(rows.some((r) => r.kind === "genius")).toBe(false);
   });
 
   it("falls back to which half of a pair the registry offers when the items aren't known", () => {
@@ -57,14 +59,14 @@ describe("context menu layout", () => {
 
   it("keeps an album's menu without a rating when the registry offers none, and separates categories", () => {
     const rows = buildMenu([d("play", "playback"), d("playShuffled", "playback"), d("goToArtist", "navigate"), d("ui.renamePlaylist", "library"), d("deletePlaylist", "library", { destructive: true })], [], { kind: "playlist", count: 1 });
-    expect(shape(rows)).toEqual(["strip", "sep", "goToArtist", "sep", "ui.renamePlaylist", "sep", "deletePlaylist"]);
+    expect(shape(rows)).toEqual(["strip", "submenu", "sep", "goToArtist", "sep", "ui.renamePlaylist", "sep", "deletePlaylist"]);
   });
 
   it("puts the renderer's items first, a heading and its radios as one choice", () => {
     const item = (id: string, extra: Partial<MenuItem> = {}): MenuItem => ({ id, label: id, icon: "", enabled: true, run: () => {}, ...extra });
     const items = [item("whenClicked", { heading: true, enabled: false }), item("tap-open", { checked: true }), item("tap-play", { checked: false }), item("pinUp"), item("pinDown")];
     const rows = buildMenu([d("play", "playback"), d("unpinFromLibrary", "library")], items, { kind: "album", count: 1 });
-    expect(shape(rows)).toEqual(["choices", "sep", "item:pinUp", "item:pinDown", "sep", "strip", "pin:true", "sep", "ui.info"]);
+    expect(shape(rows)).toEqual(["choices", "sep", "item:pinUp", "item:pinDown", "sep", "strip", "pin:true", "submenu", "sep", "ui.info"]);
     expect(rows[0]).toMatchObject({ kind: "choices", items: [{ id: "tap-open" }, { id: "tap-play" }] });
     // Items alone (a Home section's menu): no separators.
     expect(shape(buildMenu([], [item("a"), item("b")], undefined))).toEqual(["item:a", "item:b"]);
@@ -107,7 +109,7 @@ describe("menu states", () => {
 
   it("adds the app's own Song info / Album info after the navigation rows when the registry has none", () => {
     const registry = songActions.filter((a) => a.id !== "ui.info");
-    expect(shape(buildMenu(registry, [], song))).toEqual(["strip", "rating", "love:true", "download:false", "submenu", "pin:false", "sep", "goToAlbum", "goToArtist", "ui.info"]);
+    expect(shape(buildMenu(registry, [], song))).toEqual(["strip", "rating", "love:true", "download:false", "submenu", "pin:false", "submenu", "genius", "sep", "goToAlbum", "goToArtist", "ui.info"]);
     const album = buildMenu([d("play", "playback"), d("goToArtist", "navigate"), d("pinToLibrary", "library")], [], { kind: "album", count: 1 });
     expect(album.flatMap((r) => (r.kind === "action" ? [r.label] : []))).toEqual(["goToArtist", "Album info"]);
     // Not for several songs, artists or playlists.

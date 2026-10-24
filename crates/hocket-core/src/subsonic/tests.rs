@@ -473,6 +473,29 @@ async fn playlist_mutations_send_correct_params() {
 }
 
 #[tokio::test]
+async fn create_share_sends_ids_and_reads_the_url() {
+    let t = FakeTransport::new();
+    t.on_endpoint(
+        "createShare",
+        FakeReply::Json(
+            r#"{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","serverVersion":"0.63.1","openSubsonic":true,"shares":{"share":[{"id":"sh1","url":"https://music.example/share/sh1","visitCount":0}]}}}"#
+                .into(),
+        ),
+    );
+    let c = client(&t);
+    let url = c
+        .create_share(&["song-1".into(), "song-2".into()])
+        .await
+        .unwrap();
+    assert_eq!(url, "https://music.example/share/sh1");
+    assert_eq!(
+        query_params(&t.requests_to("createShare")[0], "id"),
+        vec!["song-1", "song-2"]
+    );
+    assert!(c.create_share(&[]).await.is_err());
+}
+
+#[tokio::test]
 async fn star_rating_scrobble_params() {
     let t = FakeTransport::new();
     t.on_endpoint("star", ok_empty());

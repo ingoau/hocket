@@ -28,6 +28,7 @@ vi.mock("electron", () => ({
   ShareMenu: class {
     popup() {}
   },
+  app: { getPath: () => "/tmp/hocket" },
 }));
 vi.mock("node:fs/promises", () => fsMock);
 

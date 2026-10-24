@@ -1467,6 +1467,8 @@ class FakeCore(
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
         Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
+        is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
+        is Query.ExportAudio -> QueryResult.AudioFile(null)
     }
 
     /** As the native core: every playlist, in name order, with the indices holding any of [trackIds]. */
