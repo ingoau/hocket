@@ -6,7 +6,7 @@
 // writes a file (ExportNsp) may only target a path a save dialog just chose.
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
 import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
@@ -143,12 +143,18 @@ export function installIpc(deps: IpcDeps): void {
       if (process.env.HOCKET_CACHE_DIR) roots.push(process.env.HOCKET_CACHE_DIR);
       if (!(await pathWithin(roots, path))) return "failed";
       if (process.platform === "darwin") {
-        new ShareMenu({ filePaths: [path] }).popup({ window: win });
+        const named = join(dirname(path), shareDisplayName(result.data.fileName));
+        if (named !== path) await copyFile(path, named);
+        const shared = await realpath(named);
+        if (!(await pathWithin(roots, shared))) return "failed";
+        new ShareMenu({ filePaths: [shared] }).popup({ window: win });
         return "shared";
       }
       const saved = await dialog.showSaveDialog(win, { title: t("menu.shareFileDialog"), defaultPath: result.data.fileName });
       if (saved.canceled || !saved.filePath) return "cancelled";
-      await copyFile(path, saved.filePath);
+      const again = await realpath(path);
+      if (!(await pathWithin(roots, again))) return "failed";
+      await copyFile(again, saved.filePath);
       return "saved";
     } catch (err) {
       console.error("[ipc] shareAudio failed", err);
@@ -454,6 +460,12 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     new ShareMenu({ filePaths: [path] }).popup({ window: win });
     return true;
   });
+}
+
+/** One path segment for the macOS share sheet, which shows the file's own name. */
+function shareDisplayName(name: string): string {
+  const base = name.split(/[/\\]/).pop()?.replaceAll("\0", "").replace(/^\.+/, "").trim() ?? "";
+  return base || "track";
 }
 
 /** True when [file] is [root] or a file inside it. Both are resolved, so a symlink can't step out. */

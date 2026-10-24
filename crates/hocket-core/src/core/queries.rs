@@ -271,13 +271,16 @@ impl Actor {
             .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "application/octet-stream".into());
+        // A transcoded pin is a different file (opus for a flac). Share the original only.
         if let Ok(Some(path)) = self.downloads.downloaded_path(&track.server_id, &track.id) {
-            let _ = reply.send(QueryResult::AudioFile(Some(ExportedAudio {
-                path: path.to_string_lossy().into_owned(),
-                file_name,
-                content_type,
-            })));
-            return;
+            if pin_matches_original(&path, track.suffix.as_deref()) {
+                let _ = reply.send(QueryResult::AudioFile(Some(ExportedAudio {
+                    path: path.to_string_lossy().into_owned(),
+                    file_name,
+                    content_type,
+                })));
+                return;
+            }
         }
         let Some(api) = self.api() else {
             let _ = reply.send(QueryResult::AudioFile(None));
@@ -290,8 +293,8 @@ impl Actor {
             .as_deref()
             .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
             .unwrap_or("bin");
-        dest.push(format!("{}.{}", export_safe_id(&track.id), ext));
-        if dest.is_file() && std::fs::metadata(&dest).is_ok_and(|m| m.len() > 0) {
+        dest.push(format!("{}.{}", export_cache_stem(&track.id), ext));
+        if share_cache_fresh(&dest, track.size_bytes) {
             let _ = reply.send(QueryResult::AudioFile(Some(ExportedAudio {
                 path: dest.to_string_lossy().into_owned(),
                 file_name,
@@ -609,12 +612,50 @@ fn export_safe_id(id: &str) -> String {
                 '_'
             }
         })
-        .take(80)
+        .take(40)
         .collect();
     if safe.is_empty() {
         "track".into()
     } else {
         safe
+    }
+}
+
+/// Cache file stem. A hash of the whole id keeps `ab/cd` from landing on `ab_cd`.
+fn export_cache_stem(id: &str) -> String {
+    format!("{}-{:08x}", export_safe_id(id), fnv1a(id.as_bytes()))
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in bytes {
+        hash ^= u32::from(*b);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A finished pin is the original when its extension is the library suffix.
+fn pin_matches_original(path: &std::path::Path, suffix: Option<&str>) -> bool {
+    let Some(want) = suffix.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())) else {
+        return false;
+    };
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|got| want.eq_ignore_ascii_case(got))
+}
+
+/// Reuse a cached original only when it is non-empty and, if we know the size, that size.
+fn share_cache_fresh(dest: &std::path::Path, size_bytes: Option<f64>) -> bool {
+    let Ok(meta) = std::fs::metadata(dest) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return false;
+    }
+    match size_bytes {
+        Some(n) if n > 0.0 && n.is_finite() => meta.len() == n as u64,
+        _ => true,
     }
 }
 
@@ -645,6 +686,11 @@ mod tests {
         );
         assert_eq!(export_file_name(&track("..", None, Some("../x"))), "track");
         assert_eq!(export_safe_id("ab/cd"), "ab_cd");
+        assert_ne!(export_cache_stem("ab/cd"), export_cache_stem("ab_cd"));
+        assert_eq!(export_cache_stem("ab/cd"), export_cache_stem("ab/cd"));
+        assert!(pin_matches_original(std::path::Path::new("t.flac"), Some("FLAC")));
+        assert!(!pin_matches_original(std::path::Path::new("t.opus"), Some("flac")));
+        assert!(!pin_matches_original(std::path::Path::new("t.flac"), None));
     }
 }
 

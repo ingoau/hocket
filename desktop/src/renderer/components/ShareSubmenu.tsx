@@ -44,6 +44,7 @@ export function ShareSubmenu({ facts, target, anchor, closing, motion, onBack, o
     if (!row) return;
     onClose(row.run);
   };
+  const current = rows[active];
 
   return (
     <div
@@ -51,15 +52,31 @@ export function ShareSubmenu({ facts, target, anchor, closing, motion, onBack, o
       className={`menu cm cm-sub ${motion} ${closing ? "closing" : ""}`}
       role="menu"
       aria-label={t("menu.share")}
+      aria-activedescendant={current ? `share-row-${current.id}` : undefined}
       tabIndex={-1}
       style={pos ? { left: pos.x, top: pos.y } : { left: -9999, top: 0 }}
       data-context-layer=""
       data-testid="share-submenu"
       onKeyDown={(e) => {
         e.stopPropagation();
+        if (e.key === "Tab") {
+          e.preventDefault();
+          onClose();
+          return;
+        }
         if (e.key === "Escape" || e.key === "ArrowLeft") {
           e.preventDefault();
           onBack();
+          return;
+        }
+        if (e.key === "Home") {
+          e.preventDefault();
+          setActive(0);
+          return;
+        }
+        if (e.key === "End") {
+          e.preventDefault();
+          setActive(Math.max(0, rows.length - 1));
           return;
         }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -76,6 +93,7 @@ export function ShareSubmenu({ facts, target, anchor, closing, motion, onBack, o
       {rows.map((row, i) => (
         <div
           key={row.id}
+          id={`share-row-${row.id}`}
           role="menuitem"
           className={`mi ${active === i ? "active" : ""}`}
           data-action={`share-${row.id}`}

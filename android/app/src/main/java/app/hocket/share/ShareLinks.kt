@@ -126,7 +126,11 @@ object ShareActions {
             return
         }
         val uri = withContext(Dispatchers.IO) {
-            val dir = File(File(context.cacheDir, "shared"), System.currentTimeMillis().toString()).apply { mkdirs() }
+            val root = File(context.cacheDir, "shared").apply { mkdirs() }
+            val now = System.currentTimeMillis()
+            // Same hour as a lyrics card: the other app has read the previous file by then.
+            root.listFiles()?.filter { now - it.lastModified() > 60 * 60 * 1000L }?.forEach { it.deleteRecursively() }
+            val dir = File(root, now.toString()).apply { mkdirs() }
             val dest = File(dir, exported.fileName.ifBlank { src.name })
             src.copyTo(dest, overwrite = true)
             FileProvider.getUriForFile(context, ShareImages.authority(context), dest)
