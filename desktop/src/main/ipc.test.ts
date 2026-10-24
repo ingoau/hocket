@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command, Event, Query, QueryResult } from "@core/api";
 import { IPC } from "@shared/bridge-types";
 
@@ -74,6 +74,9 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
 }
 
 describe("ipc", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -258,7 +261,6 @@ describe("ipc", () => {
     expect(roomQueries()).toBe(1);
     vi.setSystemTime(Date.now() + 16_000);
     await handlers.get(IPC.diagnosticsCollect)!(ours);
-    vi.useRealTimers();
     expect(roomQueries()).toBe(2);
     // Refresh asks at once.
     await handlers.get(IPC.diagnosticsCollect)!(ours, { force: true });
@@ -267,21 +269,24 @@ describe("ipc", () => {
     expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 3"));
   });
 
-  it("diagnostics: a collection the room turns away keeps the one before", async () => {
+  it("diagnostics: only the room's answers are reused; collect() says the newest status", async () => {
     let n = 0;
-    let declined = false;
+    let connected = false;
     const ctx = setup({
       query: async (q) => {
         if (q.type !== "roomDiagnostics") return { type: "text", data: "core says hi" } as QueryResult;
         n++;
-        const status = { requestId: `r${n}`, done: true, elapsedMs: 0, roomAnswered: true, roomDeclined: declined ? "asked again too soon; try in a few seconds" : undefined, coordinatorLog: false, devices: [] };
+        const status = { requestId: `r${n}`, done: true, elapsedMs: 0, roomAnswered: connected, coordinatorLog: false, devices: [] };
         ctx.emit({ type: "roomDiagnosticsChanged", data: { status } } as Event);
-        return { type: "text", data: declined ? "Other devices: (declined: asked again too soon)" : "Other devices: phone says hi" } as QueryResult;
+        return { type: "text", data: connected ? "Other devices: phone says hi" : "Other devices: not collected (Connect is not running).\n" } as QueryResult;
       },
     });
-    await handlers.get(IPC.diagnosticsCollect)!(ours);
-    declined = true;
-    await handlers.get(IPC.diagnosticsCollect)!(ours, { force: true });
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r1", roomAnswered: false });
+    connected = true;
+    // Asked again at once: "not collected" isn't kept.
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r2", roomAnswered: true });
+    // Reused: no new query, the same status.
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r2" });
     expect(n).toBe(2);
     await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
     expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));

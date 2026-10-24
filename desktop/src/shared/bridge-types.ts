@@ -1,6 +1,6 @@
 // Shape of `window.hocket`, the contextBridge surface installed by the preload
 // script. Everything crossing it is structured-clone-safe JSON.
-import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
+import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 
 export type WindowKind = "main" | "mini";
 
@@ -145,10 +145,11 @@ export interface HocketBridge {
      * Ask the Connect room and the other devices for their bundles, for the next `allDevices`
      * save, copy or share. Resolves once they are in (or the 45 s are up); progress arrives as
      * `roomDiagnosticsChanged` events. A call while one runs joins it; one within 15 s of the last
-     * reuses that unless `force`d (the room turns a request that soon away, and then the last
-     * collection stays).
+     * reuses that unless `force`d (the room turns a request that soon away; the core then answers
+     * with the collection before). Resolves to the newest collection's status, for a page that
+     * missed its events.
      */
-    collect(options?: { force?: boolean }): Promise<void>;
+    collect(options?: { force?: boolean }): Promise<RoomDiagnosticsStatus | undefined>;
     /** Ask where to save, then write the bundle there. Resolves to the path, or undefined when cancelled. */
     save(options?: DiagnosticsOptions): Promise<string | undefined>;
     /** Put the whole bundle on the clipboard. */

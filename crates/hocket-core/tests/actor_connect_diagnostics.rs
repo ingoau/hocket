@@ -198,3 +198,33 @@ async fn turning_developer_mode_off_while_a_bundle_is_built_sends_nothing() {
         "{text}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asking_again_too_soon_answers_with_the_collection_before() {
+    let (a, b, c) = trio().await;
+    developer_mode(&a, true).await;
+    developer_mode(&b, true).await;
+    for t in [&a, &b, &c] {
+        t.events.clear();
+    }
+    // b's platform answers at once, so the collection is over well within the room's 10 s.
+    let b_core = b.core.clone();
+    let answer = |_: &[&TestCore]| {
+        if let Some((request_id, _)) = requested(&b) {
+            let _ = b_core.dispatch(Command::AnswerDiagnosticsRequest {
+                request_id,
+                text: "b's bundle".into(),
+            });
+            b.events.clear();
+        }
+    };
+    let first = collect(&a, &[&a, &b, &c], answer).await;
+    assert!(first.contains("1 of 2 sent a bundle"), "{first}");
+    a.events.clear();
+    // Within the room's 10 s: it asks nobody, so the last collection answers again.
+    let again = collect(&a, &[&a, &b, &c], answer).await;
+    assert_eq!(again, first);
+    let last = statuses(&a).pop().unwrap();
+    assert!(last.done && last.room_declined.is_none());
+    assert_eq!(last.devices.len(), 2, "{last:?}");
+}

@@ -2,6 +2,7 @@
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
+import type { RoomDiagnosticsStatus } from "@core/api";
 import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
@@ -61,7 +62,7 @@ const bridge: HocketBridge = {
   },
   diagnostics: {
     summary: () => ipcRenderer.invoke(IPC.diagnosticsSummary) as Promise<DiagnosticsSummary>,
-    collect: (options?: { force?: boolean }) => ipcRenderer.invoke(IPC.diagnosticsCollect, options) as Promise<void>,
+    collect: (options?: { force?: boolean }) => ipcRenderer.invoke(IPC.diagnosticsCollect, options) as Promise<RoomDiagnosticsStatus | undefined>,
     save: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsSave, options) as Promise<string | undefined>,
     copy: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsCopy, options) as Promise<void>,
     reveal: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsReveal, options) as Promise<string | undefined>,

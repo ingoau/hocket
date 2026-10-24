@@ -229,6 +229,9 @@ pub(crate) struct Actor {
         crate::connect::diagnostics::Collection,
         tokio::sync::oneshot::Sender<QueryResult>,
     )>,
+    /// The newest room diagnostics collection the room answered (its final
+    /// status and text), kept for a request the room turns away.
+    pub last_room_diagnostics: Option<(RoomDiagnosticsStatus, String)>,
     /// Other devices' diagnostics requests waiting for the platform's bundle.
     pub diagnostics_answers: Vec<crate::core::handlers::diagnostics::PendingAnswer>,
 
@@ -500,6 +503,7 @@ impl Actor {
             media_art_pending: None,
             log_ring: VecDeque::new(),
             diagnostics_collections: vec![],
+            last_room_diagnostics: None,
             diagnostics_answers: vec![],
             started: false,
             shutting_down: false,

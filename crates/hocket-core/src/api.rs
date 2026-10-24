@@ -2305,7 +2305,8 @@ pub enum Query {
     /// The diagnostics of the Connect room and every other device in it, as
     /// text for the end of this device's bundle. Waits for the answers (up to
     /// 45 s). Only while developer mode is on here; each other device answers
-    /// only while its own is on.
+    /// only while its own is on. The room turns away a request within 10 s of
+    /// the last: then the previous collection answers again.
     RoomDiagnostics,
     /// Export a config document.
     ConfigDocument {
@@ -2566,7 +2567,8 @@ pub struct RoomDiagnosticsStatus {
     pub room_answered: bool,
     /// The room answered but asked nobody, in its words (asked again within
     /// 10 s of the last request: nobody else answers then, the coordinator
-    /// included).
+    /// included). Only seen with no earlier collection to fall back on: with
+    /// one, the query answers with that one (text and status) instead.
     pub room_declined: Option<String>,
     /// The hosted coordinator's answer. It answers ahead of the room, so once
     /// `room_answered` is set and this is still unset, the room has no

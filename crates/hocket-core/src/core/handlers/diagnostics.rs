@@ -88,12 +88,24 @@ impl Actor {
         }
     }
 
+    /// The final status, then the answer. A request the room turned away (asked again within its
+    /// 10 s) gets the collection before it, status and text, when there is one: nobody else
+    /// answered, so it would only have lost what that one gathered.
     fn finish_collection(&mut self, c: Collection, reply: oneshot::Sender<QueryResult>) {
         let now = self.now();
-        self.emit(Event::RoomDiagnosticsChanged {
-            status: c.status(now, true),
-        });
-        let _ = reply.send(QueryResult::Text(c.render(now)));
+        let status = c.status(now, true);
+        let (status, text) = match (&status.room_declined, &self.last_room_diagnostics) {
+            (Some(_), Some((last, text))) => (last.clone(), text.clone()),
+            _ => {
+                let text = c.render(now);
+                if status.room_answered && status.room_declined.is_none() {
+                    self.last_room_diagnostics = Some((status.clone(), text.clone()));
+                }
+                (status, text)
+            }
+        };
+        self.emit(Event::RoomDiagnosticsChanged { status });
+        let _ = reply.send(QueryResult::Text(text));
     }
 
     /// Another device asks for our bundle: decline unless developer mode is on here, else ask

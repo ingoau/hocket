@@ -26,6 +26,8 @@ export function DeveloperDiagnostics() {
   const options: DiagnosticsOptions = { allDevices: devMode };
   /** Asking the other devices; the actions wait for it (their bundles go with every one). From the first frame, so none runs before. */
   const [collecting, setCollecting] = useState(devMode);
+  /** What collect() said the newest status is: a reused collection sends no events. */
+  const [collected, setCollected] = useState<RoomDiagnosticsStatus | undefined>(undefined);
 
   const refresh = useCallback(() => {
     void bridge()
@@ -38,6 +40,7 @@ export function DeveloperDiagnostics() {
     setCollecting(true);
     void bridge()
       .diagnostics.collect({ force })
+      .then(setCollected)
       .catch((err: unknown) => console.error("diagnostics collection failed", err))
       .finally(() => setCollecting(false));
   }, []);
@@ -69,7 +72,7 @@ export function DeveloperDiagnostics() {
   const waiting = devMode && collecting;
   const blocked = busy || waiting;
   // Main asks one collection at a time (and reuses one that just finished), so the newest status is this page's.
-  const status = roomStatus;
+  const status = roomStatus ?? collected;
 
   return (
     <div className="view page-developer" data-testid="view-developer">

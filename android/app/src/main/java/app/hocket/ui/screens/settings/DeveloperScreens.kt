@@ -119,6 +119,8 @@ fun DeveloperDiagnosticsScreen(
     var collecting by remember { mutableStateOf(on) }
     /** Refresh presses: each asks the room again, even within the reuse window. */
     var collections by remember { mutableIntStateOf(0) }
+    /** The presses already asked for: other runs (developer mode coming on) may reuse. */
+    var forced by remember { mutableIntStateOf(0) }
     val roomStatus by client.roomDiagnostics.collectAsState()
     LaunchedEffect(refreshes) {
         report = try {
@@ -139,7 +141,7 @@ fun DeveloperDiagnosticsScreen(
         }
         collecting = true
         others = try {
-            collectOthers(client, collections > 0)
+            collectOthers(client, (collections > forced).also { forced = collections })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -43,6 +43,9 @@ data class HandoffPicker(val open: Boolean = false, val targets: List<DeviceInfo
 /** What kind of ids a selection holds, so toolbar actions can be queried for the right target. */
 enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
 
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+const val REUSE_ROOM_COLLECTION_MS = 15_000.0
+
 /**
  * The app-side view of the core: forwards commands and queries, folds the event stream into
  * StateFlows for each snapshot piece, extrapolates position, caches list pages and holds the
@@ -53,9 +56,6 @@ enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
  * `collectAsStateWithLifecycle` so the position ticker (a `WhileSubscribed` flow) runs only while a
  * screen that shows position is resumed.
  */
-/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
-const val REUSE_ROOM_COLLECTION_MS = 15_000.0
-
 class CoreClient(
     val core: CoreHandle,
     parentScope: CoroutineScope,
@@ -355,18 +355,12 @@ class CoreClient(
     fun dispatch(command: Command) = core.dispatch(command)
 
     /**
-     * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
-     * been freed while a screen was still composing, the release build's dead core, a query the core
-     * rejects). Screens run this from composition coroutines (`LaunchedEffect`, `produceState`),
-     * where a throw would crash the app; every caller already treats a missing result as "nothing".
-     * Cancellation still propagates.
-     */
-    /**
      * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
      * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
      * the next one rather than starting a second collection alongside. The room turns away a
-     * second request within 10 s (and nobody else answers it), so unless [force]d (Refresh) a
-     * collection that recent is reused, and one the room turned away keeps the one before.
+     * second request within 10 s (the core then answers with the collection before), so unless
+     * [force]d (Refresh) a collection that recent is reused. Only the room's answers count: "not
+     * collected" (developer mode off, Connect not running) is asked again next time.
      */
     suspend fun collectRoomDiagnostics(force: Boolean = false): String? {
         val running = synchronized(this) {
@@ -375,16 +369,20 @@ class CoreClient(
             if (!force && last != null && now() - last.second < REUSE_ROOM_COLLECTION_MS) return last.first
             scope.async {
                 val text = (query(Query.RoomDiagnostics) as? QueryResult.Text)?.data
-                synchronized(this@CoreClient) {
-                    val previous = lastRoomCollection
-                    if (text != null && (previous == null || _roomDiagnostics.value?.roomDeclined == null)) lastRoomCollection = text to now()
-                    if (_roomDiagnostics.value?.roomDeclined != null && previous != null) previous.first else text
-                }
+                if (text != null && !text.startsWith("Other devices: not collected")) synchronized(this@CoreClient) { lastRoomCollection = text to now() }
+                text
             }.also { roomCollection = it }
         }
         return running.await()
     }
 
+    /**
+     * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
+     * been freed while a screen was still composing, the release build's dead core, a query the core
+     * rejects). Screens run this from composition coroutines (`LaunchedEffect`, `produceState`),
+     * where a throw would crash the app; every caller already treats a missing result as "nothing".
+     * Cancellation still propagates.
+     */
     suspend fun query(query: Query): QueryResult? = try {
         core.query(query)
     } catch (e: CancellationException) {
