@@ -144,9 +144,11 @@ export interface HocketBridge {
     /**
      * Ask the Connect room and the other devices for their bundles, for the next `allDevices`
      * save, copy or share. Resolves once they are in (or the 45 s are up); progress arrives as
-     * `roomDiagnosticsChanged` events. A call while one runs joins it.
+     * `roomDiagnosticsChanged` events. A call while one runs joins it; one within 15 s of the last
+     * reuses that unless `force`d (the room turns a request that soon away, and then the last
+     * collection stays).
      */
-    collect(): Promise<void>;
+    collect(options?: { force?: boolean }): Promise<void>;
     /** Ask where to save, then write the bundle there. Resolves to the path, or undefined when cancelled. */
     save(options?: DiagnosticsOptions): Promise<string | undefined>;
     /** Put the whole bundle on the clipboard. */

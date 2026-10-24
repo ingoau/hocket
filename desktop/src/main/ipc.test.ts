@@ -234,6 +234,7 @@ describe("ipc", () => {
   });
 
   it("diagnostics: other devices are asked for only when the page says so, once per collection", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     let n = 0;
     const { query } = setup({
       query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? `Other devices: phone says hi ${++n}` : "core says hi" }) as QueryResult,
@@ -252,10 +253,38 @@ describe("ipc", () => {
     await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
     expect(roomQueries()).toBe(1);
     expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 1"));
-    // A refresh collects again.
+    // Asking again at once reuses it (the room would turn the request away); later, it asks again.
     await handlers.get(IPC.diagnosticsCollect)!(ours);
+    expect(roomQueries()).toBe(1);
+    vi.setSystemTime(Date.now() + 16_000);
+    await handlers.get(IPC.diagnosticsCollect)!(ours);
+    vi.useRealTimers();
+    expect(roomQueries()).toBe(2);
+    // Refresh asks at once.
+    await handlers.get(IPC.diagnosticsCollect)!(ours, { force: true });
+    expect(roomQueries()).toBe(3);
     await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
-    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 2"));
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 3"));
+  });
+
+  it("diagnostics: a collection the room turns away keeps the one before", async () => {
+    let n = 0;
+    let declined = false;
+    const ctx = setup({
+      query: async (q) => {
+        if (q.type !== "roomDiagnostics") return { type: "text", data: "core says hi" } as QueryResult;
+        n++;
+        const status = { requestId: `r${n}`, done: true, elapsedMs: 0, roomAnswered: true, roomDeclined: declined ? "asked again too soon; try in a few seconds" : undefined, coordinatorLog: false, devices: [] };
+        ctx.emit({ type: "roomDiagnosticsChanged", data: { status } } as Event);
+        return { type: "text", data: declined ? "Other devices: (declined: asked again too soon)" : "Other devices: phone says hi" } as QueryResult;
+      },
+    });
+    await handlers.get(IPC.diagnosticsCollect)!(ours);
+    declined = true;
+    await handlers.get(IPC.diagnosticsCollect)!(ours, { force: true });
+    expect(n).toBe(2);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));
   });
 
   it("diagnostics: a bundle with the other devices and no collection yet runs one", async () => {

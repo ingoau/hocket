@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.ConnectionTier
 import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.DiagnosticsSourceState
 import app.hocket.core.api.DiagnosticsSourceStatus
@@ -101,7 +102,7 @@ private const val CLIPBOARD_MAX_CHARS = 100_000
 fun DeveloperDiagnosticsScreen(
     nav: NavHostController,
     collect: suspend (Context, CoreClient) -> DiagnosticsReport = { context, client -> DiagnosticsBundle.collect(context, client) },
-    collectOthers: suspend (CoreClient) -> String = { DiagnosticsBundle.otherDevices(it) },
+    collectOthers: suspend (CoreClient, Boolean) -> String = { client, force -> DiagnosticsBundle.otherDevices(client, force) },
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -114,10 +115,10 @@ fun DeveloperDiagnosticsScreen(
     var busy by remember { mutableStateOf(false) }
     /** The other devices' bundles, once collected; every action carries them. */
     var others by remember { mutableStateOf<String?>(null) }
-    var collecting by remember { mutableStateOf(false) }
+    // Collecting from the first frame, so no action runs before the answers are in.
+    var collecting by remember { mutableStateOf(on) }
+    /** Refresh presses: each asks the room again, even within the reuse window. */
     var collections by remember { mutableIntStateOf(0) }
-    /** The collection shown before this page asked again: never shown as this one's. */
-    var staleId by remember { mutableStateOf<String?>(null) }
     val roomStatus by client.roomDiagnostics.collectAsState()
     LaunchedEffect(refreshes) {
         report = try {
@@ -136,10 +137,9 @@ fun DeveloperDiagnosticsScreen(
             collecting = false
             return@LaunchedEffect
         }
-        staleId = client.roomDiagnostics.value?.requestId
         collecting = true
         others = try {
-            collectOthers(client)
+            collectOthers(client, collections > 0)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -159,7 +159,8 @@ fun DeveloperDiagnosticsScreen(
     val shareTitle = stringResource(R.string.developer_share_title)
     /** Collects a fresh report (with the other devices' bundles), runs [action] on it, then refreshes the preview to match. */
     fun withFresh(action: suspend (DiagnosticsReport) -> Unit) {
-        if (!enabled) return
+        // State, not [enabled]: two taps before the next frame must not both get through.
+        if (busy || (on && collecting)) return
         busy = true
         val o = if (on) others else null
         scope.launch {
@@ -260,7 +261,9 @@ fun DeveloperDiagnosticsScreen(
             )
         }
         val devices by client.devices.collectAsState()
-        RoomCard(on, waiting, roomStatus?.takeIf { it.requestId != staleId }, devices)
+        val connection by client.connection.collectAsState()
+        // The client asks one collection at a time (and reuses one that just finished), so the newest status is this page's.
+        RoomCard(on, waiting, roomStatus, devices, viaCoordinator = connection.tier == ConnectionTier.Coordinator && connection.connected)
         Block(stringResource(R.string.developer_environment), r?.head?.trimEnd() ?: stringResource(R.string.developer_loading), "developer.head")
         Block(
             stringResource(R.string.developer_log),
@@ -273,13 +276,15 @@ fun DeveloperDiagnosticsScreen(
 
 /** The other devices and the coordinator: who was asked, and where each answer stands. */
 @Composable
-private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsStatus?, devices: List<DeviceInfo>) {
+private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsStatus?, devices: List<DeviceInfo>, viaCoordinator: Boolean) {
     val running = collecting || (status != null && !status.done)
     val settled = status?.devices?.count { it.state != DiagnosticsSourceState.Waiting && it.state != DiagnosticsSourceState.Receiving } ?: 0
     val headline = when {
         !on || status?.unavailable == RoomDiagnosticsUnavailable.DeveloperModeOff -> stringResource(R.string.developer_others_off)
         status?.unavailable == RoomDiagnosticsUnavailable.NotConnected -> stringResource(R.string.developer_others_not_connected)
+        status == null && !running -> stringResource(R.string.developer_others_no_room)
         status == null || (running && !status.roomAnswered) -> stringResource(R.string.developer_others_asking)
+        status.roomDeclined != null -> stringResource(R.string.developer_others_declined, status.roomDeclined.orEmpty())
         !status.roomAnswered -> stringResource(R.string.developer_others_no_room)
         running -> stringResource(R.string.developer_others_collecting, settled, status.devices.size)
         status.devices.isEmpty() -> stringResource(R.string.developer_others_none)
@@ -293,7 +298,7 @@ private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsSt
     Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("developer.room")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.developer_others), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("developer.roomStatus")) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) { if (!running) liveRegion = LiveRegionMode.Polite }.testTag("developer.roomStatus")) {
                 if (running && on) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
@@ -301,9 +306,9 @@ private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsSt
                 Text(headline, style = MaterialTheme.typography.bodyMedium)
             }
             Text(stringResource(R.string.developer_others_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (on && status != null && status.unavailable == null) {
+            if (on && status != null && status.unavailable == null && status.roomDeclined == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
-                    CoordinatorRow(status, running)
+                    CoordinatorRow(status, running, viaCoordinator)
                     for (d in status.devices) {
                         val platform = devices.firstOrNull { it.id == d.id }?.platform
                         val icon = when (platform) {
@@ -320,7 +325,7 @@ private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsSt
 }
 
 @Composable
-private fun CoordinatorRow(status: RoomDiagnosticsStatus, running: Boolean) {
+private fun CoordinatorRow(status: RoomDiagnosticsStatus, running: Boolean, viaCoordinator: Boolean) {
     val c = status.coordinator
     val name = stringResource(R.string.developer_coordinator)
     if (c != null) {
@@ -328,8 +333,9 @@ private fun CoordinatorRow(status: RoomDiagnosticsStatus, running: Boolean) {
         SourceRow(HocketIcons.Filled.Dns, name, c, detail, "developer.source.coordinator")
         return
     }
-    // It answers ahead of the room: once the room has, there is none.
+    // It answers ahead of the room: once the room has, there is none, or (connected to one) it is too old to.
     val (detail, chip, tone) = when {
+        status.roomAnswered && viaCoordinator -> Triple(R.string.developer_coordinator_silent, R.string.developer_state_no_answer, ChipTone.Bad)
         status.roomAnswered -> Triple(R.string.developer_coordinator_none, R.string.developer_state_none, ChipTone.Neutral)
         running -> Triple(R.string.developer_coordinator_waiting, R.string.developer_state_waiting, ChipTone.Neutral)
         else -> Triple(R.string.developer_others_no_room, R.string.developer_state_no_answer, ChipTone.Bad)

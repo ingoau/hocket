@@ -46,6 +46,8 @@ function isSide(v: unknown): v is number {
 const MAX_TEXT_FILE = 16 * 1024 * 1024;
 /** Lines of log the page previews. */
 const PREVIEW_LINES = 400;
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+export const REUSE_COLLECTION_MS = 15_000;
 /** Bundles kept in the diagnostics folder; older ones are removed when a new one is written. */
 const KEEP_BUNDLES = 5;
 
@@ -304,10 +306,24 @@ function allDevices(options: unknown): boolean {
  */
 function installDiagnosticsIpc(deps: IpcDeps): void {
   const { core, windows, devlog } = deps;
-  /** The newest collection from the other devices, and the one running (the core reports its progress as events). */
-  let others: string | undefined;
+  /**
+   * The newest collection from the other devices (and when it finished), and the one running. The
+   * core reports progress as events; this is the only place that asks, so the newest event is
+   * always this collection's.
+   */
+  let others: { text: string; at: number } | undefined;
   let collecting: Promise<string> | undefined;
-  const collectOthers = (): Promise<string> => {
+  /** The room turned the newest request away (asked again too soon): nobody else answered it. */
+  let roomDeclined = false;
+  core.onEvent((event) => {
+    if (event.type === "roomDiagnosticsChanged") roomDeclined = event.data.status.roomDeclined !== undefined;
+  });
+  /**
+   * The room turns away a second request within 10 s (and nobody else answers it): unless `force`d
+   * (Refresh), a collection that recent is reused, and one the room turned away keeps the one before.
+   */
+  const collectOthers = (force = false): Promise<string> => {
+    if (!force && !collecting && others && Date.now() - others.at < REUSE_COLLECTION_MS) return Promise.resolve(others.text);
     collecting ??= core
       .query({ type: "roomDiagnostics" })
       .then(
@@ -315,9 +331,9 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
         (err: unknown) => `Other devices: not collected (${String(err)})`,
       )
       .then((text) => {
-        others = text;
+        if (!(roomDeclined && others)) others = { text, at: Date.now() };
         collecting = undefined;
-        return text;
+        return others?.text ?? text;
       });
     return collecting;
   };
@@ -336,7 +352,7 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
       extra = { host: `(unavailable: ${String(err)})` };
     }
     // What the page collected (waiting for it if it is still running); a first collection otherwise.
-    const otherDevices = withOtherDevices ? await (collecting ?? (others !== undefined ? Promise.resolve(others) : collectOthers())) : undefined;
+    const otherDevices = withOtherDevices ? await (collecting ?? (others !== undefined ? Promise.resolve(others.text) : collectOthers())) : undefined;
     return devlog.bundle({ coreDiagnostics, extra, otherDevices });
   };
   core.onEvent((event) => {
@@ -373,9 +389,9 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     };
   });
 
-  ipcMain.handle(IPC.diagnosticsCollect, async (e) => {
+  ipcMain.handle(IPC.diagnosticsCollect, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    await collectOthers();
+    await collectOthers(isObject(options) && options.force === true);
   });
 
   ipcMain.handle(IPC.diagnosticsSave, async (e, options: unknown) => {

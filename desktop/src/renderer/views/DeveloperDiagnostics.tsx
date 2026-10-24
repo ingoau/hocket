@@ -24,10 +24,8 @@ export function DeveloperDiagnostics() {
   const [busy, setBusy] = useState(false);
   // Other devices only ever answer while developer mode is on here too.
   const options: DiagnosticsOptions = { allDevices: devMode };
-  /** Asking the other devices; the actions wait for it (their bundles go with every one). */
-  const [collecting, setCollecting] = useState(false);
-  /** The collection shown before this page asked again: never shown as this one's. */
-  const [staleId, setStaleId] = useState<string | undefined>(undefined);
+  /** Asking the other devices; the actions wait for it (their bundles go with every one). From the first frame, so none runs before. */
+  const [collecting, setCollecting] = useState(devMode);
 
   const refresh = useCallback(() => {
     void bridge()
@@ -36,17 +34,17 @@ export function DeveloperDiagnostics() {
       .catch((err: unknown) => console.error("diagnostics summary failed", err));
   }, []);
   useEffect(refresh, [refresh]);
-  const collect = useCallback(() => {
-    setStaleId(useApp.getState().roomDiagnostics?.requestId);
+  const collect = useCallback((force = false) => {
     setCollecting(true);
     void bridge()
-      .diagnostics.collect()
+      .diagnostics.collect({ force })
       .catch((err: unknown) => console.error("diagnostics collection failed", err))
       .finally(() => setCollecting(false));
   }, []);
   // As the page opens, and whenever developer mode comes on.
   useEffect(() => {
     if (devMode) collect();
+    else setCollecting(false);
   }, [devMode, collect]);
   // The newest lines are what matter: keep the preview scrolled to its end.
   const logRef = useRef<HTMLPreElement>(null);
@@ -70,14 +68,15 @@ export function DeveloperDiagnostics() {
   const fileName = (path: string) => path.split(/[/\\]/).pop() ?? path;
   const waiting = devMode && collecting;
   const blocked = busy || waiting;
-  const status = roomStatus && roomStatus.requestId !== staleId ? roomStatus : undefined;
+  // Main asks one collection at a time (and reuses one that just finished), so the newest status is this page's.
+  const status = roomStatus;
 
   return (
     <div className="view page-developer" data-testid="view-developer">
       <div className="view-header">
         <h1 className="brand-type">{t("developer.title")}</h1>
         <div className="actions">
-          <button type="button" className="btn" onClick={() => { refresh(); if (devMode) collect(); }} disabled={blocked} data-testid="developer-refresh"><Icon name="refresh" size={16} /> {t("developer.refresh")}</button>
+          <button type="button" className="btn" onClick={() => { refresh(); if (devMode) collect(true); }} disabled={blocked} data-testid="developer-refresh"><Icon name="refresh" size={16} /> {t("developer.refresh")}</button>
         </div>
       </div>
       <div className="view-body">
@@ -117,22 +116,26 @@ export function DeveloperDiagnostics() {
 /** The other devices and the coordinator: who was asked, and where each answer stands. */
 function RoomSection({ devMode, collecting, status }: { devMode: boolean; collecting: boolean; status: RoomDiagnosticsStatus | undefined }) {
   const devices = useApp((s) => s.devices);
+  const viaCoordinator = useApp((s) => s.connection.tier === "coordinator" && s.connection.connected);
   const running = collecting || (status !== undefined && !status.done);
   let headline: string;
   if (!devMode) headline = t("developer.othersOff");
   else if (status?.unavailable === "developerModeOff") headline = t("developer.othersOff");
   else if (status?.unavailable === "notConnected") headline = t("developer.othersNotConnected");
+  else if (!status && !running) headline = t("developer.othersNoRoom");
   else if (!status || (running && !status.roomAnswered)) headline = t("developer.othersAsking");
+  else if (status.roomDeclined) headline = t("developer.othersDeclined", { reason: status.roomDeclined });
   else if (!status.roomAnswered) headline = t("developer.othersNoRoom");
   else if (running) headline = t("developer.othersCollecting", { n: status.devices.filter(settled).length, total: status.devices.length });
   else if (status.devices.length === 0) headline = t("developer.othersNone");
   else headline = t("developer.othersDone", { n: status.devices.filter((d) => d.state === "received").length, total: status.devices.length, seconds: (status.elapsedMs / 1000).toFixed(1) });
-  const asked = devMode && status !== undefined && status.unavailable === undefined;
+  const asked = devMode && status !== undefined && status.unavailable === undefined && !status.roomDeclined;
   return (
     <section className="card developer-section developer-room" data-testid="developer-room" aria-busy={running}>
       <div className="developer-room-head">
         <h2 className="card-title">{t("developer.others")}</h2>
-        <span className={`developer-room-headline muted small ${running ? "running" : ""}`} role="status" data-testid="developer-room-status">
+        {/* Announced once it settles, not on every part that arrives. */}
+        <span className={`developer-room-headline muted small ${running ? "running" : ""}`} role="status" aria-live={running ? "off" : "polite"} data-testid="developer-room-status">
           {running && devMode ? <Icon name="spinner" size={14} className="spin" /> : null}
           {headline}
         </span>
@@ -140,7 +143,7 @@ function RoomSection({ devMode, collecting, status }: { devMode: boolean; collec
       <p className="muted small">{t("developer.othersHint")}</p>
       {asked ? (
         <ul className="developer-sources" data-testid="developer-sources">
-          <CoordinatorRow status={status} running={running} />
+          <CoordinatorRow status={status} running={running} viaCoordinator={viaCoordinator} />
           {status.devices.map((d) => (
             <SourceRow key={d.id} icon={deviceIcon(devices.find((x) => x.id === d.id))} name={d.name} source={d} testId={`developer-source-${d.id}`} />
           ))}
@@ -160,14 +163,14 @@ function deviceIcon(d: DeviceInfo | undefined): string {
   return d.platform === "android" ? "phone" : "laptop";
 }
 
-function CoordinatorRow({ status, running }: { status: RoomDiagnosticsStatus; running: boolean }) {
+function CoordinatorRow({ status, running, viaCoordinator }: { status: RoomDiagnosticsStatus; running: boolean; viaCoordinator: boolean }) {
   const c = status.coordinator;
   if (c) {
     const detail = c.state === "received" ? (status.coordinatorLog ? t("developer.coordinatorLog") : t("developer.coordinatorVersion")) : undefined;
     return <SourceRow icon="dns" name={t("developer.coordinator")} source={c} detail={detail} testId="developer-source-coordinator" />;
   }
-  // It answers ahead of the room: once the room has, there is none.
-  const text = !status.roomAnswered ? (running ? t("developer.coordinatorWaiting") : t("developer.othersNoRoom")) : t("developer.coordinatorNone");
+  // It answers ahead of the room: once the room has, there is none, or (connected to one) it is too old to.
+  const text = !status.roomAnswered ? (running ? t("developer.coordinatorWaiting") : t("developer.othersNoRoom")) : viaCoordinator ? t("developer.coordinatorSilent") : t("developer.coordinatorNone");
   return (
     <li className="developer-source" data-testid="developer-source-coordinator" data-state={status.roomAnswered ? "none" : running ? "waiting" : "noAnswer"}>
       <Icon name="dns" size={20} className="developer-source-icon" />

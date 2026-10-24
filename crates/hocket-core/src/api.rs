@@ -2564,6 +2564,10 @@ pub struct RoomDiagnosticsStatus {
     pub unavailable: Option<RoomDiagnosticsUnavailable>,
     /// The room answered (and named the devices it asked).
     pub room_answered: bool,
+    /// The room answered but asked nobody, in its words (asked again within
+    /// 10 s of the last request: nobody else answers then, the coordinator
+    /// included).
+    pub room_declined: Option<String>,
     /// The hosted coordinator's answer. It answers ahead of the room, so once
     /// `room_answered` is set and this is still unset, the room has no
     /// coordinator (a device hosts it) or one too old to answer.

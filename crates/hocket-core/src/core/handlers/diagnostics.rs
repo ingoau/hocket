@@ -51,6 +51,7 @@ impl Actor {
                     elapsed_ms: 0.0,
                     unavailable: Some(why),
                     room_answered: false,
+                    room_declined: None,
                     coordinator: None,
                     coordinator_log: false,
                     devices: vec![],

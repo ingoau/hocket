@@ -61,7 +61,7 @@ const bridge: HocketBridge = {
   },
   diagnostics: {
     summary: () => ipcRenderer.invoke(IPC.diagnosticsSummary) as Promise<DiagnosticsSummary>,
-    collect: () => ipcRenderer.invoke(IPC.diagnosticsCollect) as Promise<void>,
+    collect: (options?: { force?: boolean }) => ipcRenderer.invoke(IPC.diagnosticsCollect, options) as Promise<void>,
     save: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsSave, options) as Promise<string | undefined>,
     copy: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsCopy, options) as Promise<void>,
     reveal: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsReveal, options) as Promise<string | undefined>,

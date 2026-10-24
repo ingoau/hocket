@@ -14,6 +14,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,6 +53,9 @@ enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
  * `collectAsStateWithLifecycle` so the position ticker (a `WhileSubscribed` flow) runs only while a
  * screen that shows position is resumed.
  */
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+const val REUSE_ROOM_COLLECTION_MS = 15_000.0
+
 class CoreClient(
     val core: CoreHandle,
     parentScope: CoroutineScope,
@@ -168,8 +173,14 @@ class CoreClient(
     /** Another device in the Connect room asks for this one's diagnostics (developer mode is on here). */
     val diagnosticsRequests: SharedFlow<EventDiagnosticsRequestedInner> = _diagnosticsRequests.asSharedFlow()
     private val _roomDiagnostics = MutableStateFlow<RoomDiagnosticsStatus?>(null)
-    /** The newest room diagnostics collection (`Query.RoomDiagnostics`), as it goes. */
+    /**
+     * The newest room diagnostics collection, as it goes. [collectRoomDiagnostics] runs one at a
+     * time, so this is always the one it is running (or ran last).
+     */
     val roomDiagnostics: StateFlow<RoomDiagnosticsStatus?> = _roomDiagnostics.asStateFlow()
+    private var roomCollection: Deferred<String?>? = null
+    /** The newest finished collection's text, and when it finished. */
+    private var lastRoomCollection: Pair<String, Double>? = null
     private val _actionsChanged = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
@@ -350,6 +361,30 @@ class CoreClient(
      * where a throw would crash the app; every caller already treats a missing result as "nothing".
      * Cancellation still propagates.
      */
+    /**
+     * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
+     * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
+     * the next one rather than starting a second collection alongside. The room turns away a
+     * second request within 10 s (and nobody else answers it), so unless [force]d (Refresh) a
+     * collection that recent is reused, and one the room turned away keeps the one before.
+     */
+    suspend fun collectRoomDiagnostics(force: Boolean = false): String? {
+        val running = synchronized(this) {
+            roomCollection?.takeIf { it.isActive }?.let { return@synchronized it }
+            val last = lastRoomCollection
+            if (!force && last != null && now() - last.second < REUSE_ROOM_COLLECTION_MS) return last.first
+            scope.async {
+                val text = (query(Query.RoomDiagnostics) as? QueryResult.Text)?.data
+                synchronized(this@CoreClient) {
+                    val previous = lastRoomCollection
+                    if (text != null && (previous == null || _roomDiagnostics.value?.roomDeclined == null)) lastRoomCollection = text to now()
+                    if (_roomDiagnostics.value?.roomDeclined != null && previous != null) previous.first else text
+                }
+            }.also { roomCollection = it }
+        }
+        return running.await()
+    }
+
     suspend fun query(query: Query): QueryResult? = try {
         core.query(query)
     } catch (e: CancellationException) {

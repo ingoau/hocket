@@ -99,7 +99,7 @@ class DeveloperDiagnosticsTest {
         val answer = CompletableDeferred<String>()
         var asked = 0
         compose.setThemedContent(core) {
-            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { asked++; answer.await() })
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { _, _ -> asked++; answer.await() })
         }
         core.start()
         awaitTag("developer.stats")
@@ -127,7 +127,7 @@ class DeveloperDiagnosticsTest {
         compose.setThemedContent(core) { DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }) }
         core.start()
         awaitTag("developer.source.living-room")
-        compose.waitUntil(5_000) { textOf("developer.roomStatus").contains("1 of 2 devices sent a bundle") }
+        compose.waitUntil(5_000) { textOf("developer.roomStatus").contains("Bundles from 1 of 2") }
         assertTrue(textOf("developer.source.coordinator").contains("process log"))
         assertTrue(textOf("developer.source.laptop").contains("Received"))
         assertTrue(textOf("developer.source.living-room").contains("Declined"))
@@ -139,7 +139,7 @@ class DeveloperDiagnosticsTest {
         val core = TestCore(startPlaying = false)
         var asked = 0
         compose.setThemedContent(core) {
-            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { asked++; "" })
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { _, _ -> asked++; "" })
         }
         core.start()
         awaitTag("developer.stats")
@@ -172,7 +172,7 @@ class DeveloperDiagnosticsTest {
         // First while the room is still being asked (the actions wait), then with every answer in.
         val answer = CompletableDeferred<Unit>()
         compose.setThemedContent(core) {
-            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { answer.await(); DiagnosticsBundle.otherDevices(it) })
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { client, force -> answer.await(); DiagnosticsBundle.otherDevices(client, force) })
         }
         core.start()
         awaitTag("developer.stats")

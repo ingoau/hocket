@@ -326,6 +326,11 @@ impl Collection {
             elapsed_ms: (now - self.started_at).max(0.0),
             unavailable: None,
             room_answered: self.room_answered,
+            room_declined: self
+                .sources
+                .iter()
+                .find(|s| s.id == ROOM)
+                .and_then(|s| s.declined.clone()),
             coordinator_log: coordinator
                 .is_some_and(|c| c.text().contains(COORDINATOR_LOG_HEADING)),
             coordinator: coordinator.map(|c| c.status(done)),
@@ -546,6 +551,18 @@ mod tests {
     }
 
     #[test]
+    fn status_carries_the_rooms_refusal() {
+        let mut c = Collection::new("r", 0.0);
+        let mut room = part(ROOM, 0, 1, "");
+        room.declined = Some("asked again too soon; try in a few seconds".into());
+        c.add(room);
+        assert!(c.is_complete());
+        let s = c.status(0.0, true);
+        assert!(s.room_answered && s.devices.is_empty() && s.coordinator.is_none());
+        assert!(s.room_declined.unwrap().contains("too soon"));
+    }
+
+    #[test]
     fn status_marks_partial_answers_incomplete_once_done() {
         let mut c = Collection::new("r", 0.0);
         let mut room = part(ROOM, 0, 1, "state");
@@ -601,6 +618,7 @@ mod tests {
         });
         c.add(part("b", 5, 2, "out of range"));
         assert!(!c.is_complete());
+        assert!(c.status(0.0, false).room_declined.is_none());
         assert!(c.expired(COLLECT_TIMEOUT_MS));
         let text = c.render(COLLECT_TIMEOUT_MS);
         assert!(text.contains("Device: Device b (b)\n"), "{text}");

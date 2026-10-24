@@ -211,6 +211,8 @@ export class FakeCore implements CoreHandle {
     if (this.ticker) clearInterval(this.ticker);
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    for (const resolve of this.roomDiagnosticsWaiting) resolve("Other devices: not collected (the core shut down).\n");
+    this.roomDiagnosticsWaiting.clear();
   }
 
   private emit(e: Event): void {
@@ -700,9 +702,11 @@ export class FakeCore implements CoreHandle {
    * coordinator (when connected to one) sends its version, every other device its bundle, with
    * `roomDiagnosticsChanged` along the way.
    */
+  private roomDiagnosticsWaiting = new Set<(text: string) => void>();
+
   private roomDiagnostics(): Promise<string> {
     const requestId = `room-diag-${Date.now()}`;
-    const base: RoomDiagnosticsStatus = { requestId, done: false, elapsedMs: 0, unavailable: undefined, roomAnswered: false, coordinator: undefined, coordinatorLog: false, devices: [] };
+    const base: RoomDiagnosticsStatus = { requestId, done: false, elapsedMs: 0, unavailable: undefined, roomAnswered: false, roomDeclined: undefined, coordinator: undefined, coordinatorLog: false, devices: [] };
     const unavailable: RoomDiagnosticsUnavailable | undefined = this.settings.get("developer.mode")?.value !== "true" ? "developerModeOff" : !this.connection.connected ? "notConnected" : undefined;
     if (unavailable) {
       this.emit({ type: "roomDiagnosticsChanged", data: { status: { ...base, done: true, unavailable } } });
@@ -721,11 +725,14 @@ export class FakeCore implements CoreHandle {
       devices: step >= 1 ? others.map((d) => source(d.id, d.name, step >= 3 ? "received" : step >= 2 ? "receiving" : "waiting", step >= 3 ? 3 : step >= 2 ? 1 : 0, step >= 2 ? 3 : 0)) : [],
     });
     return new Promise((resolve) => {
+      // Settled at shutdown too (later() never fires then), so nobody waits on it forever.
+      this.roomDiagnosticsWaiting.add(resolve);
       this.emit({ type: "roomDiagnosticsChanged", data: { status: status(0) } });
       for (const step of [1, 2, 3]) this.later(step * 500, () => this.emit({ type: "roomDiagnosticsChanged", data: { status: status(step) } }));
       this.later(2000, () => {
         this.emit({ type: "roomDiagnosticsChanged", data: { status: status(4) } });
         const sections = [viaCoordinator ? "Coordinator\n-----------\nhocket-coordinator (fake)\n" : "", ...others.map((d) => `Device: ${d.name} (${d.id})\n${"-".repeat(d.name.length + d.id.length + 11)}\n(the fake core's stand-in for ${d.name}'s bundle)\n`)];
+        this.roomDiagnosticsWaiting.delete(resolve);
         resolve(`Other devices in the Connect room (${others.length} of ${others.length} sent a bundle, 2.0 s)\n\n${sections.filter(Boolean).join("\n")}`);
       });
     });

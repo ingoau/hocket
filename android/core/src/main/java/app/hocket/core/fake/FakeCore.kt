@@ -235,15 +235,17 @@ class FakeCore(
      * without timers): the coordinator (when connected to one) sends its version and log, the
      * laptop its bundle, and the living room declines, with `RoomDiagnosticsChanged` along the way.
      */
+    private var roomDiagnosticsAsked = 0
+
     private suspend fun roomDiagnostics(): String {
-        val requestId = "room-diag-${now().toLong()}"
+        val requestId = "room-diag-${++roomDiagnosticsAsked}"
         val unavailable = when {
             settings[SettingKeys.DEVELOPER_MODE]?.value != "true" -> RoomDiagnosticsUnavailable.DeveloperModeOff
             !connection.connected -> RoomDiagnosticsUnavailable.NotConnected
             else -> null
         }
         if (unavailable != null) {
-            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(RoomDiagnosticsStatus(requestId, true, 0.0, unavailable, false, null, false, emptyList()))))
+            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(RoomDiagnosticsStatus(requestId = requestId, done = true, elapsedMs = 0.0, unavailable = unavailable, roomAnswered = false, coordinator = null, coordinatorLog = false, devices = emptyList()))))
             return "Other devices: not collected (${if (unavailable == RoomDiagnosticsUnavailable.DeveloperModeOff) "developer mode is off on this device" else "Connect is not running"}).\n"
         }
         val others = devices.filter { !it.isSelf }
@@ -252,10 +254,10 @@ class FakeCore(
         fun source(id: String, name: String, state: DiagnosticsSourceState, received: Int, parts: Int, reason: String? = null) =
             DiagnosticsSourceStatus(id, name, state, received.toUInt(), parts.toUInt(), (received * 131_072).toUInt(), reason)
         fun status(step: Int) = RoomDiagnosticsStatus(
-            requestId, step >= 4, now() - started, null, step >= 1,
-            if (viaCoordinator && step >= 1) source("coordinator", "Coordinator", if (step >= 2) DiagnosticsSourceState.Received else DiagnosticsSourceState.Receiving, if (step >= 2) 2 else 1, 2) else null,
-            viaCoordinator && step >= 2,
-            if (step < 1) emptyList() else others.mapIndexed { i, d ->
+            requestId = requestId, done = step >= 4, elapsedMs = now() - started, unavailable = null, roomAnswered = step >= 1,
+            coordinator = if (viaCoordinator && step >= 1) source("coordinator", "Coordinator", if (step >= 2) DiagnosticsSourceState.Received else DiagnosticsSourceState.Receiving, if (step >= 2) 2 else 1, 2) else null,
+            coordinatorLog = viaCoordinator && step >= 2,
+            devices = if (step < 1) emptyList() else others.mapIndexed { i, d ->
                 when {
                     i % 2 == 1 -> if (step >= 2) source(d.id, d.name, DiagnosticsSourceState.Declined, 0, 1, "developer mode is off on this device") else source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
                     step >= 3 -> source(d.id, d.name, DiagnosticsSourceState.Received, 3, 3)
