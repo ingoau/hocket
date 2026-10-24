@@ -1,5 +1,6 @@
 // Developer mode (Settings → Advanced) and the developer diagnostics page: the switch, the
-// Mod+Shift+D shortcut it gates, what the bundle carries (the renderer's console lines and the
+// Mod+Shift+D shortcut it gates, the other devices it asks as it opens (and the actions waiting on
+// them), what the bundle carries (the renderer's console lines and the
 // core's diagnostics), saving it, and axe over the page in both themes. With HOCKET_SCREENSHOT_DIR
 // it also writes screenshots of the Advanced section and the page.
 //
@@ -50,6 +51,18 @@ test("developer mode gates the shortcut; the page previews, saves and passes axe
   await expect(page.getByTestId("developer-log")).toContainText("e2e-renderer-marker");
   await expect(page.getByTestId("developer-log")).toContainText("ERROR main: e2e-main-marker");
   await expect(page.getByTestId("developer-stats")).toContainText("last 60 min");
+  // The page asks the room as it opens; the actions wait for the answers.
+  await expect(page.getByTestId("developer-room-status")).toContainText("Bundles from 1 of 1");
+  await expect(page.getByTestId("developer-source-dev-pixel8")).toHaveAttribute("data-state", "received");
+  await expect(page.getByTestId("developer-source-coordinator")).toContainText("a device on your network hosts this room");
+  await expect(page.getByTestId("developer-save")).toBeEnabled();
+  await page.evaluate(() => window.hocket.dispatch({ type: "connectCoordinator" }));
+  await page.getByTestId("developer-refresh").click();
+  await expect(page.getByTestId("developer-collecting")).toBeVisible();
+  for (const id of ["developer-save", "developer-copy", "developer-reveal", "developer-refresh"]) await expect(page.getByTestId(id)).toBeDisabled();
+  await expect(page.getByTestId("developer-room-status")).toContainText("Bundles from 1 of 1");
+  await expect(page.getByTestId("developer-source-coordinator")).toContainText("Its version only");
+  await expect(page.getByTestId("developer-copy")).toBeEnabled();
 
   if (out) {
     mkdirSync(out, { recursive: true });
@@ -62,6 +75,12 @@ test("developer mode gates the shortcut; the page previews, saves and passes axe
       await page.keyboard.press(`${mod}+Shift+D`);
       await expect(page.getByTestId("view-developer")).toBeVisible();
       await expect(page.getByTestId("developer-log")).toContainText("e2e-renderer-marker");
+      // Reopened this soon, the page reuses the last collection; Refresh asks again.
+      await expect(page.getByTestId("developer-refresh")).toBeEnabled();
+      await page.getByTestId("developer-refresh").click();
+      await expect(page.getByTestId("developer-collecting")).toBeVisible();
+      await page.screenshot({ path: join(out, `desktop-${theme}-developer-diagnostics-collecting.png`) });
+      await expect(page.getByTestId("developer-copy")).toBeEnabled();
       await settleAnimations(page);
       await page.screenshot({ path: join(out, `desktop-${theme}-developer-diagnostics.png`) });
     }

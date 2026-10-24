@@ -19,6 +19,31 @@ class CoreClientTest {
     private var clock = 5_000_000.0
 
     @Test
+    fun roomDiagnosticsAreCollectedOnceAndReusedBriefly() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.DEVELOPER_MODE, "true"))
+        runCurrent()
+        val first = client.collectRoomDiagnostics()
+        assertTrue(first!!.contains("Laptop"))
+        val id = client.roomDiagnostics.value!!.requestId
+        assertTrue(client.roomDiagnostics.value!!.done)
+        // Within the room's limit: reused, nothing asked.
+        clock += 5_000
+        assertEquals(first, client.collectRoomDiagnostics())
+        assertEquals(id, client.roomDiagnostics.value!!.requestId)
+        // Forced (Refresh), or later: asked again.
+        assertNotNull(client.collectRoomDiagnostics(force = true))
+        val forced = client.roomDiagnostics.value!!.requestId
+        assertTrue(forced != id)
+        clock += REUSE_ROOM_COLLECTION_MS
+        client.collectRoomDiagnostics()
+        assertTrue(client.roomDiagnostics.value!!.requestId != forced)
+    }
+
+    @Test
     fun snapshotPopulatesStateFlows() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })

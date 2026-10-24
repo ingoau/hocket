@@ -7,7 +7,7 @@
 import { BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ArtworkLayout, Command, Query, QueryResult } from "@core/api";
+import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
@@ -46,6 +46,10 @@ function isSide(v: unknown): v is number {
 const MAX_TEXT_FILE = 16 * 1024 * 1024;
 /** Lines of log the page previews. */
 const PREVIEW_LINES = 400;
+/** How the core (and this file) start the text of a collection that asked nobody. */
+const NOT_COLLECTED = "Other devices: not collected";
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+export const REUSE_COLLECTION_MS = 15_000;
 /** Bundles kept in the diagnostics folder; older ones are removed when a new one is written. */
 const KEEP_BUNDLES = 5;
 
@@ -297,11 +301,46 @@ function allDevices(options: unknown): boolean {
 
 /**
  * The developer diagnostics page: every call builds a fresh bundle; files are only written where main
- * decides. Also answers the other devices of the Connect room, which ask the core for this device's
- * bundle (the core only passes their requests on while developer mode is on here).
+ * decides. The other devices' bundles are collected once, when the page asks (as it opens), and kept
+ * for the bundles it saves, copies or shares after. Also answers the other devices of the Connect
+ * room, which ask the core for this device's bundle (the core only passes their requests on while
+ * developer mode is on here).
  */
 function installDiagnosticsIpc(deps: IpcDeps): void {
   const { core, windows, devlog } = deps;
+  /**
+   * The newest collection from the other devices (and when it finished), and the one running. The
+   * core reports progress as events; this is the only place that asks, so the newest event is
+   * always this collection's.
+   */
+  let others: { text: string; at: number } | undefined;
+  let collecting: Promise<string> | undefined;
+  /** The newest collection's status (for a page that opens after its events went by). */
+  let lastStatus: RoomDiagnosticsStatus | undefined;
+  core.onEvent((event) => {
+    if (event.type === "roomDiagnosticsChanged") lastStatus = event.data.status;
+  });
+  /**
+   * The room turns away a second request within 10 s (the core then answers with the collection
+   * before), so unless `force`d (Refresh) a collection that recent is reused. Only the room's
+   * answers count: "not collected" (developer mode off, Connect not running, a failed query) is
+   * asked again next time.
+   */
+  const collectOthers = (force = false): Promise<string> => {
+    if (!force && !collecting && others && Date.now() - others.at < REUSE_COLLECTION_MS) return Promise.resolve(others.text);
+    collecting ??= core
+      .query({ type: "roomDiagnostics" })
+      .then(
+        (r) => (r.type === "text" ? r.data : `(unexpected answer: ${r.type})`),
+        (err: unknown) => `${NOT_COLLECTED} (${String(err)})`,
+      )
+      .then((text) => {
+        others = { text, at: text.startsWith(NOT_COLLECTED) ? 0 : Date.now() };
+        collecting = undefined;
+        return text;
+      });
+    return collecting;
+  };
   const build = async (withOtherDevices = false): Promise<DiagnosticsBundle> => {
     let coreDiagnostics: string;
     try {
@@ -316,15 +355,8 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     } catch (err) {
       extra = { host: `(unavailable: ${String(err)})` };
     }
-    let otherDevices: string | undefined;
-    if (withOtherDevices) {
-      try {
-        const r = await core.query({ type: "roomDiagnostics" });
-        otherDevices = r.type === "text" ? r.data : `(unexpected answer: ${r.type})`;
-      } catch (err) {
-        otherDevices = `Other devices: not collected (${String(err)})`;
-      }
-    }
+    // What the page collected (waiting for it if it is still running); a first collection otherwise.
+    const otherDevices = withOtherDevices ? await (collecting ?? (others !== undefined ? Promise.resolve(others.text) : collectOthers())) : undefined;
     return devlog.bundle({ coreDiagnostics, extra, otherDevices });
   };
   core.onEvent((event) => {
@@ -359,6 +391,12 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
       windowMs: b.windowMs,
       canShare: process.platform === "darwin",
     };
+  });
+
+  ipcMain.handle(IPC.diagnosticsCollect, async (e, options: unknown) => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    await collectOthers(isObject(options) && options.force === true);
+    return lastStatus;
   });
 
   ipcMain.handle(IPC.diagnosticsSave, async (e, options: unknown) => {

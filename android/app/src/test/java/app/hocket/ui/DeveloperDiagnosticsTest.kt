@@ -3,6 +3,8 @@ package app.hocket.ui
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
@@ -18,7 +20,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.DevLog
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.Command
 import app.hocket.diagnostics.DeveloperTriggers
+import app.hocket.diagnostics.DiagnosticsBundle
 import app.hocket.diagnostics.DiagnosticsReport
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.screens.settings.DeveloperDiagnosticsScreen
@@ -29,12 +33,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import kotlinx.coroutines.CompletableDeferred
 import java.io.File
 
 /**
  * Developer mode: Settings → Advanced holds the switch and the way in; a shake (here, the request
  * the shake detector makes) opens developer diagnostics only while the mode is on; the page shows
- * the report. Writes PNGs of Advanced and the page in both themes when HOCKET_SCREENSHOT_DIR is set.
+ * the report, asking the other devices as it opens. Writes PNGs of Advanced and the page in both themes when HOCKET_SCREENSHOT_DIR is set.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp-xxhdpi")
@@ -88,22 +93,59 @@ class DeveloperDiagnosticsTest {
     }
 
     @Test
-    fun theOtherDevicesAreCollectedOnlyWhenSwitchedOn() {
+    fun theOtherDevicesAreCollectedAsThePageOpensAndHoldTheActions() {
         val core = TestCore(startPlaying = false)
         core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        val answer = CompletableDeferred<String>()
         var asked = 0
         compose.setThemedContent(core) {
-            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { asked++; "Other devices: the phone says hi\n" })
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { _, _ -> asked++; answer.await() })
         }
         core.start()
-        awaitTag("developer.allDevicesSwitch")
-        compose.onNodeWithTag("developer.copy").performClick()
-        compose.waitUntil(5_000) { clipboardText()?.contains("Hocket diagnostics") == true }
-        assertEquals(0, asked)
-        compose.onNodeWithTag("developer.allDevicesSwitch").assertIsOff().performClick()
-        compose.onNodeWithTag("developer.copy").performClick()
+        awaitTag("developer.stats")
+        // Asked at once, and every action waits for the answers.
+        compose.waitUntil(5_000) { asked == 1 }
+        awaitTag("developer.collecting")
+        for (tag in listOf("developer.share", "developer.save", "developer.copy", "developer.refresh")) compose.onNodeWithTag(tag).assertIsNotEnabled()
+        answer.complete("Other devices: the phone says hi\n")
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("developer.collecting").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("developer.copy").assertIsEnabled().performClick()
         compose.waitUntil(5_000) { clipboardText()?.contains("the phone says hi") == true }
-        assertEquals(1, asked)
+        assertEquals("the copy reuses what the page collected", 1, asked)
+        // Refresh asks again.
+        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("developer.refresh").assertIsEnabled() }.isSuccess }
+        compose.onNodeWithTag("developer.refresh").performClick()
+        compose.waitForIdle()
+        compose.waitUntil(5_000) { asked == 2 }
+    }
+
+    @Test
+    fun theRoomCardShowsEveryDeviceAndTheCoordinator() {
+        val core = TestCore(startPlaying = false)
+        core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        core.fake.dispatch(Command.ConnectCoordinator)
+        compose.setThemedContent(core) { DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }) }
+        core.start()
+        awaitTag("developer.source.living-room")
+        compose.waitUntil(5_000) { textOf("developer.roomStatus").contains("Bundles from 1 of 2") }
+        assertTrue(textOf("developer.source.coordinator").contains("process log"))
+        assertTrue(textOf("developer.source.laptop").contains("Received"))
+        assertTrue(textOf("developer.source.living-room").contains("Declined"))
+        assertTrue(textOf("developer.source.living-room").contains("developer mode is off"))
+    }
+
+    @Test
+    fun withDeveloperModeOffNobodyIsAsked() {
+        val core = TestCore(startPlaying = false)
+        var asked = 0
+        compose.setThemedContent(core) {
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { _, _ -> asked++; "" })
+        }
+        core.start()
+        awaitTag("developer.stats")
+        assertTrue(textOf("developer.roomStatus").contains("Turn on developer mode"))
+        compose.onNodeWithTag("developer.copy").assertIsEnabled()
+        assertEquals(0, asked)
     }
 
     private fun clipboardText(): String? =
@@ -111,7 +153,7 @@ class DeveloperDiagnosticsTest {
             .getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()
 
     private fun textOf(tag: String): String =
-        compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString("") { it.text }
+        compose.onNodeWithTag(tag, useUnmergedTree = false).fetchSemanticsNode().config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.Text) { emptyList() }.joinToString("\n") { it.text }
 
     @Test
     @Config(qualifiers = "+notnight")
@@ -126,9 +168,20 @@ class DeveloperDiagnosticsTest {
         dir.mkdirs()
         val core = TestCore(startPlaying = false)
         core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
-        compose.setThemedContent(core) { DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }) }
+        core.fake.dispatch(Command.ConnectCoordinator)
+        // First while the room is still being asked (the actions wait), then with every answer in.
+        val answer = CompletableDeferred<Unit>()
+        compose.setThemedContent(core) {
+            DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }, collectOthers = { client, force -> answer.await(); DiagnosticsBundle.otherDevices(client, force) })
+        }
         core.start()
         awaitTag("developer.stats")
+        awaitTag("developer.collecting")
+        compose.mainClock.advanceTimeBy(1_000)
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "android-$theme-developer-diagnostics-collecting.png"))
+        answer.complete(Unit)
+        awaitTag("developer.source.living-room")
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("developer.collecting").fetchSemanticsNodes().isEmpty() }
         compose.mainClock.advanceTimeBy(1_000)
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "android-$theme-developer-diagnostics.png"))
         compose.onNodeWithTag("developer.log", useUnmergedTree = true).performScrollTo()

@@ -2305,7 +2305,8 @@ pub enum Query {
     /// The diagnostics of the Connect room and every other device in it, as
     /// text for the end of this device's bundle. Waits for the answers (up to
     /// 45 s). Only while developer mode is on here; each other device answers
-    /// only while its own is on.
+    /// only while its own is on. The room turns away a request within 10 s of
+    /// the last: then the previous collection answers again.
     RoomDiagnostics,
     /// Export a config document.
     ConfigDocument {
@@ -2504,6 +2505,82 @@ pub enum PlayerNoticeCode {
     AutoplayFoundNothing,
 }
 
+/// Where one source of a [`RoomDiagnosticsStatus`] stands.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticsSourceState {
+    /// Asked, nothing arrived yet.
+    Waiting,
+    /// Some of its parts arrived.
+    Receiving,
+    /// Its whole bundle arrived.
+    Received,
+    /// It said no (`reason`: why, in its words).
+    Declined,
+    /// The collection ended with only some of its parts.
+    Incomplete,
+    /// The collection ended without a word from it.
+    NoAnswer,
+}
+
+/// One source of a room diagnostics collection: another device, or the coordinator.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsSourceStatus {
+    pub id: String,
+    pub name: String,
+    pub state: DiagnosticsSourceState,
+    pub parts_received: u32,
+    /// Parts it said it sends (0 until the first arrives).
+    pub parts: u32,
+    /// Text received so far.
+    pub bytes: u32,
+    /// Why it declined.
+    pub reason: Option<String>,
+}
+
+/// Why a `Query::RoomDiagnostics` collected nothing.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RoomDiagnosticsUnavailable {
+    /// Developer mode is off on this device.
+    DeveloperModeOff,
+    /// Connect is not running.
+    NotConnected,
+}
+
+/// How a `Query::RoomDiagnostics` collection is going ([`Event::RoomDiagnosticsChanged`]).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomDiagnosticsStatus {
+    pub request_id: String,
+    /// The query has answered: nothing more arrives for this request.
+    pub done: bool,
+    pub elapsed_ms: f64,
+    /// Set when nothing was asked (and `done`).
+    pub unavailable: Option<RoomDiagnosticsUnavailable>,
+    /// The room answered (and named the devices it asked).
+    pub room_answered: bool,
+    /// The room answered but asked nobody, in its words (asked again within
+    /// 10 s of the last request: nobody else answers then, the coordinator
+    /// included). Only seen with no earlier collection to fall back on: with
+    /// one, the query answers with that one (text and status) instead.
+    pub room_declined: Option<String>,
+    /// The hosted coordinator's answer. It answers ahead of the room, so once
+    /// `room_answered` is set and this is still unset, the room has no
+    /// coordinator (a device hosts it) or one too old to answer.
+    pub coordinator: Option<DiagnosticsSourceStatus>,
+    /// The coordinator sent its process log, not only its version (it does
+    /// for the accounts its operator named with `--diagnostics-user`).
+    pub coordinator_log: bool,
+    /// The other devices the room asked, in its order.
+    pub devices: Vec<DiagnosticsSourceStatus>,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
@@ -2685,6 +2762,11 @@ pub enum Event {
     DiagnosticsRequested {
         request_id: String,
         from_device: String,
+    },
+    /// Progress of a `Query::RoomDiagnostics`: when it starts, as answers
+    /// arrive, and once more (`done`) when the query answers.
+    RoomDiagnosticsChanged {
+        status: RoomDiagnosticsStatus,
     },
 
     /// Drive an external backend (Android). Not emitted in native mode.

@@ -18,12 +18,18 @@
 //! its extra fields): the room asks only those, and names the others in its
 //! own answer, so an older build never leaves the asking device waiting.
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs};
+use crate::api::{
+    DeviceId, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, EpochMs,
+    RoomDiagnosticsStatus,
+};
 
 /// `from` of the room's own answer.
 pub const ROOM: &str = "room";
 /// `from` of a hosted coordinator's answer.
 pub const COORDINATOR: &str = "coordinator";
+/// What starts the process log in a coordinator's answer: it sends one only
+/// to the accounts its operator named.
+pub const COORDINATOR_LOG_HEADING: &str = "Process log (last ";
 /// `Hello` extra field (`true`) of a device that answers diagnostics requests.
 pub const HELLO_FLAG: &str = "diagnostics";
 /// Largest answer one source sends ([`cap`] keeps its head and its tail).
@@ -173,6 +179,28 @@ impl Source {
     fn text(&self) -> String {
         self.parts.iter().flatten().map(String::as_str).collect()
     }
+
+    fn status(&self, done: bool) -> DiagnosticsSourceStatus {
+        let received = self.received();
+        let state = if self.declined.is_some() {
+            DiagnosticsSourceState::Declined
+        } else if self.complete() {
+            DiagnosticsSourceState::Received
+        } else if done {
+            DiagnosticsSourceState::Incomplete
+        } else {
+            DiagnosticsSourceState::Receiving
+        };
+        DiagnosticsSourceStatus {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            state,
+            parts_received: received as u32,
+            parts: self.parts.len() as u32,
+            bytes: self.parts.iter().flatten().map(String::len).sum::<usize>() as u32,
+            reason: self.declined.clone(),
+        }
+    }
 }
 
 /// The answers to one request, on the device that asked. Complete once the room has answered,
@@ -258,6 +286,56 @@ impl Collection {
 
     pub fn expired(&self, now: EpochMs) -> bool {
         now - self.started_at >= COLLECT_TIMEOUT_MS
+    }
+
+    /// Where every source stands, for the page that waits on it. `done`: the query has answered,
+    /// so what has not arrived will not.
+    pub fn status(&self, now: EpochMs, done: bool) -> RoomDiagnosticsStatus {
+        let coordinator = self.sources.iter().find(|s| s.id == COORDINATOR);
+        let mut devices: Vec<DiagnosticsSourceStatus> = self
+            .asked
+            .iter()
+            .map(
+                |(id, name)| match self.sources.iter().find(|s| s.id == *id) {
+                    Some(s) => s.status(done),
+                    None => DiagnosticsSourceStatus {
+                        id: id.clone(),
+                        name: name.clone(),
+                        state: if done {
+                            DiagnosticsSourceState::NoAnswer
+                        } else {
+                            DiagnosticsSourceState::Waiting
+                        },
+                        parts_received: 0,
+                        parts: 0,
+                        bytes: 0,
+                        reason: None,
+                    },
+                },
+            )
+            .collect();
+        devices.extend(
+            self.sources
+                .iter()
+                .filter(|s| !is_reserved(&s.id) && !self.asked.iter().any(|(id, _)| *id == s.id))
+                .map(|s| s.status(done)),
+        );
+        RoomDiagnosticsStatus {
+            request_id: self.request_id.clone(),
+            done,
+            elapsed_ms: (now - self.started_at).max(0.0),
+            unavailable: None,
+            room_answered: self.room_answered,
+            room_declined: self
+                .sources
+                .iter()
+                .find(|s| s.id == ROOM)
+                .and_then(|s| s.declined.clone()),
+            coordinator_log: coordinator
+                .is_some_and(|c| c.text().contains(COORDINATOR_LOG_HEADING)),
+            coordinator: coordinator.map(|c| c.status(done)),
+            devices,
+        }
     }
 
     /// The answers as one text, for the end of the asking device's bundle.
@@ -419,6 +497,89 @@ mod tests {
     }
 
     #[test]
+    fn status_follows_every_source() {
+        let mut c = Collection::new("r", 1_000.0);
+        let s = c.status(1_000.0, false);
+        assert!(!s.room_answered && s.coordinator.is_none() && s.devices.is_empty());
+        c.add(part(COORDINATOR, 0, 2, "hocket-coordinator 1\n"));
+        let mut room = part(ROOM, 0, 1, "state");
+        room.asked = vec![device("b"), device("c"), device("d")];
+        c.add(room);
+        c.add(part("b", 0, 2, "hello "));
+        let mut declined = part("c", 0, 1, "");
+        declined.declined = Some("developer mode is off on this device".into());
+        c.add(declined);
+        let s = c.status(3_000.0, false);
+        assert!(s.room_answered && !s.done);
+        assert_eq!(s.elapsed_ms, 2_000.0);
+        let coord = s.coordinator.as_ref().unwrap();
+        assert_eq!(coord.state, DiagnosticsSourceState::Receiving);
+        assert_eq!((coord.parts_received, coord.parts), (1, 2));
+        assert!(!s.coordinator_log);
+        let states: Vec<_> = s.devices.iter().map(|d| (d.id.as_str(), d.state)).collect();
+        assert_eq!(
+            states,
+            vec![
+                ("b", DiagnosticsSourceState::Receiving),
+                ("c", DiagnosticsSourceState::Declined),
+                ("d", DiagnosticsSourceState::Waiting),
+            ]
+        );
+        assert_eq!(s.devices[0].name, "Name b");
+        assert_eq!(s.devices[2].name, "Device d");
+        assert!(s.devices[1]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("developer mode"));
+        c.add(part(
+            COORDINATOR,
+            1,
+            2,
+            &format!("{COORDINATOR_LOG_HEADING}60 minutes)\n"),
+        ));
+        c.add(part("b", 1, 2, "world"));
+        let s = c.status(4_000.0, true);
+        assert!(s.coordinator_log);
+        assert_eq!(
+            s.coordinator.unwrap().state,
+            DiagnosticsSourceState::Received
+        );
+        assert_eq!(s.devices[0].state, DiagnosticsSourceState::Received);
+        assert_eq!(s.devices[0].bytes, 11);
+        assert_eq!(s.devices[2].state, DiagnosticsSourceState::NoAnswer);
+    }
+
+    #[test]
+    fn status_carries_the_rooms_refusal() {
+        let mut c = Collection::new("r", 0.0);
+        let mut room = part(ROOM, 0, 1, "");
+        room.declined = Some("asked again too soon; try in a few seconds".into());
+        c.add(room);
+        assert!(c.is_complete());
+        let s = c.status(0.0, true);
+        assert!(s.room_answered && s.devices.is_empty() && s.coordinator.is_none());
+        assert!(s.room_declined.unwrap().contains("too soon"));
+    }
+
+    #[test]
+    fn status_marks_partial_answers_incomplete_once_done() {
+        let mut c = Collection::new("r", 0.0);
+        let mut room = part(ROOM, 0, 1, "state");
+        room.asked = vec![device("b")];
+        c.add(room);
+        c.add(part("b", 0, 3, "a"));
+        assert_eq!(
+            c.status(0.0, false).devices[0].state,
+            DiagnosticsSourceState::Receiving
+        );
+        assert_eq!(
+            c.status(0.0, true).devices[0].state,
+            DiagnosticsSourceState::Incomplete
+        );
+    }
+
+    #[test]
     fn parts_stay_within_the_part_count_and_cap_cuts_near_lines() {
         let control = "\u{1}".repeat(MAX_ANSWER_BYTES);
         let p = parts(&control);
@@ -457,6 +618,7 @@ mod tests {
         });
         c.add(part("b", 5, 2, "out of range"));
         assert!(!c.is_complete());
+        assert!(c.status(0.0, false).room_declined.is_none());
         assert!(c.expired(COLLECT_TIMEOUT_MS));
         let text = c.render(COLLECT_TIMEOUT_MS);
         assert!(text.contains("Device: Device b (b)\n"), "{text}");

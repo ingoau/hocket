@@ -28,7 +28,7 @@ const SYMBOLS = {
   AccountCircle: "account_circle", Add: "add", Album: "album", AllInclusive: "all_inclusive", ArrowBack: "arrow_back",
   ArrowDropDown: "arrow_drop_down", BarChart: "bar_chart", BatterySaver: "battery_saver", Bedtime: "bedtime", Cancel: "cancel",
   Cast: "cast", Category: "category", Check: "check", CheckCircle: "check_circle", ChevronRight: "chevron_right",
-  ClearAll: "clear_all", Close: "close", CloudOff: "cloud_off", Computer: "computer", Delete: "delete", Devices: "devices",
+  ClearAll: "clear_all", Close: "close", CloudOff: "cloud_off", Computer: "computer", Delete: "delete", Devices: "devices", Dns: "dns",
   Download: "download", DownloadDone: "download_done", DownloadForOffline: "download_for_offline", DragHandle: "drag_handle", Edit: "edit",
   ErrorOutline: "error:outline", Favorite: "favorite", FavoriteBorder: "favorite:outline", FilterAlt: "filter_alt",
   GraphicEq: "graphic_eq", History: "history", Home: "home", Info: "info", KeyboardArrowDown: "keyboard_arrow_down",
@@ -59,7 +59,7 @@ const GROUPS = [
     "SelectAll", "Settings", "SettingsBackupRestore", "Share", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
     "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeOff", "VolumeUp", "Watch",
     "ArrowDownward", "ArrowUpward", "Bolt", "CalendarToday", "Schedule", "SortByAlpha", "Speed", "Timer", "TrendingUp", "Update",
-    "BugReport", "Code", "ContentCopy",
+    "BugReport", "Code", "ContentCopy", "Dns",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",

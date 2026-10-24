@@ -226,7 +226,56 @@ class FakeCore(
         scope.launch { handle(command) }
     }
 
-    override suspend fun query(query: Query): QueryResult = withContext(dispatcher) { answer(query) }
+    override suspend fun query(query: Query): QueryResult = withContext(dispatcher) {
+        if (query is Query.RoomDiagnostics) QueryResult.Text(roomDiagnostics()) else answer(query)
+    }
+
+    /**
+     * As the native core's `Query::RoomDiagnostics`, played out over about two seconds (at once
+     * without timers): the coordinator (when connected to one) sends its version and log, the
+     * laptop its bundle, and the living room declines, with `RoomDiagnosticsChanged` along the way.
+     */
+    private var roomDiagnosticsAsked = 0
+
+    private suspend fun roomDiagnostics(): String {
+        val requestId = "room-diag-${++roomDiagnosticsAsked}"
+        val unavailable = when {
+            settings[SettingKeys.DEVELOPER_MODE]?.value != "true" -> RoomDiagnosticsUnavailable.DeveloperModeOff
+            !connection.connected -> RoomDiagnosticsUnavailable.NotConnected
+            else -> null
+        }
+        if (unavailable != null) {
+            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(RoomDiagnosticsStatus(requestId = requestId, done = true, elapsedMs = 0.0, unavailable = unavailable, roomAnswered = false, coordinator = null, coordinatorLog = false, devices = emptyList()))))
+            return "Other devices: not collected (${if (unavailable == RoomDiagnosticsUnavailable.DeveloperModeOff) "developer mode is off on this device" else "Connect is not running"}).\n"
+        }
+        val others = devices.filter { !it.isSelf }
+        val viaCoordinator = connection.tier == ConnectionTier.Coordinator
+        val started = now()
+        fun source(id: String, name: String, state: DiagnosticsSourceState, received: Int, parts: Int, reason: String? = null) =
+            DiagnosticsSourceStatus(id, name, state, received.toUInt(), parts.toUInt(), (received * 131_072).toUInt(), reason)
+        fun status(step: Int) = RoomDiagnosticsStatus(
+            requestId = requestId, done = step >= 4, elapsedMs = now() - started, unavailable = null, roomAnswered = step >= 1,
+            coordinator = if (viaCoordinator && step >= 1) source("coordinator", "Coordinator", if (step >= 2) DiagnosticsSourceState.Received else DiagnosticsSourceState.Receiving, if (step >= 2) 2 else 1, 2) else null,
+            coordinatorLog = viaCoordinator && step >= 2,
+            devices = if (step < 1) emptyList() else others.mapIndexed { i, d ->
+                when {
+                    i % 2 == 1 -> if (step >= 2) source(d.id, d.name, DiagnosticsSourceState.Declined, 0, 1, "developer mode is off on this device") else source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
+                    step >= 3 -> source(d.id, d.name, DiagnosticsSourceState.Received, 3, 3)
+                    step >= 2 -> source(d.id, d.name, DiagnosticsSourceState.Receiving, 1, 3)
+                    else -> source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
+                }
+            },
+        )
+        for (step in 0..4) {
+            if (step > 0 && timers) delay(500)
+            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(status(step))))
+        }
+        val sections = others.mapIndexed { i, d ->
+            "Device: ${d.name} (${d.id})\n" + if (i % 2 == 1) "(declined: developer mode is off on this device)\n" else "(the fake core's stand-in for ${d.name}'s bundle)\n"
+        }
+        val coordinator = if (viaCoordinator) "Coordinator\nhocket-coordinator (fake)\nProcess log (last 60 minutes)\n" else ""
+        return "Other devices in the Connect room (${(others.size + 1) / 2} of ${others.size} sent a bundle)\n\n" + coordinator + sections.joinToString("\n")
+    }
 
     override fun close() {
         scope.cancel()
@@ -1416,8 +1465,7 @@ class FakeCore(
         is Query.Artwork -> QueryResult.Path(null)
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
-        // The fake core is never in a Connect room with anyone.
-        Query.RoomDiagnostics -> QueryResult.Text("Other devices: not collected (the fake core has no Connect room).\n")
+        Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
     }
 

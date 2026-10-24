@@ -125,10 +125,11 @@ object DiagnosticsBundle {
 
     /**
      * The Connect room's and the other devices' diagnostics (the core waits up to 45 s for them;
-     * each device answers only while its own developer mode is on).
+     * each device answers only while its own developer mode is on). Joins a collection already
+     * running, or reuses one that just finished unless [force]d ([CoreClient.collectRoomDiagnostics]).
      */
-    suspend fun otherDevices(client: CoreClient): String =
-        withTimeoutOrNull(60_000) { (client.query(Query.RoomDiagnostics) as? QueryResult.Text)?.data }
+    suspend fun otherDevices(client: CoreClient, force: Boolean = false): String =
+        withTimeoutOrNull(60_000) { client.collectRoomDiagnostics(force) }
             ?: "Other devices: not collected (the core didn't answer)\n"
 
     /** Writes the report to the share cache and opens the share sheet for it. */

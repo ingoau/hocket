@@ -450,8 +450,10 @@ impl App {
             a.per_ip_rate,
             self.diagnostics_users.len()
         ));
+        // The asking device looks for this heading to tell the full answer from the short one.
         out.push_str(&format!(
-            "\nProcess log (last {} minutes)\n----------------------------\n",
+            "\n{}{} minutes)\n----------------------------\n",
+            diagnostics::COORDINATOR_LOG_HEADING,
             hocket_core::devlog::WINDOW_MS / 60_000
         ));
         let log = hocket_core::devlog::recent(hocket_core::devlog::WINDOW_MS);

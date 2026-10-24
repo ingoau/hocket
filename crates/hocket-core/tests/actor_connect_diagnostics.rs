@@ -43,6 +43,18 @@ fn requested(t: &TestCore) -> Option<(String, String)> {
     })
 }
 
+/// Every `RoomDiagnosticsChanged` `t` emitted, in order.
+fn statuses(t: &TestCore) -> Vec<RoomDiagnosticsStatus> {
+    t.events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::RoomDiagnosticsChanged { status } => Some(status),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Ask `t` for the room's diagnostics while `all` keep running; the text it answers.
 async fn collect(t: &TestCore, all: &[&TestCore], answer: impl Fn(&[&TestCore])) -> String {
     let core = t.core.clone();
@@ -94,6 +106,24 @@ async fn every_device_answers_or_declines_by_its_own_developer_mode() {
         "c was never asked to build anything"
     );
     assert!(requested(&a).is_none(), "nobody asks the asking device");
+
+    // The page followed along: waiting for the room first, the final word last.
+    let seen = statuses(&a);
+    assert!(seen.len() >= 3, "{seen:?}");
+    assert!(!seen[0].done && !seen[0].room_answered && seen[0].devices.is_empty());
+    assert!(seen[..seen.len() - 1].iter().all(|s| !s.done));
+    let last = seen.last().unwrap();
+    assert!(last.done && last.room_answered && last.unavailable.is_none());
+    assert!(last.coordinator.is_none(), "a LAN room has no coordinator");
+    let mut states: Vec<_> = last.devices.iter().map(|d| d.state).collect();
+    states.sort_by_key(|s| format!("{s:?}"));
+    assert_eq!(
+        states,
+        vec![
+            DiagnosticsSourceState::Declined,
+            DiagnosticsSourceState::Received
+        ]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,6 +158,13 @@ async fn nothing_is_asked_while_developer_mode_is_off_here() {
     );
     TestCore::run_all_for(&[&a, &b, &c], 1_000.0).await;
     assert!(requested(&b).is_none() && requested(&c).is_none());
+    let seen = statuses(&a);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].done);
+    assert_eq!(
+        seen[0].unavailable,
+        Some(RoomDiagnosticsUnavailable::DeveloperModeOff)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -160,4 +197,34 @@ async fn turning_developer_mode_off_while_a_bundle_is_built_sends_nothing() {
         2,
         "{text}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asking_again_too_soon_answers_with_the_collection_before() {
+    let (a, b, c) = trio().await;
+    developer_mode(&a, true).await;
+    developer_mode(&b, true).await;
+    for t in [&a, &b, &c] {
+        t.events.clear();
+    }
+    // b's platform answers at once, so the collection is over well within the room's 10 s.
+    let b_core = b.core.clone();
+    let answer = |_: &[&TestCore]| {
+        if let Some((request_id, _)) = requested(&b) {
+            let _ = b_core.dispatch(Command::AnswerDiagnosticsRequest {
+                request_id,
+                text: "b's bundle".into(),
+            });
+            b.events.clear();
+        }
+    };
+    let first = collect(&a, &[&a, &b, &c], answer).await;
+    assert!(first.contains("1 of 2 sent a bundle"), "{first}");
+    a.events.clear();
+    // Within the room's 10 s: it asks nobody, so the last collection answers again.
+    let again = collect(&a, &[&a, &b, &c], answer).await;
+    assert_eq!(again, first);
+    let last = statuses(&a).pop().unwrap();
+    assert!(last.done && last.room_declined.is_none());
+    assert_eq!(last.devices.len(), 2, "{last:?}");
 }

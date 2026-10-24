@@ -14,6 +14,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,6 +42,9 @@ data class HandoffPicker(val open: Boolean = false, val targets: List<DeviceInfo
 
 /** What kind of ids a selection holds, so toolbar actions can be queried for the right target. */
 enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
+
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+const val REUSE_ROOM_COLLECTION_MS = 15_000.0
 
 /**
  * The app-side view of the core: forwards commands and queries, folds the event stream into
@@ -167,6 +172,15 @@ class CoreClient(
     private val _diagnosticsRequests = MutableSharedFlow<EventDiagnosticsRequestedInner>(extraBufferCapacity = 4)
     /** Another device in the Connect room asks for this one's diagnostics (developer mode is on here). */
     val diagnosticsRequests: SharedFlow<EventDiagnosticsRequestedInner> = _diagnosticsRequests.asSharedFlow()
+    private val _roomDiagnostics = MutableStateFlow<RoomDiagnosticsStatus?>(null)
+    /**
+     * The newest room diagnostics collection, as it goes. [collectRoomDiagnostics] runs one at a
+     * time, so this is always the one it is running (or ran last).
+     */
+    val roomDiagnostics: StateFlow<RoomDiagnosticsStatus?> = _roomDiagnostics.asStateFlow()
+    private var roomCollection: Deferred<String?>? = null
+    /** The newest finished collection's text, and when it finished. */
+    private var lastRoomCollection: Pair<String, Double>? = null
     private val _actionsChanged = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
@@ -341,6 +355,28 @@ class CoreClient(
     fun dispatch(command: Command) = core.dispatch(command)
 
     /**
+     * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
+     * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
+     * the next one rather than starting a second collection alongside. The room turns away a
+     * second request within 10 s (the core then answers with the collection before), so unless
+     * [force]d (Refresh) a collection that recent is reused. Only the room's answers count: "not
+     * collected" (developer mode off, Connect not running) is asked again next time.
+     */
+    suspend fun collectRoomDiagnostics(force: Boolean = false): String? {
+        val running = synchronized(this) {
+            roomCollection?.takeIf { it.isActive }?.let { return@synchronized it }
+            val last = lastRoomCollection
+            if (!force && last != null && now() - last.second < REUSE_ROOM_COLLECTION_MS) return last.first
+            scope.async {
+                val text = (query(Query.RoomDiagnostics) as? QueryResult.Text)?.data
+                if (text != null && !text.startsWith("Other devices: not collected")) synchronized(this@CoreClient) { lastRoomCollection = text to now() }
+                text
+            }.also { roomCollection = it }
+        }
+        return running.await()
+    }
+
+    /**
      * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
      * been freed while a screen was still composing, the release build's dead core, a query the core
      * rejects). Screens run this from composition coroutines (`LaunchedEffect`, `produceState`),
@@ -479,6 +515,7 @@ class CoreClient(
             is Event.ActionsChanged -> _actionsChanged.tryEmit(event.data.surface)
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
             is Event.DiagnosticsRequested -> _diagnosticsRequests.tryEmit(event.data)
+            is Event.RoomDiagnosticsChanged -> _roomDiagnostics.value = event.data.status
             // Who owns transport after a handoff, and voice search waiting for playback, follow this
             // (not only snapshots). The core sends it on real changes, never on position reports.
             is Event.MediaSession -> _mediaSession.value = event.data.state
