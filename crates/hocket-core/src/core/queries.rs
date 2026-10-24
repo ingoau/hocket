@@ -637,7 +637,9 @@ fn fnv1a(bytes: &[u8]) -> u32 {
 
 /// A finished pin is the original when its extension is the library suffix.
 fn pin_matches_original(path: &std::path::Path, suffix: Option<&str>) -> bool {
-    let Some(want) = suffix.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())) else {
+    let Some(want) =
+        suffix.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+    else {
         return false;
     };
     path.extension()
@@ -688,8 +690,14 @@ mod tests {
         assert_eq!(export_safe_id("ab/cd"), "ab_cd");
         assert_ne!(export_cache_stem("ab/cd"), export_cache_stem("ab_cd"));
         assert_eq!(export_cache_stem("ab/cd"), export_cache_stem("ab/cd"));
-        assert!(pin_matches_original(std::path::Path::new("t.flac"), Some("FLAC")));
-        assert!(!pin_matches_original(std::path::Path::new("t.opus"), Some("flac")));
+        assert!(pin_matches_original(
+            std::path::Path::new("t.flac"),
+            Some("FLAC")
+        ));
+        assert!(!pin_matches_original(
+            std::path::Path::new("t.opus"),
+            Some("flac")
+        ));
         assert!(!pin_matches_original(std::path::Path::new("t.flac"), None));
     }
 }
