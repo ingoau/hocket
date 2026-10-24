@@ -38,7 +38,7 @@ let rightHeld: { x: number; y: number } | null = null;
 /** The menu opened under a held right button: releasing it on an item (after a drag) runs that item. */
 let pressedAt: { x: number; y: number } | null = null;
 /** How far the pointer must move from the press before a release picks an item. */
-const DRAG_SLOP = 4;
+const DRAG_SLOP = 8;
 
 /** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
 const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
@@ -151,6 +151,7 @@ export function ContextMenu() {
   const wasOpen = useRef(false);
   useEffect(() => {
     if (live) { wasOpen.current = true; return; }
+    pressedAt = null;
     if (!wasOpen.current) return;
     wasOpen.current = false;
     const el = returnFocus;
@@ -172,14 +173,20 @@ export function ContextMenu() {
       rightHeld = pressedAt = null;
       if (!from || !useApp.getState().contextMenu) return;
       if (Math.hypot(e.clientX - from.x, e.clientY - from.y) <= DRAG_SLOP) return;
-      const item = (e.target as Element | null)?.closest?.<HTMLElement>("[data-context-layer] [role^='menuitem']");
-      item?.click();
+      // Not the row the menu opened under (clamped to the window's edge, it can open over the
+      // pointer): a wobble while releasing an ordinary right-click mustn't run it.
+      const item = menuItemAt(e.target);
+      if (item && item !== menuItemAt(document.elementFromPoint(from.x, from.y))) item.click();
     };
+    // A release outside the window never arrives: start over.
+    const onBlur = () => { rightHeld = pressedAt = null; };
     window.addEventListener("mousedown", onDown, true);
     window.addEventListener("mouseup", onUp, true);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("mouseup", onUp, true);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -523,6 +530,11 @@ function Header({ header }: { header: MenuHeader }) {
       </div>
     </div>
   );
+}
+
+/** The menu row (of the menu or its submenu) an element is in. */
+function menuItemAt(el: EventTarget | null): HTMLElement | null {
+  return el instanceof Element ? el.closest<HTMLElement>("[data-context-layer] [role^='menuitem']") : null;
 }
 
 /** The first enabled cell of a freshly drawn menu (its cells carry ids in order). */
