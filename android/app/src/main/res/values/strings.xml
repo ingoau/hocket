@@ -933,6 +933,11 @@
     <string name="menu_downloaded">Downloaded</string>
     <string name="menu_pinned">Pinned</string>
     <string name="menu_song_info">Song info</string>
+    <string name="menu_share_navidrome">Navidrome</string>
+    <string name="menu_share_song_link">Song.link</string>
+    <string name="menu_open_genius">Open in Genius</string>
+    <string name="menu_share_file">File</string>
+    <string name="toast_share_failed">Couldn\'t share</string>
     <string name="menu_album_info">Album info</string>
     <string name="menu_remove_from">Remove from %1$s</string>
     <string name="menu_remove_n_from">Remove %1$d from %2$s</string>

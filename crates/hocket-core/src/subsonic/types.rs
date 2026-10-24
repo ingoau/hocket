@@ -78,6 +78,9 @@ pub struct SubsonicResponse {
     pub play_queue: Option<PlayQueue>,
     #[serde(default)]
     pub now_playing: Option<NowPlaying>,
+    /// `createShare`: the public links just created.
+    #[serde(default)]
+    pub shares: Option<Shares>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -89,6 +92,23 @@ pub struct ErrorBody {
     pub message: String,
     #[serde(default)]
     pub help_url: Option<String>,
+}
+
+/// `createShare` answer: one wrapper, a list of public links.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shares {
+    #[serde(default)]
+    pub share: Vec<Share>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Share {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]

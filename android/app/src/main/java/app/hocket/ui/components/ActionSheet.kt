@@ -25,6 +25,8 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Pin
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
+import app.hocket.share.ShareRequest
+import app.hocket.share.ShareRequestEffect
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.icons.HocketIcons
@@ -98,13 +100,15 @@ fun ActionSheet(
     var sheetOpen by remember { mutableStateOf(true) }
     var picker by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf<Album?>(null) }
+    var share by remember { mutableStateOf<ShareRequest?>(null) }
     val current = loaded
     if (sheetOpen && current != null) {
         val (subject, album, actions) = current
         MenuSheet(
             subject, target, actions,
-            onDismiss = { sheetOpen = false; if (!picker && info == null) onDismiss() },
+            onDismiss = { sheetOpen = false; if (share == null && !picker && info == null) onDismiss() },
             onAddToPlaylist = { picker = true },
+            onShare = { share = ShareRequest(it, subject, target) },
             onGoToAlbum = onGoToAlbum,
             onGoToArtist = onGoToArtist ?: subject.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
             onInfo = album?.let { a -> { info = a } },
@@ -112,6 +116,7 @@ fun ActionSheet(
             tag = "itemMenu",
         )
     }
+    ShareRequestEffect(share) { share = null; onDismiss() }
     if (picker) PlaylistPicker(target = target, onDismiss = { picker = false; onDismiss() })
     info?.let { a ->
         ModalBottomSheet(onDismissRequest = { info = null; onDismiss() }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("itemMenu.infoSheet")) {

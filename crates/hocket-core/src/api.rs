@@ -2312,6 +2312,15 @@ pub enum Query {
     ConfigDocument {
         include_secrets: bool,
     },
+    /// `createShare` for these song, album or playlist ids. The answer is the public URL.
+    CreateShare {
+        ids: Vec<String>,
+    },
+    /// The original audio file for a track, on disk, so the platform can hand it to the share sheet.
+    /// A completed download is reused; otherwise the original is fetched into the cache.
+    ExportAudio {
+        track_id: TrackId,
+    },
 }
 
 #[typeshare]
@@ -2383,6 +2392,24 @@ pub struct FilterPreview {
     pub sample: Vec<TrackSummary>,
 }
 
+/// A public Navidrome share (`createShare`).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedShare {
+    pub url: String,
+}
+
+/// A track file written for the platform to share. `path` stays in the main process on desktop.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedAudio {
+    pub path: String,
+    pub file_name: String,
+    pub content_type: String,
+}
+
 /// Everything a UI needs on attach.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2451,6 +2478,10 @@ pub enum QueryResult {
     Path(Option<String>),
     Source(Option<MediaSource>),
     Text(String),
+    /// A Navidrome public share URL (`createShare`). None when the server refused or there is no session.
+    Share(Option<CreatedShare>),
+    /// A track's original file, ready to hand to the platform share sheet.
+    AudioFile(Option<ExportedAudio>),
 }
 
 // ---------------------------------------------------------------------------

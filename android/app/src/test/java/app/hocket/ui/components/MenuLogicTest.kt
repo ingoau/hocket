@@ -7,6 +7,9 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.PlaylistEntryRef
 import app.hocket.core.api.PlaylistMembership
+import app.hocket.share.geniusSearch
+import app.hocket.share.shareChoices
+import app.hocket.share.songLinkSearch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -30,7 +33,7 @@ class MenuLogicTest {
         val l = menuLayout(songActions + d(ActionIds.REMOVE_FROM_QUEUE, enabled = false), MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true)
         assertEquals(listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER), l.play.map { it.id })
         assertTrue(l.love != null && l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", ActionIds.GO_TO_ALBUM), l.primary.map { it.key })
+        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", "genius", ActionIds.GO_TO_ALBUM), l.primary.map { it.key })
         // Unplaced registry actions are not lost: they follow under More (ui-only ones it can't perform are not).
         assertEquals(listOf("pin", ActionIds.GO_TO_ARTIST, "info", "somethingNew"), l.more.map { it.key })
         // Context-only actions show where the core enables them.
@@ -43,7 +46,7 @@ class MenuLogicTest {
         val remove = SongMenuExtra("Remove from Late night", app.hocket.ui.icons.HocketIcons.Filled.Remove, {}, destructive = true, testTag = "rm", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
         val sleep = SongMenuExtra("Sleep timer", app.hocket.ui.icons.HocketIcons.Filled.Bedtime, {}, testTag = "sleep")
         val l = menuLayout(songActions, MenuKind.Song, listOf(remove, sleep))
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "sleep"), l.primary.map { it.key })
+        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", "genius", "sleep"), l.primary.map { it.key })
         assertEquals(listOf("rm"), l.destructive.map { it.key })
     }
 
@@ -51,7 +54,7 @@ class MenuLogicTest {
     fun theAlbumMenuHasNoStarsAndGoesToTheArtist() {
         val l = menuLayout(songActions.filter { it.id != ActionIds.GO_TO_ALBUM && it.id != ActionIds.REMOVE_FROM_PLAYLIST && it.id != "somethingNew" }, MenuKind.Album, canGoToArtist = true, hasInfo = true)
         assertTrue(!l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", ActionIds.GO_TO_ARTIST), l.primary.map { it.key })
+        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", ActionIds.GO_TO_ARTIST), l.primary.map { it.key })
         assertEquals(listOf("pin", "info", "rate"), l.more.map { it.key })
     }
 
@@ -59,8 +62,21 @@ class MenuLogicTest {
     fun severalSongsKeepThePlayGroupStarsAndDownload() {
         val l = menuLayout(songActions.filter { it.id != "somethingNew" }, MenuKind.Songs)
         assertTrue(l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download"), l.primary.map { it.key })
+        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share"), l.primary.map { it.key })
         assertEquals(emptyList<String>(), l.more.map { it.key })
+    }
+
+    @Test
+    fun shareOffersALinkForAnAlbumAndTheFileOnlyForOneSong() {
+        assertTrue(shareChoices(MenuKind.Song).file && shareChoices(MenuKind.Song).songLink)
+        assertTrue(!shareChoices(MenuKind.Songs).file && !shareChoices(MenuKind.Songs).songLink && shareChoices(MenuKind.Songs).navidrome)
+        assertTrue(shareChoices(MenuKind.Album).songLink && !shareChoices(MenuKind.Album).file)
+        assertTrue(shareChoices(MenuKind.Artist).songLink && !shareChoices(MenuKind.Artist).navidrome)
+        assertTrue(shareChoices(MenuKind.Playlist).navidrome && !shareChoices(MenuKind.Playlist).songLink)
+        assertTrue(!shareChoices(MenuKind.Other).any)
+        assertEquals("https://song.link/s/Boards%20of%20Canada%20Roygbiv", songLinkSearch("Boards of Canada Roygbiv"))
+        assertEquals("https://genius.com/search?q=%22Roygbiv%22%20%22Boards%20of%20Canada%22", geniusSearch("Roygbiv", "Boards of Canada"))
+        assertNull(geniusSearch("  ", "Boards of Canada"))
     }
 
     @Test
