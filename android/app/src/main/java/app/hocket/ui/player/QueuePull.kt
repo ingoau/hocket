@@ -48,8 +48,12 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
     private var crossed = false
     private var settling: Job? = null
 
-    /** A pull under way (or springing back). */
-    val active: Boolean get() = raw > 0f
+    /**
+     * A pull under the finger: lifted and not springing back or easing out. Only a held pull takes a
+     * downward drag or a fling, so the queue's own list (just opened) or the page is never blocked
+     * while the lift settles.
+     */
+    val held: Boolean get() = raw > 0f && settling?.isActive != true
 
     /** How far the artwork is lifted (px, upwards): [raw] rubber-banded towards [maxLift]; none with reduced motion. */
     fun lift(): Float = if (reduced || maxLift <= 0f) 0f else maxLift * (1f - exp(-raw / maxLift))
@@ -62,7 +66,7 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
      * give back a lift. Returns what it consumed (in [dy]'s sign).
      */
     fun pull(dy: Float): Float {
-        if (dy == 0f || (dy < 0f && !enabled()) || (dy > 0f && raw <= 0f)) return 0f
+        if (dy == 0f || (dy < 0f && !enabled()) || (dy > 0f && !held)) return 0f
         settling?.cancel()
         val before = raw
         raw = (raw - dy).coerceAtLeast(0f)
@@ -76,7 +80,7 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
 
     /** The finger left with [velocity] (px/s, negative = up): open the queue or spring back. */
     fun release(velocity: Float) {
-        if (!active) return
+        if (!held) return
         val open = enabled() && (raw > commit || velocity < -flingVelocity)
         crossed = false
         if (open) {
@@ -89,6 +93,17 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
         settling = scope.launch { animate(from, 0f, animationSpec = if (open) Motion.mode else Motion.snap) { v, _ -> raw = v } }
     }
 
+    /**
+     * Drops any lift at once: the sheet started moving or left the open player (back, the collapse
+     * button), or a drag ended without a release (cancelled), so the artwork never stays lifted.
+     */
+    fun reset() {
+        settling?.cancel()
+        settling = null
+        crossed = false
+        raw = 0f
+    }
+
     override fun applyToScroll(delta: Offset, source: NestedScrollSource, performScroll: (Offset) -> Offset): Offset {
         // Dragging down gives back the lift before the sheet moves.
         val back = if (delta.y > 0f) pull(delta.y) else 0f
@@ -99,7 +114,7 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
     }
 
     override suspend fun applyToFling(velocity: Velocity, performFling: suspend (Velocity) -> Velocity) {
-        if (!active) {
+        if (!held) {
             performFling(velocity)
             return
         }
@@ -108,7 +123,7 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
         release(velocity.y)
     }
 
-    override val isInProgress: Boolean get() = active
+    override val isInProgress: Boolean get() = raw > 0f
 
     companion object {
         val MAX_LIFT: Dp = 40.dp

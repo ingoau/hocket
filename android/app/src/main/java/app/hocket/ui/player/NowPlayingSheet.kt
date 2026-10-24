@@ -34,6 +34,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
@@ -470,22 +471,27 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // or up while the sheet is still opening) moves the sheet, and flings settle it.
         val nested = remember(state) {
             object : NestedScrollConnection {
+                // The page scrolled in this gesture: the rest of it (and its fling) stays the page's,
+                // so a flick that runs into the end of a short screen's scroll never opens the queue.
+                var pageScrolled = false
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                     val d = available.y
                     if (source != NestedScrollSource.UserInput) return Offset.Zero
                     // Dragging down after a swipe up gives back the artwork's lift before the page scrolls.
-                    if (d > 0 && queuePull.active) return Offset(0f, queuePull.pull(d))
+                    if (d > 0 && queuePull.held) return Offset(0f, queuePull.pull(d))
                     return if (d < 0 && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
                 }
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                     if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    if (consumed.y != 0f) pageScrolled = true
                     val moved = state.draggable.dispatchRawDelta(available.y)
                     // Up past the open sheet: the swipe to the queue.
                     val left = available.y - moved
-                    return Offset(0f, moved + if (left < 0f) queuePull.pull(left) else 0f)
+                    return Offset(0f, moved + if (left < 0f && !pageScrolled) queuePull.pull(left) else 0f)
                 }
                 override suspend fun onPreFling(available: Velocity): Velocity {
-                    if (queuePull.active) { queuePull.release(available.y); return available }
+                    pageScrolled = false
+                    if (queuePull.held) { queuePull.release(available.y); return available }
                     return if (available.y < 0 && state.progress < 1f) { state.settle(available.y); available } else Velocity.Zero
                 }
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
@@ -581,8 +587,18 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // The lift eases out as the artwork flies to the thumbnail (and is gone in another mode).
         hero.lift = { queuePull.lift() * (1f - modeAnim.value) }
         hero.liftFraction = { queuePull.fraction() * (1f - modeAnim.value) }
-        queuePull.enabled = { state.mode == PlayerMode.Artwork && state.progress >= 1f && !carousel.busy && !state.draggable.isAnimationRunning }
+        // Only from a player already resting open: an expand drag that carries on past the top
+        // (settledValue stays Collapsed until it ends) never turns into a pull.
+        queuePull.enabled = {
+            state.mode == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded &&
+                !carousel.busy && !state.draggable.isAnimationRunning
+        }
         queuePull.onOpen = { state.mode = PlayerMode.Queue }
+        // The sheet moving (a collapse by the button, back or the scrim) drops any lift, so the
+        // artwork in flight takes over from an unlifted one.
+        LaunchedEffect(queuePull, state) {
+            snapshotFlow { state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded }.collect { open -> if (!open) queuePull.reset() }
+        }
         val sheetTitle = stringResource(R.string.player_sheet_title)
         val collapseLabel = stringResource(R.string.player_collapse)
         val expandLabel = stringResource(R.string.player_expand)
