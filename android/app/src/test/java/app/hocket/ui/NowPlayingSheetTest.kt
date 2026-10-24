@@ -281,6 +281,38 @@ class NowPlayingSheetTest {
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id != before }
     }
 
+    /** A vertical drag from the middle of [tag], [by] px up over [millis]. */
+    private fun dragUp(tag: String, by: Float, millis: Long) {
+        compose.onNodeWithTag(tag).performTouchInput { swipe(start = center, end = center - Offset(0f, by), durationMillis = millis) }
+    }
+
+    /**
+     * Swiping up on the open player opens the queue; a short slow pull springs back; and the mini
+     * player's long expand swipe, which carries on past the top, never does (the mode would stick).
+     */
+    @Test
+    fun swipingUpOnTheOpenPlayerOpensTheQueue() {
+        val core = TestCore()
+        start(core)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            assertTrue("the expand swipe opened the queue", modes.none { modeSelected(it) })
+            val density = compose.density.density
+            // Short and slow: under the commit travel, so it springs back to the artwork.
+            dragUp("player.artwork", 30f * density, 2_000)
+            repeat(60) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("a short pull opened the queue", modes.none { modeSelected(it) })
+            // Past the commit travel: the queue.
+            dragUp("player.artwork", 160f * density, 600)
+            advanceUntil("the queue") { modeSelected("queue") && displayed("queue.list") }
+            assertTrue(sheetOpen())
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
     @Test
     fun theModeStaysAcrossCollapsingAndExpandingAndTheThumbnailBringsTheArtworkBack() {
         val core = TestCore()

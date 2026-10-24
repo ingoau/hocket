@@ -1078,6 +1078,8 @@ internal fun PlayerArtwork(
             .graphicsLayer {
                 if (hidden() || hero.bigSlot().width <= 0f) { alpha = 0f; return@graphicsLayer }
                 translationX = hero.swipe()
+                // Swiping up to the queue lifts the artwork (and its neighbours, off screen).
+                translationY = -hero.lift()
             }
             .then(with(carousel) {
                 Modifier.gesture(client, scope, haptics, enabled = !thumbMode, reduced = reduced, rubberThreshold = threshold)
@@ -1099,6 +1101,9 @@ internal fun PlayerArtwork(
         Box(
             Modifier.fillMaxSize().graphicsLayer {
                 val f = modeFraction()
+                // A card shrinks a little as it lifts towards the queue (the cover only: the
+                // neighbours stay a page away, off screen).
+                if (!hero.immersive) (1f - QueuePull.SHRINK * hero.liftFraction()).let { scaleX = it; scaleY = it }
                 shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
                 shadowElevation = hero.elevationFor(f, this)

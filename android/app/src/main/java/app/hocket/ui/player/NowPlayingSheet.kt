@@ -34,6 +34,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
@@ -63,6 +64,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -256,6 +258,9 @@ internal class HeroGeometry {
     var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
     var swipe: () -> Float = { 0f }
+    /** The swipe up to the queue ([QueuePull]): the artwork's lift (px, upwards) and its share of the most (read in layer lambdas). */
+    var lift: () -> Float = { 0f }
+    var liftFraction: () -> Float = { 0f }
 
     fun measure(coordinates: LayoutCoordinates): Rect {
         val r = root ?: return Rect.Zero
@@ -413,6 +418,16 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             state.velocityThreshold = with(density) { NowPlayingSheetState.VELOCITY_THRESHOLD.toPx() }
             state.draggable.updateAnchors(DraggableAnchors { SheetValue.Collapsed at collapsedOffset; SheetValue.Expanded at 0f }, state.draggable.targetValue)
         }
+        val haptics = LocalHapticFeedback.current
+        // Swiping up on the open player opens the queue (see [QueuePull]).
+        val queuePull = remember { QueuePull(scope) }
+        queuePull.haptics = haptics
+        queuePull.reduced = reducedMotion
+        with(density) {
+            queuePull.maxLift = QueuePull.MAX_LIFT.toPx()
+            queuePull.commit = QueuePull.COMMIT.toPx()
+            queuePull.flingVelocity = QueuePull.FLING.toPx()
+        }
         val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * NowPlayingSheetState.POSITIONAL_THRESHOLD }, animationSpec = Motion.sheet)
 
         // Predictive back drives the sheet down with the gesture, then settles either way.
@@ -456,13 +471,27 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // or up while the sheet is still opening) moves the sheet, and flings settle it.
         val nested = remember(state) {
             object : NestedScrollConnection {
+                // The page scrolled in this gesture: the rest of it (and its fling) stays the page's,
+                // so a flick that runs into the end of a short screen's scroll never opens the queue.
+                var pageScrolled = false
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                     val d = available.y
-                    return if (d < 0 && source == NestedScrollSource.UserInput && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    // Dragging down after a swipe up gives back the artwork's lift before the page scrolls.
+                    if (d > 0 && queuePull.held) return Offset(0f, queuePull.pull(d))
+                    return if (d < 0 && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
                 }
-                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-                    if (source == NestedScrollSource.UserInput) Offset(0f, state.draggable.dispatchRawDelta(available.y)) else Offset.Zero
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    if (consumed.y != 0f) pageScrolled = true
+                    val moved = state.draggable.dispatchRawDelta(available.y)
+                    // Up past the open sheet: the swipe to the queue.
+                    val left = available.y - moved
+                    return Offset(0f, moved + if (left < 0f && !pageScrolled) queuePull.pull(left) else 0f)
+                }
                 override suspend fun onPreFling(available: Velocity): Velocity {
+                    pageScrolled = false
+                    if (queuePull.held) { queuePull.release(available.y); return available }
                     return if (available.y < 0 && state.progress < 1f) { state.settle(available.y); available } else Velocity.Zero
                 }
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
@@ -555,6 +584,21 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             if (reducedMotion || !state.isExpanded) modeAnim.snapTo(target) else modeAnim.animateTo(target, Motion.mode)
         }
         hero.modeFraction = { modeAnim.value }
+        // The lift eases out as the artwork flies to the thumbnail (and is gone in another mode).
+        hero.lift = { queuePull.lift() * (1f - modeAnim.value) }
+        hero.liftFraction = { queuePull.fraction() * (1f - modeAnim.value) }
+        // Only from a player already resting open: an expand drag that carries on past the top
+        // (settledValue stays Collapsed until it ends) never turns into a pull.
+        queuePull.enabled = {
+            state.mode == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded &&
+                !carousel.busy && !state.draggable.isAnimationRunning
+        }
+        queuePull.onOpen = { state.mode = PlayerMode.Queue }
+        // The sheet moving (a collapse by the button, back or the scrim) drops any lift, so the
+        // artwork in flight takes over from an unlifted one.
+        LaunchedEffect(queuePull, state) {
+            snapshotFlow { state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded }.collect { open -> if (!open) queuePull.reset() }
+        }
         val sheetTitle = stringResource(R.string.player_sheet_title)
         val collapseLabel = stringResource(R.string.player_collapse)
         val expandLabel = stringResource(R.string.player_expand)
@@ -590,7 +634,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     shadowElevation = cardElevation * (1f - p * 3f).coerceIn(0f, 1f)
                 }
                 .nestedScroll(nested)
-                .anchoredDraggable(state.draggable, Orientation.Vertical, flingBehavior = fling)
+                .anchoredDraggable(state.draggable, Orientation.Vertical, overscrollEffect = queuePull, flingBehavior = fling)
                 // The drag has non-gesture equivalents: expand from the mini player, and collapse or
                 // dismiss the open sheet (also the collapse button and back).
                 .semantics {
@@ -828,6 +872,16 @@ private fun Modifier.continuationLayer(
         translationY = t.y
     } else {
         translationX = hero.swipe() + offsetSpans * span()
+        // Rising with the artwork as it lifts towards the queue; the continuation (not the top
+        // strip, which is part of the artwork) stretches below the artwork's bottom edge, so it
+        // stays joined to the artwork there and still reaches the screen's bottom.
+        val lift = hero.lift()
+        translationY = -lift
+        val seam = big.bottom
+        if (feather && lift > 0f && seam > 0f && seam < size.height) {
+            transformOrigin = TransformOrigin(0f, seam / size.height)
+            scaleY = (size.height - seam + lift) / (size.height - seam)
+        }
     }
 }.drawWithContent {
     drawContent()
