@@ -173,6 +173,37 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("hold right, drag onto an item and release to run it", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlaylist(page, "Slow Sundays");
+    const menu = page.getByTestId("context-menu");
+    const box = (await page.getByTestId("track-row").first().boundingBox())!;
+    const at = { x: box.x + onTitle.x, y: box.y + onTitle.y };
+    // Pressed and released in place: the menu stays open for a click.
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down({ button: "right" });
+    await expect(menu).toBeVisible();
+    await page.mouse.up({ button: "right" });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    // Held and dragged onto Love: releasing there loves the song and closes the menu.
+    await page.mouse.down({ button: "right" });
+    await expect(menu).toBeVisible();
+    const love = menu.getByRole("menuitemcheckbox", { name: /Love/ });
+    await expect(love).toHaveAttribute("aria-checked", "false");
+    // (Once its entrance has played: it opens scaled.)
+    await page.waitForTimeout(400);
+    const l = (await love.boundingBox())!;
+    await page.mouse.move(l.x + l.width / 2, l.y + l.height / 2, { steps: 5 });
+    await page.mouse.up({ button: "right" });
+    await expect(menu).toHaveCount(0);
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(love).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+  });
+
   test("an album's menu has Album info; the app's own menus keep their icons", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

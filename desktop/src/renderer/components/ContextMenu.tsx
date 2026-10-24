@@ -8,6 +8,8 @@
 // and the stars, Home/End jump, Enter/Space run, → (or Enter) opens the submenu, a letter jumps to
 // the next item starting with it, a shortcut shown in the menu runs on the menu's item, Escape/Tab
 // close and focus returns to whatever opened it.
+// Pointer: like a native menu, the right button can be held, dragged onto an item and released to
+// run it; released where it was pressed, the menu stays open for a click.
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget } from "@core/api";
 import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
@@ -31,6 +33,13 @@ import { buildMenu, loveToast, nextRating, rateToast, removeToast, starLabel, ty
 let returnFocus: HTMLElement | null = null;
 let openedByKeyboard = false;
 
+/** Where the right button went down, while it's held. */
+let rightHeld: { x: number; y: number } | null = null;
+/** The menu opened under a held right button: releasing it on an item (after a drag) runs that item. */
+let pressedAt: { x: number; y: number } | null = null;
+/** How far the pointer must move from the press before a release picks an item. */
+const DRAG_SLOP = 4;
+
 /** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
 const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
 
@@ -48,6 +57,8 @@ export async function openContextMenu(e: { clientX: number; clientY: number; pre
   const [all, facts] = await Promise.all([none ? [] : fetchActions("contextMenu", target), none ? undefined : fetchMenuFacts(target, context)]);
   const actions = all.filter((a) => !(LIBRARY_PIN_IDS.has(a.id) && !a.enabled));
   if (!actions.length && !items?.length) return;
+  // Still held once the actions are in (Linux and macOS open on the press; Windows on the release).
+  pressedAt = keyboard ? null : rightHeld;
   useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, items, context, keyboard, facts });
 }
 
@@ -151,6 +162,26 @@ export function ContextMenu() {
     handOnFocus(null);
     if (el && el.isConnected && focusLost) el.focus({ preventScroll: true });
   }, [live]);
+
+  // Hold right, drag, release: the item under the release runs, by the same click a left click sends.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (e.button === 2) rightHeld = { x: e.clientX, y: e.clientY }; };
+    const onUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      const from = pressedAt;
+      rightHeld = pressedAt = null;
+      if (!from || !useApp.getState().contextMenu) return;
+      if (Math.hypot(e.clientX - from.x, e.clientY - from.y) <= DRAG_SLOP) return;
+      const item = (e.target as Element | null)?.closest?.<HTMLElement>("[data-context-layer] [role^='menuitem']");
+      item?.click();
+    };
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("mouseup", onUp, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("mouseup", onUp, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!live) return;
