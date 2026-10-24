@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,12 +45,20 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.DeviceInfo
+import app.hocket.core.api.DiagnosticsSourceState
+import app.hocket.core.api.DiagnosticsSourceStatus
+import app.hocket.core.api.Platform
+import app.hocket.core.api.RoomDiagnosticsStatus
+import app.hocket.core.api.RoomDiagnosticsUnavailable
 import app.hocket.core.client.CoreClient
 import app.hocket.diagnostics.DiagnosticsBundle
 import app.hocket.diagnostics.DiagnosticsReport
@@ -61,6 +71,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /** Advanced: developer mode (detailed logs, shake to open diagnostics) and the developer diagnostics page. */
 @Composable
@@ -80,9 +91,10 @@ private const val CLIPBOARD_MAX_CHARS = 100_000
 
 /**
  * Developer diagnostics: the device and app, the core's diagnostics and the newest log lines, with
- * Share (the share sheet, as a text file), Save (a document the user picks) and Copy. Every action
- * collects a fresh report, with the other devices' in the Connect room when that is switched on
- * (developer mode only). Reached from Advanced, or by shaking the phone in developer mode.
+ * Share (the share sheet, as a text file), Save (a document the user picks) and Copy. With developer
+ * mode on, the page asks the other devices in the Connect room and its coordinator for theirs as it
+ * opens (and on Refresh), shows where each answer stands, and holds the actions until they are in:
+ * every action then carries them. Reached from Advanced, or by shaking the phone in developer mode.
  * [collect] and [collectOthers] are swappable for tests (no logcat or native core under Robolectric).
  */
 @Composable
@@ -96,14 +108,17 @@ fun DeveloperDiagnosticsScreen(
     val scope = rememberCoroutineScope()
     val snackbar = LocalAppSnackbar.current
     val devMode = setting(SettingKeys.DEVELOPER_MODE)
+    val on = devMode.bool ?: false
     var report by remember { mutableStateOf<DiagnosticsReport?>(null) }
     var refreshes by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var allDevices by remember { mutableStateOf(false) }
-    // Other devices only ever answer while developer mode is on here too.
-    val withOthers = (devMode.bool ?: false) && allDevices
-    /** The running action also asks the other devices (as it started, whatever the switches say now). */
-    var collectingOthers by remember { mutableStateOf(false) }
+    /** The other devices' bundles, once collected; every action carries them. */
+    var others by remember { mutableStateOf<String?>(null) }
+    var collecting by remember { mutableStateOf(false) }
+    var collections by remember { mutableIntStateOf(0) }
+    /** The collection shown before this page asked again: never shown as this one's. */
+    var staleId by remember { mutableStateOf<String?>(null) }
+    val roomStatus by client.roomDiagnostics.collectAsState()
     LaunchedEffect(refreshes) {
         report = try {
             collect(context, client)
@@ -113,6 +128,27 @@ fun DeveloperDiagnosticsScreen(
             null
         }
     }
+    // As the page opens, on Refresh, and whenever developer mode comes on (other devices only ever
+    // answer while it is on here too).
+    LaunchedEffect(on, collections) {
+        others = null
+        if (!on) {
+            collecting = false
+            return@LaunchedEffect
+        }
+        staleId = client.roomDiagnostics.value?.requestId
+        collecting = true
+        others = try {
+            collectOthers(client)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            "Other devices: not collected (${e.message ?: e.javaClass.simpleName})\n"
+        }
+        collecting = false
+    }
+    val waiting = on && collecting
+    val enabled = !busy && !waiting
 
     val notify: (String) -> Unit = { message -> snackbar?.let { s -> s.launch { s.host.showSnackbar(message) } } }
     val savedText = stringResource(R.string.developer_saved)
@@ -121,12 +157,11 @@ fun DeveloperDiagnosticsScreen(
     val copiedTruncatedText = stringResource(R.string.developer_copied_truncated)
     val copyFailedText = stringResource(R.string.developer_copy_failed)
     val shareTitle = stringResource(R.string.developer_share_title)
-    /** Collects a fresh report, runs [action] on it, then refreshes the preview to match. */
+    /** Collects a fresh report (with the other devices' bundles), runs [action] on it, then refreshes the preview to match. */
     fun withFresh(action: suspend (DiagnosticsReport) -> Unit) {
-        if (busy) return
+        if (!enabled) return
         busy = true
-        val others = withOthers
-        collectingOthers = others
+        val o = if (on) others else null
         scope.launch {
             try {
                 // Let the previous report go first: two of them (and the bundle text) at once is a lot
@@ -135,7 +170,7 @@ fun DeveloperDiagnosticsScreen(
                 val here = collect(context, client)
                 report = here
                 // copy() counts the lines again: off the main thread, the logs can be tens of megabytes.
-                val fresh = if (others) collectOthers(client).let { o -> withContext(Dispatchers.Default) { here.copy(otherDevices = o) } } else here
+                val fresh = if (o != null) withContext(Dispatchers.Default) { here.copy(otherDevices = o) } else here
                 action(fresh)
             } catch (e: CancellationException) {
                 throw e
@@ -145,7 +180,6 @@ fun DeveloperDiagnosticsScreen(
                 notify(failedText + ": " + (e.message ?: e.javaClass.simpleName))
             } finally {
                 busy = false
-                collectingOthers = false
             }
         }
     }
@@ -164,7 +198,6 @@ fun DeveloperDiagnosticsScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
-        val on = devMode.bool ?: false
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = if (on) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
@@ -178,29 +211,11 @@ fun DeveloperDiagnosticsScreen(
                 Switch(checked = on, onCheckedChange = { devMode.setBool(it) }, modifier = Modifier.testTag("developer.modeSwitch"))
             }
         }
-        if (on) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("developer.allDevicesCard"),
-            ) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(HocketIcons.Filled.Devices, null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.developer_all_devices), style = MaterialTheme.typography.bodyMedium)
-                        Text(stringResource(R.string.developer_all_devices_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(checked = allDevices, onCheckedChange = { allDevices = it }, modifier = Modifier.testTag("developer.allDevicesSwitch"))
-                }
-            }
-        }
         FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { withFresh { DiagnosticsBundle.share(context, it, shareTitle) } }, enabled = !busy, modifier = Modifier.testTag("developer.share")) {
+            Button(onClick = { withFresh { DiagnosticsBundle.share(context, it, shareTitle) } }, enabled = enabled, modifier = Modifier.testTag("developer.share")) {
                 Icon(HocketIcons.Filled.Share, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_share))
             }
-            FilledTonalButton(onClick = { withFresh { pendingSave = it; saveLauncher.launch(it.fileName) } }, enabled = !busy, modifier = Modifier.testTag("developer.save")) {
+            FilledTonalButton(onClick = { withFresh { pendingSave = it; saveLauncher.launch(it.fileName) } }, enabled = enabled, modifier = Modifier.testTag("developer.save")) {
                 Icon(HocketIcons.Filled.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_save))
             }
             FilledTonalButton(onClick = {
@@ -220,19 +235,19 @@ fun DeveloperDiagnosticsScreen(
                     val copied = runCatching { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(it.fileName, clip)) }.isSuccess
                     notify(if (!copied) copyFailedText else if (truncated) copiedTruncatedText else copiedText)
                 }
-            }, enabled = !busy, modifier = Modifier.testTag("developer.copy")) {
+            }, enabled = enabled, modifier = Modifier.testTag("developer.copy")) {
                 Icon(HocketIcons.Filled.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_copy))
             }
-            OutlinedButton(onClick = { refreshes++ }, enabled = !busy, modifier = Modifier.testTag("developer.refresh")) {
+            OutlinedButton(onClick = { refreshes++; if (on) collections++ }, enabled = enabled, modifier = Modifier.testTag("developer.refresh")) {
                 Icon(HocketIcons.Filled.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_refresh))
             }
         }
-        if (busy && collectingOthers) {
+        if (waiting) {
             Text(
-                stringResource(R.string.developer_collecting),
+                stringResource(R.string.developer_wait_for_others),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }.testTag("developer.collecting"),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("developer.collecting"),
             )
         }
         val r = report
@@ -244,6 +259,8 @@ fun DeveloperDiagnosticsScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("developer.stats"),
             )
         }
+        val devices by client.devices.collectAsState()
+        RoomCard(on, waiting, roomStatus?.takeIf { it.requestId != staleId }, devices)
         Block(stringResource(R.string.developer_environment), r?.head?.trimEnd() ?: stringResource(R.string.developer_loading), "developer.head")
         Block(
             stringResource(R.string.developer_log),
@@ -251,6 +268,130 @@ fun DeveloperDiagnosticsScreen(
             "developer.log",
             note = r?.let { stringResource(R.string.developer_log_tail, DiagnosticsReport.PREVIEW_LINES) },
         )
+    }
+}
+
+/** The other devices and the coordinator: who was asked, and where each answer stands. */
+@Composable
+private fun RoomCard(on: Boolean, collecting: Boolean, status: RoomDiagnosticsStatus?, devices: List<DeviceInfo>) {
+    val running = collecting || (status != null && !status.done)
+    val settled = status?.devices?.count { it.state != DiagnosticsSourceState.Waiting && it.state != DiagnosticsSourceState.Receiving } ?: 0
+    val headline = when {
+        !on || status?.unavailable == RoomDiagnosticsUnavailable.DeveloperModeOff -> stringResource(R.string.developer_others_off)
+        status?.unavailable == RoomDiagnosticsUnavailable.NotConnected -> stringResource(R.string.developer_others_not_connected)
+        status == null || (running && !status.roomAnswered) -> stringResource(R.string.developer_others_asking)
+        !status.roomAnswered -> stringResource(R.string.developer_others_no_room)
+        running -> stringResource(R.string.developer_others_collecting, settled, status.devices.size)
+        status.devices.isEmpty() -> stringResource(R.string.developer_others_none)
+        else -> stringResource(
+            R.string.developer_others_done,
+            status.devices.count { it.state == DiagnosticsSourceState.Received },
+            status.devices.size,
+            String.format(Locale.getDefault(), "%.1f", status.elapsedMs / 1000),
+        )
+    }
+    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("developer.room")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.developer_others), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("developer.roomStatus")) {
+                if (running && on) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(headline, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(stringResource(R.string.developer_others_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (on && status != null && status.unavailable == null) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    CoordinatorRow(status, running)
+                    for (d in status.devices) {
+                        val platform = devices.firstOrNull { it.id == d.id }?.platform
+                        val icon = when (platform) {
+                            null -> HocketIcons.Filled.Devices
+                            Platform.Android -> HocketIcons.Filled.PhoneAndroid
+                            else -> HocketIcons.Filled.Computer
+                        }
+                        SourceRow(icon, d.name, d, detail = null, tag = "developer.source.${d.id}")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoordinatorRow(status: RoomDiagnosticsStatus, running: Boolean) {
+    val c = status.coordinator
+    val name = stringResource(R.string.developer_coordinator)
+    if (c != null) {
+        val detail = if (c.state == DiagnosticsSourceState.Received) stringResource(if (status.coordinatorLog) R.string.developer_coordinator_log else R.string.developer_coordinator_version) else null
+        SourceRow(HocketIcons.Filled.Dns, name, c, detail, "developer.source.coordinator")
+        return
+    }
+    // It answers ahead of the room: once the room has, there is none.
+    val (detail, chip, tone) = when {
+        status.roomAnswered -> Triple(R.string.developer_coordinator_none, R.string.developer_state_none, ChipTone.Neutral)
+        running -> Triple(R.string.developer_coordinator_waiting, R.string.developer_state_waiting, ChipTone.Neutral)
+        else -> Triple(R.string.developer_others_no_room, R.string.developer_state_no_answer, ChipTone.Bad)
+    }
+    SourceRowLayout(HocketIcons.Filled.Dns, name, stringResource(detail), "developer.source.coordinator") {
+        StateChip(stringResource(chip), tone, progress = null)
+    }
+}
+
+private enum class ChipTone { Neutral, Good, Bad }
+
+@Composable
+private fun SourceRow(icon: ImageVector, name: String, s: DiagnosticsSourceStatus, detail: String?, tag: String) {
+    val parts = s.parts.toInt()
+    val received = s.partsReceived.toInt()
+    val (label, tone) = when (s.state) {
+        DiagnosticsSourceState.Waiting -> stringResource(R.string.developer_state_waiting) to ChipTone.Neutral
+        DiagnosticsSourceState.Receiving -> stringResource(R.string.developer_state_receiving, received, parts) to ChipTone.Neutral
+        DiagnosticsSourceState.Received -> stringResource(R.string.developer_state_received, formatBytes(s.bytes.toDouble())) to ChipTone.Good
+        DiagnosticsSourceState.Declined -> stringResource(R.string.developer_state_declined) to ChipTone.Bad
+        DiagnosticsSourceState.Incomplete -> stringResource(R.string.developer_state_incomplete, received, parts) to ChipTone.Bad
+        DiagnosticsSourceState.NoAnswer -> stringResource(R.string.developer_state_no_answer) to ChipTone.Bad
+    }
+    val sub = if (s.state == DiagnosticsSourceState.Declined) s.reason else detail
+    val progress = if (s.state == DiagnosticsSourceState.Receiving && parts > 0) received.toFloat() / parts else null
+    SourceRowLayout(icon, name, sub, tag) { StateChip(label, tone, progress) }
+}
+
+@Composable
+private fun SourceRowLayout(icon: ImageVector, name: String, sub: String?, tag: String, trailing: @Composable () -> Unit) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.semantics(mergeDescendants = true) {}.testTag(tag).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                sub?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        }
+    }
+}
+
+@Composable
+private fun StateChip(label: String, tone: ChipTone, progress: Float?) {
+    val (bg, fg) = when (tone) {
+        ChipTone.Good -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        ChipTone.Bad -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        ChipTone.Neutral -> MaterialTheme.colorScheme.surfaceContainer to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(shape = RoundedCornerShape(50), color = bg, contentColor = fg) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (progress != null) {
+                CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = fg, trackColor = fg.copy(alpha = 0.24f))
+                Spacer(Modifier.width(6.dp))
+            } else if (tone == ChipTone.Good) {
+                Icon(HocketIcons.Filled.Check, null, Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
     }
 }
 

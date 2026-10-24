@@ -233,15 +233,35 @@ describe("ipc", () => {
     expect(fsMock.rm.mock.calls.map((c) => c[0])).toEqual(["/data/logs/diagnostics/hocket-diagnostics-20261010-000000.txt", "/data/logs/diagnostics/hocket-diagnostics-20261011-000000.txt"]);
   });
 
-  it("diagnostics: other devices are asked for only when the page says so", async () => {
+  it("diagnostics: other devices are asked for only when the page says so, once per collection", async () => {
+    let n = 0;
+    const { query } = setup({
+      query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? `Other devices: phone says hi ${++n}` : "core says hi" }) as QueryResult,
+    });
+    const roomQueries = () => query.mock.calls.filter((c) => (c[0] as { type: string }).type === "roomDiagnostics").length;
+    await handlers.get(IPC.diagnosticsCopy)!(ours);
+    expect(roomQueries()).toBe(0);
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.not.stringContaining("phone says hi"));
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: "yes" });
+    expect(roomQueries()).toBe(0);
+    await expect(handlers.get(IPC.diagnosticsCollect)!(stranger)).rejects.toThrow("rejected");
+    // Two collects at once share one query; the copies after reuse its answer.
+    await Promise.all([handlers.get(IPC.diagnosticsCollect)!(ours), handlers.get(IPC.diagnosticsCollect)!(ours)]);
+    expect(roomQueries()).toBe(1);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(roomQueries()).toBe(1);
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 1"));
+    // A refresh collects again.
+    await handlers.get(IPC.diagnosticsCollect)!(ours);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 2"));
+  });
+
+  it("diagnostics: a bundle with the other devices and no collection yet runs one", async () => {
     const { query } = setup({
       query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? "Other devices: phone says hi" : "core says hi" }) as QueryResult,
     });
-    await handlers.get(IPC.diagnosticsCopy)!(ours);
-    expect(query).not.toHaveBeenCalledWith({ type: "roomDiagnostics" });
-    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.not.stringContaining("phone says hi"));
-    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: "yes" });
-    expect(query).not.toHaveBeenCalledWith({ type: "roomDiagnostics" });
     await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
     expect(query).toHaveBeenCalledWith({ type: "roomDiagnostics" });
     expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));

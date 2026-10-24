@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -51,6 +51,8 @@ export interface CoreState {
   /** Undo entry ids whose action replaced or cleared the queue: the only ones that get toasts. */
   queueReplacingUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
+  /** The newest room diagnostics collection, for the developer diagnostics page. */
+  roomDiagnostics: RoomDiagnosticsStatus | undefined;
 }
 
 export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, history: [], current: undefined, playingNext: [], upcoming: [], shuffle: false, repeat: "off", autoplay: false, mode: "apple", totalUpcoming: 0 };
@@ -93,6 +95,7 @@ export const initialCoreState: CoreState = {
   lastServerSearch: undefined,
   lastError: undefined,
   exported: undefined,
+  roomDiagnostics: undefined,
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -229,6 +232,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, exported: { kind: "nsp", document: e.data.document, path: e.data.path, at: Date.now() } };
     case "configExported":
       return { ...state, exported: { kind: "config", document: e.data.document, at: Date.now() } };
+    case "roomDiagnosticsChanged":
+      return { ...state, roomDiagnostics: e.data.status };
     case "backend":
     case "diagnosticsRequested": // main answers it
       return state;

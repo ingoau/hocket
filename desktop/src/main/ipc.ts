@@ -297,11 +297,30 @@ function allDevices(options: unknown): boolean {
 
 /**
  * The developer diagnostics page: every call builds a fresh bundle; files are only written where main
- * decides. Also answers the other devices of the Connect room, which ask the core for this device's
- * bundle (the core only passes their requests on while developer mode is on here).
+ * decides. The other devices' bundles are collected once, when the page asks (as it opens), and kept
+ * for the bundles it saves, copies or shares after. Also answers the other devices of the Connect
+ * room, which ask the core for this device's bundle (the core only passes their requests on while
+ * developer mode is on here).
  */
 function installDiagnosticsIpc(deps: IpcDeps): void {
   const { core, windows, devlog } = deps;
+  /** The newest collection from the other devices, and the one running (the core reports its progress as events). */
+  let others: string | undefined;
+  let collecting: Promise<string> | undefined;
+  const collectOthers = (): Promise<string> => {
+    collecting ??= core
+      .query({ type: "roomDiagnostics" })
+      .then(
+        (r) => (r.type === "text" ? r.data : `(unexpected answer: ${r.type})`),
+        (err: unknown) => `Other devices: not collected (${String(err)})`,
+      )
+      .then((text) => {
+        others = text;
+        collecting = undefined;
+        return text;
+      });
+    return collecting;
+  };
   const build = async (withOtherDevices = false): Promise<DiagnosticsBundle> => {
     let coreDiagnostics: string;
     try {
@@ -316,15 +335,8 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     } catch (err) {
       extra = { host: `(unavailable: ${String(err)})` };
     }
-    let otherDevices: string | undefined;
-    if (withOtherDevices) {
-      try {
-        const r = await core.query({ type: "roomDiagnostics" });
-        otherDevices = r.type === "text" ? r.data : `(unexpected answer: ${r.type})`;
-      } catch (err) {
-        otherDevices = `Other devices: not collected (${String(err)})`;
-      }
-    }
+    // What the page collected (waiting for it if it is still running); a first collection otherwise.
+    const otherDevices = withOtherDevices ? await (collecting ?? (others !== undefined ? Promise.resolve(others) : collectOthers())) : undefined;
     return devlog.bundle({ coreDiagnostics, extra, otherDevices });
   };
   core.onEvent((event) => {
@@ -359,6 +371,11 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
       windowMs: b.windowMs,
       canShare: process.platform === "darwin",
     };
+  });
+
+  ipcMain.handle(IPC.diagnosticsCollect, async (e) => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    await collectOthers();
   });
 
   ipcMain.handle(IPC.diagnosticsSave, async (e, options: unknown) => {

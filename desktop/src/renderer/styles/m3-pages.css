@@ -538,4 +538,16 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .page-developer .developer-section { display: flex; flex-direction: column; gap: 8px; }
 .page-developer .developer-pre { margin: 0; padding: 12px 14px; border-radius: var(--shape-md); background: var(--bg-sunken); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 280px; user-select: text; }
 .page-developer .developer-log { max-height: 480px; }
-@media (forced-colors: active) { .page-developer .developer-mode, .page-developer .developer-pre { border: 1px solid CanvasText; } }
+.page-developer .developer-room-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.page-developer .developer-room-head .card-title { margin: 0; }
+.page-developer .developer-room-headline { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.page-developer .developer-room-headline .spin, .page-developer .developer-state .spin { animation: spin 1.2s linear infinite; }
+.page-developer .developer-sources { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.page-developer .developer-source { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: var(--shape-md); background: var(--bg-sunken); }
+.page-developer .developer-source-icon { flex: none; color: var(--accent-text); }
+.page-developer .developer-source-text { flex: 1; min-width: 0; }
+.page-developer .developer-source-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-developer .developer-state { flex: none; font-variant-numeric: tabular-nums; }
+.page-developer .developer-state.received { background: var(--state-selected); color: var(--fg); }
+.page-developer .developer-state.declined, .page-developer .developer-state.incomplete, .page-developer .developer-state.noAnswer { color: var(--danger); }
+@media (forced-colors: active) { .page-developer .developer-mode, .page-developer .developer-pre, .page-developer .developer-source { border: 1px solid CanvasText; } }

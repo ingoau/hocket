@@ -26,25 +26,46 @@ impl Actor {
         self.settings.get_bool(keys::DEVELOPER_MODE)
     }
 
-    /// `Query::RoomDiagnostics`: ask the room, answer once everyone has (or on timeout).
+    /// `Query::RoomDiagnostics`: ask the room, answer once everyone has (or on timeout). Progress
+    /// goes out as [`Event::RoomDiagnosticsChanged`] along the way.
     pub(crate) fn room_diagnostics_query(&mut self, reply: oneshot::Sender<QueryResult>) {
-        if !self.developer_mode() {
-            let _ = reply.send(QueryResult::Text(
-                "Other devices: not collected (developer mode is off on this device).\n".into(),
-            ));
-            return;
-        }
-        if self.engine.is_none() {
-            let _ = reply.send(QueryResult::Text(
-                "Other devices: not collected (Connect is not running).\n".into(),
-            ));
-            return;
-        }
         let request_id = crate::util::new_id();
+        let unavailable = if !self.developer_mode() {
+            Some((
+                RoomDiagnosticsUnavailable::DeveloperModeOff,
+                "Other devices: not collected (developer mode is off on this device).\n",
+            ))
+        } else if self.engine.is_none() {
+            Some((
+                RoomDiagnosticsUnavailable::NotConnected,
+                "Other devices: not collected (Connect is not running).\n",
+            ))
+        } else {
+            None
+        };
+        if let Some((why, text)) = unavailable {
+            self.emit(Event::RoomDiagnosticsChanged {
+                status: RoomDiagnosticsStatus {
+                    request_id,
+                    done: true,
+                    elapsed_ms: 0.0,
+                    unavailable: Some(why),
+                    room_answered: false,
+                    coordinator: None,
+                    coordinator_log: false,
+                    devices: vec![],
+                },
+            });
+            let _ = reply.send(QueryResult::Text(text.into()));
+            return;
+        }
         let now = self.now();
         tracing::info!(target: "hocket::connect", request_id, "collecting diagnostics from the room");
-        self.diagnostics_collections
-            .push((Collection::new(request_id.clone(), now), reply));
+        let collection = Collection::new(request_id.clone(), now);
+        self.emit(Event::RoomDiagnosticsChanged {
+            status: collection.status(now, false),
+        });
+        self.diagnostics_collections.push((collection, reply));
         self.engine_input(Input::RequestDiagnostics { request_id });
     }
 
@@ -59,8 +80,19 @@ impl Actor {
         self.diagnostics_collections[i].0.add(part);
         if self.diagnostics_collections[i].0.is_complete() {
             let (c, reply) = self.diagnostics_collections.remove(i);
-            let _ = reply.send(QueryResult::Text(c.render(self.now())));
+            self.finish_collection(c, reply);
+        } else {
+            let status = self.diagnostics_collections[i].0.status(self.now(), false);
+            self.emit(Event::RoomDiagnosticsChanged { status });
         }
+    }
+
+    fn finish_collection(&mut self, c: Collection, reply: oneshot::Sender<QueryResult>) {
+        let now = self.now();
+        self.emit(Event::RoomDiagnosticsChanged {
+            status: c.status(now, true),
+        });
+        let _ = reply.send(QueryResult::Text(c.render(now)));
     }
 
     /// Another device asks for our bundle: decline unless developer mode is on here, else ask
@@ -141,7 +173,7 @@ impl Actor {
             .position(|(c, _)| c.expired(now))
         {
             let (c, reply) = self.diagnostics_collections.remove(i);
-            let _ = reply.send(QueryResult::Text(c.render(now)));
+            self.finish_collection(c, reply);
         }
         while let Some(i) = self
             .diagnostics_answers

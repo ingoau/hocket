@@ -70,8 +70,9 @@ export interface DiagnosticsSummary {
 /** What a saved, copied or shared bundle covers. */
 export interface DiagnosticsOptions {
   /**
-   * Also ask the Connect room and every other device in it for theirs (each answers only while
-   * its own developer mode is on). Takes up to 45 seconds.
+   * Also carry the bundles of the Connect room and every other device in it (each answers only
+   * while its own developer mode is on): the ones `collect()` gathered, waiting for it while it
+   * runs. Without a collection, one runs first (up to 45 seconds).
    */
   allDevices?: boolean;
 }
@@ -140,6 +141,12 @@ export interface HocketBridge {
    */
   diagnostics: {
     summary(): Promise<DiagnosticsSummary>;
+    /**
+     * Ask the Connect room and the other devices for their bundles, for the next `allDevices`
+     * save, copy or share. Resolves once they are in (or the 45 s are up); progress arrives as
+     * `roomDiagnosticsChanged` events. A call while one runs joins it.
+     */
+    collect(): Promise<void>;
     /** Ask where to save, then write the bundle there. Resolves to the path, or undefined when cancelled. */
     save(options?: DiagnosticsOptions): Promise<string | undefined>;
     /** Put the whole bundle on the clipboard. */
@@ -183,6 +190,7 @@ export const IPC = {
   uiAction: "hocket:ui-action",
   artworkLayout: "hocket:artwork:layout",
   diagnosticsSummary: "hocket:diagnostics:summary",
+  diagnosticsCollect: "hocket:diagnostics:collect",
   diagnosticsSave: "hocket:diagnostics:save",
   diagnosticsCopy: "hocket:diagnostics:copy",
   diagnosticsReveal: "hocket:diagnostics:reveal",

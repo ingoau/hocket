@@ -43,6 +43,18 @@ fn requested(t: &TestCore) -> Option<(String, String)> {
     })
 }
 
+/// Every `RoomDiagnosticsChanged` `t` emitted, in order.
+fn statuses(t: &TestCore) -> Vec<RoomDiagnosticsStatus> {
+    t.events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::RoomDiagnosticsChanged { status } => Some(status),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Ask `t` for the room's diagnostics while `all` keep running; the text it answers.
 async fn collect(t: &TestCore, all: &[&TestCore], answer: impl Fn(&[&TestCore])) -> String {
     let core = t.core.clone();
@@ -94,6 +106,24 @@ async fn every_device_answers_or_declines_by_its_own_developer_mode() {
         "c was never asked to build anything"
     );
     assert!(requested(&a).is_none(), "nobody asks the asking device");
+
+    // The page followed along: waiting for the room first, the final word last.
+    let seen = statuses(&a);
+    assert!(seen.len() >= 3, "{seen:?}");
+    assert!(!seen[0].done && !seen[0].room_answered && seen[0].devices.is_empty());
+    assert!(seen[..seen.len() - 1].iter().all(|s| !s.done));
+    let last = seen.last().unwrap();
+    assert!(last.done && last.room_answered && last.unavailable.is_none());
+    assert!(last.coordinator.is_none(), "a LAN room has no coordinator");
+    let mut states: Vec<_> = last.devices.iter().map(|d| d.state).collect();
+    states.sort_by_key(|s| format!("{s:?}"));
+    assert_eq!(
+        states,
+        vec![
+            DiagnosticsSourceState::Declined,
+            DiagnosticsSourceState::Received
+        ]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,6 +158,13 @@ async fn nothing_is_asked_while_developer_mode_is_off_here() {
     );
     TestCore::run_all_for(&[&a, &b, &c], 1_000.0).await;
     assert!(requested(&b).is_none() && requested(&c).is_none());
+    let seen = statuses(&a);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].done);
+    assert_eq!(
+        seen[0].unavailable,
+        Some(RoomDiagnosticsUnavailable::DeveloperModeOff)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
