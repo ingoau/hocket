@@ -6,8 +6,10 @@ import { Icon } from "../components/Icon";
 import { filterName, isBuiltinFilter } from "../lib/filters";
 import { openItemsMenu, openItemsMenuFromButton } from "../components/ContextMenu";
 import { filterMenuItems } from "../lib/pin-menus";
+import { FilterBuilder } from "./FilterBuilder";
 
-export function Filters() {
+/** Saved filters beside the editor of the selected one (the first, until one is picked; "new" for a new one). */
+export function Filters({ selected }: { selected?: string }) {
   const filters = useApp((s) => s.filters);
   const navigate = useApp((s) => s.navigate);
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -15,27 +17,31 @@ export function Filters() {
     const f = filters.find((x) => x.id === id);
     if (f) bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   };
+  const current = selected ?? filters[0]?.id;
   return (
     <div className="view page-filters" data-testid="view-filters">
       <div className="view-header">
         <h1 className="brand-type">{t("filters.title")}</h1>
         <div className="actions"><button type="button" className="btn primary" onClick={() => navigate({ view: "filter", id: "new" })} data-testid="new-filter"><Icon name="plus" size={14} /> {t("filters.new")}</button></div>
       </div>
-      <div className="view-body">
+      <div className="view-body filters-split">
+        <div className="filters-list" role="list" aria-label={t("filters.title")}>
         {!filters.length ? <EmptyState message={t("filters.empty")} icon="filter" action={<button type="button" className="btn" onClick={() => navigate({ view: "filter", id: "new" })}>{t("filters.new")}</button>} /> : null}
         {filters.map((f) => (
-          <div key={f.id} className="pin-row filter-row" style={{ gridTemplateColumns: "auto 1fr auto auto auto" }} data-testid="filter-row" onContextMenu={(e) => openItemsMenu(e, filterMenuItems(f, serverId))}>
+          <div key={f.id} role="listitem" className={`pin-row filter-row ${f.id === current ? "selected" : ""}`} aria-current={f.id === current || undefined} style={{ gridTemplateColumns: "auto 1fr auto auto auto" }} data-testid="filter-row" onContextMenu={(e) => openItemsMenu(e, filterMenuItems(f, serverId))}>
             <span className="filter-avatar" aria-hidden="true"><Icon name="filter" size={20} /></span>
             <button type="button" className="link-button" onClick={() => navigate({ view: "filter", id: f.id })}>
               <span style={{ display: "block" }}>{filterName(f)}{isBuiltinFilter(f.id) ? <span className="badge" style={{ marginLeft: 8 }}>{t("filters.builtin")}</span> : null}</span>
               <span className="small muted" style={{ display: "block" }}>{t("sort.label", { sort: t(`sort.${f.sort}` as never) })}{f.limit ? ` · ${t("filters.limit")} ${f.limit}` : ""}</span>
             </button>
-            <button type="button" className="btn sm tonal" aria-label={`${t("filters.play")}: ${filterName(f)}`} onClick={() => play(f.id)}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
+            <button type="button" className="btn icon tonal" aria-label={`${t("filters.play")}: ${filterName(f)}`} title={t("filters.play")} onClick={() => play(f.id)}><Icon name="play" size={16} filled /></button>
             <button type="button" className="btn icon" aria-label={`${t("misc.more")}: ${filterName(f)}`} onClick={(e) => openItemsMenuFromButton(e, filterMenuItems(f, serverId))} data-testid="filter-more"><Icon name="more" size={14} /></button>
             {/* Built-ins can't be deleted (the core would only drop a saved override). */}
             {isBuiltinFilter(f.id) ? <span /> : <button type="button" className="btn icon" aria-label={`${t("filters.delete")}: ${f.name}`} onClick={() => bridge().dispatch({ type: "deleteFilter", data: { id: f.id } })}><Icon name="trash" size={14} /></button>}
           </div>
         ))}
+        </div>
+        {current ? <FilterBuilder key={current} id={current} embedded /> : null}
       </div>
     </div>
   );

@@ -485,6 +485,7 @@ const STRINGS = {
   "stats.empty": "Play something and your listening history builds here, from local play history.",
 
   // Filters
+  "filters.unsaved": "Unsaved changes",
   "filters.title": "Filters",
   "filter.builtin.recently-added": "Recently added",
   "filter.builtin.never-played": "Never played",

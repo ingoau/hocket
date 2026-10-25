@@ -615,3 +615,24 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .page-stats .bars > div { background: color-mix(in srgb, var(--accent) 42%, var(--bg-elev)); opacity: 1; transition: background-color var(--dur-short) var(--ease-emphasized); }
 .page-stats .bars > div.peak { background: var(--accent); }
 .page-stats .bars > div.hover { background: var(--accent-text); }
+
+/* Filters: the saved filters beside the editor of the selected one. */
+.page-filters { container-type: inline-size; }
+.filters-split { display: grid; grid-template-columns: 272px minmax(0, 1fr); gap: 20px; align-items: start; }
+.filters-list { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; }
+.page-filters .filter-row.selected { background: var(--state-selected); }
+.filter-editor { border-radius: var(--shape-xl); background: var(--bg-sunken); padding-bottom: 20px; min-width: 0; }
+.filter-editor > .view-header { padding: 20px 20px 12px; align-items: center; }
+.filter-editor > .view-header h2 { margin: 0; font-size: 24px; font-weight: 800; }
+.filter-editor > .view-body { padding: 0 20px; }
+.filter-editor .filter-builder { grid-template-columns: minmax(0, 1fr) 260px; }
+.filter-editor { container-type: inline-size; }
+@container (max-width: 760px) { .filter-editor .filter-builder { grid-template-columns: minmax(0, 1fr); } }
+.filters-list .filter-row { grid-template-columns: auto minmax(0, 1fr) auto auto !important; }
+/* Delete lives in the editor and the row menu; the list keeps play and more. */
+.filters-list .filter-row > :nth-child(5) { display: none; }
+.filters-list .filter-row .link-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 780px) {
+  .filters-split { grid-template-columns: minmax(0, 1fr); }
+  .filters-list { position: static; }
+}

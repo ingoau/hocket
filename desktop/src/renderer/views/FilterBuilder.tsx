@@ -25,6 +25,16 @@ const OPS: Record<"text" | "num" | "date" | "bool" | "list", FilterOp[]> = {
 };
 const OP_LABEL: Record<FilterOp, string> = { is: "is", isNot: "is not", contains: "contains", notContains: "doesn't contain", startsWith: "starts with", endsWith: "ends with", gt: "greater than", lt: "less than", inTheRange: "in the range", before: "before", after: "after", inTheLast: "in the last (days)", notInTheLast: "not in the last (days)", isTrue: "is true", isFalse: "is false" };
 
+const FIELD_NAMES: Partial<Record<FilterField, string>> = { bpm: "BPM", bitRate: "Bit rate", filePath: "File path", fileType: "File type", hasCoverArt: "Has cover art", localPlayCount: "Plays on this device", localLastPlayed: "Last played on this device", availableOffline: "Available offline" };
+
+/** "dateAdded" → "Date added", unless it has a name of its own. */
+export function fieldLabel(f: FilterField): string {
+  const named = FIELD_NAMES[f];
+  if (named) return named;
+  const words = f.replace(/([A-Z])/g, " $1").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function kindOf(f: FilterField): keyof typeof OPS {
   if (TEXT_FIELDS.includes(f)) return "text";
   if (NUM_FIELDS.includes(f)) return "num";
@@ -48,7 +58,8 @@ function defaultValue(field: FilterField, op: FilterOp): FilterValue {
   return { type: "text", data: "" };
 }
 
-export function FilterBuilder({ id }: { id: string }) {
+/** `embedded`: inside the Filters page, beside the list (a section, not a page of its own). */
+export function FilterBuilder({ id, embedded = false }: { id: string; embedded?: boolean }) {
   const filters = useApp((s) => s.filters);
   const navigate = useApp((s) => s.navigate);
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -65,7 +76,11 @@ export function FilterBuilder({ id }: { id: string }) {
   }, [filter]);
 
   const valid = filter.name.trim().length > 0;
-  const save = () => bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
+  const dirty = existing ? JSON.stringify(existing) !== JSON.stringify(filter) : true;
+  const save = () => {
+    bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
+    if (!existing) navigate({ view: "filter", id: filter.id }, true);
+  };
   const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   const exportNsp = async () => {
     const path = await bridge().dialog.save({ title: t("dialog.exportNsp"), defaultPath: `${filter.name || "filter"}.nsp`, filters: [{ name: "Navidrome smart playlist", extensions: ["nsp"] }] });
@@ -73,9 +88,10 @@ export function FilterBuilder({ id }: { id: string }) {
   };
   const localOnly = preview?.capability.localOnlyFields ?? [];
   return (
-    <div className="view page-filter-builder" data-testid="view-filter-builder">
+    <section className={`${embedded ? "filter-editor" : "view"} page-filter-builder`} aria-labelledby="filter-editor-title" data-testid="view-filter-builder">
       <div className="view-header">
-        <h1>{existing ? filterName(existing) : t("filters.builder")}</h1>
+        {embedded ? <h2 id="filter-editor-title">{existing ? filterName(existing) : t("filters.builder")}</h2> : <h1 id="filter-editor-title">{existing ? filterName(existing) : t("filters.builder")}</h1>}
+        {dirty && valid ? <span className="badge warn" data-testid="filter-dirty">{t("filters.unsaved")}</span> : null}
         <div className="actions">
           <span className="muted" data-testid="filter-count">{preview ? t("filters.count", { count: preview.count }) : <Icon name="spinner" className="spin" size={13} />}</span>
           <button type="button" className="btn tonal" onClick={play} disabled={!preview?.count}><Icon name="play" size={13} filled /> {t("filters.play")}</button>
@@ -110,7 +126,7 @@ export function FilterBuilder({ id }: { id: string }) {
           ))}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -154,7 +170,7 @@ function RuleEditor({ rule, onChange, onRemove }: { rule: FilterRule; onChange: 
   const fields = useMemo(() => [...FilterFieldValues], []);
   return (
     <div className="rule" data-testid="rule">
-      <Select value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{f}{["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</Select>
+      <Select value={rule.field} onChange={(e) => setField(e.target.value as FilterField)} aria-label="Field">{fields.map((f) => <option key={f} value={f}>{fieldLabel(f)}{["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"].includes(f) ? " (local)" : ""}</option>)}</Select>
       <Select value={rule.op} onChange={(e) => setOp(e.target.value as FilterOp)} aria-label="Operator">{ops.map((o) => <option key={o} value={o}>{OP_LABEL[o]}</option>)}</Select>
       {v.type === "text" ? <input className="input" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "text", data: e.target.value } })} aria-label="Value" data-testid="rule-value" /> : null}
       {v.type === "number" ? <input className="input" type="number" step="any" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "number", data: Number(e.target.value) } })} aria-label="Value" style={{ width: 100 }} /> : null}

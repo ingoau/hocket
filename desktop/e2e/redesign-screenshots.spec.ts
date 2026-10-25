@@ -122,6 +122,11 @@ test("redesigned screens", async () => {
       await expect(page.getByTestId("view-stats")).toBeVisible();
       await shot("stats");
 
+      // Filters: the list beside the selected filter's editor.
+      await openPlace(page, "filters");
+      await expect(page.getByTestId("view-filter-builder")).toBeVisible();
+      await shot("filters");
+
       // Settings: grouped nav with the account card.
       await page.getByTestId("nav-settings").click();
       await expect(page.getByTestId("view-settings")).toBeVisible();
