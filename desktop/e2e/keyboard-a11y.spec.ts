@@ -266,19 +266,13 @@ test.describe("keyboard only", () => {
     await expect.poll(async () => (await list.getAttribute("aria-activedescendant")) === (await second.getAttribute("id"))).toBe(true);
     await page.keyboard.press("Alt+ArrowUp");
     await expect(page.getByTestId("queue-row-upcoming").first().locator(".t1")).toHaveText(moving!);
-    // The queue selector: Enter opens it with focus inside, arrows move, Escape closes it and focus returns.
-    await tabTo(page, byTestId("queue-selector"), "the queue selector", { back: true });
+    // The queue's name opens the Queues page with focus on its back arrow; back returns focus to the name.
+    await tabTo(page, byTestId("queue-selector"), "the queue's name", { back: true });
     await page.keyboard.press("Enter");
-    const menu = page.getByTestId("queue-selector-menu");
-    await expect(menu).toBeVisible();
-    await expect(page.getByTestId("queue-selector")).toHaveAttribute("aria-expanded", "true");
-    const choices = menu.locator(".qs-item, .qs-all");
-    const n = await choices.count();
-    await expect(choices.first()).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(choices.nth(1 % n)).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "recent");
+    await expect(page.getByTestId("sidebar-back")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
     await expect(page.getByTestId("queue-selector")).toBeFocused();
     // The side panel's width: a separator the arrows move.
     await tabTo(page, byTestId("side-panel-resize"), "the side panel splitter", { back: true });

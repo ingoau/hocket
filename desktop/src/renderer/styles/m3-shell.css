@@ -253,6 +253,21 @@
 .right-panel .qrow.current .t1 { font-weight: 800; color: var(--accent-text); }
 .sq-row { margin: 0 8px; padding: 8px 8px; border-radius: var(--shape-lg); transition: background-color var(--dur-short) var(--ease-emphasized); }
 .sq-row .art { width: 44px; height: 44px; border-radius: var(--shape-md); background: var(--bg-sunken); }
+/* The Queues page: the playing queue's card, then pinned and recent rows (no artwork). */
+.queues-page { padding-bottom: 16px; }
+.queues-page .sq-row { display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 0; }
+.queues-page .sq-row:hover { background: var(--bg-hover); }
+.sq-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px 12px; border-radius: var(--shape-lg); cursor: pointer; }
+.sq-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.sq-name { font-weight: 600; }
+.sq-current { margin: 4px 12px 8px; padding: 14px 16px; border-radius: var(--shape-xl); background: var(--accent-soft); display: flex; flex-direction: column; gap: 4px; }
+.sq-current-name { display: flex; align-items: center; gap: 4px; font-size: var(--fs-lg); font-weight: 700; min-width: 0; }
+.sq-create { align-self: flex-start; margin-top: 8px; gap: 6px; }
+.sq-eyebrow { margin: 0; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.02em; color: var(--accent-text); }
+.sq-group > .sq-eyebrow { padding: 14px 20px 6px; }
+.sq-rename { flex: 1; min-width: 0; margin: 2px 8px 2px 12px; }
+.sq-current .sq-rename { margin: 0; }
+.sq-empty { padding: 12px 20px; }
 /* The queue's per-section "Clear" stays a compact text button beside its heading. */
 .right-panel .queue-clear.btn.sm { height: 28px; padding: 0 12px; font-size: var(--fs-sm); }
 /* ---- The artist menu (ArtistChooser.tsx): the track's artists, then its album. */

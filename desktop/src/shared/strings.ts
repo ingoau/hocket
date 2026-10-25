@@ -159,6 +159,10 @@ const STRINGS = {
   "savedQueues.saveAsPlaylist": "Save as playlist…",
   "savedQueues.tracks": "{count} tracks",
   "savedQueues.pinned": "Pinned",
+  "savedQueues.recent": "Recent",
+  "savedQueues.rename": "Rename",
+  "savedQueues.renameNamed": "Rename {name}",
+  "savedQueues.createPlaylist": "Create playlist",
 
   // Lyrics
   "lyrics.title": "Lyrics",
@@ -210,8 +214,8 @@ const STRINGS = {
   "queue.selector": "Choose a queue",
   "queue.current": "Current queue",
   "queue.untitled": "Queue",
-  "queue.allRecent": "All recent queues",
-  "queue.recentTitle": "Recent queues",
+  "queue.openQueues": "Queues: {name}",
+  "queue.recentTitle": "Queues",
   "queue.savedOptions": "Options for {name}",
   "queue.autoplayFooter": "When the queue ends, autoplay continues with similar songs.",
   "about.album": "Album",

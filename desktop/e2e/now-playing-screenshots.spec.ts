@@ -155,9 +155,9 @@ test("now playing surfaces", async () => {
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("sidebar-queue");
       await page.getByTestId("queue-selector").click();
-      await expect(page.getByTestId("queue-selector-menu")).toBeVisible();
-      await shot("sidebar-queue-selector");
-      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("saved-queues")).toBeVisible();
+      await shot("sidebar-queues");
+      await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-about-card-link").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "about");

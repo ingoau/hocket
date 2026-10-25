@@ -172,7 +172,7 @@ test.describe("now playing", () => {
     await expect(panel).toHaveCount(0);
   });
 
-  test("the queue selector restores a saved queue", async ({ hocket }) => {
+  test("the queue's name opens the Queues page: rename, pin, delete and restore", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     const first = await playAlbum(page, 0);
@@ -181,30 +181,42 @@ test.describe("now playing", () => {
     const panel = page.getByTestId("right-panel");
     await expect(panel.getByTestId("queue-selector-label")).toHaveText(second);
     await panel.getByTestId("queue-selector").click();
-    const menu = page.getByTestId("queue-selector-menu");
-    await expect(menu).toBeVisible();
-    // Focus moves into it; Escape closes it and gives focus back.
-    await expect(menu.getByTestId("queue-selector-item").first()).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(menu).toHaveCount(0);
-    await expect(panel.getByTestId("queue-selector")).toBeFocused();
-    await panel.getByTestId("queue-selector").click();
-    const item = menu.getByTestId("queue-selector-item").filter({ hasText: first });
-    await expect(item).toBeVisible();
-    // Each saved queue keeps its menu (restore, pin, save as playlist, delete).
-    await menu.getByTestId("queue-selector-more").first().click();
-    await expect(page.getByTestId("context-menu").locator('[data-action="pinSavedQueue"]')).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("context-menu")).toHaveCount(0);
-    await item.click();
-    await expect(menu).toHaveCount(0);
-    await expect(panel.getByTestId("queue-selector-label")).toHaveText(first);
-    await expect(page.getByTestId("player-bar").locator(".title")).not.toHaveText("");
-    // "All recent queues" opens the full list, whose back arrow returns to the queue.
-    await panel.getByTestId("queue-selector").click();
-    await page.getByTestId("queue-selector-all").click();
     await expect(panel).toHaveAttribute("data-view", "recent");
-    await expect(panel.getByTestId("saved-queues")).toBeVisible();
+    const pageEl = panel.getByTestId("saved-queues");
+    await expect(pageEl.getByTestId("saved-queues-current")).toContainText(second);
+    // Renaming the playing queue: Enter saves, and the queue's name follows.
+    await pageEl.getByTestId("saved-queues-current-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Late night");
+    await page.keyboard.press("Enter");
+    await expect(pageEl.getByTestId("saved-queues-current")).toContainText("Late night");
+    // A saved queue: Escape cancels a rename, Enter saves one.
+    const row = pageEl.getByTestId("saved-queue-row").filter({ hasText: first });
+    await row.getByTestId("saved-queue-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Nope");
+    await page.keyboard.press("Escape");
+    await expect(row).toContainText(first);
+    await row.getByTestId("saved-queue-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Morning");
+    await page.keyboard.press("Enter");
+    const morning = pageEl.getByTestId("saved-queue-row").filter({ hasText: "Morning" });
+    await expect(morning).toBeVisible();
+    // Pinning moves it under Pinned; its context menu offers Unpin.
+    await morning.getByTestId("saved-queue-pin").click();
+    await expect(morning.getByTestId("saved-queue-pin")).toHaveAttribute("aria-pressed", "true");
+    await morning.click({ button: "right" });
+    await expect(page.getByTestId("context-menu").locator('[data-action="unpinSavedQueue"]')).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Restoring returns to the queue, now playing that one.
+    await morning.getByTestId("saved-queue-restore").click();
+    await expect(panel).toHaveAttribute("data-view", "queue");
+    await expect(panel.getByTestId("queue-selector-label")).toHaveText("Morning");
+    await expect(page.getByTestId("player-bar").locator(".title")).not.toHaveText("");
+    // Delete is immediate.
+    await panel.getByTestId("queue-selector").click();
+    const late = pageEl.getByTestId("saved-queue-row").filter({ hasText: "Late night" });
+    await expect(late).toBeVisible();
+    await late.getByTestId("saved-queue-delete").click();
+    await expect(late).toHaveCount(0);
     await page.getByTestId("sidebar-back").click();
     await expect(panel).toHaveAttribute("data-view", "queue");
   });
