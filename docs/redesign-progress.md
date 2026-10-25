@@ -21,13 +21,13 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Settings | – | [x] | [ ] |
 | Queues (+ rename) | [x] | [x] | [x] (uncompiled) |
 | Connect | – | [x] | [ ] |
-| Search (recent searches, local only) | – | [x] | [ ] |
-| Album / Artist / Playlist | [x] | [x] | [ ] |
+| Search (recent searches, local only) | – | [x] | [x] (uncompiled) |
+| Album / Artist / Playlist | [x] | [x] | [~] shelves only (uncompiled) |
 | Server setup | – | [x] | [ ] |
 | Downloads | – | [x] | [ ] |
 | Stats | – | [x] | [ ] |
 | Filters | – | [x] | [ ] |
-| Song info | [x] | [x] | [ ] |
+| Song info | [x] | [x] | [x] (uncompiled) |
 
 Out of scope: bottom nav and mini player; undo history (issue #127).
 

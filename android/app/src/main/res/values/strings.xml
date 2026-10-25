@@ -327,6 +327,10 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
+    <string name="search_recent">Recent searches</string>
+    <string name="search_recent_local">Kept on this device</string>
+    <string name="search_recent_clear">Clear</string>
+    <string name="search_recent_forget">Remove “%1$s” from recent searches</string>
     <string name="player_about_album_notes">About the album</string>
     <string name="player_about_artist_bio">About the artist</string>
     <string name="player_about_similar_artists">Similar artists</string>

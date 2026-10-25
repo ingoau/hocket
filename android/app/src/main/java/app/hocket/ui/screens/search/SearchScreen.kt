@@ -2,6 +2,7 @@ package app.hocket.ui.screens.search
 
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -83,6 +84,11 @@ fun SearchScreen(nav: NavHostController) {
     var requestCounter by remember { mutableIntStateOf(0) }
     var minHeightPx by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val recentPrefs = remember(context) { app.hocket.RecentSearchPrefs(context) }
+    var recent by remember { mutableStateOf(recentPrefs.list()) }
+    // A search counts as made once its query is acted on: a result opened or played, or the keyboard's search key.
+    val rememberQuery = { recent = recentPrefs.remember(query) }
     val songMenu = app.hocket.ui.components.rememberSongMenu()
 
     LaunchedEffect(Unit) {
@@ -130,12 +136,18 @@ fun SearchScreen(nav: NavHostController) {
                 value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text(stringResource(R.string.search_hint)) },
                 leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
                 trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { rememberQuery() }),
                 modifier = Modifier.weight(1f).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp).focusRequester(focus).testTag("search.input"),
             )
             AccountButton(Modifier.padding(end = 4.dp))
         }
         val results = local
-        if (results == null) { EmptyState(stringResource(R.string.empty_search_title), stringResource(R.string.empty_search_body)); return }
+        if (results == null) {
+            if (query.isBlank() && recent.isNotEmpty()) RecentSearches(recent, onPick = { query = it; recent = recentPrefs.remember(it) }, onForget = { recent = recentPrefs.forget(it) }, onClear = { recent = recentPrefs.clear() })
+            else EmptyState(stringResource(R.string.empty_search_title), stringResource(R.string.empty_search_body))
+            return
+        }
         val empty = results.tracks.isEmpty() && results.albums.isEmpty() && results.artists.isEmpty() && results.playlists.isEmpty()
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
@@ -146,20 +158,20 @@ fun SearchScreen(nav: NavHostController) {
                 if (results.tracks.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_songs)) }
                     items(results.tracks, key = { "t" + it.id }) { t ->
-                        TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) })
+                        TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) })
                     }
                 }
                 if (results.albums.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_albums)) }
-                    item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> nav.navigate(Route.Album(a.id)) } }
+                    item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
                 }
                 if (results.artists.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_artists)) }
-                    items(results.artists, key = { "ar" + it.id }) { ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }) }
+                    items(results.artists, key = { "ar" + it.id }) { ar -> ArtistRow(ar, onClick = { rememberQuery(); nav.navigate(Route.Artist(ar.id)) }) }
                 }
                 if (results.playlists.isNotEmpty()) {
                     item { SectionHeader(stringResource(R.string.search_playlists)) }
-                    items(results.playlists, key = { "p" + it.id }) { p -> PlaylistRow(p, onClick = { nav.navigate(Route.Playlist(p.id)) }) }
+                    items(results.playlists, key = { "p" + it.id }) { p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }) }
                 }
                 item {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -180,5 +192,28 @@ fun SearchScreen(nav: NavHostController) {
     }
 }
 
+/** The empty search tab: this phone's recent searches, each to search again or forget, and Clear. */
+@Composable
+private fun RecentSearches(queries: List<String>, onPick: (String) -> Unit, onForget: (String) -> Unit, onClear: () -> Unit) {
+    LazyColumn(Modifier.fillMaxSize().testTag("search.recent"), contentPadding = PaddingValues(bottom = BottomContentInset)) {
+        item {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.search_recent), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.search_recent_local), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                androidx.compose.material3.TextButton(onClick = onClear, modifier = Modifier.testTag("search.recent.clear")) { Text(stringResource(R.string.search_recent_clear)) }
+            }
+        }
+        items(queries, key = { "recent.$it" }) { q ->
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text(q, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                leadingContent = { Icon(HocketIcons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { IconButton(onClick = { onForget(q) }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_recent_forget, q)) } },
+                modifier = Modifier.clickable { onPick(q) }.testTag("search.recent.item"),
+            )
+        }
+    }
+}
 
 private fun Modifier.onSizeChangedKeepMax(onHeight: (Int) -> Unit): Modifier = this.onSizeChanged { onHeight(it.height) }
