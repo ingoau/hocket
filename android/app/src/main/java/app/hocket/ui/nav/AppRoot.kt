@@ -348,7 +348,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
         DeveloperTriggerEffect(developerMode) {
             if (nav.currentDestination?.hasRoute(Route.DeveloperDiagnostics::class) != true) nav.navigate(Route.DeveloperDiagnostics)
         }
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache) {
+        val openConnectSettings = remember(nav) { { nav.navigate(Route.ConnectSettings) { launchSingleTop = true } } }
+        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).

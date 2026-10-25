@@ -20,7 +20,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | --- | --- | --- | --- |
 | Settings | – | [x] | [ ] |
 | Queues (+ rename) | [x] | [x] | [x] (uncompiled) |
-| Connect | – | [x] | [ ] |
+| Connect | – | [x] | [x] (uncompiled) |
 | Search (recent searches, local only) | – | [x] | [x] (uncompiled) |
 | Album / Artist / Playlist | [x] | [x] | [~] shelves only (uncompiled) |
 | Server setup | – | [x] | [ ] |
@@ -48,3 +48,10 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
 - Desktop Filters: master/detail (list beside the editor), Unsaved changes badge, readable field names. Rules stay inline editors (not chips + popover) — deviation.
 - Desktop Setup: board copy, URL hint, http:// cleartext warning, Enter hint; Name field dropped. The post-connect summary step is not implemented (needs version/capability info at setup) — deviation.
 - Android Queues (not compiled here): Playing now card (rename, Create playlist), rows without art with rename/pin/immediate delete, undo-history button removed; Commands.renameQueue; FakeCore handles RenameQueue, ArtistInfo, AlbumInfo.
+- Android Connect (not compiled here): AudioOutputs (playback module) lists connected outputs via
+  AudioDeviceCallback and applies the pick with ExoPlayer setPreferredAudioDevice; the sheet shows
+  This phone outputs (either direction, handing playback back first if another device plays), a
+  Bluetooth settings link, then other devices; gear by the title opens Connect & devices settings
+  (LocalOpenConnectSettings from AppRoot). New icons via scripts/gen-android-icons.mjs.
+- Android search: RecentSearchPrefs (SharedPreferences, device only); Android artist shelves via
+  core ReleaseKinds.kt (+ unit test); song info Last.fm cards.
