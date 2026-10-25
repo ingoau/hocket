@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,9 +95,9 @@ fun SettingsScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
-            SettingsCategory.GROUPS.forEach { (heading, group) ->
+            SettingsCategory.GROUPS.forEach { (titleRes, group) ->
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(stringResource(heading), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 6.dp).semantics { heading() })
+                    Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 6.dp).semantics { heading() })
                     group.forEachIndexed { i, category ->
                         CategoryRow(category, first = i == 0, last = i == group.lastIndex, onClick = { nav.navigate(category.route) })
                     }
@@ -115,11 +116,13 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
     Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.clickable(onClick = onOpen).testTag("settings.category.account").padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp)) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp).clearAndSetSemantics { }) {
                     Box(contentAlignment = Alignment.Center) { Text((s?.username?.firstOrNull() ?: '?').uppercase(), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimary) }
                 }
                 Spacer(Modifier.width(16.dp))
                 Column(Modifier.weight(1f)) {
+                    // The category's name first: it titles the card (and its page) for a screen reader.
+                    Text(stringResource(R.string.settings_category_account), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (s != null) {
                         val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')

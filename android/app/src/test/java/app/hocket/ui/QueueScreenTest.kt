@@ -161,15 +161,16 @@ class QueueScreenTest {
     }
 
     @Test
-    fun savedQueuesAndUndoHistoryMovedToTheirOwnScreen() {
+    fun queuesScreenShowsThePlayingQueueThenPinnedAndRecent() {
         val core = TestCore()
         compose.setThemedContent(core) { SavedQueuesScreen(rememberNavController()) }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("queues.playing").assertIsDisplayed()
         compose.onNodeWithText("Pinned").assertIsDisplayed()
         compose.onNodeWithText("Recent").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Undo history").performClick()
-        compose.onNodeWithText("Nothing to undo").assertIsDisplayed()
+        // The undo history is out for now (issue #127).
+        compose.onNodeWithContentDescription("Undo history").assertDoesNotExist()
     }
 
     /**

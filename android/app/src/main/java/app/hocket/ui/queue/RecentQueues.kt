@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,7 +21,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -47,7 +45,6 @@ import app.hocket.R
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
 import app.hocket.core.Commands
-import app.hocket.core.api.Command
 import app.hocket.core.api.SavedQueue
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
@@ -139,42 +136,13 @@ private fun SavedQueueRow(sq: SavedQueue, onRename: () -> Unit, onRestore: () ->
     }
 }
 
-/** The undo history sheet content: newest first, each undoable directly; undo/redo at the top. */
-@Composable
-fun UndoHistoryPanel(modifier: Modifier = Modifier) {
-    val client = LocalCoreClient.current
-    val undo by client.undo.collectAsStateWithLifecycle()
-    val self = remember { client.session.value?.let { "" } ?: "" }
-    Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            TextButton(enabled = undo.canUndo, onClick = { client.dispatch(Command.Undo) }) { Text(undo.undoLabel?.let { stringResource(R.string.history_undo_label, it) } ?: stringResource(R.string.action_undo)) }
-            TextButton(enabled = undo.canRedo, onClick = { client.dispatch(Command.Redo) }) { Text(undo.redoLabel?.let { stringResource(R.string.history_redo_label, it) } ?: stringResource(R.string.action_redo)) }
-        }
-        if (undo.history.isEmpty()) { EmptyState(stringResource(R.string.empty_history_title), stringResource(R.string.empty_history_body)); return }
-        LazyColumn(contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
-            items(undo.history, key = { it.id }) { e ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(HocketIcons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(e.label, style = MaterialTheme.typography.bodyLarge)
-                        Text(formatAgo(e.at) + (e.note?.let { stringResource(R.string.dot_separator) + it } ?: ""), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(onClick = { client.dispatch(Commands.undoEntry(e.id)) }) { Text(stringResource(R.string.history_undo_this)) }
-                }
-            }
-        }
-    }
-}
-
 /**
- * Full-screen route for saved queues (Home "see all", Library "Recent queues"): pinned and recent
- * queues, plus the undo history in a sheet (both used to be tabs of the player's queue).
+ * Full-screen route for Queues (Home "see all", Library "Recent queues"): the playing queue, then the
+ * pinned and recent ones. The undo history is out for now (issue #127).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SavedQueuesScreen(nav: NavHostController) {
-    var undoHistory by remember { mutableStateOf(false) }
     Scaffold(topBar = {
         TopAppBar(
             title = { Text(stringResource(R.string.queues_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
@@ -185,11 +153,5 @@ fun SavedQueuesScreen(nav: NavHostController) {
         )
     }) { padding ->
         RecentQueuesList(Modifier.fillMaxSize().padding(padding))
-    }
-    if (undoHistory) {
-        ModalBottomSheet(onDismissRequest = { undoHistory = false }) {
-            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
-            UndoHistoryPanel(Modifier.fillMaxWidth().heightIn(min = 240.dp))
-        }
     }
 }

@@ -96,7 +96,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                 if (outputs.outputs.isEmpty()) {
                     OutputRow(stringResource(R.string.handoff_this_device), HocketIcons.Filled.PhoneAndroid, self.playing, Modifier.clickable { pick(null) })
                 } else outputs.outputs.forEach { o ->
-                    val on = !elsewhere && o.id == outputs.current?.id
+                    val on = self.playing && o.id == outputs.current?.id
                     OutputRow(outputName(o), outputIcon(o.kind), on, Modifier.clickable { pick(o.id) }.testTag("handoff.output.${o.id}"))
                 }
                 TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }, modifier = Modifier.padding(horizontal = 12.dp).testTag("handoff.bluetooth")) {

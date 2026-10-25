@@ -141,7 +141,7 @@ internal fun PlayerAbout(
         albumInfo?.text?.takeIf { it.isNotBlank() }?.let { text ->
             item(key = "albumInfo") { InfoCard(stringResource(R.string.player_about_album_notes), text, card) }
         }
-        artistInfo?.let { info ->
+        artistInfo?.takeIf { !it.text.isNullOrBlank() || !it.similarArtists.isNullOrEmpty() }?.let { info ->
             item(key = "artistInfo") {
                 InfoCard(stringResource(R.string.player_about_artist_bio), info.text, card) {
                     val similar = info.similarArtists.orEmpty()
