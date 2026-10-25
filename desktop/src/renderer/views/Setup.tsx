@@ -11,7 +11,6 @@ export function Setup() {
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const lastError = useApp((s) => s.lastError);
@@ -25,6 +24,7 @@ export function Setup() {
   }, [lastError, submittedAt, busy]);
 
 
+  const cleartext = /^http:\/\/./i.test(url.trim());
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const u = url.trim().replace(/\/+$/, "");
@@ -33,7 +33,7 @@ export function Setup() {
     setError(undefined);
     setBusy(true);
     setSubmittedAt(Date.now());
-    bridge().dispatch({ type: "addServer", data: { url: u, username: username.trim(), password, name: name.trim() || undefined } });
+    bridge().dispatch({ type: "addServer", data: { url: u, username: username.trim(), password, name: undefined } });
   };
   return (
     <main className="setup" data-testid="setup">
@@ -49,15 +49,16 @@ export function Setup() {
         </div>
         <div className="setup-card">
           <CredentialWarning />
-          <label>{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={error ? "setup-error" : undefined} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /></label>
+          <label>{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={[error ? "setup-error" : "", "setup-url-hint", cleartext ? "setup-cleartext" : ""].filter(Boolean).join(" ")} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /><span className="setup-hint" id="setup-url-hint">{t("setup.urlHint")}</span></label>
+          {cleartext ? <div className="setup-cleartext" id="setup-cleartext" data-testid="setup-cleartext"><Icon name="warn" size={18} />{t("setup.cleartext")}</div> : null}
           <label>{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
           <label>{t("setup.password")}<input className="input" type="password" aria-required="true" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" /></label>
-          <label>{t("setup.name")}<input className="input" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} /></label>
           {error ? <div className="error" id="setup-error" role="alert" data-testid="setup-error"><Icon name="warn" size={18} filled />{error}</div> : null}
           <div className="setup-actions">
             <button type="submit" className="btn primary connect" disabled={busy} data-testid="setup-connect">{busy ? <Icon name="spinner" size={20} className="spin" /> : null}{busy ? t("setup.connecting") : t("setup.connect")}</button>
             <button type="button" className="btn tonal" onClick={() => void bridge().config.import().catch((err: unknown) => console.error("config import failed", err))} data-testid="setup-import"><Icon name="backup" size={18} />{t("setup.import")}</button>
           </div>
+          <p className="setup-hint setup-enter" aria-hidden="true">{t("setup.enterHint")}</p>
         </div>
       </form>
     </main>

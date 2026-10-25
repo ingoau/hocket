@@ -23,13 +23,16 @@ const STRINGS = {
   "nav.customise": "Customise sidebar…",
 
   // Server setup
-  "setup.title": "Connect to your Navidrome server",
-  "setup.subtitle": "Navidrome 0.63.0 or newer. Your password stays on this device, encrypted by the operating system.",
+  "setup.title": "Connect to Navidrome",
+  "setup.subtitle": "Hocket needs Navidrome 0.63.0 or newer. Your password stays on this device, encrypted by the operating system.",
   "setup.url": "Server URL",
   "setup.urlPlaceholder": "https://music.example.org",
   "setup.username": "Username",
   "setup.password": "Password",
   "setup.name": "Name (optional)",
+  "setup.urlHint": "The server address, starting with http:// or https://",
+  "setup.cleartext": "This address starts with http://, so your password and everything you play travel unencrypted and can be read or changed by anyone on the network. Use https:// unless the server is on a network you trust.",
+  "setup.enterHint": "Press Enter to connect",
   "setup.connect": "Connect",
   "setup.connecting": "Connecting…",
   "setup.errorUrl": "Enter the server URL, including https://",

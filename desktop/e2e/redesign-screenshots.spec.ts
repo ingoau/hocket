@@ -52,6 +52,16 @@ test("redesigned screens", async () => {
       await page.screenshot({ path: join(out!, `desktop-${theme}-${name}.png`) });
     };
     try {
+      // Server setup, with the warning an unencrypted http:// address brings.
+      if (wanted("setup")) {
+        await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+        await resizeWindow(app, page, 1456, 912);
+        await page.getByTestId("setup-url").fill("http://music.lan:4533");
+        await page.getByTestId("setup-username").fill("maren");
+        await expect(page.getByTestId("setup-cleartext")).toBeVisible();
+        await shot("setup");
+        await page.getByTestId("setup-url").fill("");
+      }
       await completeSetup(page);
       await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });
       await setSetting(page, "display.theme", theme);
