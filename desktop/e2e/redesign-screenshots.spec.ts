@@ -116,6 +116,12 @@ test("redesigned screens", async () => {
       await page.waitForTimeout(1500);
       await shot("downloads");
 
+      // Stats: period chips and the charts' readouts.
+      for (let i = 0; i < 6; i++) await page.evaluate(() => window.hocket.dispatch({ type: "next" }));
+      await openPlace(page, "stats");
+      await expect(page.getByTestId("view-stats")).toBeVisible();
+      await shot("stats");
+
       // Settings: grouped nav with the account card.
       await page.getByTestId("nav-settings").click();
       await expect(page.getByTestId("view-settings")).toBeVisible();

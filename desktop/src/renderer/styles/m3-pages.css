@@ -608,3 +608,10 @@ button.m3-switch { border: 0; padding: 0; background: none; }
   .dl-storage { position: static; order: -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 24px; align-items: center; }
   .dl-storage > :is(h2, .dl-bar) { grid-column: 1 / -1; }
 }
+
+/* Stats: the period chips, and each chart's readout of the bar under the pointer (or the peak). */
+.stat-periods .seg { flex: 0 0 auto; height: 36px; padding: 0 16px; font-size: var(--fs-md); }
+.stat-readout { font-size: var(--fs-sm); color: var(--fg-muted); min-height: 1.4em; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
+.page-stats .bars > div { background: color-mix(in srgb, var(--accent) 42%, var(--bg-elev)); opacity: 1; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.page-stats .bars > div.peak { background: var(--accent); }
+.page-stats .bars > div.hover { background: var(--accent-text); }

@@ -25,7 +25,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Album / Artist / Playlist | [x] | [x] | [ ] |
 | Server setup | – | [ ] | [ ] |
 | Downloads | – | [x] | [ ] |
-| Stats | – | [ ] | [ ] |
+| Stats | – | [x] | [ ] |
 | Filters | – | [ ] | [ ] |
 | Song info | [x] | [x] | [ ] |
 
@@ -44,3 +44,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
   with View more grid (newest/oldest), About from artistInfo.
 - Desktop Song info: wide dialog (SongInfo.tsx), library details left, Last.fm right, no action buttons.
 - Desktop Downloads (A): table (title, downloaded, size, files, remove) and a Storage card (bar, Available offline link, clear cache, warn threshold); card stacks above via a container query.
+- Desktop Stats: period chips (7 days / 30 days / Year), chart readouts (hovered bar or the peak), peak bar on the accent.
