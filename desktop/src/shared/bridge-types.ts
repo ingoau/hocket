@@ -136,6 +136,12 @@ export interface HocketBridge {
     writeText(text: string): void;
   };
   /**
+   * Share one track's original audio file. Main resolves the file (a finished download, or a fresh
+   * copy in the cache) and never tells the page where it is: macOS opens the share sheet, elsewhere
+   * a save dialog copies it.
+   */
+  shareAudio(trackId: string): Promise<"shared" | "saved" | "cancelled" | "failed">;
+  /**
    * The developer diagnostics bundle: environment, the core's diagnostics and the last hour of
    * logs. Every call builds a fresh one in main; the page only ever sees a summary.
    */
@@ -198,6 +204,7 @@ export const IPC = {
   diagnosticsCopy: "hocket:diagnostics:copy",
   diagnosticsReveal: "hocket:diagnostics:reveal",
   diagnosticsShare: "hocket:diagnostics:share",
+  shareAudio: "hocket:share:audio",
 } as const;
 
 /** The largest cover (each side) the renderer may hand `artworkLayout`; it decodes to 256. */

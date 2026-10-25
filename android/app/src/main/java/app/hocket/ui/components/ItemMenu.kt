@@ -96,6 +96,8 @@ import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.QueryResult
+import app.hocket.share.ShareChoice
+import app.hocket.share.shareChoices
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.launch
@@ -156,6 +158,12 @@ sealed interface MenuEntry {
 
     /** A row the context adds (the player's sleep timer, a playlist's remove). */
     data class Extra(val extra: SongMenuExtra) : MenuEntry { override val key get() = extra.testTag ?: extra.label }
+
+    /** Share: drills into Navidrome, Song.link and (one song) the file. */
+    data object Share : MenuEntry { override val key get() = "share" }
+
+    /** Open in Genius: a search for this one song, on the menu itself. */
+    data object Genius : MenuEntry { override val key get() = "genius" }
 }
 
 /** Love and Unlove, for the header's toggle (it runs the one matching the item's state). */
@@ -192,7 +200,7 @@ private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLI
 
 /**
  * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play, Shuffle,
- * Play next, Play later; the star row; Add to playlist, Download, Go to album, the context's extras;
+ * Play next, Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
  * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
  * Album: the same without the stars, Go to artist in the short list and Album info under More.
  * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
@@ -206,6 +214,7 @@ fun menuLayout(
     canGoToAlbum: Boolean = false,
     canGoToArtist: Boolean = false,
     hasInfo: Boolean = false,
+    count: Int = 1,
 ): MenuLayout {
     val byId = actions.associateBy { it.id }
     val replaced = extras.mapNotNull { it.replaces }.toSet()
@@ -223,14 +232,16 @@ fun menuLayout(
     val goAlbum = take(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) }
     val goArtist = take(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) }
     val info = MenuEntry.Info.takeIf { hasInfo }
+    val share = MenuEntry.Share.takeIf { shareChoices(kind, count).any }
+    val genius = MenuEntry.Genius.takeIf { kind == MenuKind.Song && count <= 1 }
     val context = CONTEXT_IDS.mapNotNull { id -> take(id)?.takeIf { it.enabled && id !in replaced } }
     val (destructiveExtras, otherExtras) = extras.partition { it.destructive }
     val rest = actions.filter { it.id !in used && it.id !in UNPERFORMABLE }
     val (restDestructive, restOther) = rest.partition { it.destructive }
     var primary = when (kind) {
-        MenuKind.Song -> listOfNotNull(addTo, download, goAlbum)
-        MenuKind.Album -> listOfNotNull(addTo, download, goArtist)
-        else -> listOfNotNull(addTo, download)
+        MenuKind.Song -> listOfNotNull(addTo, download, share, genius, goAlbum)
+        MenuKind.Album -> listOfNotNull(addTo, download, share, goArtist)
+        else -> listOfNotNull(addTo, download, share)
     } + otherExtras.map { MenuEntry.Extra(it) }
     var more = when (kind) {
         MenuKind.Song -> listOfNotNull(pin, goArtist, info)
@@ -275,6 +286,7 @@ fun MenuSheet(
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
     onInfo: (() -> Unit)? = null,
+    onShare: (ShareChoice) -> Unit = {},
     onRan: () -> Unit = {},
     extraTop: (@Composable () -> Unit)? = null,
     tag: String = "songMenu",
@@ -286,10 +298,12 @@ fun MenuSheet(
     fun hideThen(after: () -> Unit = {}) {
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
-    val layout = remember(actions, subject.kind, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null) {
-        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null)
+    val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null) {
+        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count)
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var sharePage by remember { mutableStateOf(false) }
+    val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
     var downloaded by remember { mutableStateOf(subject.downloaded) }
@@ -423,6 +437,10 @@ fun MenuSheet(
             }
             MenuEntry.Info -> MenuRow(AnnotatedString(stringResource(if (subject.kind == MenuKind.Album) R.string.menu_album_info else R.string.menu_song_info)), HocketIcons.Filled.Info, shape, tag = "$tag.info") { hideThen { onInfo?.invoke() } }
             MenuEntry.Rate -> MenuRow(AnnotatedString(stringResource(R.string.action_rate)), HocketIcons.Filled.Star, shape, tag = "$tag.rate") { rateDialog = true }
+            MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
+                trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            ) { sharePage = true }
+            MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { onShare(ShareChoice.Genius) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
                 MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) { hideThen(e.onClick) }
@@ -440,6 +458,9 @@ fun MenuSheet(
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
+            if (sharePage) {
+                SharePage(shareOptions, tag) { choice -> if (choice == null) sharePage = false else hideThen { onShare(choice) } }
+            } else {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
             if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
             if (layout.rating) {
@@ -482,6 +503,7 @@ fun MenuSheet(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -638,6 +660,28 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
             }
         }
         RatingStars(rating ?: 0, onRate = onRate, starSize = 28.dp, spacing = 14.dp, stateOverride = if (rating == null) mixed else null)
+    }
+}
+
+/** Share's page: back, then the links and (one song) the file. Null from [onChoose] is back. */
+@Composable
+private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onChoose: (ShareChoice?) -> Unit) {
+    val rows = listOfNotNull(
+        ShareChoice.Navidrome.takeIf { choices.navidrome },
+        ShareChoice.SongLink.takeIf { choices.songLink },
+        ShareChoice.File.takeIf { choices.file },
+    )
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.share.back") { onChoose(null) }
+        rows.forEachIndexed { i, choice ->
+            val (label, icon, id) = when (choice) {
+                ShareChoice.Navidrome -> Triple(R.string.menu_share_navidrome, HocketIcons.Filled.Share, "navidrome")
+                ShareChoice.SongLink -> Triple(R.string.menu_share_song_link, HocketIcons.Filled.MusicNote, "songLink")
+                ShareChoice.File -> Triple(R.string.menu_share_file, HocketIcons.Filled.Download, "file")
+                ShareChoice.Genius -> error("Open in Genius is a row of the menu")
+            }
+            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i + 1, rows.size + 1), tag = "$tag.share.$id") { onChoose(choice) }
+        }
     }
 }
 

@@ -175,6 +175,8 @@ object Queries {
     fun artwork(id: String, size: Int) = Query.Artwork(QueryArtworkInner(id, size.toUInt()))
     fun mediaSource(trackId: TrackId) = Query.MediaSource(QueryMediaSourceInner(trackId))
     fun configDocument(includeSecrets: Boolean) = Query.ConfigDocument(QueryConfigDocumentInner(includeSecrets))
+    fun createShare(ids: List<String>) = Query.CreateShare(QueryCreateShareInner(ids))
+    fun exportAudio(trackId: TrackId) = Query.ExportAudio(QueryExportAudioInner(trackId))
 }
 
 /** The fixed artwork sizes the core caches. Never request anything else. */

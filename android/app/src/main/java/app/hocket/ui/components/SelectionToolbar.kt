@@ -34,6 +34,8 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.api.ActionDescriptor
+import app.hocket.share.ShareRequest
+import app.hocket.share.ShareRequestEffect
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.core.Queries
@@ -66,6 +68,7 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
     var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
     var menu by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
+    var share by remember { mutableStateOf<ShareRequest?>(null) }
     var rating by remember { mutableStateOf(false) }
     var songsMenu by remember { mutableStateOf<MenuSubject?>(null) }
     val songs = kind == SelectionKind.Tracks || kind == SelectionKind.QueueItems
@@ -134,11 +137,13 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
                 }),
                 onDismiss = { songsMenu = null },
                 onAddToPlaylist = { playlistPicker = true },
+                onShare = { share = ShareRequest(it, subject, client.selectionTarget()) },
                 onRan = { client.clearSelection() },
                 tag = "selectionMenu",
             )
         }
     }
+    ShareRequestEffect(share) { share = null }
     if (playlistPicker) PlaylistPicker(target = client.selectionTarget(), onDismiss = { playlistPicker = false; client.clearSelection() })
     if (rating) {
         // Applies to the whole selection, so 0 (clear) is offered alongside the stars.

@@ -60,6 +60,7 @@ const bridge: HocketBridge = {
   clipboard: {
     writeText: (text: string) => ipcRenderer.send(IPC.clipboardWrite, text),
   },
+  shareAudio: (trackId: string) => ipcRenderer.invoke(IPC.shareAudio, trackId) as Promise<"shared" | "saved" | "cancelled" | "failed">,
   diagnostics: {
     summary: () => ipcRenderer.invoke(IPC.diagnosticsSummary) as Promise<DiagnosticsSummary>,
     collect: (options?: { force?: boolean }) => ipcRenderer.invoke(IPC.diagnosticsCollect, options) as Promise<RoomDiagnosticsStatus | undefined>,

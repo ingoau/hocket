@@ -626,6 +626,24 @@ impl SubsonicApi for Client {
         Box::pin(async move { self.call("deletePlaylist", &[("id", id)]).await.map(|_| ()) })
     }
 
+    fn create_share(&self, ids: &[String]) -> ApiFuture<'_, String> {
+        if ids.is_empty() {
+            return Box::pin(async {
+                Err(SubsonicError::Protocol("createShare needs an id".into()))
+            });
+        }
+        let params: Vec<(&str, String)> = ids.iter().map(|id| ("id", id.clone())).collect();
+        Box::pin(async move {
+            let body = self.call("createShare", &params).await?;
+            body.shares
+                .ok_or_else(|| missing("shares"))?
+                .share
+                .into_iter()
+                .find_map(|s| s.url.filter(|u| !u.is_empty()))
+                .ok_or_else(|| missing("share url"))
+        })
+    }
+
     fn search3(&self, query: &str, page: Search3Page) -> ApiFuture<'_, SearchResult3> {
         let query = query.to_string();
         Box::pin(async move {

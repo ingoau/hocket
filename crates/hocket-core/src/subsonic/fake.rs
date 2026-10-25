@@ -692,6 +692,19 @@ impl SubsonicApi for FakeServer {
         })
     }
 
+    fn create_share(&self, ids: &[String]) -> ApiFuture<'_, String> {
+        let ids = ids.to_vec();
+        Box::pin(async move {
+            self.gate("createShare")?;
+            if ids.is_empty() {
+                return Err(SubsonicError::Protocol("createShare needs an id".into()));
+            }
+            let mut st = self.state.lock();
+            st.next_id += 1;
+            Ok(format!("https://navidrome.example/share/{}", st.next_id))
+        })
+    }
+
     fn search3(&self, query: &str, page: Search3Page) -> ApiFuture<'_, SearchResult3> {
         let query = query.to_lowercase();
         Box::pin(async move {

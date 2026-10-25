@@ -218,6 +218,14 @@ impl Actor {
             Query::ConfigDocument { include_secrets } => {
                 QueryResult::Text(self.config_document(include_secrets))
             }
+            Query::CreateShare { ids } => {
+                self.create_share_query(ids, reply);
+                return;
+            }
+            Query::ExportAudio { track_id } => {
+                self.export_audio_query(track_id, reply);
+                return;
+            }
         };
         let _ = reply.send(answer);
     }
@@ -231,6 +239,87 @@ impl Actor {
                 Some(WhereClause::new("0=1", vec![]))
             }
         }
+    }
+
+    fn create_share_query(&mut self, ids: Vec<String>, reply: oneshot::Sender<QueryResult>) {
+        let ids: Vec<String> = ids.into_iter().filter(|id| !id.is_empty()).collect();
+        let Some(api) = self.api().filter(|_| !ids.is_empty()) else {
+            let _ = reply.send(QueryResult::Share(None));
+            return;
+        };
+        self.spawn(async move {
+            let url = match api.create_share(&ids).await {
+                Ok(url) if !url.is_empty() => Some(url),
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::debug!(error = %e, "createShare failed");
+                    None
+                }
+            };
+            let _ = reply.send(QueryResult::Share(url.map(|url| CreatedShare { url })));
+        });
+    }
+
+    fn export_audio_query(&mut self, track_id: String, reply: oneshot::Sender<QueryResult>) {
+        let Some(track) = self.db.track(&track_id).ok().flatten() else {
+            let _ = reply.send(QueryResult::AudioFile(None));
+            return;
+        };
+        let file_name = export_file_name(&track);
+        let content_type = track
+            .content_type
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "application/octet-stream".into());
+        // A transcoded pin is a different file (opus for a flac). Share the original only.
+        if let Ok(Some(path)) = self.downloads.downloaded_path(&track.server_id, &track.id) {
+            if pin_matches_original(&path, track.suffix.as_deref()) {
+                let _ = reply.send(QueryResult::AudioFile(Some(ExportedAudio {
+                    path: path.to_string_lossy().into_owned(),
+                    file_name,
+                    content_type,
+                })));
+                return;
+            }
+        }
+        let Some(api) = self.api() else {
+            let _ = reply.send(QueryResult::AudioFile(None));
+            return;
+        };
+        let mut dest = std::path::PathBuf::from(&self.cfg.cache_dir);
+        dest.push("share");
+        let ext = track
+            .suffix
+            .as_deref()
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+            .unwrap_or("bin");
+        dest.push(format!("{}.{}", export_cache_stem(&track.id), ext));
+        if share_cache_fresh(&dest, track.size_bytes) {
+            let _ = reply.send(QueryResult::AudioFile(Some(ExportedAudio {
+                path: dest.to_string_lossy().into_owned(),
+                file_name,
+                content_type,
+            })));
+            return;
+        }
+        let id = track.id.clone();
+        self.spawn(async move {
+            let path = async {
+                if let Some(parent) = dest.parent() {
+                    tokio::fs::create_dir_all(parent).await.ok()?;
+                }
+                api.download_to_file(api.download_url(&id), &dest)
+                    .await
+                    .ok()?;
+                Some(dest.to_string_lossy().into_owned())
+            }
+            .await;
+            let _ = reply.send(QueryResult::AudioFile(path.map(|path| ExportedAudio {
+                path,
+                file_name,
+                content_type,
+            })));
+        });
     }
 
     fn artwork_query(&mut self, id: String, size: u32, reply: oneshot::Sender<QueryResult>) {
@@ -482,7 +571,137 @@ fn with_mirror_state(db: &crate::db::Db, tracks: Vec<Track>) -> Vec<Track> {
         .collect()
 }
 
+/// "Artist - Title.flac", with characters filesystems refuse turned into underscores.
+fn export_file_name(track: &Track) -> String {
+    let stem = match track.artist.as_deref().filter(|s| !s.is_empty()) {
+        Some(artist) => format!("{artist} - {}", track.title),
+        None => track.title.clone(),
+    };
+    let stem: String = stem
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .take(120)
+        .collect();
+    let stem = stem.trim().trim_matches('.').to_string();
+    let stem = if stem.is_empty() {
+        "track".to_string()
+    } else {
+        stem
+    };
+    match track
+        .suffix
+        .as_deref()
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+    {
+        Some(suffix) => format!("{stem}.{suffix}"),
+        None => stem,
+    }
+}
+
+fn export_safe_id(id: &str) -> String {
+    let safe: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(40)
+        .collect();
+    if safe.is_empty() {
+        "track".into()
+    } else {
+        safe
+    }
+}
+
+/// Cache file stem. A hash of the whole id keeps `ab/cd` from landing on `ab_cd`.
+fn export_cache_stem(id: &str) -> String {
+    format!("{}-{:08x}", export_safe_id(id), fnv1a(id.as_bytes()))
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in bytes {
+        hash ^= u32::from(*b);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A finished pin is the original when its extension is the library suffix.
+fn pin_matches_original(path: &std::path::Path, suffix: Option<&str>) -> bool {
+    let Some(want) =
+        suffix.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+    else {
+        return false;
+    };
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|got| want.eq_ignore_ascii_case(got))
+}
+
+/// Reuse a cached original only when it is non-empty and, if we know the size, that size.
+fn share_cache_fresh(dest: &std::path::Path, size_bytes: Option<f64>) -> bool {
+    let Ok(meta) = std::fs::metadata(dest) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return false;
+    }
+    match size_bytes {
+        Some(n) if n > 0.0 && n.is_finite() => meta.len() == n as u64,
+        _ => true,
+    }
+}
+
 /// The artist's most played tracks from the mirror (offline answer).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(title: &str, artist: Option<&str>, suffix: Option<&str>) -> Track {
+        Track {
+            id: "id/1".into(),
+            title: title.into(),
+            artist: artist.map(str::to_string),
+            suffix: suffix.map(str::to_string),
+            ..Track::default()
+        }
+    }
+
+    #[test]
+    fn export_names_keep_the_artist_and_suffix_and_drop_path_characters() {
+        assert_eq!(
+            export_file_name(&track("Roygbiv", Some("Boards of Canada"), Some("flac"))),
+            "Boards of Canada - Roygbiv.flac"
+        );
+        assert_eq!(
+            export_file_name(&track("a/b:c", None, Some("mp3"))),
+            "a_b_c.mp3"
+        );
+        assert_eq!(export_file_name(&track("..", None, Some("../x"))), "track");
+        assert_eq!(export_safe_id("ab/cd"), "ab_cd");
+        assert_ne!(export_cache_stem("ab/cd"), export_cache_stem("ab_cd"));
+        assert_eq!(export_cache_stem("ab/cd"), export_cache_stem("ab/cd"));
+        assert!(pin_matches_original(
+            std::path::Path::new("t.flac"),
+            Some("FLAC")
+        ));
+        assert!(!pin_matches_original(
+            std::path::Path::new("t.opus"),
+            Some("flac")
+        ));
+        assert!(!pin_matches_original(std::path::Path::new("t.flac"), None));
+    }
+}
+
 fn most_played(db: &crate::db::Db, artist_id: &str, count: u32) -> Vec<Track> {
     let mut tracks = db.artist_tracks(artist_id).unwrap_or_default();
     tracks.sort_by_key(|t| std::cmp::Reverse(t.play_count));

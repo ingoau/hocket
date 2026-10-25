@@ -91,6 +91,12 @@ class MenuScreenshotTest {
         step {
             openSongMenu()
             shot(dir, "$prefix-01-song-menu")
+            compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("songMenu.share.navidrome")
+            settle()
+            shot(dir, "$prefix-01c-share")
+            compose.onNodeWithTag("songMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             // Held part way through a swipe up: the rest opening with the finger, More folding away.
             compose.mainClock.autoAdvance = false
             compose.onNodeWithTag("songMenu.header").performTouchInput { down(center); repeat(4) { moveBy(androidx.compose.ui.geometry.Offset(0f, -40f)) } }
@@ -109,6 +115,12 @@ class MenuScreenshotTest {
             awaitTag("itemMenu.header")
             settle()
             shot(dir, "$prefix-03-album-menu")
+            compose.onNodeWithTag("itemMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("itemMenu.share.songLink")
+            settle()
+            shot(dir, "$prefix-03b-album-share")
+            compose.onNodeWithTag("itemMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             dismissSheet()
             albumMenu = null
             settle()

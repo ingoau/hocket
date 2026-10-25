@@ -4,9 +4,9 @@
 // dropped), and the renderer never names a filesystem path: files are read
 // and written inside the dialog handlers, and the one core command that
 // writes a file (ExportNsp) may only target a path a save dialog just chose.
-import { BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
+import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
@@ -121,6 +121,8 @@ export function installIpc(deps: IpcDeps): void {
 
   ipcMain.handle(IPC.query, async (e, query: unknown): Promise<QueryResult> => {
     if (!isOurs(windows, e.sender) || !isEnvelope(query)) throw new Error("rejected");
+    // The file's path stays in main (shareAudio). A page must not ask for it.
+    if (query.type === "exportAudio") throw new Error("rejected");
     const result = await core.query(query as Query);
     if (query.type === "artwork" && result.type === "path") {
       // Never hand a path to the page: it gets a token the protocol resolves.
@@ -128,6 +130,36 @@ export function installIpc(deps: IpcDeps): void {
       return { type: "path", data: token };
     }
     return result;
+  });
+
+  ipcMain.handle(IPC.shareAudio, async (e, trackId: unknown): Promise<"shared" | "saved" | "cancelled" | "failed"> => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || !isOurs(windows, e.sender) || typeof trackId !== "string" || trackId.length === 0 || trackId.length > 512) return "failed";
+    try {
+      const result = await core.query({ type: "exportAudio", data: { track_id: trackId } });
+      if (result.type !== "audioFile" || !result.data?.path) return "failed";
+      const path = await realpath(result.data.path);
+      const roots = [app.getPath("userData"), app.getPath("sessionData")];
+      if (process.env.HOCKET_CACHE_DIR) roots.push(process.env.HOCKET_CACHE_DIR);
+      if (!(await pathWithin(roots, path))) return "failed";
+      if (process.platform === "darwin") {
+        const named = join(dirname(path), shareDisplayName(result.data.fileName));
+        if (named !== path) await copyFile(path, named);
+        const shared = await realpath(named);
+        if (!(await pathWithin(roots, shared))) return "failed";
+        new ShareMenu({ filePaths: [shared] }).popup({ window: win });
+        return "shared";
+      }
+      const saved = await dialog.showSaveDialog(win, { title: t("menu.shareFileDialog"), defaultPath: result.data.fileName });
+      if (saved.canceled || !saved.filePath) return "cancelled";
+      const again = await realpath(path);
+      if (!(await pathWithin(roots, again))) return "failed";
+      await copyFile(again, saved.filePath);
+      return "saved";
+    } catch (err) {
+      console.error("[ipc] shareAudio failed", err);
+      return "failed";
+    }
   });
 
   ipcMain.handle(IPC.artworkLayout, (e, rgba: unknown, width: unknown, height: unknown, request: unknown): ArtworkLayout | undefined => {
@@ -428,6 +460,27 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     new ShareMenu({ filePaths: [path] }).popup({ window: win });
     return true;
   });
+}
+
+/** One path segment for the macOS share sheet, which shows the file's own name. */
+function shareDisplayName(name: string): string {
+  const base = name.split(/[/\\]/).pop()?.replaceAll("\0", "").replace(/^\.+/, "").trim() ?? "";
+  return base || "track";
+}
+
+/** True when [file] is [root] or a file inside it. Both are resolved, so a symlink can't step out. */
+async function pathWithin(roots: string[], file: string): Promise<boolean> {
+  for (const root of roots) {
+    let base: string;
+    try {
+      base = await realpath(root);
+    } catch {
+      continue;
+    }
+    const rel = relative(base, file);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return true;
+  }
+  return false;
 }
 
 function applyWindowControl(windows: Windows, win: BrowserWindow, control: unknown): void {
