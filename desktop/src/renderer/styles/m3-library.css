@@ -208,6 +208,7 @@
 .detail-head.compact:is(.hero-small, .hero-none) { min-height: 0; }
 .detail-head.hero-small .hero-backdrop img { filter: blur(56px) saturate(1.25) brightness(0.62); transform: scale(1.3); }
 .detail-head.hero-none { min-height: 300px; background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 45%, color-mix(in srgb, var(--accent) 40%, #000) 100%); }
+.detail-head.hero-small .art.pending { background: rgba(255, 255, 255, 0.12); box-shadow: none; }
 .detail-head.hero-none .art.placeholder { display: grid; place-items: center; background: rgba(255, 255, 255, 0.12); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24); color: #fff; }
 .detail-head:is(.hero-large, .hero-small, .hero-none) .meta :is(.muted, .faint) { color: rgba(255, 255, 255, 0.84); }
 .detail-head:is(.hero-large, .hero-small, .hero-none) .meta > .muted.small:first-child { background: rgba(255, 255, 255, 0.16); color: #fff; }

@@ -25,7 +25,7 @@ export function Filters({ selected }: { selected?: string }) {
         <div className="actions"><button type="button" className="btn primary" onClick={() => navigate({ view: "filter", id: "new" })} data-testid="new-filter"><Icon name="plus" size={14} /> {t("filters.new")}</button></div>
       </div>
       <div className="view-body filters-split">
-        <div className="filters-list" role="list" aria-label={t("filters.title")}>
+        <div className="filters-list" role={filters.length ? "list" : undefined} aria-label={filters.length ? t("filters.title") : undefined}>
         {!filters.length ? <EmptyState message={t("filters.empty")} icon="filter" action={<button type="button" className="btn" onClick={() => navigate({ view: "filter", id: "new" })}>{t("filters.new")}</button>} /> : null}
         {filters.map((f) => (
           <div key={f.id} role="listitem" className={`pin-row filter-row ${f.id === current ? "selected" : ""}`} aria-current={f.id === current || undefined} style={{ gridTemplateColumns: "auto 1fr auto auto auto" }} data-testid="filter-row" onContextMenu={(e) => openItemsMenu(e, filterMenuItems(f, serverId))}>

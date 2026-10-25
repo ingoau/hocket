@@ -1,6 +1,6 @@
 // Filter builder: rules tree, live count, server-expressibility indicator and
 // the four outputs (save / play / smart playlist / static playlist / export .nsp).
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Filter, FilterField, FilterNode, FilterOp, FilterPreview, FilterRule, FilterValue, SortOrder } from "@core/api";
 import { FilterFieldValues, FilterOpValues, SortOrderValues } from "@core/api";
 import { t } from "@shared/strings";
@@ -77,9 +77,21 @@ export function FilterBuilder({ id, embedded = false }: { id: string; embedded?:
 
   const valid = filter.name.trim().length > 0;
   const dirty = existing ? JSON.stringify(existing) !== JSON.stringify(filter) : true;
+  // A new filter moves to its own address once the core has it (so the editor never remounts blank,
+  // and a refused save leaves the draft in place).
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (saving && !existing && filters.some((f) => f.id === filter.id)) navigate({ view: "filter", id: filter.id }, true);
+  }, [saving, existing, filters, filter.id, navigate]);
+  // The filter was deleted elsewhere (another device, its menu): leave its editor rather than offer to recreate it.
+  const seen = useRef(false);
+  if (existing) seen.current = true;
+  useEffect(() => {
+    if (id !== "new" && seen.current && !existing) navigate({ view: "filters" }, true);
+  }, [id, existing, navigate]);
   const save = () => {
     bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
-    if (!existing) navigate({ view: "filter", id: filter.id }, true);
+    if (!existing) setSaving(true);
   };
   const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
   const exportNsp = async () => {

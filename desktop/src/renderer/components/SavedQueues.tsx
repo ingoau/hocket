@@ -18,6 +18,13 @@ export function SavedQueues() {
   const count = useApp((s) => s.queue.history.length + (s.queue.current ? 1 : 0) + s.queue.playingNext.length + s.queue.totalUpcoming);
   const [renaming, setRenaming] = useState<string | null | undefined>(undefined);
   const d = bridge().dispatch;
+  // After Enter or Escape in a rename, focus goes back to that queue's Rename button (it unmounted the field).
+  const [refocus, setRefocus] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (refocus === undefined || renaming !== undefined) return;
+    document.querySelector<HTMLElement>(`[data-rename-for="${CSS.escape(refocus)}"]`)?.focus();
+    setRefocus(undefined);
+  }, [refocus, renaming]);
   const rename = (saved_queue_id: string | null, value: string) => {
     setRenaming(undefined);
     if (value.trim()) d({ type: "renameQueue", data: { saved_queue_id: saved_queue_id ?? undefined, label: value.trim() } });
@@ -27,13 +34,13 @@ export function SavedQueues() {
   const recent = sorted.filter((q) => !q.pinned);
   const row = (q: SavedQueue) => (
     <li key={q.id} className="sq-row" onContextMenu={(e) => void openContextMenu(e, { type: "savedQueue", data: { id: q.id } }, { savedQueueId: q.id })} data-testid="saved-queue-row">
-      {renaming === q.id ? <RenameField initial={q.label} onDone={(v) => rename(q.id, v)} onCancel={() => setRenaming(undefined)} /> : (
+      {renaming === q.id ? <RenameField initial={q.label} onDone={(v, key) => { rename(q.id, v); if (key) setRefocus(q.id); }} onCancel={() => { setRenaming(undefined); setRefocus(q.id); }} /> : (
         <button type="button" className="sq-main" title={t("savedQueues.restore")} onClick={() => { d({ type: "restoreSavedQueue", data: { id: q.id } }); showSideView("queue"); }} data-testid="saved-queue-restore">
           <span className="truncate sq-name">{q.label}</span>
           <span className="small muted truncate">{t("savedQueues.tracks", { count: q.trackCount })} · {fmtRelative(q.lastInteractedAt)}</span>
         </button>
       )}
-      <button type="button" className="btn icon sm" title={t("savedQueues.rename")} aria-label={t("savedQueues.renameNamed", { name: q.label })} onClick={() => setRenaming(q.id)} data-testid="saved-queue-rename"><Icon name="edit" size={16} /></button>
+      <button type="button" className="btn icon sm" title={t("savedQueues.rename")} aria-label={t("savedQueues.renameNamed", { name: q.label })} onClick={() => setRenaming(q.id)} data-rename-for={q.id} data-testid="saved-queue-rename"><Icon name="edit" size={16} /></button>
       <button type="button" className={`btn icon sm ${q.pinned ? "on" : ""}`} aria-pressed={q.pinned} title={q.pinned ? t("savedQueues.unpin") : t("savedQueues.pin")} aria-label={`${q.pinned ? t("savedQueues.unpin") : t("savedQueues.pin")} ${q.label}`} onClick={() => d({ type: "pinSavedQueue", data: { id: q.id, pinned: !q.pinned } })} data-testid="saved-queue-pin"><Icon name="pin" size={16} filled={q.pinned} /></button>
       <button type="button" className="btn icon sm" title={t("savedQueues.delete")} aria-label={`${t("savedQueues.delete")} ${q.label}`} onClick={() => d({ type: "deleteSavedQueue", data: { id: q.id } })} data-testid="saved-queue-delete"><Icon name="trash" size={16} /></button>
     </li>
@@ -42,10 +49,10 @@ export function SavedQueues() {
     <div className="side-scroll queues-page" data-testid="saved-queues">
       <div className="sq-current" role="group" aria-labelledby="sq-playing" data-testid="saved-queues-current">
         <div className="sq-eyebrow" id="sq-playing">{t("queue.nowPlaying")}</div>
-        {renaming === null ? <RenameField initial={label ?? ""} onDone={(v) => rename(null, v)} onCancel={() => setRenaming(undefined)} /> : (
+        {renaming === null ? <RenameField initial={label ?? ""} onDone={(v, key) => { rename(null, v); if (key) setRefocus(""); }} onCancel={() => { setRenaming(undefined); setRefocus(""); }} /> : (
           <div className="sq-current-name">
             <span className="truncate">{label ?? t("queue.untitled")}</span>
-            {label ? <button type="button" className="btn icon sm" title={t("savedQueues.rename")} aria-label={t("savedQueues.renameNamed", { name: label })} onClick={() => setRenaming(null)} data-testid="saved-queues-current-rename"><Icon name="edit" size={16} /></button> : null}
+            {label ? <button type="button" className="btn icon sm" title={t("savedQueues.rename")} aria-label={t("savedQueues.renameNamed", { name: label })} onClick={() => setRenaming(null)} data-rename-for="" data-testid="saved-queues-current-rename"><Icon name="edit" size={16} /></button> : null}
           </div>
         )}
         <div className="small muted">{t("savedQueues.tracks", { count })}</div>
@@ -68,14 +75,14 @@ function Group({ title, id, children }: { title: string; id: string; children: R
 }
 
 /** Enter or leaving the field saves; Escape cancels; a blank name changes nothing. */
-function RenameField({ initial, onDone, onCancel }: { initial: string; onDone: (value: string) => void; onCancel: () => void }) {
+function RenameField({ initial, onDone, onCancel }: { initial: string; onDone: (value: string, byKey: boolean) => void; onCancel: () => void }) {
   const input = useRef<HTMLInputElement>(null);
   const done = useRef(false);
   useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
-  const finish = (save: boolean) => {
+  const finish = (save: boolean, byKey = true) => {
     if (done.current) return;
     done.current = true;
-    if (save) onDone(input.current?.value ?? "");
+    if (save) onDone(input.current?.value ?? "", byKey);
     else onCancel();
   };
   return (
@@ -84,6 +91,6 @@ function RenameField({ initial, onDone, onCancel }: { initial: string; onDone: (
         if (e.key === "Enter") { e.preventDefault(); finish(true); }
         if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
       }}
-      onBlur={() => finish(true)} data-testid="saved-queue-rename-input" />
+      onBlur={() => finish(true, false)} data-testid="saved-queue-rename-input" />
   );
 }

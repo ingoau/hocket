@@ -2,9 +2,9 @@
 // stretched past its own pixels: a cover big enough to fill the header edge to
 // edge is shown that way (Large); a smaller one sits at its size over a
 // blurred wash of itself (Small); with none, an accent gradient (None).
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ARTWORK_SIZES } from "@shared/constants";
-import { useArtwork } from "./Artwork";
+import { resolveArtwork } from "./Artwork";
 import { Icon } from "./Icon";
 
 export type HeroMode = "large" | "small" | "none";
@@ -13,9 +13,14 @@ export type HeroMode = "large" | "small" | "none";
 export const LARGE_HERO_HEIGHT = 420;
 export const COMPACT_HERO_HEIGHT = 320;
 
-/** Large only when the image has the pixels to fill `width` × `height` CSS px at `dpr` without being scaled up. */
-export function heroMode(natural: { width: number; height: number } | undefined, url: string | undefined, width: number, height: number, dpr: number): HeroMode {
-  if (!url) return "none";
+/**
+ * Large only when the image has the pixels to fill `width` × `height` CSS px at `dpr` without being
+ * scaled up. `url` undefined means no artwork; null means it is still being resolved (shown as Small,
+ * so a page with a cover never flashes the no-artwork gradient first).
+ */
+export function heroMode(natural: { width: number; height: number } | undefined, url: string | null | undefined, width: number, height: number, dpr: number): HeroMode {
+  if (url === undefined) return "none";
+  if (url === null) return "small";
   if (!natural || !width) return "small";
   // Cropped to cover: the scale is set by the tighter side.
   const scale = Math.max((width * dpr) / natural.width, (height * dpr) / natural.height);
@@ -24,7 +29,14 @@ export function heroMode(natural: { width: number; height: number } | undefined,
 
 /** `compact`: the album and playlist pages, whose track list scrolls under a fixed header, keep it shorter. */
 export function DetailHead({ coverArt, round = false, compact = false, icon = "music", onContextMenu, children, testId }: { coverArt: string | undefined; round?: boolean; compact?: boolean; icon?: string; onContextMenu?: (e: React.MouseEvent) => void; children: ReactNode; testId?: string }) {
-  const url = useArtwork(coverArt, ARTWORK_SIZES.full);
+  // null while resolving; undefined when there is no cover (or it could not be fetched).
+  const [resolved, setResolved] = useState<{ id: string; url: string | undefined } | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    if (coverArt) void resolveArtwork(coverArt, ARTWORK_SIZES.full).then((u) => alive && setResolved({ id: coverArt, url: u }));
+    return () => { alive = false; };
+  }, [coverArt]);
+  const url = !coverArt ? undefined : resolved?.id === coverArt ? resolved.url : null;
   const [natural, setNatural] = useState<{ width: number; height: number } | undefined>(undefined);
   const [width, setWidth] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -45,7 +57,7 @@ export function DetailHead({ coverArt, round = false, compact = false, icon = "m
           <img src={url} alt="" draggable={false} onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })} />
         </div>
       ) : null}
-      {mode === "small" && url ? <img className={`art${round ? " round" : ""}`} src={url} alt="" draggable={false} /> : null}
+      {mode === "small" ? (url ? <img className={`art${round ? " round" : ""}`} src={url} alt="" draggable={false} /> : <div className={`art pending${round ? " round" : ""}`} aria-hidden="true" />) : null}
       {mode === "none" ? <div className={`art placeholder${round ? " round" : ""}`} aria-hidden="true"><Icon name={icon} size={64} /></div> : null}
       <div className="meta">{children}</div>
     </div>

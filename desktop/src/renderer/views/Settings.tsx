@@ -21,6 +21,7 @@ import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { Select, Slider, Switch } from "../components/controls";
+import { warnChoices } from "../lib/storage-warn";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "advanced", "about"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -421,7 +422,7 @@ function Storage() {
       <Row title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
         <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
-          {[2, 4, 5, 10, 20, 50, 100].map((g) => <option key={g} value={g}>{g} GB</option>)}
+          {warnChoices(warn ? Math.round(warn / GIB) : 0).map((g) => <option key={g} value={g}>{g} GB</option>)}
         </Select>
       </Row>
       <Row title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })} data-testid="clear-cache">{t("downloads.clearCache")}</button></Row>

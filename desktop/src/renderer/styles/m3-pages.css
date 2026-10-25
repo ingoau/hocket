@@ -629,7 +629,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .filter-editor { container-type: inline-size; }
 @container (max-width: 760px) { .filter-editor .filter-builder { grid-template-columns: minmax(0, 1fr); } }
 .filters-list .filter-row { grid-template-columns: auto minmax(0, 1fr) auto auto !important; }
-/* Delete lives in the editor and the row menu; the list keeps play and more. */
+/* Delete lives in the editor; the list keeps play and more. */
 .filters-list .filter-row > :nth-child(5) { display: none; }
 .filters-list .filter-row .link-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @container (max-width: 780px) {

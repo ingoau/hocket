@@ -1178,9 +1178,20 @@ async fn artist_and_album_info_come_from_the_server_and_are_cached() {
     server.set_offline(true);
     assert_eq!(
         external(t.query(Query::ArtistInfo { id: "ar0".into() }).await),
-        Some(artist)
+        Some(artist.clone())
     );
     assert_eq!(server.calls_to("getArtistInfo2"), 1);
+    // Past its week, offline: the older answer still stands in.
+    t.clock.advance(8.0 * 86_400_000.0);
+    assert_eq!(
+        external(t.query(Query::ArtistInfo { id: "ar0".into() }).await),
+        Some(artist.clone())
+    );
+    assert_eq!(
+        server.calls_to("getArtistInfo2"),
+        2,
+        "a stale entry asks the server again"
+    );
     // Something never fetched, offline: nothing, not an error.
     assert_eq!(
         external(t.query(Query::AlbumInfo { id: "al1".into() }).await),

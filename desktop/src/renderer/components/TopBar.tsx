@@ -117,6 +117,7 @@ function SearchBox() {
   const serverRows = rows(server);
   const all = [...localRows, ...serverRows];
   const searchFor = (query: string) => {
+    setActive(-1);
     setRecent(rememberSearch(query));
     setQ(query);
     navigate({ view: "search", param: query });
@@ -131,6 +132,8 @@ function SearchBox() {
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { setOpen(false); input.current?.blur(); return; }
     const count = showRecent ? recent.length : all.length;
+    // Delete forgets the highlighted recent search (the rows' × does the same for the pointer).
+    if (showRecent && e.key === "Delete" && recent[active]) { e.preventDefault(); forget(recent[active]); return; }
     if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(count - 1, a + 1)); }
     if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(-1, a - 1)); }
     if (e.key === "Enter") {
@@ -150,6 +153,11 @@ function SearchBox() {
   );
   // Focused with nothing typed: the recent searches (this device's own).
   const showRecent = open && !q.trim() && recent.length > 0;
+  const forget = (query: string) => {
+    const next = forgetSearch(query);
+    setRecent(next);
+    setActive((a) => Math.min(a, next.length - 1));
+  };
   const expanded = (open && !!q.trim()) || showRecent;
   // The sheet lifts away on Escape, an outside click or a pick; when the query
   // is cleared there is nothing left to show, so it goes at once.
@@ -157,22 +165,26 @@ function SearchBox() {
   return (
     <div className="search" role="search">
       <Icon name="search" size={14} />
-      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
+      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onBlur={(e) => { if (!pop.current?.contains(e.relatedTarget as Node | null)) { setOpen(false); setActive(-1); } }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
       {sheet.value ? (
-        <div {...sheet.exitProps} id="search-results" className={`search-popover ${sheet.motion}`} role="listbox" aria-label={showRecent ? t("search.recent") : t("a11y.searchResults")} style={{ minHeight: showRecent ? undefined : minHeight }} data-testid="search-popover">
+        <div {...sheet.exitProps} id={showRecent ? undefined : "search-results"} className={`search-popover ${sheet.motion}`} role={showRecent ? undefined : "listbox"} aria-label={showRecent ? undefined : t("a11y.searchResults")} style={{ minHeight: showRecent ? undefined : minHeight }} data-testid="search-popover">
           {showRecent ? (
             <>
-              <div className="search-recent-head" role="presentation">
-                <span className="grow"><span className="search-recent-title">{t("search.recent")}</span> <span className="muted">· {t("search.recentLocal")}</span></span>
-                <button type="button" className="btn text sm" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); setRecent(clearSearches()); }} data-testid="search-recent-clear">{t("search.recentClear")}</button>
+              <div className="search-recent-head">
+                <span className="grow" id="search-recent-title"><span className="search-recent-title">{t("search.recent")}</span> <span className="muted">· {t("search.recentLocal")}</span></span>
+                <button type="button" className="btn text sm" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); setActive(-1); setRecent(clearSearches()); }} data-testid="search-recent-clear">{t("search.recentClear")}</button>
               </div>
-              {recent.map((r, i) => (
-                <div key={r} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); searchFor(r); }} data-testid="search-recent">
-                  <Icon name="restore" size={18} className="search-recent-icon" />
-                  <div className="grow truncate">{r}</div>
-                  <button type="button" className="btn icon sm" tabIndex={-1} aria-label={t("search.recentForget", { query: r })} title={t("search.recentForget", { query: r })} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setRecent(forgetSearch(r)); }} data-testid="search-recent-forget"><Icon name="close" size={16} /></button>
-                </div>
-              ))}
+              {/* The rows alone are the listbox; the header and its Clear sit outside it. */}
+              <div id="search-results" role="listbox" aria-labelledby="search-recent-title">
+                {recent.map((r, i) => (
+                  <div key={r} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} aria-description={t("search.recentForgetHint")} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); searchFor(r); }} data-testid="search-recent">
+                    <Icon name="restore" size={18} className="search-recent-icon" />
+                    <div className="grow truncate">{r}</div>
+                    {/* For the pointer only (Delete does it from the keyboard), so not a control inside the option. */}
+                    <span className="search-recent-forget" aria-hidden="true" title={t("search.recentForget", { query: r })} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); forget(r); }} data-testid="search-recent-forget"><Icon name="close" size={16} /></span>
+                  </div>
+                ))}
+              </div>
             </>
           ) : null}
           {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}

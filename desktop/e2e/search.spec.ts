@@ -1,4 +1,5 @@
 import { completeSetup, expect, test } from "./fixtures";
+import { expectNoViolations } from "./a11y-helpers";
 
 test.describe("search", () => {
   test("the results page narrows by kind, and recent searches stay on this device", async ({ hocket }) => {
@@ -37,6 +38,7 @@ test.describe("search", () => {
     await input.click();
     await expect(recent).toHaveCount(2);
     await expect(recent.first()).toHaveText("lights");
+    await expectNoViolations(page, "recent searches");
     // The arrows and Enter pick one.
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
@@ -48,6 +50,21 @@ test.describe("search", () => {
     await recent.filter({ hasText: "lights" }).hover();
     await recent.filter({ hasText: "lights" }).getByTestId("search-recent-forget").click();
     await expect(recent).toHaveCount(1);
+    // Delete forgets the highlighted one from the keyboard.
+    await page.getByTestId("search-input").fill("x");
+    await page.getByTestId("search-input").fill("");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Delete");
+    await expect(page.getByTestId("search-popover")).toHaveCount(0);
+    // Tab moves on and the popover closes.
+    await input.fill("again");
+    await page.keyboard.press("Enter");
+    await input.fill("");
+    await input.click();
+    await expect(recent).toHaveCount(1);
+    await page.keyboard.press("Tab");
+    await expect(page.getByTestId("search-popover")).toHaveCount(0);
+    await input.click();
     await page.getByTestId("search-recent-clear").click();
     await expect(page.getByTestId("search-popover")).toHaveCount(0);
   });

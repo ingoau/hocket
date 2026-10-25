@@ -37,6 +37,7 @@ export function SongInfo({ trackId }: { trackId: string }) {
   const album = useQuery(() => (tr?.albumId ? { type: "albumInfo", data: { id: tr.albumId } } : null), "externalInfo", [tr?.albumId], { static: true });
   const artist = useQuery(() => (tr?.artistId ? { type: "artistInfo", data: { id: tr.artistId } } : null), "externalInfo", [tr?.artistId], { static: true });
   if (!tr) return <h2 className="dialog-title" id="dialog-title">{t("misc.loading")}</h2>;
+  const playNext = (id: string) => bridge().dispatch({ type: "playNext", data: { server_id: serverId, track_ids: [id] } });
   const go = (route: Parameters<typeof navigate>[0]) => { close(); navigate(route); };
   const format = tr.suffix ? [tr.suffix.toUpperCase(), tr.bitRate ? `${tr.bitRate} kbps` : undefined, tr.sampleRate ? `${(tr.sampleRate / 1000).toFixed(1)} kHz` : undefined, tr.bitDepth ? `${tr.bitDepth}-bit` : undefined].filter(Boolean).join(" · ") : undefined;
   const similar = related.data ?? [];
@@ -93,10 +94,13 @@ export function SongInfo({ trackId }: { trackId: string }) {
               <h3 id="si-similar">{t("songInfo.similar")} <span className="small muted">· {t("songInfo.similarHint")}</span></h3>
               <ul className="plain-list si-similar">
                 {similar.map((r) => (
-                  <li key={r.track.id} className="si-similar-row" onDoubleClick={() => bridge().dispatch({ type: "playNext", data: { server_id: serverId, track_ids: [r.track.id] } })} title={r.reason} data-testid="song-info-similar">
-                    <Artwork id={r.track.coverArt} size={64} className="art" />
-                    <span className="grow truncate">{r.track.title}<span className="muted"> · {r.track.artist}</span></span>
-                    <span className="small muted">{fmtTime(r.track.durationMs)}</span>
+                  <li key={r.track.id}>
+                    {/* A button, so the keyboard plays it next too: a key's click has detail 0, a double click's second 2, a single click (1) does nothing. */}
+                    <button type="button" className="si-similar-row" onClick={(e) => { if (e.detail !== 1) playNext(r.track.id); }} title={r.reason} aria-label={t("songInfo.playNextNamed", { title: r.track.title, artist: r.track.artist ?? "" })} data-testid="song-info-similar">
+                      <Artwork id={r.track.coverArt} size={64} className="art" />
+                      <span className="grow truncate">{r.track.title}<span className="muted"> · {r.track.artist}</span></span>
+                      <span className="small muted">{fmtTime(r.track.durationMs)}</span>
+                    </button>
                   </li>
                 ))}
               </ul>

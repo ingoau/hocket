@@ -807,21 +807,36 @@ impl Reducer<'_, '_> {
                 if label.is_empty() {
                     return Err(ReduceError::EmptyName);
                 }
-                match id {
-                    None => {
-                        let ctx = self.doc.context.as_mut().ok_or(ReduceError::Empty)?;
-                        ctx.label = label;
-                    }
-                    Some(id) => {
-                        let q = self
+                // The playing queue and its saved entry are one queue to the user: a saved queue
+                // is re-snapshotted from the live context when it is left (matched by identity,
+                // not label), so renaming either renames both, or the old name would come back.
+                let identity = match &id {
+                    None => saved::context_identity(
+                        self.doc.context.as_ref().ok_or(ReduceError::Empty)?,
+                    ),
+                    Some(id) => saved::context_identity(
+                        &self
                             .doc
                             .saved_queues
-                            .iter_mut()
-                            .find(|q| q.id == id)
-                            .ok_or(ReduceError::UnknownSavedQueue(id))?;
+                            .iter()
+                            .find(|q| &q.id == id)
+                            .ok_or_else(|| ReduceError::UnknownSavedQueue(id.clone()))?
+                            .context,
+                    ),
+                };
+                if let Some(ctx) = self.doc.context.as_mut() {
+                    if saved::context_identity(ctx) == identity {
+                        ctx.label = label.clone();
+                    }
+                }
+                let now = self.ctx.now;
+                for q in self.doc.saved_queues.iter_mut() {
+                    if id.as_deref().is_some_and(|id| q.id == id)
+                        || saved::context_identity(&q.context) == identity
+                    {
                         q.label = label.clone();
-                        q.context.label = label;
-                        q.updated_at = self.ctx.now;
+                        q.context.label = label.clone();
+                        q.updated_at = now;
                     }
                 }
                 Ok(())
@@ -3271,6 +3286,9 @@ mod tests {
         );
         assert_eq!(d.saved_queues[0].label, "Friday drive");
         assert_eq!(d.saved_queues[0].context.label, "Friday drive");
+        // It is the queue playing (saved from it): the live context takes the name too, or leaving
+        // it would re-snapshot the old name over the new one.
+        assert_eq!(d.context.as_ref().unwrap().label, "Friday drive");
         let (d, _) = step(
             &d,
             &e,
@@ -3280,7 +3298,19 @@ mod tests {
             },
         );
         assert_eq!(d.context.as_ref().unwrap().label, "Now");
-        assert_eq!(d.saved_queues[0].label, "Friday drive");
+        assert_eq!(d.saved_queues[0].label, "Now");
+        // Playing something else keeps the name on the saved entry.
+        let left = play(&d, &e, album("b", 2), Some(0), false);
+        assert!(
+            left.saved_queues
+                .iter()
+                .any(|q| q.id == id && q.label == "Now"),
+            "{:?}",
+            left.saved_queues
+                .iter()
+                .map(|q| &q.label)
+                .collect::<Vec<_>>()
+        );
         assert!(matches!(
             step_err(
                 &d,

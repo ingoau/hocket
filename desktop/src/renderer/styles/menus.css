@@ -166,8 +166,9 @@
 .si-file { display: flex; align-items: center; gap: 8px; }
 .si-file code { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--fg-muted); }
 .si-similar { display: flex; flex-direction: column; gap: 2px; }
-.si-similar-row { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--shape-sm); cursor: default; font-size: var(--fs-sm); }
+.si-similar-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--shape-sm); cursor: default; font-size: var(--fs-sm); }
 .si-similar-row:hover { background: var(--bg-hover); }
+.si-similar-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .si-similar-row .art { width: 32px; height: 32px; border-radius: var(--shape-xs); flex: 0 0 auto; }
 .si-text { margin: 0; font-size: var(--fs-sm); line-height: 1.55; color: var(--fg-muted); white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
 .si-chips { display: flex; flex-wrap: wrap; gap: 6px; }

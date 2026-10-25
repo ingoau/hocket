@@ -6,6 +6,7 @@ import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { SK } from "@shared/settings-keys";
 import { Select } from "../components/controls";
+import { GIB, warnChoices } from "../lib/storage-warn";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { Artwork } from "../components/Artwork";
@@ -39,8 +40,6 @@ export function Downloads({ tab }: { tab?: string }) {
     </div>
   );
 }
-
-const GIB = 1024 ** 3;
 
 /** Downloads as a table (what, how far along, size, files), with the device's storage beside it. */
 function Pins() {
@@ -122,7 +121,7 @@ function StorageCard() {
         <span>{t("settings.storageWarn")}</span>
         <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
-          {[1, 2, 4, 8, 16].map((g) => <option key={g} value={g}>{g} GB</option>)}
+          {warnChoices(warn ? Math.round(warn / GIB) : 0).map((g) => <option key={g} value={g}>{g} GB</option>)}
         </Select>
       </label>
     </aside>

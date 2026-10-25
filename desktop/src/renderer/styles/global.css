@@ -343,8 +343,9 @@ h3 { font-size: var(--fs-lg); }
 .search-recent-head { display: flex; align-items: center; gap: 8px; padding: 4px 4px 6px 10px; font-size: var(--fs-sm); }
 .search-recent-title { font-weight: 700; color: var(--accent-text); }
 .search-recent-icon { color: var(--fg-muted); }
-.result-row .btn.icon.sm { opacity: 0; }
-.result-row:hover .btn.icon.sm, .result-row.active .btn.icon.sm { opacity: 1; }
+.search-recent-forget { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--fg-muted); cursor: pointer; opacity: 0; }
+.search-recent-forget:hover { background: var(--bg-hover); color: var(--fg); }
+.result-row:hover .search-recent-forget, .result-row.active .search-recent-forget { opacity: 1; }
 .result-row .art { width: 26px; height: 26px; border-radius: var(--shape-xs); flex: 0 0 auto; }
 .result-row .kind { font-size: var(--fs-xs); color: var(--fg-faint); width: 56px; text-align: right; }
 

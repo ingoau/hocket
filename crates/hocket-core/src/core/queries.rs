@@ -463,16 +463,20 @@ impl Actor {
             InfoOf::Artist => format!("artistInfo:{id}"),
             InfoOf::Album => format!("albumInfo:{id}"),
         };
-        if let Ok(Some(info)) = self.caches.meta_get::<Option<ExternalInfo>>(&sid, &key) {
-            let _ = reply.send(QueryResult::ExternalInfo(info));
-            return;
-        }
-        let stale = self
+        // One read: the entry is kept long past its freshness (see [`CachedExternalInfo`]) so an
+        // older answer is still there to fall back on offline.
+        let cached = self
             .caches
-            .meta_get_stale::<Option<ExternalInfo>>(&sid, &key)
+            .meta_get_stale::<CachedExternalInfo>(&sid, &key)
             .ok()
-            .flatten()
-            .and_then(|(info, _)| info);
+            .flatten();
+        if let Some((entry, fetched_at)) = &cached {
+            if fetched_at + entry.fresh_ms > self.now() {
+                let _ = reply.send(QueryResult::ExternalInfo(entry.info.clone()));
+                return;
+            }
+        }
+        let stale = cached.and_then(|(entry, _)| entry.info);
         let Some(api) = self.api() else {
             let _ = reply.send(QueryResult::ExternalInfo(stale));
             return;
@@ -495,12 +499,17 @@ impl Actor {
                     {
                         let _ = db.set_artist_biography(&id, Some(text));
                     }
-                    let ttl = if info.is_some() {
+                    let fresh_ms = if info.is_some() {
                         EXTERNAL_INFO_TTL_MS
                     } else {
                         crate::cache::DEFAULT_META_TTL_MS
                     };
-                    if let Err(e) = caches.meta_put(&sid, &key, &info, Some(ttl)) {
+                    let entry = CachedExternalInfo {
+                        info: info.clone(),
+                        fresh_ms,
+                    };
+                    if let Err(e) = caches.meta_put(&sid, &key, &entry, Some(EXTERNAL_INFO_KEEP_MS))
+                    {
                         tracing::debug!(target: "hocket_core", error = %e, "external info cache");
                     }
                     info
@@ -631,6 +640,17 @@ enum InfoOf {
 
 /// A week: biographies and album notes rarely change.
 const EXTERNAL_INFO_TTL_MS: f64 = 7.0 * 24.0 * 3600.0 * 1000.0;
+/// How long an artist or album info entry stays stored (for offline) after it stops being fresh.
+const EXTERNAL_INFO_KEEP_MS: f64 = 180.0 * 24.0 * 3600.0 * 1000.0;
+
+/// An artist or album info answer as cached: the answer (None = the server had nothing) and how
+/// long after fetching it counts as fresh. Stored with a much longer expiry than that, so a stale
+/// answer survives housekeeping to stand in when the server can't be reached.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedExternalInfo {
+    info: Option<ExternalInfo>,
+    fresh_ms: f64,
+}
 
 fn artist_info(db: &crate::db::Db, a: &crate::subsonic::types::ArtistInfo2) -> ExternalInfo {
     ExternalInfo {
@@ -675,25 +695,79 @@ fn plain_text(html: &str) -> Option<String> {
         .rfind("<a ")
         .filter(|&i| html[i..].contains("Last.fm"))
         .unwrap_or(html.len());
-    let mut out = String::with_capacity(cut);
-    let mut in_tag = false;
+    let mut text = String::with_capacity(cut);
+    let mut tag: Option<String> = None;
     for ch in html[..cut].chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
+        match (&mut tag, ch) {
+            (None, '<') => tag = Some(String::new()),
+            (Some(name), '>') => {
+                // A line break or the end of a block keeps the words apart.
+                let n = name
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(n.trim_end_matches('/'), "br" | "p" | "div" | "li") {
+                    text.push('\n');
+                }
+                tag = None;
+            }
+            (Some(name), c) => name.push(c),
+            (None, c) => text.push(c),
         }
     }
-    let out = out
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ");
+    let out = decode_entities(&text);
     let out = out.trim();
     (!out.is_empty()).then(|| out.to_string())
+}
+
+/// HTML entities in one pass (so "&amp;lt;" stays "&lt;"): the named ones a biography uses, and
+/// numeric ones. Anything else is left as written.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some(end) = rest
+            .char_indices()
+            .take_while(|&(i, _)| i < 12)
+            .find(|&(_, c)| c == ';')
+            .map(|(i, _)| i)
+        else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let name = &rest[1..end];
+        let decoded = match name {
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "nbsp" => Some(' '),
+            _ => name
+                .strip_prefix("#x")
+                .or_else(|| name.strip_prefix("#X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| name.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn tracks_of(server_id: &str, children: &[crate::subsonic::types::Child]) -> Vec<Track> {
@@ -824,6 +898,19 @@ mod tests {
         assert_eq!(
             super::plain_text(" <a href=\"u\">Read more on Last.fm</a>"),
             None
+        );
+        // Line breaks and paragraphs keep words apart; entities decode once, numeric ones too.
+        assert_eq!(
+            super::plain_text(
+                "One<br/>two</p><p>three &amp;lt;b&amp;gt; &#039;x&#x27; &unknown; a & b"
+            )
+            .as_deref(),
+            Some("One\ntwo\n\nthree &lt;b&gt; 'x' &unknown; a & b")
+        );
+        // Multi-byte text right after an ampersand never splits a character.
+        assert_eq!(
+            super::plain_text("Café & crème brûlée ünïcödé").as_deref(),
+            Some("Café & crème brûlée ünïcödé")
         );
     }
 

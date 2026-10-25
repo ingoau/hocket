@@ -1,7 +1,7 @@
 // Search results: chips to narrow to one kind (each with its count), then the
 // library's matches — the first songs (all of them under Songs), albums,
 // artists and playlists — and below them what only the server found.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -20,11 +20,12 @@ export function SearchView({ query }: { query: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
-  const [reqId] = useState(() => `sv-${Date.now()}`);
+  // One request id per query, so a late server batch for the previous query is ignored.
+  const reqId = useMemo(() => `sv-${Date.now()}-${query}`, [query]);
   const [kind, setKind] = useState<Kind>("all");
-  useEffect(() => setKind("all"), [query]);
   const local = useQuery(() => ({ type: "search", data: { server_id: serverId, query, limit: 100, include_server: true, request_id: reqId } }), "search", [query, serverId], { static: true });
   const [server, setServer] = useState<SearchResults | undefined>(undefined);
+  useEffect(() => { setKind("all"); setServer(undefined); }, [query]);
   useEffect(() => { if (serverBatch?.requestId === reqId) setServer(serverBatch); }, [serverBatch, reqId]);
   const found = local.data;
   const ids = [...(found?.tracks ?? []), ...(server?.tracks ?? [])].map((x) => x.id);

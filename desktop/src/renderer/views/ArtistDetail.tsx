@@ -2,7 +2,7 @@
 // top songs, the discography as one shelf per release kind (albums, EPs,
 // singles, compilations; "View more" opens the kind's full grid, newest or
 // oldest first), then About from the server's artist info (Last.fm).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Album } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -38,6 +38,13 @@ export function ArtistDetail({ id }: { id: string }) {
   const [grid, setGrid] = useState<ReleaseKind | null>(null);
   const [oldest, setOldest] = useState(false);
   useEffect(() => { setGrid(null); setAllTop(false); }, [id]);
+  // Focus follows the swap: onto the grid's back arrow going in, back onto that shelf's View more coming out.
+  const lastGrid = useRef<ReleaseKind | null>(null);
+  useEffect(() => {
+    const target = grid ? '[data-testid="artist-grid-back"]' : lastGrid.current ? `[data-testid="artist-shelf-more-${lastGrid.current}"]` : null;
+    if (grid) lastGrid.current = grid;
+    if (target && document.activeElement === document.body) document.querySelector<HTMLElement>(target)?.focus({ preventScroll: !grid });
+  }, [grid]);
   const a = artist.data;
   const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
   const topAll = top.data ?? [];

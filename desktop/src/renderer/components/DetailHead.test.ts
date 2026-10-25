@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { heroMode } from "./DetailHead";
 
 describe("heroMode", () => {
-  it("is None without artwork", () => {
+  it("is None without artwork, Small while it is still resolving", () => {
     expect(heroMode({ width: 3000, height: 3000 }, undefined, 900, 420, 1)).toBe("none");
+    expect(heroMode(undefined, null, 900, 420, 1)).toBe("small");
   });
   it("is Large only when the cover fills the header without scaling up", () => {
     expect(heroMode({ width: 1000, height: 1000 }, "u", 900, 420, 1)).toBe("large");
