@@ -23,10 +23,10 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Connect | – | [x] | [x] (uncompiled) |
 | Search (recent searches, local only) | – | [x] | [x] (uncompiled) |
 | Album / Artist / Playlist | [x] | [x] | [~] shelves only (uncompiled) |
-| Server setup | – | [x] | [ ] |
+| Server setup | – | [x] | [x] already matched |
 | Downloads | – | [x] | [x] (uncompiled) |
 | Stats | – | [x] | [x] (uncompiled) |
-| Filters | – | [x] | [ ] |
+| Filters | – | [x] | [ ] rule sheet not done |
 | Song info | [x] | [x] | [x] (uncompiled) |
 
 Out of scope: bottom nav and mini player; undo history (issue #127).
@@ -56,3 +56,5 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
 - Android search: RecentSearchPrefs (SharedPreferences, device only); Android artist shelves via
   core ReleaseKinds.kt (+ unit test); song info Last.fm cards.
 - Android Settings: account card on top (stats/devices chips), group headings over the category cards.
+- Not done on Android (need a device/SDK to verify): Large/Small/None artwork headers on album,
+  artist and playlist pages; Filters' tap-a-rule bottom sheet. Android Setup already matched the board.
