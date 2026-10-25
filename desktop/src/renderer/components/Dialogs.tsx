@@ -1,13 +1,14 @@
 // Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info.
 import { useEffect, useRef, useState } from "react";
-import type { Album, Track } from "@core/api";
+import type { Album, DeviceInfo, Track } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { fmtBytes, fmtDate, fmtDuration, fmtTime } from "../lib/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtRelative, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { deviceIcon } from "./ConnectPill";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 
@@ -115,11 +116,15 @@ function SleepTimerDialog() {
   );
 }
 
+// Play on: this computer (one row, whatever it outputs to), then the other
+// devices signed in to the server, each saying whether it is playing, ready to
+// take over, still preparing, or when it was last seen.
 function ConnectDialog() {
   const close = useApp((s) => s.closeDialog);
   const devices = useApp((s) => s.devices);
   const handoff = useApp((s) => s.handoff);
   const connection = useApp((s) => s.connection);
+  const navigate = useApp((s) => s.navigate);
   const others = devices.filter((d) => !d.isSelf);
   const self = devices.find((d) => d.isSelf);
   const pick = (id: string) => {
@@ -127,31 +132,40 @@ function ConnectDialog() {
     close();
   };
   const tier = connection.tier === "coordinator" ? t("connect.tier.coordinator") : connection.tier === "lan" ? t("connect.tier.lan") : t("connect.tier.local");
+  const row = (d: DeviceInfo, name: string, sub: string, testId?: string) => (
+    <li key={d.id}>
+      <button type="button" className={`connect-row ${d.playing ? "on" : ""}`} aria-current={d.playing || undefined} onClick={() => pick(d.id)} data-testid={testId}>
+        <span className="connect-row-icon"><Icon name={d.isSelf ? "laptop" : deviceIcon(d.platform)} size={22} /></span>
+        <span className="grow" style={{ minWidth: 0 }}>
+          <span className="truncate connect-row-name">{name}</span>
+          <span className="truncate connect-row-sub">{sub}</span>
+        </span>
+        {d.playing ? <Icon name="volume" size={20} /> : null}
+      </button>
+    </li>
+  );
   return (
     <>
       <h2 className="dialog-title" id="dialog-title">{t("connect.title")}</h2>
-      <div className="muted small">{tier}{connection.peerCount ? ` · ${t("connect.peers", { count: connection.peerCount })}` : ""}</div>
-      <ul className="list plain-list">
-        {self ? (
-          <li><button type="button" className="li" onClick={() => pick(self.id)}>
-            <Icon name="devices" size={14} />
-            <span className="grow">{self.name} <span className="faint">· {t("connect.thisDevice")}</span></span>
-            {self.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}
-          </button></li>
-        ) : null}
-        {others.map((d) => {
-          const target = handoff.targets.find((x) => x.id === d.id) ?? d;
-          return (
-            <li key={d.id}><button type="button" className="li" onClick={() => pick(d.id)} data-testid="device-choice">
-              <Icon name="devices" size={14} />
-              <span className="grow">{d.name} <span className="faint">· {d.platform}</span></span>
-              {d.playing ? <span className="badge ok">{t("connect.playing")}</span> : target.ready ? <span className="badge synced">{t("connect.ready")}</span> : handoff.open ? <span className="badge">{t("connect.preparing")}</span> : null}
-            </button></li>
-          );
-        })}
-        {!others.length ? <li className="li muted" style={{ height: "auto", padding: 10 }}>{t("connect.noDevices")}</li> : null}
+      <ul className="plain-list connect-group" data-testid="connect-self">
+        {self ? row(self, t("connect.thisComputer"), self.playing ? t("connect.playing") : t("connect.playHere")) : null}
       </ul>
-      <div className="buttons">
+      <div className="connect-heading">
+        <h3>{t("connect.others")}</h3>
+        <span className="small muted">{tier}</span>
+      </div>
+      {others.length ? (
+        <ul className="plain-list connect-group">
+          {others.map((d) => {
+            const target = handoff.targets.find((x) => x.id === d.id) ?? d;
+            const sub = d.playing ? t("connect.playing") : target.ready ? t("connect.ready") : handoff.open ? t("connect.preparing") : t("connect.seen", { when: fmtRelative(d.lastSeen) });
+            return row(d, d.name, sub, "device-choice");
+          })}
+        </ul>
+      ) : <p className="small muted connect-empty">{t("connect.noDevices")}</p>}
+      <div className="buttons connect-buttons">
+        <button type="button" className="btn text" onClick={() => { close(); navigate({ view: "settings", param: "connect" }); }} data-testid="connect-settings"><Icon name="settings" size={18} />{t("connect.settings")}</button>
+        <span className="spacer" />
         <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>
       </div>
     </>

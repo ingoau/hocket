@@ -121,6 +121,11 @@ const STRINGS = {
   // Connect
   "connect.title": "Play on",
   "connect.thisDevice": "This device",
+  "connect.thisComputer": "This computer",
+  "connect.playHere": "Play here",
+  "connect.others": "Connect",
+  "connect.seen": "Seen {when}",
+  "connect.settings": "Connect & devices",
   "connect.playing": "Playing",
   "connect.ready": "Ready",
   "connect.preparing": "Preparing…",

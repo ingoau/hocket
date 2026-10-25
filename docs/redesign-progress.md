@@ -20,7 +20,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | --- | --- | --- | --- |
 | Settings | – | [ ] | [ ] |
 | Queues (+ rename) | [x] | [x] | [ ] |
-| Connect | – | [ ] | [ ] |
+| Connect | – | [x] | [ ] |
 | Search (recent searches, local only) | – | [ ] | [ ] |
 | Album / Artist / Playlist | [x] | [ ] | [ ] |
 | Server setup | – | [ ] | [ ] |
@@ -36,3 +36,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
 - Desktop Queues: side panel queue name opens the Queues page (SavedQueues.tsx): Now playing card
   (rename, Create playlist), Pinned/Recent rows without art (rename, pin, delete). Fullscreen keeps
   its drop-down. e2e updated (now-playing, a11y, keyboard-a11y, exit-motion, screenshots).
+- Desktop Play on: This computer row, Connect group with status/seen, Connect & devices link. e2e/redesign-screenshots.spec.ts shoots redesigned screens.

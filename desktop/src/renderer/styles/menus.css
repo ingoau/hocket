@@ -121,3 +121,24 @@
   .cm-search:focus-within { outline: 2px solid Highlight; }
   .menu.cm .kbd { border-color: CanvasText; }
 }
+
+/* Play on: grouped rows (rounded as a group), the playing one on the accent. */
+.connect-group { display: flex; flex-direction: column; gap: 2px; }
+.connect-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-sunken); border-radius: 4px; cursor: pointer; }
+.connect-group > li:first-child .connect-row { border-top-left-radius: var(--shape-lg); border-top-right-radius: var(--shape-lg); }
+.connect-group > li:last-child .connect-row { border-bottom-left-radius: var(--shape-lg); border-bottom-right-radius: var(--shape-lg); }
+.connect-row:hover { background: var(--bg-hover); }
+.connect-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.connect-row.on { background: var(--accent); color: var(--accent-fg); }
+/* Spaced from the end of the dialog's own flex column. */
+.connect-buttons .spacer { flex: 1; }
+.connect-row-icon { flex: 0 0 auto; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 20px; background: var(--accent-soft); color: var(--accent-text); transition: border-radius var(--dur-short) var(--ease-emphasized); }
+.connect-row.on .connect-row-icon { border-radius: var(--shape-md); background: color-mix(in srgb, var(--accent-fg) 18%, transparent); color: inherit; }
+.connect-row-name, .connect-row-sub { display: block; }
+.connect-row-name { font-weight: 600; }
+.connect-row-sub { font-size: var(--fs-sm); opacity: 0.75; }
+.connect-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.connect-heading h3 { font-size: var(--fs-md); font-weight: 700; color: var(--accent-text); }
+.connect-empty { margin: 0; }
+.connect-buttons { align-items: center; }
+.connect-buttons .btn.text { gap: 6px; }
