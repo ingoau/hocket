@@ -327,6 +327,8 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
+    <string name="stats_peak_hour">Most plays at %1$s</string>
+    <string name="stats_peak_day">Busiest: %1$s</string>
     <plurals name="downloads_count"><item quantity="one">%d download</item><item quantity="other">%d downloads</item></plurals>
     <string name="downloads_kind_album">Album</string>
     <string name="downloads_kind_playlist">Playlist</string>

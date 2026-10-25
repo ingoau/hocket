@@ -103,10 +103,10 @@ fun StatsScreen(nav: NavHostController) {
                     Text(stringResource(R.string.stats_time, formatDurationWords(s.totalMs.toLong())), style = MaterialTheme.typography.titleMedium)
                 }
             }
-            item { SectionHeader(stringResource(R.string.stats_by_hour)); BarChart(s.playsByHour.map { it.toInt() }, labels = (0 until 24).map { if (it % 6 == 0) it.toString() else "" }) }
+            item { SectionHeader(stringResource(R.string.stats_by_hour)); BarChart(s.playsByHour.map { it.toInt() }, labels = (0 until 24).map { if (it % 6 == 0) it.toString() else "" }, readout = { peak -> stringResource(R.string.stats_peak_hour, "%02d:00–%02d:00".format(peak, (peak + 1) % 24)) }) }
             item {
                 val days = listOf(R.string.weekday_mon, R.string.weekday_tue, R.string.weekday_wed, R.string.weekday_thu, R.string.weekday_fri, R.string.weekday_sat, R.string.weekday_sun).map { stringResource(it) }
-                SectionHeader(stringResource(R.string.stats_by_weekday)); BarChart(s.playsByWeekday.map { it.toInt() }, labels = days)
+                SectionHeader(stringResource(R.string.stats_by_weekday)); BarChart(s.playsByWeekday.map { it.toInt() }, labels = days, readout = { peak -> stringResource(R.string.stats_peak_day, days.getOrElse(peak) { "" }) })
             }
             if (s.topTracks.isNotEmpty()) { item { SectionHeader(stringResource(R.string.stats_top_tracks)) }; items(s.topTracks, key = { it.id }) { t -> TrackRow(t, onClick = { t.albumId?.let { nav.navigate(Route.Album(it)) } }) } }
             if (s.topAlbums.isNotEmpty()) { item { SectionHeader(stringResource(R.string.stats_top_albums)); AlbumStrip(s.topAlbums) { nav.navigate(Route.Album(it.id)) } } }
@@ -115,13 +115,17 @@ fun StatsScreen(nav: NavHostController) {
     }
 }
 
+/** Bars on tracks, the busiest one in the accent and named by [readout] above the chart. */
 @Composable
-fun BarChart(values: List<Int>, labels: List<String>, modifier: Modifier = Modifier) {
+fun BarChart(values: List<Int>, labels: List<String>, modifier: Modifier = Modifier, readout: (@Composable (Int) -> String)? = null) {
     val max = (values.maxOrNull() ?: 0).coerceAtLeast(1)
-    val bar = MaterialTheme.colorScheme.primary
+    val peak = values.indexOf(values.maxOrNull() ?: 0)
+    val peakBar = MaterialTheme.colorScheme.primary
+    val bar = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
     val track = MaterialTheme.colorScheme.surfaceContainerHighest
     val desc = values.mapIndexed { i, v -> "${labels.getOrNull(i)?.ifEmpty { i.toString() } ?: i}: $v" }.joinToString(", ")
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { contentDescription = desc }) {
+        if (readout != null && values.any { it > 0 }) Text(readout(peak), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
         Canvas(Modifier.fillMaxWidth().height(120.dp)) {
             val n = values.size.coerceAtLeast(1)
             val gap = 4.dp.toPx()
@@ -130,7 +134,7 @@ fun BarChart(values: List<Int>, labels: List<String>, modifier: Modifier = Modif
                 val h = size.height * v / max
                 val x = i * (w + gap)
                 drawRoundRect(track, Offset(x, 0f), Size(w, size.height), CornerRadius(w / 3))
-                if (v > 0) drawRoundRect(bar, Offset(x, size.height - h), Size(w, h), CornerRadius(w / 3))
+                if (v > 0) drawRoundRect(if (i == peak) peakBar else bar, Offset(x, size.height - h), Size(w, h), CornerRadius(w / 3))
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
