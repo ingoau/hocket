@@ -18,7 +18,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 
 | Screen | Core | Desktop | Android |
 | --- | --- | --- | --- |
-| Settings | – | [ ] | [ ] |
+| Settings | – | [x] | [ ] |
 | Queues (+ rename) | [x] | [x] | [ ] |
 | Connect | – | [x] | [ ] |
 | Search (recent searches, local only) | – | [ ] | [ ] |
@@ -37,3 +37,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
   (rename, Create playlist), Pinned/Recent rows without art (rename, pin, delete). Fullscreen keeps
   its drop-down. e2e updated (now-playing, a11y, keyboard-a11y, exit-motion, screenshots).
 - Desktop Play on: This computer row, Connect group with status/seen, Connect & devices link. e2e/redesign-screenshots.spec.ts shoots redesigned screens.
+- Desktop Settings: nav grouped under section headers (Look and sound, Library and storage, Devices and controls, App), account card on top, sections renamed.

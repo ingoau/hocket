@@ -19,6 +19,16 @@
 /* ---- Settings: pill section nav ------------------------------------------- */
 .page-settings .settings { grid-template-columns: 256px minmax(0, 1fr); }
 .page-settings .settings-nav { border-right: 0; padding: 24px 8px 24px 16px; display: flex; flex-direction: column; gap: 2px; }
+.page-settings .settings-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.page-settings .settings-nav-heading { margin: 0; padding: 18px 14px 6px; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.02em; color: var(--accent-text); }
+.settings-account { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 4px; border-radius: var(--shape-lg); background: var(--bg-sunken); cursor: pointer; }
+.settings-account:hover { background: var(--bg-hover); }
+.settings-account.active { background: var(--state-selected); }
+.settings-account:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.settings-account-avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); font-weight: 700; font-size: var(--fs-lg); }
+.settings-account-name, .settings-account-sub { display: block; }
+.settings-account-name { font-weight: 650; }
+.settings-account-sub { font-size: var(--fs-sm); color: var(--fg-muted); }
 .page-settings .settings-nav .nav-item { height: 44px; padding: 0 18px 0 14px; gap: 14px; font-size: 14px; color: var(--fg-muted); flex: 0 0 auto; }
 .page-settings .settings-nav .nav-item + .nav-item { margin-top: 0; }
 .page-settings .settings-nav .nav-item .icon { opacity: 1; width: 20px; height: 20px; }
@@ -259,6 +269,9 @@
   .page-settings .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 12px 16px 4px; border-bottom: 0; }
   .page-settings .settings-nav .nav-item { height: 36px; padding: 0 14px 0 10px; gap: 8px; font-size: var(--fs-md); background: var(--bg-sunken); }
   .page-settings .settings-nav .nav-item .icon { width: 18px; height: 18px; }
+  /* Narrow, the nav is one wrapping row of chips: no headings, no account card. */
+  .page-settings .settings-nav-group { display: contents; }
+  .page-settings .settings-nav-heading, .page-settings .settings-account { display: none; }
   .page-settings .settings-body { padding: 16px var(--page-gutter) 28px; }
   .page-settings .setting-row { padding: 12px 16px; gap: 10px; }
   .page-settings .setting-row .control { justify-content: flex-start; }

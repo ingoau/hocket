@@ -71,6 +71,13 @@ test("redesigned screens", async () => {
       await expect(page.getByTestId("connect-self")).toBeVisible();
       await shot("connect");
       await page.keyboard.press("Escape");
+
+      // Settings: grouped nav with the account card.
+      await page.getByTestId("nav-settings").click();
+      await expect(page.getByTestId("view-settings")).toBeVisible();
+      await shot("settings");
+      await page.getByTestId("settings-nav-audio").click();
+      await shot("settings-audio");
     } finally {
       await app.close().catch(() => undefined);
       rmSync(userData, { recursive: true, force: true });

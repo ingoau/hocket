@@ -24,6 +24,13 @@ import { Select, Slider, Switch } from "../components/controls";
 
 const SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "advanced", "about"] as const;
 type Section = (typeof SECTIONS)[number];
+/** The nav's groups, in the order they are listed (General also opens from the account card). */
+const SECTION_GROUPS: { title: Parameters<typeof t>[0]; sections: Section[] }[] = [
+  { title: "settings.group.lookAndSound", sections: ["appearance", "audio", "transcoding", "lyrics"] },
+  { title: "settings.group.libraryAndStorage", sections: ["general", "storage"] },
+  { title: "settings.group.devicesAndControls", sections: ["connect", "customisation", "shortcuts"] },
+  { title: "settings.group.app", sections: ["backup", "diagnostics", "advanced", "about"] },
+];
 const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
@@ -33,8 +40,14 @@ export function Settings({ section }: { section?: string }) {
     <div className="view page-settings" data-testid="view-settings">
       <div className="settings">
         <nav className="settings-nav" aria-label={t("settings.title")}>
-          {SECTIONS.map((s) => (
-            <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} aria-current={current === s ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}><Icon name={SECTION_ICONS[s]} size={20} filled={current === s} /><span>{t(`settings.section.${s}` as never)}</span></a>
+          <AccountCard onOpen={() => navigate({ view: "settings", param: "general" }, true)} current={current === "general"} />
+          {SECTION_GROUPS.map((g) => (
+            <div key={g.title} className="settings-nav-group" role="group" aria-labelledby={`settings-group-${g.title}`}>
+              <h2 className="settings-nav-heading" id={`settings-group-${g.title}`}>{t(g.title)}</h2>
+              {g.sections.map((s) => (
+                <a key={s} href="#" className={`nav-item ${current === s ? "active" : ""}`} aria-current={current === s ? "page" : undefined} onClick={(e) => { e.preventDefault(); navigate({ view: "settings", param: s }, true); }} data-testid={`settings-nav-${s}`}><Icon name={SECTION_ICONS[s]} size={20} filled={current === s} /><span>{t(`settings.section.${s}` as never)}</span></a>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="settings-body">
@@ -55,6 +68,23 @@ export function Settings({ section }: { section?: string }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** The signed-in account and its server at the top of the nav: who, where, and when the library last synced. */
+function AccountCard({ onOpen, current }: { onOpen: () => void; current: boolean }) {
+  const server = useApp((s) => s.servers[0]);
+  if (!server) return null;
+  const host = server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  return (
+    <button type="button" className={`settings-account ${current ? "active" : ""}`} onClick={onOpen} data-testid="settings-account">
+      <span className="settings-account-avatar" aria-hidden="true">{(server.username[0] ?? "?").toUpperCase()}</span>
+      <span className="grow" style={{ minWidth: 0 }}>
+        <span className="truncate settings-account-name">{server.username}</span>
+        <span className="truncate settings-account-sub">{server.name && server.name !== host ? t("settings.account.on", { server: server.name, host }) : host}</span>
+        <span className="truncate settings-account-sub">{server.lastSync ? t("settings.account.synced", { when: fmtRelative(server.lastSync) }) : t("settings.account.notSynced")}</span>
+      </span>
+    </button>
   );
 }
 
