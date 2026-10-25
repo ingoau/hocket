@@ -18,7 +18,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 
 | Screen | Core | Desktop | Android |
 | --- | --- | --- | --- |
-| Settings | – | [x] | [ ] |
+| Settings | – | [x] | [x] (uncompiled) |
 | Queues (+ rename) | [x] | [x] | [x] (uncompiled) |
 | Connect | – | [x] | [x] (uncompiled) |
 | Search (recent searches, local only) | – | [x] | [x] (uncompiled) |
@@ -55,3 +55,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
   (LocalOpenConnectSettings from AppRoot). New icons via scripts/gen-android-icons.mjs.
 - Android search: RecentSearchPrefs (SharedPreferences, device only); Android artist shelves via
   core ReleaseKinds.kt (+ unit test); song info Last.fm cards.
+- Android Settings: account card on top (stats/devices chips), group headings over the category cards.

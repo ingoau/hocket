@@ -1,6 +1,14 @@
 package app.hocket.ui.screens.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,13 +70,12 @@ enum class SettingsCategory(val id: String, val route: Route) {
     About("about", Route.About);
 
     companion object {
-        /** How the list is grouped (Android system-settings style: related categories share a card). */
-        val GROUPS: List<List<SettingsCategory>> = listOf(
-            listOf(Account),
-            listOf(Appearance, Playback, Audio, Streaming),
-            listOf(Downloads, Lyrics, Library, Battery),
-            listOf(Connect, Pebble, Customise),
-            listOf(Backup, Advanced, About),
+        /** How the list is grouped under its headings (Android system-settings style: related categories share a card). Account is the card on top. */
+        val GROUPS: List<Pair<Int, List<SettingsCategory>>> = listOf(
+            R.string.settings_group_look_and_sound to listOf(Appearance, Playback, Audio, Streaming),
+            R.string.settings_group_library_and_storage to listOf(Downloads, Lyrics, Library, Battery),
+            R.string.settings_group_devices_and_controls to listOf(Connect, Pebble, Customise),
+            R.string.settings_group_app to listOf(Backup, Advanced, About),
         )
     }
 }
@@ -90,12 +97,45 @@ fun SettingsScreen(nav: NavHostController) {
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SettingsCategory.GROUPS.forEach { group ->
+            AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
+            SettingsCategory.GROUPS.forEach { (heading, group) ->
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(heading), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 6.dp).semantics { heading() })
                     group.forEachIndexed { i, category ->
                         CategoryRow(category, first = i == 0, last = i == group.lastIndex, onClick = { nav.navigate(category.route) })
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Who is signed in, to which server, and when the library last synced; with shortcuts to listening stats and devices. */
+@Composable
+private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -> Unit) {
+    val client = LocalCoreClient.current
+    val server by client.server.collectAsStateWithLifecycle()
+    val s = server
+    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.clickable(onClick = onOpen).testTag("settings.category.account").padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp)) {
+                    Box(contentAlignment = Alignment.Center) { Text((s?.username?.firstOrNull() ?: '?').uppercase(), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimary) }
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (s != null) {
+                        val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
+                        Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyMedium)
+                }
+                Icon(HocketIcons.Filled.ChevronRight, null)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(onClick = onStats, label = { Text(stringResource(R.string.settings_account_stats)) }, leadingIcon = { Icon(HocketIcons.Filled.BarChart, null) }, modifier = Modifier.testTag("settings.account.stats"))
+                AssistChip(onClick = onDevices, label = { Text(stringResource(R.string.settings_account_devices)) }, leadingIcon = { Icon(HocketIcons.Filled.Devices, null) }, modifier = Modifier.testTag("settings.account.devices"))
             }
         }
     }

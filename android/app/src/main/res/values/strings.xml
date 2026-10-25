@@ -327,6 +327,13 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
+    <string name="settings_group_look_and_sound">Look and sound</string>
+    <string name="settings_group_library_and_storage">Library and storage</string>
+    <string name="settings_group_devices_and_controls">Devices and controls</string>
+    <string name="settings_group_app">App</string>
+    <string name="settings_account_on">%1$s on %2$s</string>
+    <string name="settings_account_stats">Listening stats</string>
+    <string name="settings_account_devices">Devices</string>
     <string name="handoff_settings">Connect &amp; devices</string>
     <string name="handoff_this_phone">This phone</string>
     <string name="handoff_other_devices">Connect</string>
