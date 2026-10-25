@@ -147,6 +147,9 @@ object Queries {
         Query.Tracks(QueryTracksInner(serverId, filter, sort, descending, page))
     fun trackCount(serverId: ServerId, filter: FilterNode? = null) = Query.TrackCount(QueryTrackCountInner(serverId, filter))
     fun track(id: TrackId) = Query.Track(QueryTrackInner(id))
+    /** The server's artist and album info (Last.fm notes, links, similar artists), cached by the core. */
+    fun artistInfo(id: ArtistId) = Query.ArtistInfo(QueryArtistInfoInner(id))
+    fun albumInfo(id: AlbumId) = Query.AlbumInfo(QueryAlbumInfoInner(id))
     fun tracksByIds(ids: List<TrackId>) = Query.TracksByIds(QueryTracksByIdsInner(ids))
     fun albums(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false, artistId: ArtistId? = null, genre: String? = null) =
         Query.Albums(QueryAlbumsInner(serverId, artistId, genre, sort, descending, page))

@@ -320,6 +320,10 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
+    <string name="player_about_album_notes">About the album</string>
+    <string name="player_about_artist_bio">About the artist</string>
+    <string name="player_about_similar_artists">Similar artists</string>
+    <string name="player_about_source">From Last.fm and MusicBrainz via your server</string>
     <string name="queue_playing_now">Playing now</string>
     <string name="queue_rename">Rename</string>
     <string name="queue_name">Queue name</string>

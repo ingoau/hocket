@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import app.hocket.ui.icons.HocketIcons
@@ -33,6 +35,7 @@ import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.Album
+import app.hocket.core.api.ExternalInfo
 import app.hocket.core.api.Track
 import app.hocket.core.api.TrackSummary
 import app.hocket.ui.LocalCoreClient
@@ -70,9 +73,17 @@ internal fun PlayerAbout(
         value = id?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data }
     }
     val d = detail?.takeIf { it.id == id }
+    val albumId = summary?.albumId
+    val artistId = summary?.artistId
+    val albumInfo by produceState<ExternalInfo?>(initialValue = null, albumId) {
+        value = null
+        value = albumId?.let { (client.query(Queries.albumInfo(it)) as? QueryResult.ExternalInfo)?.data }
+    }
+    val artistInfo by produceState<ExternalInfo?>(initialValue = null, artistId) {
+        value = null
+        value = artistId?.let { (client.query(Queries.artistInfo(it)) as? QueryResult.ExternalInfo)?.data }
+    }
     val links = buildMap {
-        val albumId = summary?.albumId
-        val artistId = summary?.artistId
         if (onOpenAlbum != null && albumId != null) put(stringResource(R.string.player_about_album), stringResource(R.string.action_go_to_album) to { onOpenAlbum(albumId) })
         if (onOpenArtist != null && artistId != null) put(stringResource(R.string.player_about_artist), stringResource(R.string.action_go_to_artist) to { onOpenArtist(artistId) })
     }
@@ -126,6 +137,26 @@ internal fun PlayerAbout(
                 }
             }
         }
+        // What the server adds from Last.fm and MusicBrainz: the album's notes, the artist's biography and similar artists.
+        albumInfo?.text?.takeIf { it.isNotBlank() }?.let { text ->
+            item(key = "albumInfo") { InfoCard(stringResource(R.string.player_about_album_notes), text, card) }
+        }
+        artistInfo?.let { info ->
+            item(key = "artistInfo") {
+                InfoCard(stringResource(R.string.player_about_artist_bio), info.text, card) {
+                    val similar = info.similarArtists.orEmpty()
+                    if (similar.isNotEmpty()) {
+                        Text(stringResource(R.string.player_about_similar_artists), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            similar.forEach { a -> AssistChip(onClick = { onOpenArtist?.invoke(a.id) }, enabled = onOpenArtist != null, label = { Text(a.name) }) }
+                        }
+                    }
+                }
+            }
+        }
+        if (albumInfo != null || artistInfo != null) item(key = "source") {
+            Text(stringResource(R.string.player_about_source), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
+        }
     }
 }
 
@@ -142,6 +173,18 @@ private fun DetailRow(label: String, value: String, link: Pair<String, () -> Uni
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.4f))
         Text(value, style = MaterialTheme.typography.bodyLarge, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(0.6f))
         if (link != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+    }
+}
+
+/** A titled tonal card of server-provided text (clamped), with room for more below it. */
+@Composable
+private fun InfoCard(title: String, text: String?, color: androidx.compose.ui.graphics.Color, more: @Composable () -> Unit = {}) {
+    Surface(shape = RoundedCornerShape(24.dp), color = color, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+            if (!text.isNullOrBlank()) Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis)
+            more()
+        }
     }
 }
 
