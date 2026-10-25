@@ -72,6 +72,18 @@ test("redesigned screens", async () => {
       await shot("connect");
       await page.keyboard.press("Escape");
 
+      // Search: the kind chips and sections, then the recent searches.
+      await page.getByTestId("search-input").fill("the");
+      await page.keyboard.press("Enter");
+      await expect(page.getByTestId("view-search")).toBeVisible();
+      await page.getByTestId("search-input").blur();
+      await shot("search");
+      await page.getByTestId("search-input").fill("");
+      await page.getByTestId("search-input").click();
+      await expect(page.getByTestId("search-recent").first()).toBeVisible();
+      await shot("search-recent");
+      await page.keyboard.press("Escape");
+
       // Settings: grouped nav with the account card.
       await page.getByTestId("nav-settings").click();
       await expect(page.getByTestId("view-settings")).toBeVisible();

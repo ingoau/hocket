@@ -6,6 +6,7 @@ import type { Job, SearchResults, ServerInfo, SyncProgress } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
+import { clearSearches, forgetSearch, recentSearches, rememberSearch } from "../lib/recent-searches";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { fmtRelative } from "../lib/format";
@@ -52,6 +53,7 @@ function SearchBox() {
   const input = useRef<HTMLInputElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const reqId = useRef("");
+  const [recent, setRecent] = useState<string[]>(() => recentSearches());
 
   useEffect(() => {
     if (focusNonce) {
@@ -114,20 +116,29 @@ function SearchBox() {
   const localRows = rows(local);
   const serverRows = rows(server);
   const all = [...localRows, ...serverRows];
+  const searchFor = (query: string) => {
+    setRecent(rememberSearch(query));
+    setQ(query);
+    navigate({ view: "search", param: query });
+    setOpen(false);
+  };
   const pick = (r: Row) => {
+    if (q.trim()) setRecent(rememberSearch(q));
     r.go();
     setOpen(false);
     input.current?.blur();
   };
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { setOpen(false); input.current?.blur(); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(all.length - 1, a + 1)); }
+    const count = showRecent ? recent.length : all.length;
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(count - 1, a + 1)); }
     if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(-1, a - 1)); }
     if (e.key === "Enter") {
       e.preventDefault();
+      if (showRecent) { const r = recent[active]; if (r) searchFor(r); return; }
       const r = all[active];
       if (r) pick(r);
-      else if (q.trim()) { navigate({ view: "search", param: q }); setOpen(false); }
+      else if (q.trim()) searchFor(q);
     }
   };
   const renderRow = (r: Row, i: number) => (
@@ -137,20 +148,37 @@ function SearchBox() {
       <span className="kind">{r.kind}</span>
     </div>
   );
-  const expanded = open && !!q.trim();
+  // Focused with nothing typed: the recent searches (this device's own).
+  const showRecent = open && !q.trim() && recent.length > 0;
+  const expanded = (open && !!q.trim()) || showRecent;
   // The sheet lifts away on Escape, an outside click or a pick; when the query
   // is cleared there is nothing left to show, so it goes at once.
-  const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() });
+  const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() && !showRecent });
   return (
     <div className="search" role="search">
       <Icon name="search" size={14} />
-      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => q && setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
+      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
       {sheet.value ? (
-        <div {...sheet.exitProps} id="search-results" className={`search-popover ${sheet.motion}`} role="listbox" aria-label={t("a11y.searchResults")} style={{ minHeight }} data-testid="search-popover">
-          {local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
-          {localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
-          {local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
-          {serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
+        <div {...sheet.exitProps} id="search-results" className={`search-popover ${sheet.motion}`} role="listbox" aria-label={showRecent ? t("search.recent") : t("a11y.searchResults")} style={{ minHeight: showRecent ? undefined : minHeight }} data-testid="search-popover">
+          {showRecent ? (
+            <>
+              <div className="search-recent-head" role="presentation">
+                <span className="grow"><span className="search-recent-title">{t("search.recent")}</span> <span className="muted">· {t("search.recentLocal")}</span></span>
+                <button type="button" className="btn text sm" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); setRecent(clearSearches()); }} data-testid="search-recent-clear">{t("search.recentClear")}</button>
+              </div>
+              {recent.map((r, i) => (
+                <div key={r} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); searchFor(r); }} data-testid="search-recent">
+                  <Icon name="restore" size={18} className="search-recent-icon" />
+                  <div className="grow truncate">{r}</div>
+                  <button type="button" className="btn icon sm" tabIndex={-1} aria-label={t("search.recentForget", { query: r })} title={t("search.recentForget", { query: r })} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setRecent(forgetSearch(r)); }} data-testid="search-recent-forget"><Icon name="close" size={16} /></button>
+                </div>
+              ))}
+            </>
+          ) : null}
+          {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
+          {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
+          {!showRecent && local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
+          {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>
       ) : null}
     </div>
