@@ -369,7 +369,7 @@ private const val BOTTOM_FADE = 0.6f
  * extension (either end) fades over only [CRISP_FEATHER], onto its colour, unless [evenFlat] (the artwork
  * in flight, whose flat continuation fades out under it: its edge fades as wide as any other).
  */
-internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction): Modifier {
+internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction, crispFraction: () -> Float = { 0f }): Modifier {
     val bottom = edge != null
     val bottomFeather = if (edge?.isFlat() == true && !evenFlat) CRISP_FEATHER else FEATHER
     // The top fades onto [ImmersiveTopStrip]'s blurred copy (or its flat colour, over less).
@@ -385,6 +385,18 @@ internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, e
                 val from = size.height * (1f - bottomFeather)
                 drawRect(
                     Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - f), startY = from, endY = size.height),
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                    size = size.copy(height = size.height - from),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+            // With [evenFlat], a flat edge's own short fade too, as much as [crispFraction]: the
+            // same edge the landed artwork has, while the continuation is still there.
+            val c = crispFraction().coerceIn(0f, 1f)
+            if (bottom && evenFlat && edge?.isFlat() == true && c > 0f) {
+                val from = size.height * (1f - CRISP_FEATHER)
+                drawRect(
+                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - c), startY = from, endY = size.height),
                     topLeft = androidx.compose.ui.geometry.Offset(0f, from),
                     size = size.copy(height = size.height - from),
                     blendMode = BlendMode.DstIn,

@@ -151,9 +151,10 @@ enum Side {
     Top,
 }
 
-/// How grainy the cover is near one edge: the mean step in luma (sRGB levels, 0..255) between
-/// neighbouring pixels, at the resolution the cover came in (resampling to [N] averages a fine
-/// grain away). In levels, not OKLab: near black OKLab spreads JPEG noise of a level or two far
+/// How grainy the cover is along one edge (the rows Extend carries on): the mean step in luma
+/// (sRGB levels, 0..255) between neighbouring pixels, at the resolution the cover came in
+/// (resampling to [N] averages a fine grain away). The apps send about 256 px, which
+/// [GRAIN_MAX] is calibrated for. In levels, not OKLab: near black OKLab spreads JPEG noise of a level or two far
 /// apart, though nobody sees it. Steps of [GRAIN_EDGE] levels or more are a shape's edge (a
 /// caption, a border), not grain, and are left out.
 fn grain(rgba: &[u8], w: usize, h: usize, side: Side) -> f64 {
@@ -161,7 +162,7 @@ fn grain(rgba: &[u8], w: usize, h: usize, side: Side) -> f64 {
         Side::Bottom | Side::Top => (w, h),
         Side::Right | Side::Left => (h, w),
     };
-    let depth = (across * REFLECT_ROWS / N).max(2).min(across);
+    let depth = (across * (EDGE_ROWS + 1) / N).max(2).min(across);
     let luma = |i: usize, d: usize| {
         let (x, y) = match side {
             Side::Bottom => (i, h - 1 - d),
