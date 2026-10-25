@@ -261,6 +261,37 @@ pub struct Album {
     pub music_brainz_id: Option<String>,
     pub replay_gain: Option<ReplayGain>,
     pub offline: OfflineState,
+    /// OpenSubsonic release types, lowercased (`album`, `ep`, `single`, `live`...); empty when
+    /// the server doesn't send them. [`Album::release_kind`] reduces them to one shelf.
+    #[serde(default)]
+    pub release_types: Vec<String>,
+}
+
+/// Which shelf of an artist's discography an album sits on.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReleaseKind {
+    Album,
+    Ep,
+    Single,
+    Compilation,
+}
+
+impl Album {
+    /// Compilations first (the flag is set for every server), then the release types; an album
+    /// with no types is an album.
+    pub fn release_kind(&self) -> ReleaseKind {
+        if self.is_compilation || self.release_types.iter().any(|t| t == "compilation") {
+            ReleaseKind::Compilation
+        } else if self.release_types.iter().any(|t| t == "ep") {
+            ReleaseKind::Ep
+        } else if self.release_types.iter().any(|t| t == "single") {
+            ReleaseKind::Single
+        } else {
+            ReleaseKind::Album
+        }
+    }
 }
 
 #[typeshare]

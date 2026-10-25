@@ -256,6 +256,9 @@ pub struct AlbumId3 {
     pub music_brainz_id: Option<String>,
     #[serde(default)]
     pub is_compilation: Option<bool>,
+    /// OpenSubsonic: `["Album"]`, `["EP"]`, `["Single", "Live"]`... (MusicBrainz release types).
+    #[serde(default)]
+    pub release_types: Vec<String>,
     #[serde(default)]
     pub sort_name: Option<String>,
     #[serde(default)]
