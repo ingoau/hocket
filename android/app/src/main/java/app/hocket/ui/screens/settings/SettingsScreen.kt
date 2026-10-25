@@ -41,12 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
-import app.hocket.core.SettingKeys
-import app.hocket.core.api.ConnectionTier
-import app.hocket.core.api.ReplayGainMode
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.formatAgo
-import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
