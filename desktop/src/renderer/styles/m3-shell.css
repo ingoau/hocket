@@ -148,6 +148,7 @@
    colour. A reflection's fades into it behind the Lyrics card, from the title row's bottom to the
    next card's top (--side-fade-at, --side-fade-len, kept by the overview), along a smoothstep. */
 .side-overview.immersive {
+  --np-crisp: #000 96%, rgba(0, 0, 0, 0.84) 97%, rgba(0, 0, 0, 0.5) 98%, rgba(0, 0, 0, 0.16) 99%, transparent;
   --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent;
   --side-fade-at: 100%; --side-fade-len: 180px;
 }
@@ -156,6 +157,7 @@
 .side-overview[data-style="mirror"] .side-continuation { mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) var(--side-fade-at), rgba(0, 0, 0, 0.9888) calc(var(--side-fade-at) + var(--side-fade-len) * 0.0625), rgba(0, 0, 0, 0.957) calc(var(--side-fade-at) + var(--side-fade-len) * 0.125), rgba(0, 0, 0, 0.9077) calc(var(--side-fade-at) + var(--side-fade-len) * 0.1875), rgba(0, 0, 0, 0.8438) calc(var(--side-fade-at) + var(--side-fade-len) * 0.25), rgba(0, 0, 0, 0.7681) calc(var(--side-fade-at) + var(--side-fade-len) * 0.3125), rgba(0, 0, 0, 0.6836) calc(var(--side-fade-at) + var(--side-fade-len) * 0.375), rgba(0, 0, 0, 0.5933) calc(var(--side-fade-at) + var(--side-fade-len) * 0.4375), rgba(0, 0, 0, 0.5) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5), rgba(0, 0, 0, 0.4067) calc(var(--side-fade-at) + var(--side-fade-len) * 0.5625), rgba(0, 0, 0, 0.3164) calc(var(--side-fade-at) + var(--side-fade-len) * 0.625), rgba(0, 0, 0, 0.2319) calc(var(--side-fade-at) + var(--side-fade-len) * 0.6875), rgba(0, 0, 0, 0.1562) calc(var(--side-fade-at) + var(--side-fade-len) * 0.75), rgba(0, 0, 0, 0.0923) calc(var(--side-fade-at) + var(--side-fade-len) * 0.8125), rgba(0, 0, 0, 0.043) calc(var(--side-fade-at) + var(--side-fade-len) * 0.875), rgba(0, 0, 0, 0.0112) calc(var(--side-fade-at) + var(--side-fade-len) * 0.9375), rgba(0, 0, 0, 0) calc(var(--side-fade-at) + var(--side-fade-len) * 1)); }
 .side-continuation.fade-in-art { animation: side-art-in var(--dur-spring-long) var(--ease-emphasized-decel) both; }
 .side-overview.immersive .side-art { width: calc(100% + 32px); margin: -16px -16px 0; border-radius: 0; box-shadow: none; background: none; }
+.side-overview.immersive[data-flat] .side-art { mask-image: linear-gradient(to bottom, var(--np-crisp)); }
 .side-overview.immersive:not([data-flat]) .side-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
 /* The overview's colour (data-fill) runs to the end of the scroll and past it (the scroller wears
    it too). Every card is glass in the edge's tone over it: light with dark text over a light

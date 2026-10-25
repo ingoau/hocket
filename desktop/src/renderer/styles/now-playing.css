@@ -214,19 +214,21 @@
 .np[data-immersive] .np-art-button:focus-visible { outline-offset: -6px; border-radius: 0; }
 /* The artwork's last 30% (FEATHER in lib/immersive.ts) fades onto its blurred copy on the canvas
    beneath, along a smoothstep: a straight ramp's ends read as edges. */
-.np[data-immersive] { --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent; }
+.np[data-immersive] { --np-crisp: #000 96%, rgba(0, 0, 0, 0.84) 97%, rgba(0, 0, 0, 0.5) 98%, rgba(0, 0, 0, 0.16) 99%, transparent; --np-feather: #000 70%, rgba(0, 0, 0, 0.96) 73.75%, rgba(0, 0, 0, 0.84) 77.5%, rgba(0, 0, 0, 0.68) 81.25%, rgba(0, 0, 0, 0.5) 85%, rgba(0, 0, 0, 0.32) 88.75%, rgba(0, 0, 0, 0.16) 92.5%, rgba(0, 0, 0, 0.04) 96.25%, transparent; }
 /* And a vignette on that side, so the fade is no straight line: it comes in sooner towards the
    corners there, while the far edges stay put. */
 .np[data-immersive="bottom"] .np-art { mask-image: linear-gradient(to bottom, var(--np-feather)), radial-gradient(ellipse 90% 120% at 50% 0%, var(--np-feather)); mask-composite: intersect; }
 .np[data-immersive="right"] .np-art { mask-image: linear-gradient(to right, var(--np-feather)), radial-gradient(ellipse 120% 90% at 0% 50%, var(--np-feather)); mask-composite: intersect; }
-/* Except where the artwork already ends in the one colour carried on: crisp to its edge. */
-.np[data-immersive="bottom"][data-flat] .np-art { mask-image: none; }
+/* Except where the artwork already ends in the one colour carried on: only its last 4%
+   (CRISP_FEATHER in lib/immersive.ts) fades, onto that colour, so a cover a level or a grain off
+   it never shows a hard line. */
+.np[data-immersive="bottom"][data-flat] .np-art { mask-image: linear-gradient(to bottom, var(--np-crisp)); }
 /* Beside a view, a flat extension dissolves too: the artwork's own last 30% fades into the moving
    blur (a smoothstep, eased in as the view opens) and the carried-on colour is gone by its edge,
    so the soft edge is as wide as a mirror's rather than the crisp seam. */
 @property --np-art-solid { syntax: "<percentage>"; inherits: false; initial-value: 100%; }
 .np[data-immersive="right"][data-flat] .np-art {
-  --np-art-solid: 100%;
+  --np-art-solid: 96%;
   --np-art-span: calc(100% - var(--np-art-solid));
   mask-image: linear-gradient(to right, #000 var(--np-art-solid), rgba(0, 0, 0, 0.84) calc(var(--np-art-solid) + var(--np-art-span) * 0.25), rgba(0, 0, 0, 0.5) calc(var(--np-art-solid) + var(--np-art-span) * 0.5), rgba(0, 0, 0, 0.16) calc(var(--np-art-solid) + var(--np-art-span) * 0.75), transparent 100%);
   transition: --np-art-solid 700ms var(--ease-emphasized);
@@ -256,7 +258,7 @@
   transition: translate var(--spring-spatial-ms) var(--spring-spatial), --np-left-solid var(--spring-spatial-ms) var(--ease-emphasized);
 }
 .np[data-sides="both"][data-centred] .np-art-slot { --np-left-solid: 0; }
-.np[data-sides="both"][data-left-flat] .np-art-slot { mask-image: none; }
+.np[data-sides="both"][data-left-flat] .np-art-slot { mask-image: linear-gradient(rgba(0, 0, 0, var(--np-left-solid)), rgba(0, 0, 0, var(--np-left-solid))), linear-gradient(to left, var(--np-crisp)); mask-composite: add; }
 .np[data-layout="immersive"] .np-pane { position: absolute; z-index: 1; right: 40px; width: var(--np-pane-w); top: 88px; bottom: 104px; }
 /* With a view open, the carried-on part shortens and dissolves into the moving blur, and the view sits on that. */
 @property --np-solid { syntax: "<length-percentage>"; inherits: false; initial-value: 100%; }
