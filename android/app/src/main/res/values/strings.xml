@@ -327,6 +327,13 @@
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
+    <plurals name="downloads_count"><item quantity="one">%d download</item><item quantity="other">%d downloads</item></plurals>
+    <string name="downloads_kind_album">Album</string>
+    <string name="downloads_kind_playlist">Playlist</string>
+    <string name="downloads_kind_song">Song</string>
+    <string name="downloads_legend_downloads">Downloads</string>
+    <string name="downloads_legend_cache">Stream cache</string>
+    <string name="downloads_legend_free">Free</string>
     <string name="settings_group_look_and_sound">Look and sound</string>
     <string name="settings_group_library_and_storage">Library and storage</string>
     <string name="settings_group_devices_and_controls">Devices and controls</string>

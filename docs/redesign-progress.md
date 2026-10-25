@@ -24,7 +24,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Search (recent searches, local only) | – | [x] | [x] (uncompiled) |
 | Album / Artist / Playlist | [x] | [x] | [~] shelves only (uncompiled) |
 | Server setup | – | [x] | [ ] |
-| Downloads | – | [x] | [ ] |
+| Downloads | – | [x] | [x] (uncompiled) |
 | Stats | – | [x] | [ ] |
 | Filters | – | [x] | [ ] |
 | Song info | [x] | [x] | [x] (uncompiled) |

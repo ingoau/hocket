@@ -1,5 +1,14 @@
 package app.hocket.ui.screens.downloads
 
+import app.hocket.core.api.PinTarget
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.draw.clip
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -78,6 +87,7 @@ fun DownloadsScreen(nav: NavHostController) {
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+            item(key = "storage") { StorageCard(storage.downloadsBytes, storage.cacheBytes, storage.freeBytes) }
             // Everything that plays offline: downloads plus complete stream-cache entries.
             item(key = "availableOffline") {
                 ListItem(
@@ -88,6 +98,7 @@ fun DownloadsScreen(nav: NavHostController) {
                     modifier = Modifier.clickable { nav.navigate(Route.AvailableOffline) }.testTag("downloads.availableOffline"),
                 )
             }
+            if (pins.isNotEmpty()) item(key = "h.pins") { app.hocket.ui.components.SectionHeader(pluralStringResource(R.plurals.downloads_count, pins.size, pins.size)) }
             if (pins.isEmpty()) item(key = "empty") { EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body)) }
             if (warn != null && storage.downloadsBytes > warn) {
                 item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
@@ -100,7 +111,7 @@ fun DownloadsScreen(nav: NavHostController) {
                         Column(Modifier.weight(1f)) {
                             Text(pin.label, style = MaterialTheme.typography.bodyLarge)
                             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.downloads_progress, pin.downloadedCount.toInt(), pin.trackCount.toInt()) + stringResource(R.string.dot_separator) + formatBytes(pin.bytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(stringResource(pinKind(pin.target)) + stringResource(R.string.dot_separator) + stringResource(R.string.downloads_progress, pin.downloadedCount.toInt(), pin.trackCount.toInt()) + stringResource(R.string.dot_separator) + formatBytes(pin.bytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original))
                             }
                         }
@@ -120,4 +131,42 @@ fun DownloadsScreen(nav: NavHostController) {
         }
     }
     removing?.let { pin -> ConfirmDialog(stringResource(R.string.downloads_remove_confirm, pin.label), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.unpin(pin.target)) }, onDismiss = { removing = null }) }
+}
+
+private fun pinKind(target: PinTarget): Int = when (target) {
+    is PinTarget.Album -> R.string.downloads_kind_album
+    is PinTarget.Playlist -> R.string.downloads_kind_playlist
+    else -> R.string.downloads_kind_song
+}
+
+/** What this phone's storage holds: downloads, the stream cache and what is free, as one bar with its legend. */
+@Composable
+private fun StorageCard(downloads: Double, cache: Double, free: Double?) {
+    val whole = (downloads + cache + (free ?: 0.0)).coerceAtLeast(1.0)
+    val dl = MaterialTheme.colorScheme.primary
+    val ca = MaterialTheme.colorScheme.tertiary
+    val track = MaterialTheme.colorScheme.surfaceContainerHighest
+    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("downloads.storage")) {
+        Column(Modifier.padding(20.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(6.dp)).background(track)) {
+                if (downloads > 0) Box(Modifier.fillMaxHeight().weight((downloads / whole).toFloat()).background(dl))
+                if (cache > 0) Box(Modifier.fillMaxHeight().weight((cache / whole).toFloat()).background(ca))
+                val rest = (1.0 - (downloads + cache) / whole).toFloat()
+                if (rest > 0f) Spacer(Modifier.weight(rest))
+            }
+            Legend(dl, stringResource(R.string.downloads_legend_downloads), formatBytes(downloads))
+            Legend(ca, stringResource(R.string.downloads_legend_cache), formatBytes(cache))
+            if (free != null) Legend(track, stringResource(R.string.downloads_legend_free), formatBytes(free))
+        }
+    }
+}
+
+@Composable
+private fun Legend(color: androidx.compose.ui.graphics.Color, label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(10.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
 }
