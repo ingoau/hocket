@@ -792,6 +792,14 @@ class FakeCore(
             is Command.RestoreSavedQueue -> restoreSaved(c.data.id)
             is Command.PinSavedQueue -> { val i = savedQueues.indexOfFirst { it.id == c.data.id }; if (i >= 0) { savedQueues[i] = savedQueues[i].copy(pinned = c.data.pinned, updatedAt = now()); emitSaved() } }
             is Command.DeleteSavedQueue -> { savedQueues.removeAll { it.id == c.data.id }; emitSaved() }
+            is Command.RenameQueue -> {
+                val label = c.data.label.trim()
+                if (label.isNotEmpty()) {
+                    val id = c.data.saved_queue_id
+                    if (id == null) { context = context?.copy(label = label); emitQueue() }
+                    else { val i = savedQueues.indexOfFirst { it.id == id }; if (i >= 0) { savedQueues[i] = savedQueues[i].copy(label = label, context = savedQueues[i].context.copy(label = label), updatedAt = now()); emitSaved() } }
+                }
+            }
             is Command.SaveQueueAsPlaylist -> {
                 val ids = c.data.saved_queue_id?.let { id -> savedQueues.firstOrNull { it.id == id }?.let { resolveContext(it.context) } } ?: (contextTracks + insertions.map { it.trackId })
                 createPlaylist(c.data.name, ids)
@@ -1420,6 +1428,12 @@ class FakeCore(
             QueryResult.Artists(ArtistPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
         is Query.Artist -> QueryResult.ArtistDetail(library.artist(q.data.id))
+        // Made-up Last.fm details, so the song info and artist pages have something to show.
+        is Query.ArtistInfo -> QueryResult.ExternalInfo(library.artist(q.data.id)?.let { a ->
+            ExternalInfo(text = "${a.name} make quiet, close-miked songs about leaving and coming home.", lastFmUrl = "https://www.last.fm/music/${a.name.replace(' ', '+')}",
+                similarArtists = library.artists.filter { it.id != a.id }.take(5))
+        })
+        is Query.AlbumInfo -> QueryResult.ExternalInfo(library.album(q.data.id)?.let { al -> ExternalInfo(text = "${al.name} was recorded over two winters with the windows open.", lastFmUrl = "https://www.last.fm/music/${(al.artist ?: al.name).replace(' ', '+')}") })
         is Query.ArtistTopSongs -> QueryResult.TrackList(library.artistAlbums(q.data.id).flatMap { library.albumTracks(it.id) }.sortedByDescending { it.playCount }.take(q.data.count.toInt()))
         is Query.Genres -> QueryResult.Genres(library.genres.toList())
         is Query.Playlists -> QueryResult.Playlists(library.playlists.toList())

@@ -40,6 +40,8 @@ object Commands {
     fun restoreSavedQueue(id: String) = Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(id))
     fun pinSavedQueue(id: String, pinned: Boolean) = Command.PinSavedQueue(CommandPinSavedQueueInner(id, pinned))
     fun deleteSavedQueue(id: String) = Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(id))
+    /** Renames a saved queue, or the playing one when [savedQueueId] is null; a blank label is ignored. */
+    fun renameQueue(savedQueueId: String?, label: String) = Command.RenameQueue(CommandRenameQueueInner(savedQueueId, label))
     fun saveQueueAsPlaylist(savedQueueId: String?, name: String) =
         Command.SaveQueueAsPlaylist(CommandSaveQueueAsPlaylistInner(savedQueueId, name))
     fun setSavedQueueCap(cap: Int) = Command.SetSavedQueueCap(CommandSetSavedQueueCapInner(cap.toUInt()))

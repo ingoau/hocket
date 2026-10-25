@@ -16,6 +16,7 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_ok">OK</string>
     <string name="action_save">Save</string>
+    <string name="action_create">Create</string>
     <string name="action_delete">Delete</string>
     <string name="action_retry">Retry</string>
     <string name="action_dismiss">Dismiss</string>
@@ -318,6 +319,11 @@
     <string name="queue_mode_youtube">Insert into context</string>
     <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
+    <string name="queues_title">Queues</string>
+    <string name="queue_playing_now">Playing now</string>
+    <string name="queue_rename">Rename</string>
+    <string name="queue_name">Queue name</string>
+    <string name="queue_create_playlist">Create playlist</string>
     <string name="queue_item_a11y">%1$s by %2$s, %3$s</string>
     <string name="queue_unavailable">Couldn’t play here</string>
 

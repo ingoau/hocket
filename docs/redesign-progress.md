@@ -19,7 +19,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Screen | Core | Desktop | Android |
 | --- | --- | --- | --- |
 | Settings | – | [x] | [ ] |
-| Queues (+ rename) | [x] | [x] | [ ] |
+| Queues (+ rename) | [x] | [x] | [x] (uncompiled) |
 | Connect | – | [x] | [ ] |
 | Search (recent searches, local only) | – | [x] | [ ] |
 | Album / Artist / Playlist | [x] | [x] | [ ] |
@@ -47,3 +47,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
 - Desktop Stats: period chips (7 days / 30 days / Year), chart readouts (hovered bar or the peak), peak bar on the accent.
 - Desktop Filters: master/detail (list beside the editor), Unsaved changes badge, readable field names. Rules stay inline editors (not chips + popover) — deviation.
 - Desktop Setup: board copy, URL hint, http:// cleartext warning, Enter hint; Name field dropped. The post-connect summary step is not implemented (needs version/capability info at setup) — deviation.
+- Android Queues (not compiled here): Playing now card (rename, Create playlist), rows without art with rename/pin/immediate delete, undo-history button removed; Commands.renameQueue; FakeCore handles RenameQueue, ArtistInfo, AlbumInfo.
