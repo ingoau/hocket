@@ -3,7 +3,9 @@
 // entries; the core's AvailableOffline filter field).
 import { useCallback } from "react";
 import { t } from "@shared/strings";
-import { useApp } from "../store/app";
+import { useApp, useSetting } from "../store/app";
+import { SK } from "@shared/settings-keys";
+import { Select } from "../components/controls";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { Artwork } from "../components/Artwork";
@@ -27,20 +29,20 @@ export function Downloads({ tab }: { tab?: string }) {
     <div className="view page-downloads" data-testid="view-downloads">
       <div className="view-header">
         <h1 className="brand-type">{t("downloads.title")}</h1>
-        <div className="actions">
-          <button type="button" className="btn tonal" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
-        </div>
       </div>
       <div className="view-tabs-row">
         <Tabs id="downloads-tabs" className="tabs view-tabs" label={t("downloads.tabs")} selected={current} onSelect={(k) => navigate({ view: "downloads", param: k === "offline" ? "offline" : undefined }, true)}
           tabs={[{ key: "pins", label: t("downloads.tab.pins"), testId: "downloads-tab-pins" }, { key: "offline", label: t("downloads.tab.offline"), testId: "downloads-tab-offline" }]} />
-        {sum ? <span className="muted small">{t("downloads.usage", { downloads: fmtBytes(sum.downloadsBytes), cache: fmtBytes(sum.cacheBytes), images: fmtBytes(sum.imagesBytes) })}</span> : null}
+        {sum && current === "offline" ? <span className="muted small">{t("downloads.usage", { downloads: fmtBytes(sum.downloadsBytes), cache: fmtBytes(sum.cacheBytes), images: fmtBytes(sum.imagesBytes) })}</span> : null}
       </div>
       {current === "pins" ? <Pins /> : <AvailableOffline />}
     </div>
   );
 }
 
+const GIB = 1024 ** 3;
+
+/** Downloads as a table (what, how far along, size, files), with the device's storage beside it. */
 function Pins() {
   const pins = useApp((s) => s.pins);
   const navigate = useApp((s) => s.navigate);
@@ -53,21 +55,77 @@ function Pins() {
     else if (p.target.type === "playlist") navigate({ view: "playlist", id: p.target.data.id });
   };
   return (
-    <div className="view-body" {...tabPanelProps("downloads-tabs", "pins")}>
-      {!list.length ? <EmptyState message={t("downloads.empty")} icon="download" action={<button type="button" className="btn" onClick={() => navigate({ view: "albums" })}>{t("nav.albums")}</button>} /> : null}
-      {list.map((p) => (
-        <div key={JSON.stringify(p.target)} className="pin-row" data-testid="pin-row">
-          <Artwork id={p.coverArt} size={64} className="art" />
-          <div style={{ minWidth: 0 }}>
-            <button type="button" className="link-button truncate" onClick={() => open(p)}>{p.label}</button>
-            <div className="small muted">{t("downloads.progress", { done: p.downloadedCount, total: p.trackCount })} · {fmtBytes(p.bytes)}{p.transcoded ? ` · ${t("downloads.transcoded")}` : ""}</div>
-            {p.downloadedCount < p.trackCount ? <div className="progress" style={{ marginTop: 4 }}><div style={{ width: `${(p.downloadedCount / Math.max(1, p.trackCount)) * 100}%` }} /></div> : null}
-          </div>
-          <span className="badge">{p.target.type}</span>
-          <button type="button" className="btn icon" aria-label={`${t("downloads.remove")}: ${p.label}`} title={t("downloads.remove")} onClick={() => remove(p)}><Icon name="trash" size={14} /></button>
-        </div>
-      ))}
+    <div className="view-body downloads-body" {...tabPanelProps("downloads-tabs", "pins")}>
+      <div className="downloads-main">
+        {!list.length ? <EmptyState message={t("downloads.empty")} icon="download" action={<button type="button" className="btn" onClick={() => navigate({ view: "albums" })}>{t("nav.albums")}</button>} /> : (
+          <table className="dl-table" data-testid="downloads-table">
+            <thead><tr><th scope="col">{t("downloads.col.title")}</th><th scope="col">{t("downloads.col.downloaded")}</th><th scope="col" className="num">{t("downloads.col.size")}</th><th scope="col" className="num">{t("downloads.col.files")}</th><th scope="col"><span className="sr-only">{t("downloads.remove")}</span></th></tr></thead>
+            <tbody>
+              {list.map((p) => {
+                const done = p.downloadedCount >= p.trackCount;
+                return (
+                  <tr key={JSON.stringify(p.target)} data-testid="pin-row">
+                    <td>
+                      <div className="dl-title">
+                        <Artwork id={p.coverArt} size={64} className="art" />
+                        <div style={{ minWidth: 0 }}>
+                          <button type="button" className="link-button truncate" onClick={() => open(p)}>{p.label}</button>
+                          <div className="small muted">{t(`downloads.kind.${p.target.type}`)}{p.transcoded ? ` · ${t("downloads.transcoded")}` : ""}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      {done ? <span className="badge ok"><Icon name="check" size={14} /> {t("downloads.done")}</span> : (
+                        <div className="dl-progress"><div className="progress"><div style={{ width: `${(p.downloadedCount / Math.max(1, p.trackCount)) * 100}%` }} /></div><span className="small muted">{t("downloads.progress", { done: p.downloadedCount, total: p.trackCount })}</span></div>
+                      )}
+                    </td>
+                    <td className="num">{fmtBytes(p.bytes)}</td>
+                    <td className="num">{p.trackCount}</td>
+                    <td className="num"><button type="button" className="btn icon" aria-label={`${t("downloads.remove")}: ${p.label}`} title={t("downloads.remove")} onClick={() => remove(p)}><Icon name="trash" size={18} /></button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <StorageCard />
     </div>
+  );
+}
+
+function StorageCard() {
+  const storage = useApp((s) => s.storage);
+  const navigate = useApp((s) => s.navigate);
+  const st = useQuery(() => ({ type: "storage" }), "storage", [], { static: true });
+  const sum = storage ?? st.data;
+  const warn = useSetting<number | null>(SK.storageWarnThresholdBytes, null);
+  if (!sum) return null;
+  const free = sum.freeBytes ?? 0;
+  const whole = Math.max(1, sum.downloadsBytes + sum.cacheBytes + free);
+  const pct = (n: number) => `${(n / whole) * 100}%`;
+  return (
+    <aside className="dl-storage" aria-labelledby="dl-storage-title" data-testid="downloads-storage">
+      <h2 id="dl-storage-title">{t("downloads.storage")}</h2>
+      <div className="dl-bar" aria-hidden="true"><span className="dl-bar-dl" style={{ width: pct(sum.downloadsBytes) }} /><span className="dl-bar-cache" style={{ width: pct(sum.cacheBytes) }} /></div>
+      <dl className="dl-legend">
+        <div><dt><span className="dot dl" />{t("downloads.tab.pins")}</dt><dd>{fmtBytes(sum.downloadsBytes)}</dd></div>
+        <div><dt><span className="dot cache" />{t("downloads.cache")}</dt><dd>{fmtBytes(sum.cacheBytes)}</dd></div>
+        {sum.freeBytes !== undefined ? <div><dt><span className="dot free" />{t("downloads.free")}</dt><dd>{fmtBytes(free)}</dd></div> : null}
+      </dl>
+      <button type="button" className="dl-link" onClick={() => navigate({ view: "downloads", param: "offline" }, true)} data-testid="downloads-open-offline">
+        <span className="grow"><span className="dl-link-title">{t("downloads.tab.offline")}</span><span className="small muted">{t("downloads.offlineShort")}</span></span>
+        <Icon name="chevronRight" size={20} />
+      </button>
+      <button type="button" className="btn tonal" onClick={() => bridge().dispatch({ type: "clearStreamCache" })} data-testid="downloads-clear-cache">{t("downloads.clearCache")}</button>
+      <label className="dl-warn">
+        <span>{t("settings.storageWarn")}</span>
+        <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
+          <option value={0}>–</option>
+          {[1, 2, 4, 8, 16].map((g) => <option key={g} value={g}>{g} GB</option>)}
+        </Select>
+      </label>
+    </aside>
   );
 }
 

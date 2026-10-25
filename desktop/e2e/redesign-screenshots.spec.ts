@@ -108,6 +108,14 @@ test("redesigned screens", async () => {
       await shot("song-info");
       await page.keyboard.press("Escape");
 
+      // Downloads: the table and the storage card.
+      for (const id of ["al-2", "al-5"]) await page.evaluate((id) => window.hocket.dispatch({ type: "pin", data: { target: { type: "album", data: { id } }, transcode: false } }), id);
+      await page.evaluate(() => window.hocket.dispatch({ type: "pin", data: { target: { type: "playlist", data: { id: "pl-1" } }, transcode: false } }));
+      await openPlace(page, "downloads");
+      await expect(page.getByTestId("downloads-storage")).toBeVisible();
+      await page.waitForTimeout(1500);
+      await shot("downloads");
+
       // Settings: grouped nav with the account card.
       await page.getByTestId("nav-settings").click();
       await expect(page.getByTestId("view-settings")).toBeVisible();

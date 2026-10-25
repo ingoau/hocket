@@ -24,7 +24,7 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Search (recent searches, local only) | – | [x] | [ ] |
 | Album / Artist / Playlist | [x] | [x] | [ ] |
 | Server setup | – | [ ] | [ ] |
-| Downloads | – | [ ] | [ ] |
+| Downloads | – | [x] | [ ] |
 | Stats | – | [ ] | [ ] |
 | Filters | – | [ ] | [ ] |
 | Song info | [x] | [x] | [ ] |
@@ -43,3 +43,4 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
   hero because their track list scrolls under it. Artist: top songs preview, shelves per release kind
   with View more grid (newest/oldest), About from artistInfo.
 - Desktop Song info: wide dialog (SongInfo.tsx), library details left, Last.fm right, no action buttons.
+- Desktop Downloads (A): table (title, downloaded, size, files, remove) and a Storage card (bar, Available offline link, clear cache, warn threshold); card stacks above via a container query.
