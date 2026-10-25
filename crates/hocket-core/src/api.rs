@@ -924,6 +924,11 @@ pub struct ArtworkMetrics {
     pub marks: u32,
     /// Mean colour change between neighbouring pixels in the lower 40%.
     pub busy: f64,
+    /// Fine texture near the edge: the mean luma step between neighbouring pixels, in sRGB levels
+    /// (0..255) at the cover's own resolution. The apps draw this much grain over a flat
+    /// continuation so the texture carries on rather than stopping at the seam.
+    #[serde(default)]
+    pub grain: f64,
     pub faces: u32,
     /// Share of what sits behind the controls (the continuation) that is very dark / very light
     /// (one of them near 1: the controls follow it, not the theme).

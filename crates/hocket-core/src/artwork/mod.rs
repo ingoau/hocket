@@ -52,6 +52,12 @@ const EDGE_ROW_FLAT: f64 = 0.95;
 /// colour shows where the texture stops: it carries on in its own colours, faded in like any
 /// other extension.
 const CRISP_MIN: f64 = 0.95;
+/// A crisp edge also needs the cover this smooth near it ([grain], in sRGB levels): a fine,
+/// low-contrast grain (a ceiling tile, paper, concrete) is one colour to [FLAT_TOL] yet shows as
+/// texture stopping dead against one flat colour. JPEG noise is about a level.
+const GRAIN_MAX: f64 = 2.0;
+/// A step between neighbours this big (sRGB levels) is a shape's edge, not grain.
+const GRAIN_EDGE: f32 = 16.0;
 /// This many small marks in the reflection zone rule a mirror out.
 const MARKS_MAX: u32 = 2;
 /// Busier than this (mean neighbour distance) rules a mirror out.
@@ -123,16 +129,69 @@ pub fn layout(
         })
         .collect();
     let top = img.median(0..TOP_ROWS);
-    let decide =
-        |img: &Img, faces: &[FaceRect]| edge(img, faces, square, request.preference, request.theme);
+    let decide = |img: &Img, side: Side, faces: &[FaceRect]| {
+        let grain = grain(rgba, w, h, side);
+        edge(img, grain, faces, square, request.preference, request.theme)
+    };
     ArtworkLayout {
-        bottom: decide(&img, &faces),
-        right: decide(&img.transposed(), &transposed_faces),
-        left: decide(&img.mirrored().transposed(), &mirrored_faces),
-        top: decide(&img.flipped(), &flipped_faces),
+        bottom: decide(&img, Side::Bottom, &faces),
+        right: decide(&img.transposed(), Side::Right, &transposed_faces),
+        left: decide(&img.mirrored().transposed(), Side::Left, &mirrored_faces),
+        top: decide(&img.flipped(), Side::Top, &flipped_faces),
         top_light: luminance(top) > 0.4,
         top_marks: img.marks(0..TOP_ROWS) >= MARKS_MAX,
     }
+}
+
+#[derive(Clone, Copy)]
+enum Side {
+    Bottom,
+    Right,
+    Left,
+    Top,
+}
+
+/// How grainy the cover is near one edge: the mean step in luma (sRGB levels, 0..255) between
+/// neighbouring pixels, at the resolution the cover came in (resampling to [N] averages a fine
+/// grain away). In levels, not OKLab: near black OKLab spreads JPEG noise of a level or two far
+/// apart, though nobody sees it. Steps of [GRAIN_EDGE] levels or more are a shape's edge (a
+/// caption, a border), not grain, and are left out.
+fn grain(rgba: &[u8], w: usize, h: usize, side: Side) -> f64 {
+    let (len, across) = match side {
+        Side::Bottom | Side::Top => (w, h),
+        Side::Right | Side::Left => (h, w),
+    };
+    let depth = (across * REFLECT_ROWS / N).max(2).min(across);
+    let luma = |i: usize, d: usize| {
+        let (x, y) = match side {
+            Side::Bottom => (i, h - 1 - d),
+            Side::Top => (i, d),
+            Side::Right => (w - 1 - d, i),
+            Side::Left => (d, i),
+        };
+        let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+        (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * p[3] as f32 / 255.0
+    };
+    let (mut sum, mut n) = (0.0f64, 0usize);
+    let mut step = |a: f32, b: f32| {
+        let d = (a - b).abs();
+        if d < GRAIN_EDGE {
+            sum += d as f64;
+            n += 1;
+        }
+    };
+    let mut prev: Vec<f32> = Vec::new();
+    for d in 0..depth {
+        let row: Vec<f32> = (0..len).map(|i| luma(i, d)).collect();
+        for i in 0..len.saturating_sub(1) {
+            step(row[i], row[i + 1]);
+        }
+        for (p, q) in prev.iter().zip(&row) {
+            step(*p, *q);
+        }
+        prev = row;
+    }
+    sum / n.max(1) as f64
 }
 
 /// [`layout`] over JSON, for the FFI crates: the request in, the layout out.
@@ -181,6 +240,7 @@ pub(crate) fn card_edge(reason: &str) -> ArtworkEdge {
 /// one).
 fn edge(
     img: &Img,
+    grain: f64,
     faces: &[FaceRect],
     square: bool,
     preference: ImmersiveArtwork,
@@ -190,7 +250,10 @@ fn edge(
     // The outermost row alone (a few pixels of the original): one colour means a border, a
     // backdrop or a plain band, and the art can simply carry on in it.
     let last_median = img.median(N - 1..N);
-    let last_row_flat = img.share_within(N - 1..N, last_median, FLAT_TOL) >= EDGE_ROW_FLAT;
+    // Only when the rows just above are that colour too: a thin border (or a fringe) under busy
+    // art would otherwise carry on as a flat band the art never shows.
+    let last_row_flat = img.share_within(N - 1..N, last_median, FLAT_TOL) >= EDGE_ROW_FLAT
+        && img.share_within(strip.clone(), last_median, FLAT_TOL) >= FLAT_MIN;
     let median = if last_row_flat {
         last_median
     } else {
@@ -220,6 +283,7 @@ fn edge(
         rough,
         marks,
         busy,
+        grain,
         faces: face_count,
         ..Default::default()
     };
@@ -233,7 +297,9 @@ fn edge(
         // The art ends in one colour (a plain background, a border, a band, a backdrop, with or
         // without a caption or sticker on it): carry that colour on, never reflect it. Before the
         // mirror, so the choice doesn't hang on whether small text near the edge was seen.
-        _ if last_row_flat || flat >= CRISP_MIN => (ArtworkStyle::Extend, "extend:flat"),
+        _ if (last_row_flat || flat >= CRISP_MIN) && grain <= GRAIN_MAX => {
+            (ArtworkStyle::Extend, "extend:flat")
+        }
         _ if flat >= FLAT_MIN => (ArtworkStyle::Extend, "extend:plain"),
         _ if mirror_ok => (ArtworkStyle::Mirror, "mirror"),
         // Smearing a person's clothes or skin down the screen looks wrong: people only extend flat.
