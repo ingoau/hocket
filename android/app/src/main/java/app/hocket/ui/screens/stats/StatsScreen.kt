@@ -68,8 +68,10 @@ fun StatsScreen(nav: NavHostController) {
     var period by rememberSaveable { mutableIntStateOf(30) }
     // Starts from the last answer for this period, so a pop back from a top album or artist has its
     // row on the first frame to fly back into.
-    var stats by rememberCachedState<ListeningStats?>(listOf("stats", rememberServerId(), period)) { null }
-    LaunchedEffect(period) { stats = (client.query(Queries.stats(period)) as? QueryResult.Stats)?.data }
+    val serverId = rememberServerId()
+    var stats by rememberCachedState<ListeningStats?>(listOf("stats", serverId, period)) { null }
+    // Keyed like the cached state: the server arriving after the first frame resets it, so ask again.
+    LaunchedEffect(period, serverId) { stats = (client.query(Queries.stats(period)) as? QueryResult.Stats)?.data }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),

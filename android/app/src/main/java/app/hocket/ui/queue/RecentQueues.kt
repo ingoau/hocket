@@ -92,14 +92,14 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
 /** The playing queue at the top of Queues: its name (renamable once it has one) and Create playlist. */
 @Composable
 private fun PlayingQueueCard(label: String?, count: Int, onRename: () -> Unit, onCreatePlaylist: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("queues.playing")) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("queues.playing")) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
             Text(stringResource(R.string.queue_playing_now), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label ?: stringResource(R.string.player_mode_queue), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (label != null) IconButton(onClick = onRename, modifier = Modifier.testTag("queues.playing.rename")) { Icon(HocketIcons.Filled.Edit, stringResource(R.string.queue_rename)) }
             }
-            Text(stringResource(R.string.saved_tracks, count), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(stringResource(R.string.saved_tracks, count), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
             FilledTonalButton(onClick = onCreatePlaylist, enabled = count > 0, modifier = Modifier.testTag("queues.playing.createPlaylist")) {
                 Icon(HocketIcons.Filled.PlaylistAdd, null)

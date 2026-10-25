@@ -113,7 +113,7 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val s = server
-    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.clickable(onClick = onOpen).testTag("settings.category.account").padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp).clearAndSetSemantics { }) {
@@ -127,7 +127,7 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
                     if (s != null) {
                         val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
                         Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyMedium)
                 }
                 Icon(HocketIcons.Filled.ChevronRight, null)
