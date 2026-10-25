@@ -104,6 +104,14 @@ impl Actor {
                 self.artist_top_songs(id, count, reply);
                 return;
             }
+            Query::ArtistInfo { id } => {
+                self.external_info(InfoOf::Artist, id, reply);
+                return;
+            }
+            Query::AlbumInfo { id } => {
+                self.external_info(InfoOf::Album, id, reply);
+                return;
+            }
             Query::Genres { server_id } => {
                 QueryResult::Genres(self.db.genres(&server_id).unwrap_or_default())
             }
@@ -439,6 +447,73 @@ impl Actor {
         });
     }
 
+    /// [`Query::ArtistInfo`] / [`Query::AlbumInfo`]: a cached answer when one is fresh,
+    /// otherwise the server, falling back to an older cached answer when the server can't be
+    /// reached. An empty answer is cached too (most servers without a Last.fm key), for a day.
+    fn external_info(&mut self, of: InfoOf, id: String, reply: oneshot::Sender<QueryResult>) {
+        let owner = match of {
+            InfoOf::Artist => self.db.artist(&id).ok().flatten().map(|a| a.server_id),
+            InfoOf::Album => self.db.album(&id).ok().flatten().map(|a| a.server_id),
+        };
+        let Some(sid) = self.server_id().or(owner) else {
+            let _ = reply.send(QueryResult::ExternalInfo(None));
+            return;
+        };
+        let key = match of {
+            InfoOf::Artist => format!("artistInfo:{id}"),
+            InfoOf::Album => format!("albumInfo:{id}"),
+        };
+        if let Ok(Some(info)) = self.caches.meta_get::<Option<ExternalInfo>>(&sid, &key) {
+            let _ = reply.send(QueryResult::ExternalInfo(info));
+            return;
+        }
+        let stale = self
+            .caches
+            .meta_get_stale::<Option<ExternalInfo>>(&sid, &key)
+            .ok()
+            .flatten()
+            .and_then(|(info, _)| info);
+        let Some(api) = self.api() else {
+            let _ = reply.send(QueryResult::ExternalInfo(stale));
+            return;
+        };
+        let db = self.db.clone();
+        let caches = self.caches.clone();
+        self.spawn(async move {
+            let fetched = match of {
+                InfoOf::Artist => api
+                    .artist_info2(&id, 10, false)
+                    .await
+                    .map(|a| artist_info(&db, &a)),
+                InfoOf::Album => api.album_info2(&id).await.map(|a| album_info(&a)),
+            };
+            let answer = match fetched {
+                Ok(info) => {
+                    let info = (!info.is_empty()).then_some(info);
+                    if let (InfoOf::Artist, Some(text)) =
+                        (of, info.as_ref().and_then(|i| i.text.as_deref()))
+                    {
+                        let _ = db.set_artist_biography(&id, Some(text));
+                    }
+                    let ttl = if info.is_some() {
+                        EXTERNAL_INFO_TTL_MS
+                    } else {
+                        crate::cache::DEFAULT_META_TTL_MS
+                    };
+                    if let Err(e) = caches.meta_put(&sid, &key, &info, Some(ttl)) {
+                        tracing::debug!(target: "hocket_core", error = %e, "external info cache");
+                    }
+                    info
+                }
+                Err(e) => {
+                    tracing::debug!(target: "hocket_core", error = %e, "external info");
+                    stale
+                }
+            };
+            let _ = reply.send(QueryResult::ExternalInfo(answer));
+        });
+    }
+
     pub(crate) fn on_top_songs_refreshed(
         &mut self,
         server_id: ServerId,
@@ -547,6 +622,79 @@ impl Actor {
 
 /// The `LibraryChanged.tables` entry for a refreshed top songs list.
 pub(crate) const TOP_SONGS_TABLE: &str = "artistTopSongs";
+
+#[derive(Clone, Copy)]
+enum InfoOf {
+    Artist,
+    Album,
+}
+
+/// A week: biographies and album notes rarely change.
+const EXTERNAL_INFO_TTL_MS: f64 = 7.0 * 24.0 * 3600.0 * 1000.0;
+
+fn artist_info(db: &crate::db::Db, a: &crate::subsonic::types::ArtistInfo2) -> ExternalInfo {
+    ExternalInfo {
+        text: a.biography.as_deref().and_then(plain_text),
+        music_brainz_id: non_empty(&a.music_brainz_id),
+        last_fm_url: non_empty(&a.last_fm_url),
+        image_url: non_empty(&a.large_image_url)
+            .or_else(|| non_empty(&a.medium_image_url))
+            .or_else(|| non_empty(&a.small_image_url)),
+        similar_artists: a
+            .similar_artist
+            .iter()
+            .filter_map(|s| db.artist(&s.id).ok().flatten())
+            .collect(),
+    }
+}
+
+fn album_info(a: &crate::subsonic::types::AlbumInfo) -> ExternalInfo {
+    ExternalInfo {
+        text: a.notes.as_deref().and_then(plain_text),
+        music_brainz_id: non_empty(&a.music_brainz_id),
+        last_fm_url: non_empty(&a.last_fm_url),
+        image_url: non_empty(&a.large_image_url)
+            .or_else(|| non_empty(&a.medium_image_url))
+            .or_else(|| non_empty(&a.small_image_url)),
+        similar_artists: vec![],
+    }
+}
+
+fn non_empty(s: &Option<String>) -> Option<String> {
+    s.as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Last.fm text as the server passes it on: HTML with a closing
+/// `<a href="...">Read more on Last.fm</a>`. Drops that link, strips the other tags and decodes
+/// the common entities; `None` when nothing is left.
+fn plain_text(html: &str) -> Option<String> {
+    let cut = html
+        .rfind("<a ")
+        .filter(|&i| html[i..].contains("Last.fm"))
+        .unwrap_or(html.len());
+    let mut out = String::with_capacity(cut);
+    let mut in_tag = false;
+    for ch in html[..cut].chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ");
+    let out = out.trim();
+    (!out.is_empty()).then(|| out.to_string())
+}
 
 fn tracks_of(server_id: &str, children: &[crate::subsonic::types::Child]) -> Vec<Track> {
     children
@@ -664,6 +812,21 @@ fn share_cache_fresh(dest: &std::path::Path, size_bytes: Option<f64>) -> bool {
 /// The artist's most played tracks from the mirror (offline answer).
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plain_text_drops_tags_entities_and_the_last_fm_link() {
+        assert_eq!(
+            super::plain_text(
+                "Low Lanterns are a <b>folk</b> trio &amp; friends. <a href=\"https://www.last.fm/music/x\">Read more on Last.fm</a>"
+            )
+            .as_deref(),
+            Some("Low Lanterns are a folk trio & friends.")
+        );
+        assert_eq!(
+            super::plain_text(" <a href=\"u\">Read more on Last.fm</a>"),
+            None
+        );
+    }
+
     use super::*;
 
     fn track(title: &str, artist: Option<&str>, suffix: Option<&str>) -> Track {

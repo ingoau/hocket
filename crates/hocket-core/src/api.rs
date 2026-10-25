@@ -267,6 +267,33 @@ pub struct Album {
     pub release_types: Vec<String>,
 }
 
+/// An artist's or album's details from outside the library, through the server.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalInfo {
+    /// Biography or album notes as plain text (the server's HTML stripped, the trailing
+    /// "Read more on Last.fm" link dropped; `last_fm_url` carries it).
+    pub text: Option<String>,
+    pub music_brainz_id: Option<String>,
+    pub last_fm_url: Option<String>,
+    /// The largest image the server offered.
+    pub image_url: Option<String>,
+    /// Artists only: similar artists that are in the library.
+    #[serde(default)]
+    pub similar_artists: Vec<Artist>,
+}
+
+impl ExternalInfo {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none()
+            && self.music_brainz_id.is_none()
+            && self.last_fm_url.is_none()
+            && self.image_url.is_none()
+            && self.similar_artists.is_empty()
+    }
+}
+
 /// Which shelf of an artist's discography an album sits on.
 #[typeshare]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2268,6 +2295,16 @@ pub enum Query {
         id: ArtistId,
         count: u32,
     },
+    /// What the server knows about an artist from outside the library (Navidrome asks Last.fm
+    /// and the like): biography, links, similar artists. `ExternalInfo(None)` when there is
+    /// nothing, e.g. the server has no Last.fm key. Cached for a week.
+    ArtistInfo {
+        id: ArtistId,
+    },
+    /// As [`Query::ArtistInfo`] for an album (`getAlbumInfo2`): its notes and links.
+    AlbumInfo {
+        id: AlbumId,
+    },
     Genres {
         server_id: ServerId,
     },
@@ -2491,6 +2528,7 @@ pub enum QueryResult {
     AlbumDetail(Option<Album>),
     Artists(ArtistPage),
     ArtistDetail(Option<Artist>),
+    ExternalInfo(Option<ExternalInfo>),
     Genres(Vec<Genre>),
     Playlists(Vec<Playlist>),
     PlaylistDetail(Option<Playlist>),

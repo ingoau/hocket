@@ -729,6 +729,17 @@ impl SubsonicApi for Client {
         })
     }
 
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo> {
+        let id = id.to_string();
+        Box::pin(async move {
+            Ok(self
+                .call("getAlbumInfo2", &[("id", id)])
+                .await?
+                .album_info
+                .unwrap_or_default())
+        })
+    }
+
     fn sonic_similar_tracks(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<SonicMatch>> {
         let id = id.to_string();
         Box::pin(async move {

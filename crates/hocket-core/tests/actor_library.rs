@@ -1147,3 +1147,43 @@ async fn artist_top_songs_are_cached_and_refreshed_in_the_background() {
         .iter()
         .any(|e| matches!(e, Event::LibraryChanged { .. })));
 }
+
+fn external(r: QueryResult) -> Option<ExternalInfo> {
+    match r {
+        QueryResult::ExternalInfo(info) => info,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artist_and_album_info_come_from_the_server_and_are_cached() {
+    let server = seeded_server(12, 180.0);
+    let t = synced("external-info", server.clone()).await;
+
+    let artist = external(t.query(Query::ArtistInfo { id: "ar0".into() }).await).unwrap();
+    assert!(artist
+        .text
+        .as_deref()
+        .is_some_and(|s| s.starts_with("About ")));
+    assert!(artist.similar_artists.iter().all(|a| a.id != "ar0"));
+    let album = external(t.query(Query::AlbumInfo { id: "al0".into() }).await).unwrap();
+    assert!(album
+        .text
+        .as_deref()
+        .is_some_and(|s| s.starts_with("About ")));
+    assert_eq!(server.calls_to("getArtistInfo2"), 1);
+    assert_eq!(server.calls_to("getAlbumInfo2"), 1);
+
+    // Answered from the cache, offline too.
+    server.set_offline(true);
+    assert_eq!(
+        external(t.query(Query::ArtistInfo { id: "ar0".into() }).await),
+        Some(artist)
+    );
+    assert_eq!(server.calls_to("getArtistInfo2"), 1);
+    // Something never fetched, offline: nothing, not an error.
+    assert_eq!(
+        external(t.query(Query::AlbumInfo { id: "al1".into() }).await),
+        None
+    );
+}
