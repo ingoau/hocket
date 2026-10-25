@@ -114,9 +114,9 @@ export function SongInfo({ trackId }: { trackId: string }) {
               <h3 id="si-artist">{t("songInfo.aboutArtist")}</h3>
               {artistInfo.text ? <p className="si-text">{artistInfo.text}</p> : null}
               {artistInfo.similarArtists?.length ? (
-                <div className="si-chips" role="list" aria-label={t("songInfo.similarArtists")}>
-                  {artistInfo.similarArtists.map((a) => <button key={a.id} type="button" role="listitem" className="btn tonal sm" onClick={() => go({ view: "artist", id: a.id })}>{a.name}</button>)}
-                </div>
+                <ul className="plain-list si-chips" aria-label={t("songInfo.similarArtists")}>
+                  {artistInfo.similarArtists.map((a) => <li key={a.id}><button type="button" className="btn tonal sm" onClick={() => go({ view: "artist", id: a.id })}>{a.name}</button></li>)}
+                </ul>
               ) : null}
               {artistInfo.lastFmUrl ? <a className="plain-link small" href={artistInfo.lastFmUrl} target="_blank" rel="noreferrer">{t("artist.readOnLastFm")}</a> : null}
             </section>
