@@ -401,6 +401,10 @@ pub enum SessionOp {
     DeleteSavedQueue {
         id: String,
     },
+    RenameQueue {
+        id: Option<String>,
+        label: String,
+    },
     TouchSavedQueue {
         id: String,
     },
@@ -476,6 +480,13 @@ impl SessionOp {
                 pinned: *pinned,
             },
             Command::DeleteSavedQueue { id } => SessionOp::DeleteSavedQueue { id: id.clone() },
+            Command::RenameQueue {
+                saved_queue_id,
+                label,
+            } => SessionOp::RenameQueue {
+                id: saved_queue_id.clone(),
+                label: label.clone(),
+            },
             _ => return None,
         })
     }

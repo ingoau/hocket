@@ -1883,6 +1883,13 @@ pub enum Command {
     DeleteSavedQueue {
         id: String,
     },
+    /// Rename a queue. `saved_queue_id: None` renames the queue that is
+    /// playing (its context label); otherwise the saved queue with that ID.
+    /// A blank label is ignored.
+    RenameQueue {
+        saved_queue_id: Option<String>,
+        label: String,
+    },
     SaveQueueAsPlaylist {
         saved_queue_id: Option<String>,
         name: String,

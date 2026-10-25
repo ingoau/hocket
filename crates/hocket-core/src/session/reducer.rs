@@ -184,6 +184,11 @@ pub enum QueueOp {
     DeleteSavedQueue {
         id: String,
     },
+    /// `id: None` renames the live context; otherwise that saved queue.
+    RenameQueue {
+        id: Option<String>,
+        label: String,
+    },
     TouchSavedQueue {
         id: String,
     },
@@ -251,6 +256,13 @@ impl QueueOp {
                 pinned: *pinned,
             },
             Command::DeleteSavedQueue { id } => QueueOp::DeleteSavedQueue { id: id.clone() },
+            Command::RenameQueue {
+                saved_queue_id,
+                label,
+            } => QueueOp::RenameQueue {
+                id: saved_queue_id.clone(),
+                label: label.clone(),
+            },
             _ => return None,
         })
     }
@@ -304,6 +316,8 @@ pub enum ReduceError {
     UnknownSavedQueue(String),
     #[error("nothing queued")]
     Empty,
+    #[error("a queue name can't be empty")]
+    EmptyName,
 }
 
 /// Environment for one reduction. `position_ms` is the playback position of
@@ -785,6 +799,30 @@ impl Reducer<'_, '_> {
                 self.doc.saved_queues.retain(|q| q.id != id);
                 if self.doc.saved_queues.len() == before {
                     return Err(ReduceError::UnknownSavedQueue(id));
+                }
+                Ok(())
+            }
+            QueueOp::RenameQueue { id, label } => {
+                let label = label.trim().to_string();
+                if label.is_empty() {
+                    return Err(ReduceError::EmptyName);
+                }
+                match id {
+                    None => {
+                        let ctx = self.doc.context.as_mut().ok_or(ReduceError::Empty)?;
+                        ctx.label = label;
+                    }
+                    Some(id) => {
+                        let q = self
+                            .doc
+                            .saved_queues
+                            .iter_mut()
+                            .find(|q| q.id == id)
+                            .ok_or(ReduceError::UnknownSavedQueue(id))?;
+                        q.label = label.clone();
+                        q.context.label = label;
+                        q.updated_at = self.ctx.now;
+                    }
                 }
                 Ok(())
             }
@@ -3223,6 +3261,37 @@ mod tests {
             },
         );
         assert!(!d.saved_queues[0].pinned);
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::RenameQueue {
+                id: Some(id.clone()),
+                label: "  Friday drive ".into(),
+            },
+        );
+        assert_eq!(d.saved_queues[0].label, "Friday drive");
+        assert_eq!(d.saved_queues[0].context.label, "Friday drive");
+        let (d, _) = step(
+            &d,
+            &e,
+            QueueOp::RenameQueue {
+                id: None,
+                label: "Now".into(),
+            },
+        );
+        assert_eq!(d.context.as_ref().unwrap().label, "Now");
+        assert_eq!(d.saved_queues[0].label, "Friday drive");
+        assert!(matches!(
+            step_err(
+                &d,
+                &e,
+                QueueOp::RenameQueue {
+                    id: None,
+                    label: "  ".into(),
+                },
+            ),
+            ReduceError::EmptyName
+        ));
         let (d, _) = step(&d, &e, QueueOp::TouchSavedQueue { id: id.clone() });
         assert_eq!(d.saved_queues[0].last_interacted_at, 2.0);
         let mut remote = d.saved_queues[0].clone();
