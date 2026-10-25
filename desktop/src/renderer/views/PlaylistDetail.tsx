@@ -4,7 +4,7 @@ import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { TrackTable, usePagedTracks } from "../components/TrackTable";
-import { Artwork } from "../components/Artwork";
+import { DetailHead } from "../components/DetailHead";
 import { Icon } from "../components/Icon";
 import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { fmtDuration } from "../lib/format";
@@ -27,9 +27,7 @@ export function PlaylistDetail({ id }: { id: string }) {
   const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-playlist">
-      <div className="detail-head" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })}>
-        <Artwork id={p?.coverArt} size={300} className="art" />
-        <div className="meta">
+      <DetailHead coverArt={p?.coverArt} compact icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head">
           <div className="muted small">{p?.isSmart ? t("playlists.smart") : t("nav.playlists")}{p && !p.isMine && p.owner ? ` · ${t("playlists.owner", { owner: p.owner })}` : ""}</div>
           <h1>{p?.name ?? ""}</h1>
           <div className="muted">{t("playlist.tracks", { count: p?.songCount ?? 0, duration: fmtDuration(p?.durationMs ?? 0) })}{p?.comment ? ` · ${p.comment}` : ""}</div>
@@ -39,8 +37,7 @@ export function PlaylistDetail({ id }: { id: string }) {
             <button type="button" className="btn tonal" onClick={() => play(0, true)}><Icon name="shuffle" size={20} /> {t("album.shuffle")}</button>
             <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => p && openMenuFromButton(e, { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-more"><Icon name="more" /></button>
           </div>
-        </div>
-      </div>
+      </DetailHead>
       <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={rows} total={total} columns={["index", "art", "title", "artist", "album", "rating", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
           onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}

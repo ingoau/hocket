@@ -3,7 +3,7 @@ import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { TrackTable } from "../components/TrackTable";
-import { Artwork } from "../components/Artwork";
+import { DetailHead } from "../components/DetailHead";
 import { Icon } from "../components/Icon";
 import { Heart, Stars } from "../components/Stars";
 import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
@@ -26,9 +26,7 @@ export function AlbumDetail({ id }: { id: string }) {
   const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-album">
-      <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })}>
-        <Artwork id={a?.coverArt} size={300} className="art" />
-        <div className="meta">
+      <DetailHead coverArt={a?.coverArt} compact icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head">
           <div className="muted small">{t("nav.albums")}{offlineLabel(a?.offline) ? <span className="badge ok" style={{ marginLeft: 8 }} data-testid="album-offline">{offlineLabel(a?.offline)}</span> : null}</div>
           <h1>{a?.name ?? ""}</h1>
           <div>
@@ -42,8 +40,7 @@ export function AlbumDetail({ id }: { id: string }) {
             {a ? <Stars value={a.rating} label={t("a11y.ratingOf", { title: a.name })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "album", data: { id: a.id } }], rating: r } })} /> : null}
             <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } })} data-testid="album-more"><Icon name="more" /></button>
           </div>
-        </div>
-      </div>
+      </DetailHead>
       <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={list} total={list.length} columns={["index", "title", "artist", "rating", "love", "plays", "duration", "offline"]} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
       </div>

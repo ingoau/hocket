@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type Page } from "@playwright/test";
 import type { ServerInfo } from "../src/core/api";
-import { completeSetup, expect, launchFake, resizeWindow } from "./fixtures";
+import { completeSetup, expect, launchFake, openPlace, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
 const only = process.env.HOCKET_SCREENSHOT_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
@@ -82,6 +82,30 @@ test("redesigned screens", async () => {
       await page.getByTestId("search-input").click();
       await expect(page.getByTestId("search-recent").first()).toBeVisible();
       await shot("search-recent");
+      await page.keyboard.press("Escape");
+
+      // Album, artist and playlist pages: the artwork-led header and the discography shelves.
+      await openPlace(page, "albums");
+      await page.getByTestId("grid-tile").first().dblclick();
+      await expect(page.getByTestId("view-album")).toBeVisible();
+      await expect(page.getByTestId("track-row").first()).toBeVisible();
+      await shot("album");
+      await page.getByTestId("track-row").first().locator("a").first().click();
+      await expect(page.getByTestId("view-artist")).toBeVisible();
+      await shot("artist");
+      await page.getByTestId("content").locator(".view").evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+      await shot("artist-scrolled");
+      await openPlace(page, "playlists");
+      await page.getByTestId("grid-tile").first().dblclick();
+      await expect(page.getByTestId("view-playlist")).toBeVisible();
+      await shot("playlist");
+
+      // Song info: the wide dialog with the server's Last.fm details.
+      await openPlace(page, "songs");
+      await page.getByTestId("track-row").first().click({ button: "right" });
+      await page.locator('[data-testid="context-menu"] [data-action="ui.info"]').click();
+      await expect(page.getByTestId("dialog-trackInfo").locator("dl").first()).toBeVisible();
+      await shot("song-info");
       await page.keyboard.press("Escape");
 
       // Settings: grouped nav with the account card.

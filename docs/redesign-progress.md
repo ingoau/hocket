@@ -21,13 +21,13 @@ the Ship*.dc.html boards). Delete this file when the work lands.
 | Settings | – | [x] | [ ] |
 | Queues (+ rename) | [x] | [x] | [ ] |
 | Connect | – | [x] | [ ] |
-| Search (recent searches, local only) | – | [ ] | [ ] |
-| Album / Artist / Playlist | [x] | [ ] | [ ] |
+| Search (recent searches, local only) | – | [x] | [ ] |
+| Album / Artist / Playlist | [x] | [x] | [ ] |
 | Server setup | – | [ ] | [ ] |
 | Downloads | – | [ ] | [ ] |
 | Stats | – | [ ] | [ ] |
 | Filters | – | [ ] | [ ] |
-| Song info | [x] | [ ] | [ ] |
+| Song info | [x] | [x] | [ ] |
 
 Out of scope: bottom nav and mini player; undo history (issue #127).
 
@@ -38,3 +38,8 @@ Out of scope: bottom nav and mini player; undo history (issue #127).
   its drop-down. e2e updated (now-playing, a11y, keyboard-a11y, exit-motion, screenshots).
 - Desktop Play on: This computer row, Connect group with status/seen, Connect & devices link. e2e/redesign-screenshots.spec.ts shoots redesigned screens.
 - Desktop Settings: nav grouped under section headers (Look and sound, Library and storage, Devices and controls, App), account card on top, sections renamed.
+- Desktop Search: kind chips, 5-song preview, recent searches in localStorage (lib/recent-searches.ts).
+- Desktop detail pages: DetailHead (Large/Small/None, never upscaled); album/playlist use a compact
+  hero because their track list scrolls under it. Artist: top songs preview, shelves per release kind
+  with View more grid (newest/oldest), About from artistInfo.
+- Desktop Song info: wide dialog (SongInfo.tsx), library details left, Last.fm right, no action buttons.

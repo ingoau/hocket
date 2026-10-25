@@ -248,7 +248,7 @@ test.describe("axe: no violations anywhere", () => {
       await page.getByTestId("track-row").first().click({ button: "right" });
       await page.locator('[data-testid="context-menu"] [data-action="ui.info"]').click();
       await expect(page.getByTestId("dialog-trackInfo")).toBeVisible();
-      await expect(page.getByTestId("dialog-trackInfo").locator("dl")).toBeVisible();
+      await expect(page.getByTestId("dialog-trackInfo").locator("dl").first()).toBeVisible();
       await expectNoViolations(page, `${theme} track info dialog`);
       await page.keyboard.press("Escape");
       // A toast with an Undo action (only queue-replacing actions get one).
