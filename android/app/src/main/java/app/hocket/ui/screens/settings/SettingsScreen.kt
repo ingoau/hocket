@@ -81,8 +81,8 @@ enum class SettingsCategory(val id: String, val route: Route) {
 }
 
 /**
- * Top-level settings: one row per category (leading icon, title, a one-line summary of the current
- * values, chevron), grouped in cards; each opens its own sub-screen. Every setting lives in exactly
+ * Top-level settings: the account card, then one row per category (leading icon, title, chevron),
+ * grouped in cards under headings (no summaries: they cluttered the list); each opens its own sub-screen. Every setting lives in exactly
  * one category.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,7 +128,7 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
                     if (s != null) {
                         val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
                         Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
                     } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyMedium)
                 }
                 Icon(HocketIcons.Filled.ChevronRight, null)
@@ -149,7 +149,6 @@ private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolea
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         ListItem(
             headlineContent = { Text(category.title()) },
-            supportingContent = { Text(category.summary(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingContent = { Icon(category.icon(), null, tint = MaterialTheme.colorScheme.primary) },
             trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
@@ -196,70 +195,6 @@ fun SettingsCategory.title(): String = stringResource(
         SettingsCategory.About -> R.string.settings_section_about
     },
 )
-
-/** One line of the category's current values. */
-@Composable
-private fun SettingsCategory.summary(): String {
-    val client = LocalCoreClient.current
-    val dot = stringResource(R.string.dot_separator)
-    val onLabel = stringResource(R.string.settings_on)
-    val offLabel = stringResource(R.string.settings_off)
-    fun on(b: Boolean) = if (b) onLabel else offLabel
-    return when (this) {
-        SettingsCategory.Account -> {
-            val server by client.server.collectAsStateWithLifecycle()
-            val s = server
-            if (s == null) stringResource(R.string.settings_summary_no_server)
-            else stringResource(R.string.settings_server_body, s.url, s.username) + dot + (s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced))
-        }
-        SettingsCategory.Appearance -> {
-            val theme = setting(SettingKeys.DISPLAY_THEME).string ?: "system"
-            val accent = setting(SettingKeys.DISPLAY_ACCENT).string
-            val themeLabel = stringResource(when (theme) { "light" -> R.string.settings_theme_light; "dark" -> R.string.settings_theme_dark; else -> R.string.settings_theme_system })
-            val accentName = accent?.let { hex -> ACCENTS.firstOrNull { it.first.equals(hex, true) }?.let { stringResource(it.second) } ?: hex }
-            stringResource(R.string.settings_theme) + ": " + themeLabel + dot + stringResource(R.string.settings_accent) + ": " + (accentName ?: stringResource(R.string.settings_accent_dynamic))
-        }
-        SettingsCategory.Playback -> {
-            val queue by client.queue.collectAsStateWithLifecycle()
-            val cap = setting(SettingKeys.QUEUE_SAVED_CAP).int ?: 10
-            stringResource(R.string.settings_autoplay_short) + ": " + on(queue.autoplay) + dot + stringResource(R.string.settings_summary_saved_cap, cap)
-        }
-        SettingsCategory.Audio -> {
-            val audio by client.audio.collectAsStateWithLifecycle()
-            val rg = stringResource(when (audio.replayGain) { ReplayGainMode.Off -> R.string.settings_rg_off; ReplayGainMode.Track -> R.string.settings_rg_track; ReplayGainMode.Album -> R.string.settings_rg_album; ReplayGainMode.Auto -> R.string.settings_rg_auto })
-            stringResource(R.string.settings_replay_gain) + ": " + rg + dot + stringResource(R.string.settings_gapless) + ": " + on(audio.gapless)
-        }
-        SettingsCategory.Streaming -> stringResource(R.string.settings_summary_streaming)
-        SettingsCategory.Downloads -> {
-            val storage by client.storage.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))
-        }
-        SettingsCategory.Lyrics -> stringResource(R.string.settings_summary_external_lyrics) + ": " + on(setting(SettingKeys.LYRICS_EXTERNAL_ENABLED).bool ?: false) +
-            dot + stringResource(R.string.lyrics_offset_value, setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS).int ?: 0)
-        SettingsCategory.Library -> {
-            val bridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED).bool ?: false
-            val threshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD).int ?: 4
-            stringResource(R.string.settings_love_threshold) + ": " + (if (bridge) "$threshold★" else stringResource(R.string.settings_love_threshold_off)) + dot + stringResource(R.string.nav_filters) + dot + stringResource(R.string.nav_stats)
-        }
-        SettingsCategory.Battery -> {
-            val saver by client.batterySaver.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_battery_saver) + ": " + on(saver)
-        }
-        SettingsCategory.Connect -> {
-            val connection by client.connection.collectAsStateWithLifecycle()
-            when (connection.tier) {
-                ConnectionTier.Local -> stringResource(R.string.connection_local)
-                ConnectionTier.Lan -> stringResource(R.string.connection_lan, connection.peerCount.toInt())
-                ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
-            }
-        }
-        SettingsCategory.Pebble -> stringResource(R.string.pebble_auto_open) + ": " + on(setting(SettingKeys.PEBBLE_AUTO_OPEN).bool ?: false)
-        SettingsCategory.Customise -> stringResource(R.string.settings_bottom_bar) + dot + stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_swipe_actions)
-        SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
-        SettingsCategory.Advanced -> stringResource(R.string.settings_summary_advanced, on(setting(SettingKeys.DEVELOPER_MODE).bool ?: false))
-        SettingsCategory.About -> stringResource(R.string.settings_licence)
-    }
-}
 
 @Composable
 internal fun str(id: Int): String = stringResource(id)
