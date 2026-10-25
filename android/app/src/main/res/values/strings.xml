@@ -212,6 +212,13 @@
     <string name="playlist_reorder_handle">Drag to reorder</string>
     <string name="album_tracks_count">%1$d tracks · %2$s</string>
     <string name="artist_albums">Albums</string>
+    <string name="artist_eps">EPs</string>
+    <string name="artist_singles">Singles</string>
+    <string name="artist_compilations">Compilations</string>
+    <plurals name="release_count_albums"><item quantity="one">%d album</item><item quantity="other">%d albums</item></plurals>
+    <plurals name="release_count_eps"><item quantity="one">%d EP</item><item quantity="other">%d EPs</item></plurals>
+    <plurals name="release_count_singles"><item quantity="one">%d single</item><item quantity="other">%d singles</item></plurals>
+    <plurals name="release_count_compilations"><item quantity="one">%d compilation</item><item quantity="other">%d compilations</item></plurals>
     <string name="artist_top_songs">Top songs</string>
     <string name="artist_biography">About</string>
     <string name="genre_albums">Albums</string>

@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.FlowRow
@@ -63,6 +64,8 @@ import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
+import app.hocket.core.api.ReleaseKind
+import app.hocket.core.byReleaseKind
 import app.hocket.core.api.Page
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.QueryResult
@@ -342,13 +345,14 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     }
     val context = Commands.artistContext(ar.serverId, ar.id, ar.name)
     val songMenu = app.hocket.ui.components.rememberSongMenu()
-    DetailScaffold(nav, embedded, ar.name, stringResource(R.string.library_count_albums, ar.albumCount.toInt()), ar.coverArt, roundArtwork = true, shareKey = shareKey, header = {
+    val shelves = albums.byReleaseKind()
+    val counts = shelves.map { (kind, list) -> pluralStringResource(releaseCountRes(kind), list.size, list.size) }.joinToString(stringResource(R.string.dot_separator))
+    DetailScaffold(nav, embedded, ar.name, counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, ar.coverArt, roundArtwork = true, shareKey = shareKey, header = {
         IconToggleButton(checked = ar.loved, onCheckedChange = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) {
             Icon(if (ar.loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (ar.loved) R.string.action_unlove else R.string.action_love), tint = if (ar.loved) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         PlayShuffleRow(onPlay = { client.dispatch(Commands.playContext(context)) }, onShuffle = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
-        ar.biography?.let { bio -> item(key = "bio") { SectionHeader(stringResource(R.string.artist_biography)); Text(bio, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) } }
         val topSongs = top
         if (topSongs == null) {
             item(key = "h.top") { SectionHeader(stringResource(R.string.artist_top_songs)) }
@@ -359,11 +363,28 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
                 TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playTracks(t.serverId, topSongs.map { it.id }, i, ar.name)) }, onMore = { songMenu.open(t.toSummary()) })
             }
         }
-        if (albums.isNotEmpty()) {
-            item(key = "h.albums") { SectionHeader(stringResource(R.string.artist_albums)) }
-            item(key = "albums") { AlbumStrip(albums) { nav.navigate(Route.Album(it.id)) } }
+        // The discography, one shelf per release kind (albums, EPs, singles, compilations).
+        shelves.forEach { (kind, list) ->
+            item(key = "h.${kind.string}") { SectionHeader(stringResource(releaseKindRes(kind))) }
+            item(key = "shelf.${kind.string}") { AlbumStrip(list) { nav.navigate(Route.Album(it.id)) } }
         }
+        // About comes last: the server's biography (Last.fm), with similar artists in the library.
+        ar.biography?.takeIf { it.isNotBlank() }?.let { bio -> item(key = "bio") { SectionHeader(stringResource(R.string.artist_biography)); Text(bio, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) } }
     }
+}
+
+private fun releaseKindRes(kind: ReleaseKind): Int = when (kind) {
+    ReleaseKind.Album -> R.string.artist_albums
+    ReleaseKind.Ep -> R.string.artist_eps
+    ReleaseKind.Single -> R.string.artist_singles
+    ReleaseKind.Compilation -> R.string.artist_compilations
+}
+
+private fun releaseCountRes(kind: ReleaseKind): Int = when (kind) {
+    ReleaseKind.Album -> R.plurals.release_count_albums
+    ReleaseKind.Ep -> R.plurals.release_count_eps
+    ReleaseKind.Single -> R.plurals.release_count_singles
+    ReleaseKind.Compilation -> R.plurals.release_count_compilations
 }
 
 /** One playlist row: its track and a key that stays with it while the list is reordered. */
