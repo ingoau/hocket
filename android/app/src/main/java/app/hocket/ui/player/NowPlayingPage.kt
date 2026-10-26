@@ -1014,7 +1014,7 @@ internal fun deviceIcon(platform: Platform): ImageVector = when (platform) {
 @Composable
 private fun SongInfoSheet(onDismiss: () -> Unit, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("player.info")) {
-        PlayerAbout(Modifier.fillMaxWidth().navigationBarsPadding(), onOpenAlbum = onOpenAlbum, onOpenArtist = onOpenArtist)
+        PlayerAbout(Modifier.fillMaxWidth().navigationBarsPadding(), onOpenAlbum = onOpenAlbum, onOpenArtist = onOpenArtist, onClose = onDismiss)
     }
 }
 

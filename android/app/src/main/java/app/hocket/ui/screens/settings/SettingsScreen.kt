@@ -1,8 +1,28 @@
 package app.hocket.ui.screens.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.toShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import app.hocket.core.Commands
+import app.hocket.ui.brand.brandTitleStyle
+import app.hocket.ui.components.GroupLabel
+import app.hocket.ui.components.segmentColor
+import app.hocket.ui.components.segmentedListColors
 import androidx.compose.ui.Alignment
-import androidx.compose.material3.AssistChip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
@@ -20,7 +40,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -88,7 +107,13 @@ fun SettingsScreen(nav: NavHostController) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
-        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.settings_title), modifier = Modifier.semantics { heading() }) }, scrollBehavior = scroll) },
+        topBar = {
+            LargeFlexibleTopAppBar(
+                title = { Text(stringResource(R.string.settings_title), style = brandTitleStyle(), modifier = Modifier.semantics { heading() }) },
+                navigationIcon = { if (nav.previousBackStackEntry != null) androidx.compose.material3.IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                scrollBehavior = scroll,
+            )
+        },
     ) { padding ->
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
@@ -96,10 +121,10 @@ fun SettingsScreen(nav: NavHostController) {
         ) {
             AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
             SettingsCategory.GROUPS.forEach { (titleRes, group) ->
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 6.dp).semantics { heading() })
+                Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                    GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
                     group.forEachIndexed { i, category ->
-                        CategoryRow(category, first = i == 0, last = i == group.lastIndex, onClick = { nav.navigate(category.route) })
+                        CategoryRow(category, i, group.size, onClick = { nav.navigate(category.route) })
                     }
                 }
             }
@@ -107,71 +132,102 @@ fun SettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Who is signed in, to which server, and when the library last synced; with shortcuts to listening stats and devices. */
+/**
+ * Who is signed in and to which server, centred on a tonal card: the user's initial on a cookie,
+ * their name in the word mark's face, the server, then the last sync as a button that syncs now,
+ * and the shortcuts to listening stats and devices as a pair of tiles.
+ */
 @Composable
 private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -> Unit) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
+    val sync by client.syncProgress.collectAsStateWithLifecycle()
     val s = server
-    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.clickable(onClick = onOpen).testTag("settings.category.account").padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp).clearAndSetSemantics { }) {
-                    Box(contentAlignment = Alignment.Center) { Text((s?.username?.firstOrNull() ?: '?').uppercase(), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimary) }
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    // The category's name first: it titles the card (and its page) for a screen reader.
-                    Text(stringResource(R.string.settings_category_account), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (s != null) {
-                        val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
-                        Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyMedium)
-                }
-                Icon(HocketIcons.Filled.ChevronRight, null)
+    val scheme = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(32.dp), color = scheme.secondaryContainer, contentColor = scheme.onSecondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).clickable(onClick = onOpen).testTag("settings.category.account").padding(vertical = 8.dp)
+                    .semantics(mergeDescendants = true) { },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    Modifier.size(88.dp).background(Brush.linearGradient(listOf(scheme.primary.copy(alpha = 0.78f), scheme.primary)), MaterialShapes.Cookie9Sided.toShape()),
+                    contentAlignment = Alignment.Center,
+                ) { Text((s?.username?.firstOrNull() ?: '?').uppercase(), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold, color = scheme.onPrimary, modifier = Modifier.clearAndSetSemantics { }) }
+                Spacer(Modifier.height(12.dp))
+                // The category's name for a screen reader: the card opens Account & server.
+                val accountLabel = str(R.string.settings_category_account)
+                Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.headlineMedium.merge(brandTitleStyle()), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { contentDescription = "${s?.username ?: ""}, $accountLabel" })
+                if (s != null) {
+                    val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
+                    Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyLarge)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(onClick = onStats, label = { Text(stringResource(R.string.settings_account_stats)) }, leadingIcon = { Icon(HocketIcons.Filled.BarChart, null) }, modifier = Modifier.testTag("settings.account.stats"))
-                AssistChip(onClick = onDevices, label = { Text(stringResource(R.string.settings_account_devices)) }, leadingIcon = { Icon(HocketIcons.Filled.Devices, null) }, modifier = Modifier.testTag("settings.account.devices"))
+            if (s != null) {
+                Spacer(Modifier.height(8.dp))
+                val syncing = sync != null
+                Button(onClick = { client.dispatch(Commands.syncLibrary(s.id, false)) }, enabled = !syncing, shapes = ButtonDefaults.shapes(), modifier = Modifier.heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("settings.account.sync"),
+                    contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
+                    Icon(HocketIcons.Filled.Sync, null, Modifier.size(ButtonDefaults.MediumIconSize))
+                    Spacer(Modifier.width(ButtonDefaults.MediumIconSpacing))
+                    val last = s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced)
+                    Text(if (syncing) stringResource(R.string.settings_syncing) else stringResource(R.string.settings_last_sync_now, last), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                AccountTile(stringResource(R.string.settings_account_stats), HocketIcons.Outlined.BarChart, RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp), onStats, Modifier.weight(1f).fillMaxHeight().testTag("settings.account.stats"))
+                AccountTile(stringResource(R.string.settings_account_devices), HocketIcons.Outlined.Devices, RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp, topStart = 6.dp, bottomStart = 6.dp), onDevices, Modifier.weight(1f).fillMaxHeight().testTag("settings.account.devices"))
             }
         }
     }
 }
 
+/** A shortcut on the account card: its icon over its label, on the card's lifted surface. */
 @Composable
-private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolean, onClick: () -> Unit) {
-    val outer = 24.dp
-    val inner = 6.dp
-    val shape = RoundedCornerShape(topStart = if (first) outer else inner, topEnd = if (first) outer else inner, bottomStart = if (last) outer else inner, bottomEnd = if (last) outer else inner)
-    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-        ListItem(
-            headlineContent = { Text(category.title()) },
-            leadingContent = { Icon(category.icon(), null, tint = MaterialTheme.colorScheme.primary) },
-            trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
-            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-            modifier = Modifier.clickable(onClick = onClick).testTag("settings.category.${category.id}"),
-        )
+private fun AccountTile(label: String, icon: ImageVector, shape: Shape, onClick: () -> Unit, modifier: Modifier) {
+    Surface(onClick = onClick, shape = shape, color = segmentColor(), contentColor = MaterialTheme.colorScheme.onSurface, modifier = modifier) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        }
     }
 }
 
+@Composable
+private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index, count),
+        colors = segmentedListColors(),
+        leadingContent = {
+            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Icon(category.icon(), null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+        },
+        trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
+        modifier = Modifier.testTag("settings.category.${category.id}"),
+    ) { Text(category.title()) }
+}
+
 private fun SettingsCategory.icon(): ImageVector = when (this) {
-    SettingsCategory.Account -> HocketIcons.Filled.AccountCircle
-    SettingsCategory.Appearance -> HocketIcons.Filled.Palette
+    SettingsCategory.Account -> HocketIcons.Outlined.Person
+    SettingsCategory.Appearance -> HocketIcons.Outlined.Palette
     SettingsCategory.Playback -> HocketIcons.AutoMirrored.Filled.QueueMusic
     SettingsCategory.Audio -> HocketIcons.Filled.GraphicEq
     SettingsCategory.Streaming -> HocketIcons.Filled.NetworkCheck
-    SettingsCategory.Downloads -> HocketIcons.Filled.Download
-    SettingsCategory.Lyrics -> HocketIcons.Filled.Lyrics
-    SettingsCategory.Library -> HocketIcons.Filled.LibraryMusic
-    SettingsCategory.Battery -> HocketIcons.Filled.BatterySaver
-    SettingsCategory.Connect -> HocketIcons.Filled.Devices
+    SettingsCategory.Downloads -> HocketIcons.Outlined.Download
+    SettingsCategory.Lyrics -> HocketIcons.Outlined.Lyrics
+    SettingsCategory.Library -> HocketIcons.Outlined.LibraryMusic
+    SettingsCategory.Battery -> HocketIcons.Outlined.BatterySaver
+    SettingsCategory.Connect -> HocketIcons.Outlined.Devices
     SettingsCategory.Pebble -> HocketIcons.Filled.Watch
-    SettingsCategory.Customise -> HocketIcons.Filled.Tune
+    SettingsCategory.Customise -> HocketIcons.Outlined.Tune
     SettingsCategory.Backup -> HocketIcons.Filled.SettingsBackupRestore
     SettingsCategory.Advanced -> HocketIcons.Filled.Code
-    SettingsCategory.About -> HocketIcons.Filled.Info
+    SettingsCategory.About -> HocketIcons.Outlined.Info
 }
 
 @Composable

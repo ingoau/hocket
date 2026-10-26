@@ -190,6 +190,8 @@ object ArtworkSizes {
     const val LIST = 160
     const val GRID = 320
     const val FULL = 640
+    /** A detail page's full-bleed header: asked big, shown full-bleed only when it came back at least the header's size (never upscaled). */
+    const val HERO = 1200
 }
 
 /** A [Track] shrunk to what lists and the queue need. */

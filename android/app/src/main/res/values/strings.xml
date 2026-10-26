@@ -15,6 +15,7 @@
     <string name="action_more_for">More options for %1$s</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_ok">OK</string>
+    <string name="action_done">Done</string>
     <string name="action_save">Save</string>
     <string name="action_create">Create</string>
     <string name="action_delete">Delete</string>
@@ -1052,4 +1053,77 @@
         <item quantity="other">Removed from %1$d playlists</item>
     </plurals>
     <string name="picker_added_and_removed">Added to %1$d, removed from %2$d</string>
+    <!-- Redesign: Queues -->
+    <string name="queue_rename_title">Rename queue</string>
+    <string name="queue_empty_meta">Empty</string>
+    <string name="queue_empty_hint">Play or add songs to fill it</string>
+    <string name="queue_where">Track %1$d of %2$d · %3$s in</string>
+    <string name="queue_rename_named">Rename %1$s</string>
+    <string name="queue_delete_named">Delete %1$s</string>
+    <!-- Redesign: Play on -->
+    <string name="handoff_bluetooth_short">Bluetooth</string>
+    <string name="handoff_usb_short">USB</string>
+    <!-- Redesign: Settings -->
+    <string name="settings_syncing">Syncing…</string>
+    <string name="settings_last_sync_now">%1$s · Sync now</string>
+    <!-- Redesign: Search -->
+    <string name="search_kind_all">All</string>
+    <string name="search_kind_count">%1$s %2$d</string>
+    <string name="search_see_all_songs">See all songs</string>
+    <string name="search_songs_count">%1$d songs</string>
+    <string name="search_none_body">Check the spelling, or try fewer words.</string>
+    <string name="search_server_none">Nothing else on the server.</string>
+    <!-- Redesign: album, artist and playlist pages -->
+    <string name="release_view_more">View more</string>
+    <string name="release_newest">Newest</string>
+    <string name="release_oldest">Oldest</string>
+    <string name="detail_tracks">Tracks</string>
+    <string name="detail_select">Select</string>
+    <string name="detail_download">Download</string>
+    <string name="detail_remove_download">Remove download</string>
+    <string name="detail_play_named">Play %1$s</string>
+    <string name="album_released">Released %1$d</string>
+    <string name="album_added">Added %1$s</string>
+    <string name="album_more_by">More by %1$s</string>
+    <plurals name="album_plays"><item quantity="one">%d play</item><item quantity="other">%d plays</item></plurals>
+    <!-- Redesign: Song info -->
+    <string name="about_tab_song">Song</string>
+    <string name="about_tab_about">About</string>
+    <string name="about_tab_file">File</string>
+    <string name="about_close">Close song info</string>
+    <string name="about_never">Never</string>
+    <string name="about_today">Today</string>
+    <string name="about_of">of %1$d</string>
+    <string name="about_disc">Disc %1$d</string>
+    <string name="about_similar_songs">Similar songs</string>
+    <string name="about_nothing">Your server has nothing more about this song.</string>
+    <string name="about_more">More</string>
+    <string name="about_less">Less</string>
+    <string name="about_quality">Quality</string>
+    <plurals name="about_channels"><item quantity="one">%d channel</item><item quantity="other">%d channels</item></plurals>
+    <string name="about_rg_track">Track %1$s</string>
+    <string name="about_rg_peak">, peak %1$s</string>
+    <string name="about_rg_album">Album %1$s</string>
+    <string name="about_path">Path on server</string>
+    <string name="about_mbid">MusicBrainz recording</string>
+    <string name="about_copy_path">Copy file path</string>
+    <string name="about_copy_mbid">Copy MusicBrainz ID</string>
+    <!-- Redesign: Downloads -->
+    <string name="downloads_legend_cache_short">Cache</string>
+    <!-- Redesign: Listening -->
+    <string name="stats_hours">%1$d h</string>
+    <string name="stats_minutes">%1$d min</string>
+    <string name="stats_minutes_listened">%1$d min listened</string>
+    <string name="stats_listened">listened</string>
+    <plurals name="stats_plays_unit"><item quantity="one">play</item><item quantity="other">plays</item></plurals>
+    <!-- Redesign: Filters -->
+    <string name="filter_more_outputs">More ways to use this filter</string>
+    <string name="filter_remove_group">Remove group</string>
+    <string name="filter_remove_named">Remove rule: %1$s</string>
+    <string name="filter_rule_local">Uses what’s on this device, so a filter with this rule stays local.</string>
+    <string name="filter_this_device">This device</string>
+    <string name="filter_play_named">Play %1$s</string>
+    <!-- Redesign: Setup -->
+    <string name="setup_who">%1$s on %2$s</string>
+    <string name="setup_synced">Library synced</string>
 </resources>

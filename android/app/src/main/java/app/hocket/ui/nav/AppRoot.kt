@@ -169,7 +169,9 @@ fun AppRoot(
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
-        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor
+        // Set when the setup form signs in: setup stays up for the server's summary until Continue.
+        var holdSetup by rememberSaveable { mutableStateOf(false) }
+        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor && !holdSetup
         CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides appSnackbar) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
@@ -179,7 +181,7 @@ fun AppRoot(
                 Box(Modifier.weight(1f).fillMaxWidth().then(if (fakeBanner) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
                     when {
                         !started || !ready -> LoadingScreen()
-                        !inShell -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
+                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
                         else -> MainShell(snackbar)
                     }
                 }

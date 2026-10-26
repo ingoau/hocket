@@ -131,6 +131,9 @@ class FakeCore(
     /** `album:<id>` / `track:<id>` for every PrimeAlbum / PrimeTrack received, in order (for tests). */
     val primeRequests: List<String> get() = primed.toList()
 
+    /** Files to answer `Query.Artwork` with (id, size); none by default, so the id's gradient stands in. */
+    @Volatile var artworkFile: ((String, Int) -> String?)? = null
+
     init {
         devices += DeviceInfo(deviceId, "This phone", Platform.Android, "0.1.0", true, false, now(), true)
         devices += DeviceInfo("laptop", "Laptop", Platform.Linux, "0.1.0", false, false, now() - 20_000, false)
@@ -1476,7 +1479,7 @@ class FakeCore(
         Query.UndoState -> QueryResult.Undo(undoState())
         is Query.Actions -> QueryResult.Actions(actionsFor(q.data.surface, q.data.target))
         Query.Shortcuts -> QueryResult.Shortcuts(emptyList())
-        is Query.Artwork -> QueryResult.Path(null)
+        is Query.Artwork -> QueryResult.Path(artworkFile?.invoke(q.data.id, q.data.size.toInt()))
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
         Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")

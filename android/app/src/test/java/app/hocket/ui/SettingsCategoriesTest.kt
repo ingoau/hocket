@@ -166,7 +166,8 @@ class SettingsCategoriesTest {
         for (category in SettingsCategory.entries) {
             val row = compose.onNodeWithTag("settings.category.${category.id}").performScrollTo().fetchSemanticsNode()
             val texts = row.config[SemanticsProperties.Text].map { it.text }
-            val title = texts.first()
+            // The account card leads with who is signed in; it names its page for a screen reader.
+            val title = if (category == SettingsCategory.Account) androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().getString(app.hocket.R.string.settings_category_account) else texts.first()
             texts.drop(1).forEach { summary ->
                 assertTrue("'${category.id}' summary uses ' · ' separators: $summary", Regex("\\S·|·\\S").find(summary) == null)
                 assertTrue("'${category.id}' summary has no comma lists: $summary", category == SettingsCategory.Account || !summary.contains(", "))

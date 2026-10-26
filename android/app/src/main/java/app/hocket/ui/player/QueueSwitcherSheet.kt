@@ -28,7 +28,7 @@ import app.hocket.ui.queue.RecentQueuesList
 fun QueueSwitcherSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("queueSwitcher.sheet")) {
         Column(Modifier.navigationBarsPadding()) {
-            Text(stringResource(R.string.home_saved_queues), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
+            Text(stringResource(R.string.queues_title), style = MaterialTheme.typography.headlineSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp).semantics { heading() })
             RecentQueuesList(Modifier.fillMaxWidth().heightIn(min = 240.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp), onRestore = onDismiss)
         }
     }
