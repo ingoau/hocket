@@ -68,15 +68,23 @@ class SongMenuController {
     internal var shown by mutableStateOf<Pair<SongMenuRequest, List<ActionDescriptor>>?>(null)
 
     /** Opens the menu for [track]; with [pull], brought up by a drag that it follows (see [SheetPull]). */
-    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.id)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null) {
-        if (shown != null) return
-        pull?.onClosed = { close() }
+    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.id)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null): Boolean {
+        if (shown != null) return false
+        pending?.pull?.dismiss()
+        // A pull that drops back closes its own menu, never one opened after it.
+        pull?.onClosed = { if (pending?.pull === pull || shown?.first?.pull === pull) close() }
         pending = SongMenuRequest(track, target, extras, context, pull)
+        return true
     }
 
     val isOpen: Boolean get() = pending != null || shown != null
 
-    internal fun close() { pending = null; shown = null }
+    internal fun close() {
+        pending?.pull?.dismiss()
+        shown?.first?.pull?.dismiss()
+        pending = null
+        shown = null
+    }
 }
 
 val LocalSongMenu = staticCompositionLocalOf<SongMenuController?> { null }

@@ -96,7 +96,6 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
     val self = devices.firstOrNull { it.isSelf }
     // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro").
     val currentOutput = outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
-    pull?.onClosed = onDismiss
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberPulledSheetState(pull), scrimColor = pulledScrim(pull), modifier = Modifier.pulled(pull).testTag("handoff.sheet")) {
         Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -212,7 +212,7 @@ internal fun FullPlayer(
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
     hero.artPad = with(density) { ART_PAD.toPx() }
-    /** Opens the song menu; [pull] when a swipe brings it up. */
+    /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
     val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
         // the sleep timer as its extra (it has no other place in the player).
@@ -225,14 +225,20 @@ internal fun FullPlayer(
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
                 onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
-        }
-        Unit
+        } ?: false
     }
     // `swipe.playerUp` set to the device picker or the song menu: the swipe brings it up as a sheet
     // that follows the finger (the queue and the lyrics are the sheet's own [SwipeUpPull.onOpen]).
     if (swipeUp != null) SideEffect {
         swipeUp.openSheet = when (swipeUpAction) {
-            SwipeOptions.PLAYER_UP_CONNECT -> { pull -> handoffPull = pull; handoff = true }
+            SwipeOptions.PLAYER_UP_CONNECT -> { pull ->
+                // Dropping back closes this picker only, never one opened after it.
+                pull.onClosed = { if (handoffPull === pull) { handoff = false; handoffPull = null } }
+                handoffPull?.dismiss()
+                handoffPull = pull
+                handoff = true
+                true
+            }
             SwipeOptions.PLAYER_UP_MENU -> { pull -> openMenu(pull) }
             else -> null
         }
@@ -280,7 +286,7 @@ internal fun FullPlayer(
                         switcherOpen = queues,
                         onSwitchQueue = { queues = true },
                         onConnect = { handoff = true },
-                        onMore = { openMenu(null) },
+                        onMore = { openMenu(null); Unit },
                         modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
                     )
                 },
@@ -318,7 +324,7 @@ internal fun FullPlayer(
             }
         }
     }
-    if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull = null }, pull = handoffPull)
+    if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
     if (queues) QueuesSheet(onDismiss = { queues = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })

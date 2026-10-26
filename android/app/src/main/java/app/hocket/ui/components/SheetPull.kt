@@ -8,6 +8,8 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -23,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * A sheet brought up by a drag that started somewhere else (the full player's swipe up): while the
@@ -40,18 +43,25 @@ class SheetPull(private val scope: CoroutineScope) {
     /** How far up the finger has brought the sheet (px). */
     var travel by mutableFloatStateOf(0f)
         private set
-    /** The sheet's height (px), once it has been laid out (0 until then). */
-    var height by mutableFloatStateOf(0f)
-        internal set
+    private val heightState = mutableFloatStateOf(0f)
+    /** The sheet's height (px), once it has been laid out (0 until then); the travel never runs past it. */
+    var height: Float
+        get() = heightState.floatValue
+        internal set(value) {
+            heightState.floatValue = value
+            if (value > 0f && travel > value) travel = value
+        }
     /** Let go and opened: the sheet is no longer slid down. */
     var open by mutableStateOf(false)
         private set
     /** The sheet has dropped back: take it away. Set by whoever shows it. */
     var onClosed: () -> Unit = {}
     private var settling: Job? = null
+    /** Taken away by its host ([dismiss]): nothing more to do. */
+    private var gone = false
 
     /** Under the finger: not yet let go. */
-    val held: Boolean get() = !open && settling == null
+    val held: Boolean get() = !open && !gone && settling == null
 
     /** How much of the sheet shows (0..1). */
     fun shown(): Float = when {
@@ -63,8 +73,9 @@ class SheetPull(private val scope: CoroutineScope) {
     /** Moves the sheet by [dy] (px, negative = up) while [held]. Returns what it took (in [dy]'s sign). */
     fun drag(dy: Float): Float {
         if (!held || dy == 0f) return 0f
-        val before = travel
-        travel = (travel - dy).coerceIn(0f, if (height > 0f) height else Float.POSITIVE_INFINITY)
+        val max = if (height > 0f) height else Float.POSITIVE_INFINITY
+        val before = travel.coerceAtMost(max)
+        travel = (before - dy).coerceIn(0f, max)
         return before - travel
     }
 
@@ -83,7 +94,20 @@ class SheetPull(private val scope: CoroutineScope) {
                 animate(travel, 0f, initialVelocity = -velocity, animationSpec = Motion.sheet) { v, _ -> travel = v }
                 onClosed()
             }
+        }.also { job ->
+            // The scope went away mid-settle (the player left composition; the sheet may be hosted
+            // elsewhere): end where the release was going rather than hang half way.
+            job.invokeOnCompletion { cause ->
+                if (cause == null || gone) return@invokeOnCompletion
+                if (open) this.open = true else onClosed()
+            }
         }
+    }
+
+    /** Its host took the sheet away (dismissed, or never shown): stops following and settling. */
+    fun dismiss() {
+        gone = true
+        settling?.cancel()
     }
 }
 
@@ -99,6 +123,16 @@ fun Modifier.pulled(pull: SheetPull?): Modifier = if (pull == null) this else th
     .onSizeChanged { pull.height = it.height.toFloat() }
     .graphicsLayer { translationY = if (pull.open) 0f else size.height - pull.travel.coerceIn(0f, size.height) }
 
-/** The sheet's scrim, fading in as a [pull]ed sheet comes up. */
+/**
+ * The sheet's scrim, fading in as a [pull]ed sheet comes up: in [SCRIM_STEPS] steps, so a drag
+ * recomposes the sheet a few dozen times, not every frame.
+ */
 @Composable
-fun pulledScrim(pull: SheetPull?): Color = BottomSheetDefaults.ScrimColor.let { if (pull == null) it else it.copy(alpha = it.alpha * pull.shown()) }
+fun pulledScrim(pull: SheetPull?): Color {
+    val full = BottomSheetDefaults.ScrimColor
+    if (pull == null) return full
+    val step by remember(pull) { derivedStateOf { (pull.shown() * SCRIM_STEPS).roundToInt() } }
+    return full.copy(alpha = full.alpha * step / SCRIM_STEPS)
+}
+
+private const val SCRIM_STEPS = 32

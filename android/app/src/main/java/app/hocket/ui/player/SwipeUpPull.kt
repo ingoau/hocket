@@ -44,8 +44,8 @@ import kotlin.math.exp
 internal class SwipeUpPull(private val scope: CoroutineScope) : OverscrollEffect {
     var enabled: () -> Boolean = { false }
     var onOpen: () -> Unit = {}
-    /** Set when the swipe brings up a sheet: shows it, following the given pull. */
-    var openSheet: ((SheetPull) -> Unit)? = null
+    /** Set when the swipe brings up a sheet: shows it, following the given pull (false: nothing to show). */
+    var openSheet: ((SheetPull) -> Boolean)? = null
     var haptics: HapticFeedback? = null
     var reduced = false
     /** The lift's limit, the travel that opens the mode and the fling (px/s) that does (set from the density). */
@@ -93,8 +93,9 @@ internal class SwipeUpPull(private val scope: CoroutineScope) : OverscrollEffect
         openSheet?.let { open ->
             if (dy > 0f || raw > 0f) return@let
             val s = SheetPull(scope)
+            // Nothing to show (no song, a menu already open): the swipe does nothing.
+            if (!open(s)) return 0f
             sheet = s
-            open(s)
             return s.drag(dy)
         }
         settling?.cancel()
