@@ -155,11 +155,19 @@ private fun DetailScaffold(
         var titleBottom by remember { androidx.compose.runtime.mutableFloatStateOf(Float.MAX_VALUE) }
         val barBottom = with(LocalDensity.current) { (androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp).toPx() }
         val collapsed by remember(barBottom) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || titleBottom < barBottom } }
-        // The status bar's icons over the cover's top strip, then over the filled-in bar (on a
-        // phone: a wide layout's pane shares the status bar with the list beside it).
-        if (!embedded) app.hocket.ui.player.StatusBarOver(if (look.immersive && !collapsed) (look.topLight ?: !look.dark) else !look.dark)
-        // The whole page in the artwork's colours, and the bar floating over it too.
-        if (!embedded) app.hocket.ui.nav.PageColors(look.scheme)
+        // Once the cover's top strip has scrolled out from under the bar, the rest of the cover is
+        // behind its icons: they turn white over a shade, whatever the strip was.
+        val pastStripPx = with(LocalDensity.current) { 32.dp.toPx() }
+        val pastStrip by remember(pastStripPx) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > pastStripPx } }
+        val overArt = when {
+            !look.immersive || collapsed -> null
+            pastStrip -> false
+            else -> look.topLight
+        }
+        // The whole page in the artwork's colours, and the bar floating over it too, with the status
+        // bar's icons over the cover, then over the filled-in bar (on a phone: a wide layout's pane
+        // shares the status bar with the list beside it).
+        if (!embedded) app.hocket.ui.nav.PageColors(look.scheme, statusLight = overArt ?: !look.dark)
         MaterialTheme(colorScheme = look.scheme) {
             androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.theme.LocalDarkTheme provides look.dark, androidx.compose.material3.LocalContentColor provides look.scheme.onBackground) {
                 Box(Modifier.fillMaxSize().background(look.scheme.background)) {
@@ -181,7 +189,7 @@ private fun DetailScaffold(
                             content()
                         }
                     }
-                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = look.topLight?.takeIf { look.immersive }, actions = barActions)
+                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastStrip && !collapsed, actions = barActions)
                     overlay()
                 }
             }
@@ -272,7 +280,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         below = {
             a.artist?.let { name ->
                 HeroLine(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1,
-                    modifier = Modifier.padding(top = 6.dp).heightIn(min = 40.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
+                    modifier = Modifier.padding(top = 6.dp).heightIn(min = 44.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
             }
             HeroLine(listOfNotNull(a.genre?.takeIf { it.isNotBlank() }, a.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong()))).joinToString(dot))
         },

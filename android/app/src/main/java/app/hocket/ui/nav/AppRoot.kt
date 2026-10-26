@@ -471,12 +471,18 @@ private fun MainShell(snackbar: SnackbarHostState) {
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on (Navic): the surface colour eased in
             // from transparent, so content scrolling under them fades out instead of clashing.
+            // The status bar's icons for the page on top (a detail page over its cover), unless the
+            // full player covers it and sets its own.
+            PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
             if (!wide || playerVisible) {
                 // Fully faded by about half-way up the floating mini player (it has its own card and
                 // shadow); without one, a short fade above the bar.
                 val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
-                val surface by androidx.compose.animation.animateColorAsState(LocalPageChrome.current.scheme?.surface ?: MaterialTheme.colorScheme.surface, label = "bottomScrim")
+                // (The page's own colours already ease in, so no animation of its own here: the bar's
+                // labels and the scrim under them always change together.)
+                val pageScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id)
+                val surface = pageScheme?.surface ?: MaterialTheme.colorScheme.surface
                 // Solid behind the bar's labels (so rows scrolling under them don't show through),
                 // eased in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
@@ -488,8 +494,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // sheet expands and the full player takes the screen (read in the placement phase, so
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
-                val pageChrome = LocalPageChrome.current
-                MaterialTheme(colorScheme = pageChrome.scheme ?: MaterialTheme.colorScheme) {
+                MaterialTheme(colorScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id) ?: MaterialTheme.colorScheme) {
                 ShortNavigationBar(
                     // Transparent over the scrim (Navic's detached style).
                     containerColor = Color.Transparent,

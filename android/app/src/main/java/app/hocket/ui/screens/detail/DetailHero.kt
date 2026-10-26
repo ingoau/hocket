@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -156,8 +157,12 @@ internal fun rememberDetailLook(coverArt: String?, round: Boolean, width: Dp): D
         else -> app.background to !appDark
     }
     val page by animateColorAsState(target, tween(450), label = "detailPage")
-    val scheme = remember(page, seed, light) { ArtworkColors.pageScheme(seed, page, light) }
-    return DetailLook(immersive, layout, layout?.let(::stripLight), scheme, dark = !light)
+    // While the page eases from one colour to the next, its text follows the colour on screen
+    // (dark text on a page still near black would not read), then the target's own call.
+    val shownLight = if (page == target) light else page.luminance() > 0.4f
+    // Nothing of the cover's yet (or ever: no artwork): the app's own colours, accents included.
+    val scheme = if (seed == null && edge == null && page == app.background) app else remember(page, seed, shownLight) { ArtworkColors.pageScheme(seed, page, shownLight) }
+    return DetailLook(immersive, layout, layout?.let(::stripLight), scheme, dark = !shownLight)
 }
 
 /**
@@ -432,11 +437,17 @@ internal fun ReleaseTile(a: Album, meta: String, onOpen: () -> Unit, onPlay: () 
  * dark (false): dark or white icons on the cover's shade, rather than the page's colours.
  */
 @Composable
-internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, overArt: Boolean? = null, actions: @Composable RowScope.() -> Unit) {
+internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, overArt: Boolean? = null, shade: Boolean = false, actions: @Composable RowScope.() -> Unit) {
     val bar by animateColorAsState(if (collapsed) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, label = "detailBar")
     val titleAlpha by animateFloatAsState(if (collapsed) 1f else 0f, label = "detailBarTitle")
+    // Over the middle of a cover (its top strip scrolled away), a shade for the white icons.
+    val shadeAlpha by animateFloatAsState(if (shade) 1f else 0f, label = "detailBarShade")
     Row(
-        Modifier.fillMaxWidth().background(bar).statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
+        Modifier.fillMaxWidth()
+            .drawBehind {
+                if (shadeAlpha > 0f) drawRect(Brush.verticalGradient(*Array(9) { i -> val t = i / 8f; t to Color.Black.copy(alpha = 0.45f * shadeAlpha * (1f - t) * (1f - t)) }), size = size.copy(height = size.height * 1.5f))
+            }
+            .background(bar).statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         val art = overArt.takeIf { !collapsed }
