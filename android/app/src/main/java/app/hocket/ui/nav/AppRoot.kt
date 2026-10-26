@@ -150,7 +150,7 @@ fun AppRoot(
     val fatal by fatalError.collectAsStateWithLifecycle()
     fatal?.let { FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
-    CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client)) {
+    CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client), LocalPageChrome provides remember { PageChrome() }) {
         val started by client.started.collectAsStateWithLifecycle()
         val servers by client.servers.collectAsStateWithLifecycle()
         // The fake core has nothing to replay; the native core waits for the keystore replay first.
@@ -471,12 +471,22 @@ private fun MainShell(snackbar: SnackbarHostState) {
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on (Navic): the surface colour eased in
             // from transparent, so content scrolling under them fades out instead of clashing.
+            // The status bar's icons for the page on top (a detail page over its cover), unless the
+            // full player covers it and sets its own.
+            PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
             if (!wide || playerVisible) {
                 // Fully faded by about half-way up the floating mini player (it has its own card and
                 // shadow); without one, a short fade above the bar.
                 val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
-                val surface = MaterialTheme.colorScheme.surface
-                val scrim = remember(surface) { easedScrim(surface) }
+                // Over a page in its own colours (a detail page in its artwork's), into those instead.
+                // (The page's own colours already ease in, so no animation of its own here: the bar's
+                // labels and the scrim under them always change together.)
+                val pageScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id)
+                val surface = pageScheme?.surface ?: MaterialTheme.colorScheme.surface
+                // Solid behind the bar's labels (so rows scrolling under them don't show through),
+                // eased in above.
+                val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
+                val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
@@ -484,6 +494,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // sheet expands and the full player takes the screen (read in the placement phase, so
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
+                MaterialTheme(colorScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id) ?: MaterialTheme.colorScheme) {
                 ShortNavigationBar(
                     // Transparent over the scrim (Navic's detached style).
                     containerColor = Color.Transparent,
@@ -504,6 +515,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                             modifier = Modifier.testTag("navBar." + item.id),
                         )
                     }
+                }
                 }
             }
             // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
@@ -543,14 +555,15 @@ private fun MainShell(snackbar: SnackbarHostState) {
 /**
  * A vertical gradient from transparent (top) to [color] (bottom) with an eased curve (circular
  * ease-in, measured from the bottom), so the scrim is nearly solid behind the bar and fades out
- * softly above the mini player instead of showing a hard band.
+ * softly above the mini player instead of showing a hard band. The lowest [solid] share is solid.
  */
-private fun easedScrim(color: Color, stops: Int = 16): Brush = Brush.verticalGradient(
+private fun easedScrim(color: Color, stops: Int = 16, solid: Float = 0f): Brush = Brush.verticalGradient(
     *Array(stops) { i ->
         val t = i / (stops - 1f)
         val fromBottom = 1f - t
-        t to color.copy(alpha = color.alpha * kotlin.math.sqrt((1f - fromBottom * fromBottom).coerceAtLeast(0f)))
+        t * (1f - solid) to color.copy(alpha = color.alpha * kotlin.math.sqrt((1f - fromBottom * fromBottom).coerceAtLeast(0f)))
     },
+    1f to color,
 )
 
 /**

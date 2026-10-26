@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Surface
@@ -135,39 +137,66 @@ fun DetailPane(nav: NavHostController, target: DetailTarget?) {
 @Composable
 private fun DetailScaffold(
     nav: NavHostController, embedded: Boolean, title: String?, coverArt: String?, roundArtwork: Boolean = false,
+    /** False for a page whose artwork is never edge to edge (a playlist's, a genre's first album). */
+    immersive: Boolean = true,
     loading: Boolean = false,
     shareKey: String? = null,
     listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState(),
     barActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     eyebrow: (@Composable () -> Unit)? = null,
     below: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {},
-    heroActions: @Composable androidx.compose.foundation.layout.RowScope.(onBanner: Boolean) -> Unit = {},
+    heroActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // The full-bleed image is as tall as it is wide.
-        val mode = rememberHeroMode(coverArt, constraints.maxWidth, constraints.maxWidth)
-        val collapsed by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 } }
-        ShimmerHost {
-            LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
-                item(key = "header", contentType = "header") {
-                    DetailHero(
-                        mode = if (loading) (if (coverArt != null) HeroMode.Small else HeroMode.None) else mode,
-                        title = if (loading) title else title.orEmpty(), coverArt = coverArt, shareKey = shareKey, round = roundArtwork,
-                        eyebrow = eyebrow.takeIf { !loading }, below = { if (loading) SkeletonLine(Modifier.padding(top = 8.dp).fillMaxWidth(0.4f), 14.dp) else below() },
-                        actions = { onBanner -> if (loading) { Box(Modifier.width(112.dp).height(56.dp).skeleton(CircleShape)); Box(Modifier.size(56.dp).skeleton(RoundedCornerShape(16.dp))) } else heroActions(onBanner) },
-                    )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val look = rememberDetailLook(coverArt, roundArtwork || !immersive, maxWidth)
+        // The bar fills in as the title passes under it (or once the header has gone).
+        var titleBottom by remember { androidx.compose.runtime.mutableFloatStateOf(Float.MAX_VALUE) }
+        val barBottom = with(LocalDensity.current) { (androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp).toPx() }
+        val collapsed by remember(barBottom) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || titleBottom < barBottom } }
+        // Once the cover's top strip has scrolled out from under the bar, the rest of the cover is
+        // behind its icons: they turn white over a shade, whatever the strip was.
+        val pastStripPx = with(LocalDensity.current) { 32.dp.toPx() }
+        val pastStrip by remember(pastStripPx) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > pastStripPx } }
+        val scrolled by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
+        val overArt = when {
+            !look.immersive || collapsed -> null
+            pastStrip -> false
+            else -> look.topLight
+        }
+        // The whole page in the artwork's colours, and the bar floating over it too, with the status
+        // bar's icons over the cover, then over the filled-in bar (on a phone: a wide layout's pane
+        // shares the status bar with the list beside it).
+        if (!embedded) app.hocket.ui.nav.PageColors(look.scheme, statusLight = overArt ?: !look.dark)
+        MaterialTheme(colorScheme = look.scheme) {
+            androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.theme.LocalDarkTheme provides look.dark, androidx.compose.material3.LocalContentColor provides look.scheme.onBackground) {
+                Box(Modifier.fillMaxSize().background(look.scheme.background)) {
+                    ShimmerHost {
+                        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+                            item(key = "header", contentType = "header") {
+                                DetailHero(
+                                    look = look,
+                                    title = if (loading) title else title.orEmpty(), coverArt = coverArt, shareKey = shareKey, round = roundArtwork,
+                                    eyebrow = eyebrow.takeIf { !loading }, below = { if (loading) SkeletonLine(Modifier.padding(top = 10.dp).fillMaxWidth(0.4f), 14.dp) else below() },
+                                    onTitleBottom = { titleBottom = it },
+                                    actions = { if (loading) { Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)); Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)) } else heroActions() },
+                                )
+                            }
+                            if (loading) {
+                                items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
+                                return@LazyColumn
+                            }
+                            content()
+                        }
+                    }
+                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastStrip && !collapsed,
+                        // A card page: the bar fills in as soon as the tile reaches it.
+                        filled = collapsed || (!look.immersive && scrolled), actions = barActions)
+                    overlay()
                 }
-                if (loading) {
-                    items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
-                    return@LazyColumn
-                }
-                content()
             }
         }
-        DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), actions = barActions)
-        overlay()
     }
 }
 
@@ -246,20 +275,21 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val downloaded = pins.any { it.target == Commands.albumPin(a.id) }
     val dot = stringResource(R.string.dot_separator)
     DetailScaffold(nav, embedded, a.name, a.coverArt, shareKey = shareKey,
-        barActions = { DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { albumSheet = true }) },
+        barActions = {
+            DetailLoveButton(a.loved, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
+            DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
+            DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { albumSheet = true })
+        },
         below = {
             a.artist?.let { name ->
-                Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 4.dp).heightIn(min = 44.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
+                HeroLine(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1,
+                    modifier = Modifier.padding(top = 6.dp).heightIn(min = 44.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
             }
-            Text(listOfNotNull(a.year?.takeIf { it > 0u }?.toString(), a.genre?.takeIf { it.isNotBlank() }, stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong()))).joinToString(dot),
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HeroLine(listOfNotNull(a.genre?.takeIf { it.isNotBlank() }, a.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong()))).joinToString(dot))
         },
-        heroActions = { onBanner ->
+        heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-            HeroIconButton(HocketIcons.Filled.Shuffle, stringResource(R.string.action_shuffle), onBanner, onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
-            HeroLoveToggle(a.loved, onBanner, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
-            HeroDownloadToggle(downloaded, onBanner, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
+            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
         },
     ) {
         item(key = "rating") { RatingRow(a.rating.toInt()) { client.dispatch(Commands.setRating(listOf(app.hocket.core.api.RatingTarget.Album(app.hocket.core.api.RatingTargetAlbumInner(a.id))), it)) } }
@@ -410,11 +440,11 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
             }
         }
         null -> DetailScaffold(nav, embedded, ar.name, ar.coverArt, roundArtwork = true, shareKey = shareKey,
-            below = { Text(counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) },
-            heroActions = { onBanner ->
+            barActions = { DetailLoveButton(ar.loved, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) },
+            below = { HeroLine(counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 8.dp)) },
+            heroActions = {
                 HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-                HeroIconButton(HocketIcons.Filled.Shuffle, stringResource(R.string.action_shuffle), onBanner, onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
-                HeroLoveToggle(ar.loved, onBanner, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) })
+                HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
             },
         ) {
             val topSongs = top
@@ -479,20 +509,22 @@ private fun ArtistSubPage(artist: String, title: String, count: String?, onBack:
     val listState = rememberLazyListState()
     val collapsed by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 } }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("artist.subpage")) {
-            item(key = "head") {
-                Column(Modifier.statusBarsPadding().padding(top = 72.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)) {
-                    Text(artist, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
-                        trailing?.invoke()
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+            LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("artist.subpage")) {
+                item(key = "head") {
+                    Column(Modifier.statusBarsPadding().padding(top = 72.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                        Text(artist, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
+                            trailing?.invoke()
+                        }
+                        if (count != null) Text(count, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                     }
-                    if (count != null) Text(count, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 }
+                content()
             }
-            content()
+            DetailTopBar(title, collapsed = collapsed, onBack = onBack, actions = {})
         }
-        DetailTopBar(title, collapsed = collapsed, onBack = onBack, actions = {})
     }
 }
 
@@ -591,7 +623,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val choosing = selecting || selectMode
     androidx.activity.compose.BackHandler(enabled = selectMode) { selectMode = false }
     if (p == null) {
-        DetailScaffold(nav, embedded, null, flyingCover, shareKey = shareKey, loading = true, listState = listState) {}
+        DetailScaffold(nav, embedded, null, flyingCover, immersive = false, shareKey = shareKey, loading = true, listState = listState) {}
         return
     }
     val context = Commands.playlistContext(p.serverId, p.id, p.name)
@@ -599,26 +631,29 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val downloaded = pins.any { it.target == Commands.playlistPin(p.id) }
     val editable = !p.isSmart && p.isMine
     val dot = stringResource(R.string.dot_separator)
-    DetailScaffold(nav, embedded, p.name, p.coverArt, shareKey = shareKey, listState = listState,
-        barActions = { DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { playlistSheet = true }) },
+    // A playlist's cover (often a mosaic of its albums) shows as a tile, never edge to edge.
+    DetailScaffold(nav, embedded, p.name, p.coverArt, immersive = false, shareKey = shareKey, listState = listState,
+        barActions = {
+            DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
+            DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { playlistSheet = true })
+        },
         eyebrow = {
             val badges = listOfNotNull(
                 stringResource(R.string.badge_smart).takeIf { p.isSmart },
                 stringResource(R.string.badge_read_only).takeIf { p.isSmart || !p.isMine },
                 stringResource(R.string.playlist_public).takeIf { p.public },
             )
-            if (badges.isNotEmpty()) Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) { badges.forEach { HeroBadge(it) } }
+            if (badges.isNotEmpty()) Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) { badges.forEach { HeroBadge(it) } }
         },
         below = {
-            Text(listOfNotNull(p.owner?.let { stringResource(R.string.playlist_by, it) }, stringResource(R.string.album_tracks_count, p.songCount.toInt(), formatDurationWords(p.durationMs.toLong()))).joinToString(dot),
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-            p.comment?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp)) }
-            if (p.isSmart) Text(stringResource(R.string.smart_playlist_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            p.owner?.let { HeroLine(it, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1, modifier = Modifier.padding(top = 6.dp)) }
+            HeroLine(stringResource(R.string.album_tracks_count, p.songCount.toInt(), formatDurationWords(p.durationMs.toLong())), Modifier.padding(top = 4.dp))
+            p.comment?.takeIf { it.isNotBlank() }?.let { HeroLine(it, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 4) }
+            if (p.isSmart) HeroLine(stringResource(R.string.smart_playlist_note), Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
         },
-        heroActions = { onBanner ->
+        heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-            HeroIconButton(HocketIcons.Filled.Shuffle, stringResource(R.string.action_shuffle), onBanner, onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
-            HeroDownloadToggle(downloaded, onBanner, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
+            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
         },
         overlay = {
             SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p.name,
@@ -702,16 +737,16 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val settings by client.settings.collectAsStateWithLifecycle()
     val allPins = app.hocket.ui.screens.library.LibraryPins.parse(settings[app.hocket.core.SettingKeys.LIBRARY_PINS]?.value)
     val pinned = allPins.any { it.kind == "genre" && it.id == name }
-    DetailScaffold(nav, embedded, name, al?.firstOrNull()?.coverArt, loading = al == null || tr == null, barActions = {
+    DetailScaffold(nav, embedded, name, al?.firstOrNull()?.coverArt, immersive = false, loading = al == null || tr == null, barActions = {
         // Genres have no registry menu: pinning is the genre page's own toggle.
         // A full Library can still unpin, not pin.
         DetailBarButton(if (pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (pinned) R.string.library_pin_remove else R.string.library_pin_add),
             onClick = { app.hocket.ui.screens.library.LibraryPins.toggle(client, app.hocket.ui.screens.library.PinKind.Genre, name) }, enabled = pinned || app.hocket.ui.screens.library.LibraryPins.canPin(allPins), modifier = Modifier.testTag("genre.pin"))
     }, below = {
-        tr?.let { Text(stringResource(R.string.library_count_songs, it.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
-    }, heroActions = { onBanner ->
+        tr?.let { HeroLine(stringResource(R.string.library_count_songs, it.size), Modifier.padding(top = 8.dp)) }
+    }, heroActions = {
         HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-        HeroIconButton(HocketIcons.Filled.Shuffle, stringResource(R.string.action_shuffle), onBanner, onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+        HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
     }) {
         if (al == null || tr == null) return@DetailScaffold
         if (al.isEmpty() && tr.isEmpty()) {
