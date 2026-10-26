@@ -69,6 +69,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("display.animatedBackground", SettingsCategory.Appearance, R.string.settings_animated_background, R.string.settings_animated_background_body),
     SettingEntry("display.immersiveArtwork", SettingsCategory.Appearance, R.string.settings_immersive, R.string.settings_immersive_body, R.string.settings_search_kw_artwork),
     SettingEntry("display.playerRating", SettingsCategory.Appearance, R.string.settings_player_rating, R.string.settings_player_rating_body, R.string.settings_search_kw_rating),
+    SettingEntry("display.albumTrackArtists", SettingsCategory.Appearance, R.string.settings_album_track_artists, R.string.settings_album_track_artists_body, R.string.settings_search_kw_album_artists),
     SettingEntry("queue.mode", SettingsCategory.Playback, R.string.queue_mode, keywords = R.string.settings_search_kw_queue),
     SettingEntry("queue.savedCap", SettingsCategory.Playback, R.string.settings_saved_cap, keywords = R.string.settings_search_kw_queue),
     SettingEntry("queue.autoplay", SettingsCategory.Playback, R.string.settings_autoplay, keywords = R.string.settings_search_kw_queue),

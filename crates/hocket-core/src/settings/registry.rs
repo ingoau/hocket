@@ -82,6 +82,9 @@ pub mod keys {
     /// The star rating in the player (the full player and the desktop's bar): shown, or left to
     /// the song menu and the song's details. Synced: a preference, not a device's.
     pub const DISPLAY_PLAYER_RATING: &str = "display.playerRating";
+    /// An album's tracks name their artist on every row; off names it only where it is not the
+    /// album's artist. Synced: a preference, not a device's.
+    pub const DISPLAY_ALBUM_TRACK_ARTISTS: &str = "display.albumTrackArtists";
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
@@ -564,6 +567,12 @@ pub static REGISTRY: &[SettingDef] = &[
     def(DISPLAY_PLAYER_RATING, Synced, SettingKind::Bool, || {
         json!(true)
     }),
+    def(
+        DISPLAY_ALBUM_TRACK_ARTISTS,
+        Synced,
+        SettingKind::Bool,
+        || json!(false),
+    ),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,
         Synced,

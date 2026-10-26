@@ -55,6 +55,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "animatedBackground", section: "appearance", label: "settings.animatedBackground", keywords: "settingsSearch.kw.animatedBackground" },
   { id: "immersiveArtwork", section: "appearance", label: "settings.immersiveArtwork", keywords: "settingsSearch.kw.immersiveArtwork" },
   { id: "playerRating", section: "appearance", label: "settings.playerRating", keywords: "settingsSearch.kw.playerRating" },
+  { id: "albumTrackArtists", section: "appearance", label: "settings.albumTrackArtists", desc: "settings.albumTrackArtistsDesc", keywords: "settingsSearch.kw.albumTrackArtists" },
   { id: "fullscreenIdleHide", section: "appearance", label: "settings.fullscreenIdleHide", desc: "settings.fullscreenIdleHideDesc" },
   { id: "lyricsSize", section: "appearance", label: "settings.lyricsSize", desc: "settings.lyricsSizeDesc" },
   { id: "lyricsAnimated", section: "appearance", label: "settings.lyricsAnimated", desc: "settings.lyricsAnimatedDesc", keywords: "settingsSearch.kw.animatedBackground" },

@@ -160,6 +160,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
+        def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
