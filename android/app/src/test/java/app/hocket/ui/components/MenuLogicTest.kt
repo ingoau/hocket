@@ -51,11 +51,11 @@ class MenuLogicTest {
     }
 
     @Test
-    fun theAlbumMenuHasNoStarsAndGoesToTheArtist() {
+    fun theAlbumMenuHasStarsAndGoesToTheArtist() {
         val l = menuLayout(songActions.filter { it.id != ActionIds.GO_TO_ALBUM && it.id != ActionIds.REMOVE_FROM_PLAYLIST && it.id != "somethingNew" }, MenuKind.Album, canGoToArtist = true, hasInfo = true)
-        assertTrue(!l.rating)
+        assertTrue(l.rating)
         assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", ActionIds.GO_TO_ARTIST), l.primary.map { it.key })
-        assertEquals(listOf("pin", "info", "rate"), l.more.map { it.key })
+        assertEquals(listOf("pin", "info"), l.more.map { it.key })
     }
 
     @Test

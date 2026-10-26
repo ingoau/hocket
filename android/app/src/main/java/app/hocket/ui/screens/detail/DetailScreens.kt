@@ -155,16 +155,12 @@ private fun DetailScaffold(
         var titleBottom by remember { androidx.compose.runtime.mutableFloatStateOf(Float.MAX_VALUE) }
         val barBottom = with(LocalDensity.current) { (androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp).toPx() }
         val collapsed by remember(barBottom) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || titleBottom < barBottom } }
-        // Once the cover's top strip has scrolled out from under the bar, the rest of the cover is
-        // behind its icons: they turn white over a shade, whatever the strip was.
-        val pastStripPx = with(LocalDensity.current) { 32.dp.toPx() }
-        val pastStrip by remember(pastStripPx) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > pastStripPx } }
+        // Over a cover the bar's icons (and the status bar's) are white on a shade: the cover's
+        // own at the top, then the bar's once that has scrolled away.
+        val pastShadePx = with(LocalDensity.current) { 32.dp.toPx() }
+        val pastShade by remember(pastShadePx) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > pastShadePx } }
         val scrolled by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
-        val overArt = when {
-            !look.immersive || collapsed -> null
-            pastStrip -> false
-            else -> look.topLight
-        }
+        val overArt = if (look.immersive && !collapsed) false else null
         // The whole page in the artwork's colours, and the bar floating over it too, with the status
         // bar's icons over the cover, then over the filled-in bar (on a phone: a wide layout's pane
         // shares the status bar with the list beside it).
@@ -190,7 +186,7 @@ private fun DetailScaffold(
                             content()
                         }
                     }
-                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastStrip && !collapsed,
+                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastShade && !collapsed,
                         // A card page: the bar fills in as soon as the tile reaches it.
                         filled = collapsed || (!look.immersive && scrolled), actions = barActions)
                     overlay()
@@ -202,15 +198,6 @@ private fun DetailScaffold(
 
 /** A group's rows in a list: inset from the screen's edges, 2dp below the one before. */
 internal fun Modifier.segmentItem(index: Int): Modifier = padding(start = 16.dp, end = 16.dp, top = if (index > 0) androidx.compose.material3.ListItemDefaults.SegmentedGap else 0.dp)
-
-/** "Your rating" and the stars, between the header and the tracks. */
-@Composable
-private fun RatingRow(rating: Int, onRate: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(R.string.player_about_rating), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        RatingStars(rating, onRate = onRate, starSize = 24.dp, spacing = 20.dp)
-    }
-}
 
 /** How long an album page stays resumed and on screen before its first track is primed. */
 internal const val PRIME_DWELL_MS = 2_000L
@@ -248,6 +235,9 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     var album by rememberCachedState<Album?>(listOf("detail.album", id)) { null }
     var tracks by rememberCachedState<List<Track>?>(listOf("detail.albumTracks", id)) { null }
     var more by rememberCachedState(listOf("detail.albumMore", id)) { emptyList<Album>() }
+    // The album's notes (Last.fm, through the server), under Play and Shuffle.
+    var notes by rememberCachedState<String?>(listOf("detail.albumNotes", id)) { null }
+    LaunchedEffect(id) { notes = (client.query(Queries.albumInfo(id)) as? QueryResult.ExternalInfo)?.data?.text?.takeIf { it.isNotBlank() } ?: notes }
     LaunchedEffect(id, libraryGen) {
         val a = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
         val t = (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data
@@ -278,27 +268,23 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         barActions = {
             DetailLoveButton(a.loved, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
             DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
-            DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { albumSheet = true })
         },
         below = {
             a.artist?.let { name ->
                 HeroLine(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1,
-                    modifier = Modifier.padding(top = 6.dp).heightIn(min = 44.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
+                    modifier = Modifier.heightIn(min = 40.dp).wrapContentHeight().then(a.artistId?.let { aid -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { nav.navigate(Route.Artist(aid)) } } ?: Modifier).testTag("album.artist"))
             }
-            HeroLine(listOfNotNull(a.genre?.takeIf { it.isNotBlank() }, a.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.album_tracks_count, a.songCount.toInt(), formatDurationWords(a.durationMs.toLong()))).joinToString(dot))
+            listOfNotNull(a.genre?.takeIf { it.isNotBlank() }, a.year?.takeIf { it > 0u }?.toString()).takeIf { it.isNotEmpty() }?.let { HeroLine(it.joinToString(dot), style = MaterialTheme.typography.bodySmall) }
         },
         heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
             HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+            HeroMoreButton(onClick = { albumSheet = true })
         },
     ) {
-        item(key = "rating") { RatingRow(a.rating.toInt()) { client.dispatch(Commands.setRating(listOf(app.hocket.core.api.RatingTarget.Album(app.hocket.core.api.RatingTargetAlbumInner(a.id))), it)) } }
+        notes?.let { text -> item(key = "notes") { DetailNotes(text, Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp)) } }
         val list = tracks
-        item(key = "h.tracks") {
-            DetailSectionHead(stringResource(R.string.detail_tracks), Modifier.padding(top = 16.dp)) {
-                if (list != null) Text(stringResource(R.string.album_tracks_count, list.size, formatClock(list.sumOf { it.durationMs.toLong() })), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        item(key = "tracks.top") { Spacer(Modifier.height(16.dp)) }
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
         else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
             val playing = nowPlaying?.track?.id == t.id
@@ -316,6 +302,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         item(key = "footer") {
             val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.LONG)
             val facts = listOfNotNull(
+                list?.let { pluralStringResource(R.plurals.album_tracks_count, it.size, it.size, formatDurationWords(it.sumOf { t -> t.durationMs.toLong() })) },
                 a.year?.takeIf { it > 0u }?.let { stringResource(R.string.album_released, it.toInt()) },
                 a.created?.let { stringResource(R.string.album_added, date.format(java.util.Date(it.toLong()))) },
                 pluralStringResource(R.plurals.album_plays, a.playCount.toInt(), a.playCount.toInt()),
@@ -441,7 +428,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         }
         null -> DetailScaffold(nav, embedded, ar.name, ar.coverArt, roundArtwork = true, shareKey = shareKey,
             barActions = { DetailLoveButton(ar.loved, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) },
-            below = { HeroLine(counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 8.dp)) },
+            below = { HeroLine(counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
             heroActions = {
                 HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
                 HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
@@ -635,7 +622,6 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     DetailScaffold(nav, embedded, p.name, p.coverArt, immersive = false, shareKey = shareKey, listState = listState,
         barActions = {
             DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
-            DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { playlistSheet = true })
         },
         eyebrow = {
             val badges = listOfNotNull(
@@ -646,14 +632,14 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             if (badges.isNotEmpty()) Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) { badges.forEach { HeroBadge(it) } }
         },
         below = {
-            p.owner?.let { HeroLine(it, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1, modifier = Modifier.padding(top = 6.dp)) }
-            HeroLine(stringResource(R.string.album_tracks_count, p.songCount.toInt(), formatDurationWords(p.durationMs.toLong())), Modifier.padding(top = 4.dp))
+            p.owner?.let { HeroLine(it, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, maxLines = 1, modifier = Modifier.padding(top = 2.dp)) }
             p.comment?.takeIf { it.isNotBlank() }?.let { HeroLine(it, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 4) }
             if (p.isSmart) HeroLine(stringResource(R.string.smart_playlist_note), Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
         },
         heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
             HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+            HeroMoreButton(onClick = { playlistSheet = true })
         },
         overlay = {
             SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p.name,
@@ -666,14 +652,17 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         },
     ) {
         val list = entries
-        item(key = "h.tracks") {
-            DetailSectionHead(stringResource(R.string.detail_tracks), Modifier.padding(top = 16.dp)) {
-                if (!list.isNullOrEmpty()) FilledTonalButton(onClick = { if (choosing) { client.clearSelection(); selectMode = false } else selectMode = true }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("playlist.select")) {
-                    Icon(if (choosing) HocketIcons.Filled.Close else HocketIcons.Filled.SelectAll, null, Modifier.size(ButtonDefaults.IconSize))
+        // No heading over the songs. Choosing them (Select songs, in the menu) shows Cancel here
+        // until the first pick brings up the selection toolbar.
+        item(key = "tracks.top") {
+            if (selectMode && !selecting) Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.detail_select), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                FilledTonalButton(onClick = { client.clearSelection(); selectMode = false }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("playlist.select")) {
+                    Icon(HocketIcons.Filled.Close, null, Modifier.size(ButtonDefaults.IconSize))
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    Text(stringResource(if (choosing) R.string.action_cancel else R.string.detail_select))
+                    Text(stringResource(R.string.action_cancel))
                 }
-            }
+            } else Spacer(Modifier.height(16.dp))
         }
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton() }
         else itemsIndexed(list, key = { _, e -> e.key }, contentType = { _, _ -> "track" }) { i, e ->
@@ -703,8 +692,29 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                     }) else null)
             }
         }
+        // How many songs and how long, at the foot.
+        if (!list.isNullOrEmpty()) item(key = "footer") {
+            Text(pluralStringResource(R.plurals.album_tracks_count, list.size, list.size, formatDurationWords(list.sumOf { it.track.durationMs.toLong() })), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp))
+        }
     }
-    if (playlistSheet) ActionSheet(target, p.name, p.owner, onDismiss = { playlistSheet = false })
+    if (playlistSheet) ActionSheet(target, p.name, p.owner, onDismiss = { playlistSheet = false },
+        // Choosing songs starts here (a long press on one does too).
+        extras = if (entries.isNullOrEmpty()) emptyList() else listOf(app.hocket.ui.components.SongMenuExtra(resources.getString(R.string.detail_select), HocketIcons.Filled.SelectAll,
+            onClick = { selectMode = true }, testTag = "playlist.selectSongs")))
+}
+
+/** An album's notes: three lines, then the rest behind More (tapping anywhere on them toggles). */
+@Composable
+private fun DetailNotes(text: String, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable(text) { mutableStateOf(false) }
+    var overflows by remember(text) { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth().clickable(enabled = overflows || expanded, onClickLabel = stringResource(if (expanded) R.string.detail_notes_less else R.string.detail_notes_more)) { expanded = !expanded }.testTag("album.notes")) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (expanded) Int.MAX_VALUE else 3,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow })
+        if (overflows || expanded) Text(stringResource(if (expanded) R.string.detail_notes_less else R.string.detail_notes_more), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.End).padding(top = 2.dp).clearAndSetSemantics { })
+    }
 }
 
 /** A small pill over a playlist's name (Public, Smart, Read-only). */

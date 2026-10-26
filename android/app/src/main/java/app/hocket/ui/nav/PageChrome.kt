@@ -33,6 +33,56 @@ class PageChrome {
         if (statusLight[entryId] != light) statusLight[entryId] = light
     }
     internal fun remove(entryId: String) { schemes.remove(entryId); statusLight.remove(entryId) }
+
+    /** Each composed page's push/pop progress ([PageTransitionLayer]: 0 at rest, 1 gone or covered). */
+    private val progress = mutableStateMapOf<String, Float>()
+    /** The moving top page and the page it covers, as of the last progress reported. */
+    private var movingTop: String? = null
+    private var movingCovered: String? = null
+
+    internal fun reportProgress(entryId: String, value: Float, top: String?, covered: String?) {
+        movingTop = top
+        movingCovered = covered
+        progress[entryId] = value
+    }
+
+    internal fun clearProgress(entryId: String) { progress.remove(entryId) }
+
+    /**
+     * The chrome's colours with [entryId] on top: while a push or a pop (a predictive back gesture
+     * included) is moving, blended from the moving top page's colours ([fallback] for a page with
+     * none) to the covered page's by its progress, so the bar crossfades with the pages.
+     */
+    fun chromeScheme(entryId: String?, fallback: ColorScheme): ColorScheme {
+        val top = movingTop
+        // The last push or pop's top page while it is still composed: on a pop it is the page
+        // leaving (the back stack already names the one under it, from the first frame), at rest
+        // after a push the page showing.
+        val f = top?.let { progress[it] } ?: return schemeFor(entryId) ?: fallback
+        val from = schemeFor(top) ?: fallback
+        val covered = movingCovered
+        if (f <= 0f || covered == null) return from
+        return lerpScheme(from, schemeFor(covered) ?: fallback, f.coerceIn(0f, 1f))
+    }
+}
+
+/** [a] to [b] by [t], role by role (the roles the bar, its indicator and its scrim read, and the rest of the surfaces). */
+internal fun lerpScheme(a: ColorScheme, b: ColorScheme, t: Float): ColorScheme {
+    fun l(x: androidx.compose.ui.graphics.Color, y: androidx.compose.ui.graphics.Color) = androidx.compose.ui.graphics.lerp(x, y, t)
+    return b.copy(
+        primary = l(a.primary, b.primary), onPrimary = l(a.onPrimary, b.onPrimary),
+        primaryContainer = l(a.primaryContainer, b.primaryContainer), onPrimaryContainer = l(a.onPrimaryContainer, b.onPrimaryContainer),
+        secondary = l(a.secondary, b.secondary), onSecondary = l(a.onSecondary, b.onSecondary),
+        secondaryContainer = l(a.secondaryContainer, b.secondaryContainer), onSecondaryContainer = l(a.onSecondaryContainer, b.onSecondaryContainer),
+        tertiary = l(a.tertiary, b.tertiary), onTertiary = l(a.onTertiary, b.onTertiary),
+        background = l(a.background, b.background), onBackground = l(a.onBackground, b.onBackground),
+        surface = l(a.surface, b.surface), onSurface = l(a.onSurface, b.onSurface),
+        surfaceVariant = l(a.surfaceVariant, b.surfaceVariant), onSurfaceVariant = l(a.onSurfaceVariant, b.onSurfaceVariant),
+        surfaceContainerLowest = l(a.surfaceContainerLowest, b.surfaceContainerLowest), surfaceContainerLow = l(a.surfaceContainerLow, b.surfaceContainerLow),
+        surfaceContainer = l(a.surfaceContainer, b.surfaceContainer), surfaceContainerHigh = l(a.surfaceContainerHigh, b.surfaceContainerHigh),
+        surfaceContainerHighest = l(a.surfaceContainerHighest, b.surfaceContainerHighest),
+        outline = l(a.outline, b.outline), outlineVariant = l(a.outlineVariant, b.outlineVariant),
+    )
 }
 
 val LocalPageChrome = staticCompositionLocalOf { PageChrome() }

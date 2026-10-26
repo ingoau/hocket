@@ -481,8 +481,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
                 // (The page's own colours already ease in, so no animation of its own here: the bar's
                 // labels and the scrim under them always change together.)
-                val pageScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id)
-                val surface = pageScheme?.surface ?: MaterialTheme.colorScheme.surface
+                val surface = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme).surface
                 // Solid behind the bar's labels (so rows scrolling under them don't show through),
                 // eased in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
@@ -494,7 +493,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // sheet expands and the full player takes the screen (read in the placement phase, so
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
-                MaterialTheme(colorScheme = LocalPageChrome.current.schemeFor(backStack.lastOrNull()?.id) ?: MaterialTheme.colorScheme) {
+                MaterialTheme(colorScheme = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme)) {
                 ShortNavigationBar(
                     // Transparent over the scrim (Navic's detached style).
                     containerColor = Color.Transparent,

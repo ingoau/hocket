@@ -212,7 +212,10 @@
     <string name="playlist_new">New playlist</string>
     <string name="playlist_delete_confirm">Delete “%1$s”? This can’t be undone.</string>
     <string name="playlist_reorder_handle">Drag to reorder</string>
-    <string name="album_tracks_count">%1$d tracks · %2$s</string>
+    <plurals name="album_tracks_count">
+        <item quantity="one">%1$d song · %2$s</item>
+        <item quantity="other">%1$d songs · %2$s</item>
+    </plurals>
     <string name="artist_albums">Albums</string>
     <string name="artist_eps">EPs</string>
     <string name="artist_singles">Singles</string>
@@ -358,6 +361,8 @@
     <string name="search_recent_clear">Clear</string>
     <string name="search_recent_forget">Remove “%1$s” from recent searches</string>
     <string name="player_about_album_notes">About the album</string>
+    <string name="detail_notes_more">More</string>
+    <string name="detail_notes_less">Less</string>
     <string name="player_about_artist_bio">About the artist</string>
     <string name="player_about_similar_artists">Similar artists</string>
     <string name="player_about_source">From Last.fm and MusicBrainz via your server</string>
@@ -1189,7 +1194,6 @@
     <string name="release_view_more">View more</string>
     <string name="release_newest">Newest</string>
     <string name="release_oldest">Oldest</string>
-    <string name="detail_tracks">Tracks</string>
     <string name="detail_select">Select</string>
     <string name="detail_download">Download</string>
     <string name="detail_remove_download">Remove download</string>
