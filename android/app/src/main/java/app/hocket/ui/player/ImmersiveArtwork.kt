@@ -186,10 +186,10 @@ fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boole
     return state
 }
 
-private fun argb(c: UInt): Color = Color(c.toInt() or 0xFF000000.toInt())
+internal fun argb(c: UInt): Color = Color(c.toInt() or 0xFF000000.toInt())
 
 /** [colors] averaged over a window of `2 × radius + 1`: the same edge, blurred sideways. */
-private fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indices.map { i ->
+internal fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indices.map { i ->
     val span = colors.subList(maxOf(0, i - radius), minOf(colors.size, i + radius + 1))
     Color(span.map { it.red }.average().toFloat(), span.map { it.green }.average().toFloat(), span.map { it.blue }.average().toFloat())
 }

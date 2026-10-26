@@ -738,7 +738,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
  * value is not null; the window's own appearance again once it is.
  */
 @Composable
-private fun StatusBarOver(light: Boolean?) {
+internal fun StatusBarOver(light: Boolean?) {
     val view = androidx.compose.ui.platform.LocalView.current
     androidx.compose.runtime.DisposableEffect(light, view) {
         var context = view.context

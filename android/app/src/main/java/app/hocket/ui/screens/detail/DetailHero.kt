@@ -1,6 +1,5 @@
 package app.hocket.ui.screens.detail
 
-import android.graphics.BitmapFactory
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -21,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -33,23 +31,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -74,7 +66,6 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.core.api.Album
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
-import app.hocket.ui.components.smallerSize
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ArtworkShare
 import app.hocket.ui.nav.rememberArtworkShareSource
@@ -82,71 +73,102 @@ import app.hocket.ui.nav.sharedArtworkDestination
 import app.hocket.ui.player.artworkSeed
 import app.hocket.ui.theme.ArtworkColors
 import app.hocket.ui.theme.LocalDarkTheme
-import java.io.File
+import androidx.compose.animation.core.tween
+import androidx.compose.material3.ColorScheme
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
+import app.hocket.core.SettingKeys
+import app.hocket.core.api.ArtworkEdge
+import app.hocket.core.api.ArtworkStyle
+import app.hocket.core.api.ImmersiveArtwork as ImmersiveArtworkPreference
+import app.hocket.ui.player.CRISP_FEATHER
+import app.hocket.ui.player.FEATHER
+import app.hocket.ui.player.ImmersiveTopStrip
+import app.hocket.ui.player.stripLight
+import app.hocket.core.api.ArtworkLayout
+import app.hocket.ui.player.ImmersiveArtwork
+import app.hocket.ui.player.argb
+import app.hocket.ui.player.grainBrush
+import app.hocket.ui.player.immersiveFade
+import app.hocket.ui.player.isFlat
+import app.hocket.ui.player.rememberArtworkLayout
+import app.hocket.ui.player.soften
+import kotlin.math.roundToInt
 
 /**
- * How a detail page's header shows its artwork, never upscaled: [Large] full-bleed when the image
- * is at least the header's size in pixels, [Small] as a tile on a tinted banner when it is smaller
- * (or still being fetched, or the core has no file and the id's gradient stands in), [None] when
- * the item has no artwork at all.
+ * How a detail page looks, worked out from its artwork: [immersive] (the cover edge to edge at the
+ * top, carried on below by [edge], as in the full player) or a card (the cover as a tile over the
+ * title); either way the whole page in the artwork's colour ([scheme], [dark]). [layout]: the
+ * cover's worked-out layout once known (its top edge fills the strip above it). [topLight]: the
+ * cover's top strip, under the status bar and the bar's buttons, is light.
  */
-enum class HeroMode { Large, Small, None }
-
-/** The full-bleed header's height for a page [width] wide (the boards' 390 × 470). */
-internal fun largeHeroHeight(width: Dp): Dp = width * (470f / 390f)
-
-/** Natural sizes of hero images (cover@size to its file and size), so a page visited again lays out in its mode at once. */
-private val naturalSizes = android.util.LruCache<String, Pair<String, Pair<Int, Int>>>(64)
-
-@Composable
-internal fun rememberHeroMode(coverArt: String?, widthPx: Int, heightPx: Int): HeroMode {
-    val client = LocalCoreClient.current
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
-    if (coverArt == null) return HeroMode.None
-    val size = if (batterySaver) smallerSize(ArtworkSizes.HERO) else ArtworkSizes.HERO
-    // The server never sends more than was asked for: below the header's width it can't be Large,
-    // so don't fetch the big file just to measure it.
-    if (size < widthPx) return HeroMode.Small
-    val key = "$coverArt@$size"
-    val natural = remember(key) { mutableStateOf(naturalSizes.get(key)?.second) }
-    LaunchedEffect(key) {
-        val path = client.artworkPath(coverArt, size) ?: return@LaunchedEffect
-        // Known for this file: nothing to read. A new file (the cache refetched it) is measured again.
-        naturalSizes.get(key)?.takeIf { it.first == path }?.let { natural.value = it.second; return@LaunchedEffect }
-        val bounds = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(File(path.removePrefix("file://")).absolutePath, opts)
-            if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
-        } ?: return@LaunchedEffect
-        naturalSizes.put(key, path to bounds)
-        natural.value = bounds
-    }
-    val n = natural.value ?: return HeroMode.Small
-    if (widthPx <= 0 || heightPx <= 0) return HeroMode.Small
-    // Cropped to cover: the tighter side sets the scale.
-    val scale = maxOf(widthPx.toFloat() / n.first, heightPx.toFloat() / n.second)
-    return if (scale <= 1f) HeroMode.Large else HeroMode.Small
+@androidx.compose.runtime.Immutable
+internal class DetailLook(val immersive: Boolean, val layout: ArtworkLayout?, val topLight: Boolean?, val scheme: ColorScheme, val dark: Boolean) {
+    val edge: ArtworkEdge? get() = layout?.bottom
 }
 
-/** The banner's tint: the artwork's seed as a soft container (the boards' peach for a warm cover). */
+/** Immersive headers only up to this width: wider (a tablet's pane), the square would fill the screen. */
+private val IMMERSIVE_MAX_WIDTH = 600.dp
+
+/**
+ * The look for a page with [coverArt]. Square covers go edge to edge whenever the immersive artwork
+ * setting allows it ([ImmersiveArtwork] asked with Always: the header fades out within a few rows,
+ * so even a busy edge only carries on briefly); an artist's photo ([round]), a cover that isn't
+ * square, or the setting at Never show a card. Until the cover is worked out the page assumes
+ * immersive in the app's colours, then eases into the cover's.
+ */
 @Composable
-internal fun bannerTint(coverArt: String?): Color {
+internal fun rememberDetailLook(coverArt: String?, round: Boolean, width: Dp): DetailLook {
+    val client = LocalCoreClient.current
+    val settings by client.settings.collectAsStateWithLifecycle()
+    val appDark = LocalDarkTheme.current
+    val app = MaterialTheme.colorScheme
+    val preference = ImmersiveArtwork.preference(settings[SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
+    val candidate = coverArt != null && !round && width <= IMMERSIVE_MAX_WIDTH && preference != ImmersiveArtworkPreference.Never
+    val resolved = if (candidate) rememberArtworkLayout(coverArt, ImmersiveArtworkPreference.Always, appDark).value else null
+    val layout = resolved?.layout?.takeIf { it.bottom.style != ArtworkStyle.Card }
+    val immersive = candidate && (resolved == null || layout != null)
     val seed by artworkSeed(coverArt)
-    val dark = LocalDarkTheme.current
-    val base = MaterialTheme.colorScheme.surfaceContainer
-    val target = seed?.let { s -> val scheme = ArtworkColors.scheme(s, dark); lerp(scheme.primaryContainer, base, if (dark) 0.45f else 0.55f) } ?: base
-    return animateColorAsState(target, label = "bannerTint").value
+    val edge = layout?.bottom
+    // Immersive: the colour the cover carries on in, under the scrim its text needs. A card: the
+    // seed's container, softened towards the page.
+    val (target, light) = when {
+        edge != null -> {
+            val scrim = (if (edge.light) Color.White else Color.Black).copy(alpha = edge.scrim.toFloat())
+            scrim.compositeOver(argb(edge.baseColor)) to edge.light
+        }
+        seed != null && !immersive -> {
+            val s = ArtworkColors.scheme(seed!!, appDark)
+            lerp(s.primaryContainer, s.surface, if (appDark) 0.5f else 0.45f) to !appDark
+        }
+        else -> app.background to !appDark
+    }
+    val page by animateColorAsState(target, tween(450), label = "detailPage")
+    val scheme = remember(page, seed, light) { ArtworkColors.pageScheme(seed, page, light) }
+    return DetailLook(immersive, layout, layout?.let(::stripLight), scheme, dark = !light)
 }
 
 /**
- * A detail page's header. [Large]: the artwork edge to edge, fading into the page, the title over
- * its foot. [Small] and [None]: a tinted banner with rounded lower corners, the artwork (if any) as
- * a tilted tile (a circle for an artist) bleeding off its top right, the title over it. [eyebrow]
- * goes above the title, [below] under it, [actions] last (inside the banner, under the image).
+ * A detail page's header, centred. Immersive: the cover edge to edge from the top of the screen,
+ * fading at its foot into its own colours ([DetailContinuation]), the title just under it. A card:
+ * the cover as a tile (a circle for an artist) under the bar, then the title; without a cover just
+ * the title. [eyebrow] goes above the title, [below] under it, [actions] (Play and Shuffle) last.
  */
 @Composable
 internal fun DetailHero(
-    mode: HeroMode,
+    look: DetailLook,
     /** Null while the page loads: a skeleton line in its place. */
     title: String?,
     coverArt: String?,
@@ -154,111 +176,207 @@ internal fun DetailHero(
     round: Boolean,
     eyebrow: (@Composable () -> Unit)? = null,
     below: @Composable ColumnScope.() -> Unit = {},
-    actions: @Composable RowScope.(onBanner: Boolean) -> Unit,
+    actions: @Composable RowScope.() -> Unit,
+    /** The title's bottom edge in the window (px), as it scrolls: the bar fills in once it passes under it. */
+    onTitleBottom: (Float) -> Unit = {},
 ) {
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     BoxWithConstraints(Modifier.fillMaxWidth().testTag("detail.header").semantics { }) {
         val width = maxWidth
-        when (mode) {
-            HeroMode.Large -> Column {
-                val heroHeight = largeHeroHeight(width)
-                Box(Modifier.fillMaxWidth()) {
-                    Box(Modifier.fillMaxWidth().height(heroHeight)) {
-                        // The image is square, the header a little taller: the page fades in over its foot.
-                        Artwork(coverArt, ArtworkSizes.HERO, title, Modifier.fillMaxWidth().aspectRatio(1f).sharedArtworkDestination(shareKey).testTag("detail.artwork"), RectangleShape)
-                        // A shade under the status bar and the floating buttons, then the fade into the page.
-                        Box(Modifier.fillMaxWidth().height(120.dp + statusTop).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.30f), Color.Transparent))))
-                        val bg = MaterialTheme.colorScheme.background
-                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, 0.5f to Color.Transparent, 0.74f to bg.copy(alpha = 0.8f), 0.84f to bg)))
-                    }
-                    Column(Modifier.padding(top = heroHeight - 100.dp, start = 20.dp, end = 20.dp)) {
-                        eyebrow?.invoke()
-                        HeroTitle(title)
-                        below()
-                    }
-                }
-                androidx.compose.foundation.layout.FlowRow(Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) { actions(false) }
+        if (look.immersive) {
+            val edge = look.edge
+            val layout = look.layout
+            // As in the full player: the cover starts under the status bar and the bar's icons,
+            // the strip above it filled from its top edge ([ImmersiveTopStrip]).
+            val artTop = statusTop + 64.dp
+            val density = LocalDensity.current
+            val hero = remember { app.hocket.ui.player.HeroGeometry() }
+            with(density) {
+                hero.area = androidx.compose.ui.geometry.Rect(0f, 0f, width.toPx(), (artTop + width).toPx())
+                hero.immersiveTop = artTop.toPx()
             }
-            else -> Surface(color = bannerTint(coverArt), shape = RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp), modifier = Modifier.fillMaxWidth()) {
-                Box {
-                    if (mode == HeroMode.Small) {
-                        if (round) {
-                            Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.align(Alignment.TopEnd).offset(x = 56.dp, y = statusTop + 16.dp).size(minOf(220.dp, width * 0.58f))
-                                .shadow(16.dp, CircleShape).sharedArtworkDestination(shareKey).testTag("detail.artwork"), CircleShape)
-                        } else {
-                            Artwork(coverArt, ArtworkSizes.GRID, title, Modifier.align(Alignment.TopEnd).offset(x = 30.dp, y = statusTop + 40.dp).size(minOf(200.dp, width * 0.52f)).rotate(-6f)
-                                .shadow(14.dp, RoundedCornerShape(32.dp)).sharedArtworkDestination(shareKey).testTag("detail.artwork"), RoundedCornerShape(32.dp))
-                        }
-                    }
-                    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp, top = statusTop + if (mode == HeroMode.Small) 64.dp + 128.dp else 88.dp)) {
-                        eyebrow?.invoke()
-                        HeroTitle(title)
-                        below()
-                        // Wraps at large text sizes rather than squeezing the buttons.
-                        androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) { actions(true) }
-                    }
-                }
+            if (layout != null) Box(Modifier.matchParentSize().clipToBounds()) { ImmersiveTopStrip(coverArt, layout, hero, Modifier.fillMaxSize()) }
+            // Behind the header, never setting its height: it runs on only as far as the header goes.
+            if (edge != null) BoxWithConstraints(Modifier.matchParentSize().clipToBounds()) { DetailContinuation(coverArt, edge, width, artTop, maxHeight) }
+            // Its foot fades as the player's does (a mirror's onto its reflection, a flat edge's last
+            // few rows onto its colour); any other extension carries straight on with no fade.
+            val footFades = edge != null && (edge.style == ArtworkStyle.Mirror || edge.isFlat())
+            Artwork(coverArt, ArtworkSizes.HERO, title, Modifier.padding(top = artTop).fillMaxWidth().aspectRatio(1f).sharedArtworkDestination(shareKey)
+                .immersiveFade(edge, fraction = { if (footFades) 1f else 0f }, top = layout?.top, topFraction = { 1f }).testTag("detail.artwork"), RectangleShape)
+            HeroText(title, eyebrow, below, actions, onTitleBottom, Modifier.padding(top = artTop + width + 20.dp).padding(bottom = 8.dp))
+        } else {
+            // A glow of the cover's colour behind the tile, fading into the page.
+            Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to lerp(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.primary, 0.14f), 1f to Color.Transparent)))
+            Column(Modifier.fillMaxWidth().padding(top = statusTop + 72.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (coverArt != null) {
+                    val side = minOf(width * 0.62f, 264.dp)
+                    val shape = if (round) CircleShape else RoundedCornerShape(28.dp)
+                    Artwork(coverArt, if (round) ArtworkSizes.FULL else ArtworkSizes.FULL, title, Modifier.size(side).shadow(24.dp, shape, ambientColor = MaterialTheme.colorScheme.primary, spotColor = Color.Black)
+                        .sharedArtworkDestination(shareKey).testTag("detail.artwork"), shape)
+                    Spacer(Modifier.height(24.dp))
+                } else Spacer(Modifier.height(24.dp))
+                HeroText(title, eyebrow, below, actions, onTitleBottom, Modifier.padding(bottom = 8.dp))
             }
         }
     }
 }
 
-/** The page's name, large and tight; long names step down a size so they still fit in three lines. */
+/** The title, what goes around it and the actions, centred. */
 @Composable
-private fun HeroTitle(title: String?) {
-    if (title == null) { app.hocket.ui.components.SkeletonLine(Modifier.padding(vertical = 6.dp).fillMaxWidth(0.6f), 44.dp); return }
-    val style = if (title.length > 28) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayMedium
-    Text(title, style = style.merge(TextStyle(fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp)), maxLines = 3, overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.widthIn(max = 360.dp).semantics { heading() }.testTag("detail.title"))
-}
-
-/** The hero's Play: a medium filled button with its label. */
-@Composable
-internal fun HeroPlayButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Button(onClick = onClick, shapes = ButtonDefaults.shapes(), modifier = modifier.heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.play"),
-        contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
-        Icon(HocketIcons.Filled.PlayArrow, null, Modifier.size(ButtonDefaults.MediumIconSize))
-        Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
-        Text(stringResource(R.string.action_play), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+private fun HeroText(title: String?, eyebrow: (@Composable () -> Unit)?, below: @Composable ColumnScope.() -> Unit, actions: @Composable RowScope.() -> Unit, onTitleBottom: (Float) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        eyebrow?.invoke()
+        HeroTitle(title, onTitleBottom)
+        below()
+        Row(Modifier.padding(top = 20.dp).widthIn(max = 420.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) { actions() }
     }
 }
 
-/** A medium square icon button beside Play: on the banner it sits on the lifted surface, under the image on the tonal one. */
+/** The page's name, large and centred; long names step down a size so they still fit in three lines. */
 @Composable
-internal fun HeroIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onBanner: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    FilledTonalIconButton(
-        onClick = onClick, shapes = IconButtonDefaults.shapes(),
-        colors = if (onBanner) IconButtonDefaults.filledTonalIconButtonColors(containerColor = app.hocket.ui.components.segmentColor(), contentColor = MaterialTheme.colorScheme.onSurface) else IconButtonDefaults.filledTonalIconButtonColors(),
-        modifier = modifier.size(IconButtonDefaults.mediumContainerSize()),
-    ) { Icon(icon, label, Modifier.size(IconButtonDefaults.mediumIconSize)) }
+private fun HeroTitle(title: String?, onBottom: (Float) -> Unit) {
+    if (title == null) { app.hocket.ui.components.SkeletonLine(Modifier.padding(vertical = 6.dp).fillMaxWidth(0.6f), 40.dp); return }
+    val style = when {
+        title.length > 40 -> MaterialTheme.typography.headlineMediumEmphasized
+        title.length > 20 -> MaterialTheme.typography.headlineLargeEmphasized
+        else -> MaterialTheme.typography.displaySmallEmphasized
+    }
+    Text(title, style = style.merge(TextStyle(fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp, textAlign = TextAlign.Center)), maxLines = 3, overflow = TextOverflow.Ellipsis,
+        color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.widthIn(max = 480.dp).onGloballyPositioned { onBottom(it.positionInRoot().y + it.size.height) }.semantics { heading() }.testTag("detail.title"))
 }
+
+/** A line of the header under the title (the artist, the facts), centred. */
+@Composable
+internal fun HeroLine(text: String, modifier: Modifier = Modifier, style: TextStyle = MaterialTheme.typography.bodyMedium, color: Color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight: FontWeight? = null, maxLines: Int = 2) {
+    Text(text, style = style, color = color, fontWeight = fontWeight, textAlign = TextAlign.Center, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = modifier)
+}
+
+/** The hero's Play: a medium filled button with its label, sharing the row with Shuffle. */
+@Composable
+internal fun RowScope.HeroPlayButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Button(onClick = onClick, shapes = ButtonDefaults.shapes(), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.play"),
+        contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
+        Icon(HocketIcons.Filled.PlayArrow, null, Modifier.size(ButtonDefaults.MediumIconSize))
+        Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
+        Text(stringResource(R.string.action_play), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1)
+    }
+}
+
+/** Shuffle beside Play: the same size, tonal. */
+@Composable
+internal fun RowScope.HeroShuffleButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FilledTonalButton(onClick = onClick, shapes = ButtonDefaults.shapes(), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.shuffle"),
+        colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest, contentColor = MaterialTheme.colorScheme.onSurface),
+        contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
+        Icon(HocketIcons.Filled.Shuffle, null, Modifier.size(ButtonDefaults.MediumIconSize))
+        Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
+        Text(stringResource(R.string.action_shuffle), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1)
+    }
+}
+
+/** Love in the bar: the heart filled in the primary colour once loved. */
+@Composable
+internal fun DetailLoveButton(loved: Boolean, onToggle: (Boolean) -> Unit) {
+    DetailBarButton(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (loved) R.string.action_unlove else R.string.action_love),
+        onClick = { onToggle(!loved) }, modifier = Modifier.testTag("detail.love"), tint = if (loved && !LocalHeroBarOverArt.current) MaterialTheme.colorScheme.primary else null)
+}
+
+/** Download in the bar; a check once the item is kept on the device. */
+@Composable
+internal fun DetailDownloadButton(downloaded: Boolean, onToggle: (Boolean) -> Unit) {
+    DetailBarButton(if (downloaded) HocketIcons.Filled.DownloadDone else HocketIcons.Filled.Download, stringResource(if (downloaded) R.string.detail_remove_download else R.string.detail_download),
+        onClick = { onToggle(!downloaded) }, modifier = Modifier.testTag("detail.download"))
+}
+
+/** How far the continuation runs under the title, as a share of the cover's side. */
+private const val CONTINUATION = 0.62f
 
 /**
- * Love as a medium toggle. Loved: a light (bright surface) square with the heart filled in the
- * primary colour, rather than a filled primary square, which read as a dark block among the light
- * buttons beside it. Not loved: the outlined heart on the surface, round.
+ * What carries an immersive cover on under the title, ending in the page's colour.
+ *
+ * - A flat edge, as in the full player: the cover's last [CRISP_FEATHER] fades onto its one
+ *   colour, which carries on with the cover's grain over it.
+ * - Any other extension: no fade at all. The cover's own last rows are stretched down from its
+ *   edge, so the join is seamless, and settle within [STRETCH] of the side into the colours along
+ *   the edge, softened sideways.
+ * - A mirror, as in the full player: the cover's last [FEATHER] fades ([immersiveFade]) onto a
+ *   blurred reflection of itself, which blurs further with distance.
+ *
+ * Either way under the scrim the text needs (eased in just past the edge) and fading into the page
+ * by the header's foot.
  */
 @Composable
-internal fun HeroLoveToggle(loved: Boolean, onBanner: Boolean, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    FilledIconToggleButton(
-        checked = loved, onCheckedChange = onToggle, shapes = IconButtonDefaults.toggleableShapes(),
-        colors = IconButtonDefaults.filledIconToggleButtonColors(
-            containerColor = if (onBanner) app.hocket.ui.components.segmentColor() else MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            checkedContainerColor = MaterialTheme.colorScheme.surfaceBright, checkedContentColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = modifier.size(IconButtonDefaults.mediumContainerSize()).testTag("detail.love"),
-    ) { Icon(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (loved) R.string.action_unlove else R.string.action_love), Modifier.size(IconButtonDefaults.mediumIconSize)) }
+private fun DetailContinuation(coverArt: String?, edge: ArtworkEdge, side: Dp, artTop: Dp, header: Dp) {
+    val mirror = edge.style == ArtworkStyle.Mirror
+    val flat = edge.isFlat()
+    // Under the cover's fading foot: a mirror's [FEATHER], a flat edge's [CRISP_FEATHER].
+    val overlap = when { mirror -> side * FEATHER; flat -> side * CRISP_FEATHER; else -> 0.dp }
+    // Faded out by the header's foot, where the page's own colour takes over.
+    val height = minOf(overlap + side * CONTINUATION, (header - artTop - side + overlap).coerceAtLeast(overlap + 1.dp))
+    val density = LocalDensity.current
+    val sidePx = with(density) { side.toPx() }
+    val seamPx = with(density) { overlap.toPx() }
+    val heightPx = with(density) { height.toPx() }
+
+    /** The cover with its reflection under it, blurred as one, the seam on the cover's edge, kept down to [until] (a share of the side below the seam). */
+    @Composable
+    fun Reflected(blur: Dp, until: Float) = Box(
+        Modifier.fillMaxSize().fadeDown(seamPx, seamPx + sidePx * until).clipToBounds().layout { m, c ->
+            val s = sidePx.roundToInt().coerceAtLeast(1)
+            val p = m.measure(Constraints.fixed(c.maxWidth, 2 * s))
+            layout(c.maxWidth, c.maxHeight) { p.place(0, (seamPx - s).roundToInt()) }
+        },
+    ) {
+        Column(Modifier.fillMaxSize().blur(blur, BlurredEdgeTreatment.Rectangle)) {
+            Artwork(coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().weight(1f), RectangleShape)
+            Artwork(coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().weight(1f).graphicsLayer { scaleY = -1f }, RectangleShape)
+        }
+    }
+    Box(Modifier.wrapContentHeight(Alignment.Top, unbounded = true).padding(top = artTop + side - overlap).fillMaxWidth().height(height).clearAndSetSemantics { }.fadeDown(seamPx, heightPx)) {
+        val base = argb(edge.baseColor)
+        Box(Modifier.fillMaxSize().background(base))
+        if (flat) Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
+        else Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(soften(edge.edgeColors.map(::argb).ifEmpty { listOf(base) }, 6))))
+        if (mirror) {
+            Reflected(side * 0.08f, 0.55f)
+            Reflected(side * 0.03f, 0.12f)
+        } else if (!flat) {
+            // The cover's last rows, flipped about its edge and stretched down: the first pixel
+            // under the edge is the cover's last, so nothing fades and no seam shows.
+            Box(Modifier.fillMaxSize().fadeDown(0f, sidePx * STRETCH).clipToBounds()) {
+                Artwork(coverArt, ArtworkSizes.FULL, null, Modifier
+                    .layout { m, c ->
+                        val s = sidePx.roundToInt().coerceAtLeast(1)
+                        val p = m.measure(Constraints.fixed(c.maxWidth, s))
+                        layout(c.maxWidth, c.maxHeight) { p.place(0, -s) }
+                    }
+                    .graphicsLayer {
+                        // Two of the cover's ArtworkSizes.FULL rows over the whole stretch.
+                        val rows = 2f * sidePx / ArtworkSizes.FULL
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+                        scaleY = -(sidePx * STRETCH / rows.coerceAtLeast(1f)).coerceAtLeast(1f)
+                    }, RectangleShape)
+            }
+        }
+        // The scrim the title needs: eased in from the seam (a mirror: over its fading edge).
+        if (edge.scrim > 0.0) {
+            val scrim = (if (edge.light) Color.White else Color.Black).copy(alpha = edge.scrim.toFloat())
+            val ease = if (overlap > 0.dp) seamPx else sidePx * 0.06f
+            Box(Modifier.fillMaxSize().drawBehind { drawRect(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 1f to scrim, startY = 0f, endY = ease.coerceAtLeast(1f)), size = size) })
+        }
+    }
 }
 
-/** Download as a medium toggle; a check once the item is kept on the device. */
-@Composable
-internal fun HeroDownloadToggle(downloaded: Boolean, onBanner: Boolean, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    FilledTonalIconToggleButton(
-        checked = downloaded, onCheckedChange = onToggle, shapes = IconButtonDefaults.toggleableShapes(),
-        colors = IconButtonDefaults.filledTonalIconToggleButtonColors(containerColor = if (onBanner) app.hocket.ui.components.segmentColor() else MaterialTheme.colorScheme.surfaceContainerHigh),
-        modifier = modifier.size(IconButtonDefaults.mediumContainerSize()).testTag("detail.download"),
-    ) { Icon(if (downloaded) HocketIcons.Filled.DownloadDone else HocketIcons.Filled.Download, stringResource(if (downloaded) R.string.detail_remove_download else R.string.detail_download), Modifier.size(IconButtonDefaults.mediumIconSize)) }
-}
+/** How far an extension's stretched rows run before only its edge colours are left, as a share of the side. */
+private const val STRETCH = 0.4f
+
+/** Keeps the content in full down to [from] px, then fades it out by [to]. */
+private fun Modifier.fadeDown(from: Float, to: Float): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(Brush.verticalGradient(0f to Color.Black, 0.35f to Color.Black.copy(alpha = 0.75f), 1f to Color.Transparent, startY = from, endY = to.coerceAtLeast(from + 1f)), blendMode = BlendMode.DstIn)
+    }
 
 /** A section's heading, with an optional tonal "View more" on its right. */
 @Composable
@@ -308,39 +426,44 @@ internal fun ReleaseTile(a: Album, meta: String, onOpen: () -> Unit, onPlay: () 
 }
 
 /**
- * The floating top bar over a detail page: back and more as tonal circles over the header; once the
- * header has scrolled away ([collapsed]) the bar fills in with the page's name.
+ * The floating top bar over a detail page: back and the page's actions as bare icons over the
+ * header; once the title has scrolled under it ([collapsed]) the bar fills in with the page's colour
+ * and name. [overArt]: the icons sit over an immersive cover, whose top strip is light (true) or
+ * dark (false): dark or white icons on the cover's shade, rather than the page's colours.
  */
 @Composable
-internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, actions: @Composable RowScope.() -> Unit) {
+internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, overArt: Boolean? = null, actions: @Composable RowScope.() -> Unit) {
     val bar by animateColorAsState(if (collapsed) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, label = "detailBar")
     val titleAlpha by animateFloatAsState(if (collapsed) 1f else 0f, label = "detailBarTitle")
     Row(
         Modifier.fillMaxWidth().background(bar).statusBarsPadding().height(64.dp).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        val circle = IconButtonDefaults.filledTonalIconButtonColors(containerColor = if (collapsed) Color.Transparent else app.hocket.ui.components.segmentColor().copy(alpha = 0.8f), contentColor = MaterialTheme.colorScheme.onSurface)
+        val art = overArt.takeIf { !collapsed }
+        // Bare icons: over a cover they read on its top shade (white over a dark strip, dark over a
+        // light one), elsewhere on the page or the filled-in bar.
+        val content by animateColorAsState(when (art) { true -> Color(0xFF1C1B1F); false -> Color.White; null -> MaterialTheme.colorScheme.onSurface }, label = "detailBarIcon")
+        val circle = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color.Transparent, contentColor = content)
         if (onBack != null) FilledTonalIconButton(onClick = onBack, colors = circle, shapes = IconButtonDefaults.shapes(), modifier = Modifier.size(48.dp)) {
             Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
         }
-        Text(title.orEmpty(), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text(title.orEmpty(), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
             // Hidden until the bar fills in, and out of the accessibility tree till then (the header says it).
             modifier = Modifier.weight(1f).padding(start = 8.dp).graphicsLayer { alpha = titleAlpha }.then(if (collapsed) Modifier else Modifier.clearAndSetSemantics { }))
-        androidx.compose.runtime.CompositionLocalProvider(LocalHeroBarColors provides circle) { actions() }
+        androidx.compose.runtime.CompositionLocalProvider(LocalHeroBarColors provides circle, LocalHeroBarOverArt provides (art != null)) { actions() }
     }
 }
 
-/** The colours of the bar's circle buttons, for the page's own actions in [DetailTopBar]. */
+/** Whether the bar's icons are over an immersive cover (its shade's colours, not the page's). */
+internal val LocalHeroBarOverArt = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+/** The colours of the bar's icon buttons, for the page's own actions in [DetailTopBar]. */
 internal val LocalHeroBarColors = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.material3.IconButtonColors?> { null }
 
-/** One of the page's actions in [DetailTopBar]: a tonal circle like Back. */
+/** One of the page's actions in [DetailTopBar]: a bare icon like Back. */
 @Composable
-internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color? = null) {
     FilledTonalIconButton(onClick = onClick, enabled = enabled, colors = LocalHeroBarColors.current ?: IconButtonDefaults.filledTonalIconButtonColors(), shapes = IconButtonDefaults.shapes(), modifier = modifier.size(48.dp)) {
-        Icon(icon, label)
+        if (tint != null) Icon(icon, label, tint = tint) else Icon(icon, label)
     }
 }
-
-/** Pixel size helper for [rememberHeroMode]. */
-@Composable
-internal fun Dp.toPx(): Int = with(LocalDensity.current) { this@toPx.roundToPx() }
