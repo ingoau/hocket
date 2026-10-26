@@ -73,7 +73,7 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("view-album")).toBeVisible();
       await expect(page.getByTestId("track-row").first()).toBeVisible();
       await expectNoViolations(page, `${theme} album detail`);
-      await page.getByTestId("track-row").first().locator("a").first().click();
+      await page.getByTestId("album-artist").click();
       await expect(page.getByTestId("view-artist")).toBeVisible();
       await page.waitForTimeout(250);
       await expectNoViolations(page, `${theme} artist detail`);

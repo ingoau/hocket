@@ -112,7 +112,7 @@ test("redesigned screens", async () => {
       await expect(page.getByTestId("view-album")).toBeVisible();
       await expect(page.getByTestId("track-row").first()).toBeVisible();
       await shot("album");
-      await page.getByTestId("track-row").first().locator("a").first().click();
+      await page.getByTestId("album-artist").click();
       await expect(page.getByTestId("view-artist")).toBeVisible();
       await shot("artist");
       await page.getByTestId("content").locator(".view").evaluate((el) => el.scrollTo({ top: el.scrollHeight }));

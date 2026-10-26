@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { SK } from "@shared/settings-keys";
@@ -34,10 +35,11 @@ export function AlbumDetail({ id }: { id: string }) {
   const footnote = [a?.year ? t("album.released", { year: a.year }) : "", a?.created ? t("album.added", { date: fmtDate(a.created) }) : "", a?.playCount ? t("album.plays", { count: a.playCount }) : ""].filter(Boolean).join(" · ");
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
   // The artist column names only the tracks by someone other than the album's artist (gone when
-  // none are), or every track by the setting.
+  // none are), or every track by the setting. Decided once the album is in, so it doesn't flash.
   const allArtists = useSetting(SK.displayAlbumTrackArtists, false);
-  const anyOther = list.some((x) => !sameArtist(x.artist, a?.artist));
-  const columns: ColumnId[] = ["index", "title", ...(allArtists || anyOther ? ["artist" as const] : []), "rating", "love", "plays", "duration", "offline"];
+  const anyOther = !!a && list.some((x) => !sameArtist(x.artist, a.artist));
+  const showArtist = allArtists || anyOther;
+  const columns = useMemo<ColumnId[]>(() => ["index", "title", ...(showArtist ? ["artist" as const] : []), "rating", "love", "plays", "duration", "offline"], [showArtist]);
   const kept = a?.offline === "downloaded" || a?.offline === "downloading";
   return (
     <div className="view detail-page" data-testid="view-album">
@@ -60,7 +62,7 @@ export function AlbumDetail({ id }: { id: string }) {
           {offlineLabel(a?.offline) ? <span className="eyebrow" data-testid="album-offline">{offlineLabel(a?.offline)}</span> : null}
           <h1>{a?.name ?? ""}</h1>
           <div className="detail-sub">
-            <a href="#" className="plain-link" onClick={(e) => { e.preventDefault(); if (a?.artistId) navigate({ view: "artist", id: a.artistId }); }}>{a?.artist}</a>
+            <a href="#" className="plain-link" data-testid="album-artist" onClick={(e) => { e.preventDefault(); if (a?.artistId) navigate({ view: "artist", id: a.artistId }); }}>{a?.artist}</a>
             <span>{[a?.year, a?.genre, t("album.tracks", { count: a?.songCount ?? 0, duration: fmtDuration(a?.durationMs ?? 0) })].filter(Boolean).join(" · ")}</span>
           </div>
       </DetailHead>
