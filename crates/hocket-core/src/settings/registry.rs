@@ -567,9 +567,12 @@ pub static REGISTRY: &[SettingDef] = &[
     def(DISPLAY_PLAYER_RATING, Synced, SettingKind::Bool, || {
         json!(true)
     }),
-    def(DISPLAY_ALBUM_TRACK_ARTISTS, Synced, SettingKind::Bool, || {
-        json!(false)
-    }),
+    def(
+        DISPLAY_ALBUM_TRACK_ARTISTS,
+        Synced,
+        SettingKind::Bool,
+        || json!(false),
+    ),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,
         Synced,
