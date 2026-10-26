@@ -146,6 +146,8 @@ private fun DetailScaffold(
     eyebrow: (@Composable () -> Unit)? = null,
     below: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {},
     heroActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    /** A card joined under Play and Shuffle (an album's notes). */
+    heroFooter: (@Composable () -> Unit)? = null,
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
@@ -176,6 +178,7 @@ private fun DetailScaffold(
                                     title = if (loading) title else title.orEmpty(), coverArt = coverArt, shareKey = shareKey, round = roundArtwork,
                                     eyebrow = eyebrow.takeIf { !loading }, below = { if (loading) SkeletonLine(Modifier.padding(top = 10.dp).fillMaxWidth(0.4f), 14.dp) else below() },
                                     onTitleBottom = { titleBottom = it },
+                                    footer = heroFooter.takeIf { !loading },
                                     actions = { if (loading) { Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)); Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)) } else heroActions() },
                                 )
                             }
@@ -278,11 +281,11 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         },
         heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) }, pos = GroupPos.Middle)
             HeroMoreButton(onClick = { albumSheet = true })
         },
+        heroFooter = notes?.let { text -> { DetailNotes(text, PaddingValues(horizontal = 18.dp, vertical = 14.dp)) } },
     ) {
-        notes?.let { text -> item(key = "notes") { DetailNotes(text, Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp)) } }
         val list = tracks
         item(key = "tracks.top") { Spacer(Modifier.height(16.dp)) }
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
@@ -638,7 +641,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         },
         heroActions = {
             HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
-            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
+            HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) }, pos = GroupPos.Middle)
             HeroMoreButton(onClick = { playlistSheet = true })
         },
         overlay = {
@@ -704,12 +707,12 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             onClick = { selectMode = true }, testTag = "playlist.selectSongs")))
 }
 
-/** An album's notes: three lines, then the rest behind More (tapping anywhere on them toggles). */
+/** An album's notes, in their card: three lines, then the rest behind More (tapping anywhere on the card toggles). */
 @Composable
-private fun DetailNotes(text: String, modifier: Modifier = Modifier) {
+private fun DetailNotes(text: String, padding: PaddingValues, modifier: Modifier = Modifier) {
     var expanded by rememberSaveable(text) { mutableStateOf(false) }
     var overflows by remember(text) { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth().clickable(enabled = overflows || expanded, onClickLabel = stringResource(if (expanded) R.string.detail_notes_less else R.string.detail_notes_more)) { expanded = !expanded }.testTag("album.notes")) {
+    Column(modifier.fillMaxWidth().clickable(enabled = overflows || expanded, onClickLabel = stringResource(if (expanded) R.string.detail_notes_less else R.string.detail_notes_more)) { expanded = !expanded }.padding(padding).testTag("album.notes")) {
         Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (expanded) Int.MAX_VALUE else 3,
             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow })
         if (overflows || expanded) Text(stringResource(if (expanded) R.string.detail_notes_less else R.string.detail_notes_more), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,

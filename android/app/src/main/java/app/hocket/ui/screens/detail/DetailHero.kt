@@ -31,6 +31,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonShapes
+import androidx.compose.material3.Surface
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -180,6 +182,8 @@ internal fun DetailHero(
     actions: @Composable RowScope.() -> Unit,
     /** The title's bottom edge in the window (px), as it scrolls: the bar fills in once it passes under it. */
     onTitleBottom: (Float) -> Unit = {},
+    /** A card joined under the actions (an album's notes), or null. */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     BoxWithConstraints(Modifier.fillMaxWidth().testTag("detail.header").semantics { }) {
@@ -197,7 +201,7 @@ internal fun DetailHero(
             Box(Modifier.fillMaxWidth().height(statusTop + 120.dp).background(Brush.verticalGradient(
                 *Array(9) { i -> val t = i / 8f; t to Color.Black.copy(alpha = 0.55f * (1f - t) * (1f - t)) },
             )))
-            HeroText(title, eyebrow, below, actions, onTitleBottom, Modifier.padding(top = width + 16.dp).padding(bottom = 4.dp))
+            HeroText(title, eyebrow, below, actions, footer, onTitleBottom, Modifier.padding(top = width + 16.dp).padding(bottom = 4.dp))
         } else {
             // A glow of the cover's colour behind the tile, fading into the page.
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to lerp(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.primary, 0.14f), 1f to Color.Transparent)))
@@ -209,7 +213,7 @@ internal fun DetailHero(
                         .sharedArtworkDestination(shareKey).testTag("detail.artwork"), shape)
                     Spacer(Modifier.height(24.dp))
                 } else Spacer(Modifier.height(24.dp))
-                HeroText(title, eyebrow, below, actions, onTitleBottom, Modifier.padding(bottom = 8.dp))
+                HeroText(title, eyebrow, below, actions, footer, onTitleBottom, Modifier.padding(bottom = 8.dp))
             }
         }
     }
@@ -217,14 +221,52 @@ internal fun DetailHero(
 
 /** The title, what goes around it and the actions, centred. */
 @Composable
-private fun HeroText(title: String?, eyebrow: (@Composable () -> Unit)?, below: @Composable ColumnScope.() -> Unit, actions: @Composable RowScope.() -> Unit, onTitleBottom: (Float) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        eyebrow?.invoke()
-        HeroTitle(title, onTitleBottom)
-        below()
-        Row(Modifier.padding(top = 16.dp).widthIn(max = 420.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) { actions() }
+private fun HeroText(title: String?, eyebrow: (@Composable () -> Unit)?, below: @Composable ColumnScope.() -> Unit, actions: @Composable RowScope.() -> Unit, footer: (@Composable () -> Unit)?, onTitleBottom: (Float) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            eyebrow?.invoke()
+            HeroTitle(title, onTitleBottom)
+            below()
+        }
+        // The actions and the card under them are one connected group: round outside, a small
+        // radius wherever two of them meet; as wide as the songs under them.
+        Column(Modifier.padding(top = 16.dp, start = 16.dp, end = 16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalJoinedBelow provides (footer != null)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GROUP_GAP), verticalAlignment = Alignment.CenterVertically) { actions() }
+            }
+            footer?.let { content ->
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(topStart = GROUP_INNER, topEnd = GROUP_INNER, bottomStart = GROUP_OUTER, bottomEnd = GROUP_OUTER), modifier = Modifier.fillMaxWidth()) { content() }
+            }
+        }
     }
 }
+
+/** The actions' group: its outer corners, where two pieces meet, and the gap between them. */
+private val GROUP_OUTER = 28.dp
+private val GROUP_INNER = 8.dp
+private val GROUP_GAP = 4.dp
+
+/** Whether a card is joined under the actions (their lower corners are then inner ones). */
+private val LocalJoinedBelow = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+/** Where an action sits in its row: the first and last take the group's outer corners on their side. */
+internal enum class GroupPos { Start, Middle, End }
+
+@Composable
+private fun groupShape(pos: GroupPos): RoundedCornerShape {
+    val below = LocalJoinedBelow.current
+    val o = GROUP_OUTER
+    val i = GROUP_INNER
+    return when (pos) {
+        GroupPos.Start -> RoundedCornerShape(topStart = o, topEnd = i, bottomStart = if (below) i else o, bottomEnd = i)
+        GroupPos.Middle -> RoundedCornerShape(i)
+        GroupPos.End -> RoundedCornerShape(topStart = i, topEnd = o, bottomStart = i, bottomEnd = if (below) i else o)
+    }
+}
+
+/** A group piece's shapes: its own at rest, squarer while pressed (the Expressive press). */
+@Composable
+private fun groupButtonShapes(pos: GroupPos) = ButtonShapes(shape = groupShape(pos), pressedShape = RoundedCornerShape(GROUP_INNER))
 
 /** The page's name, large and centred; long names step down a size so they still fit in three lines. */
 @Composable
@@ -247,8 +289,8 @@ internal fun HeroLine(text: String, modifier: Modifier = Modifier, style: TextSt
 
 /** The hero's Play: a medium filled button with its label, sharing the row with Shuffle. */
 @Composable
-internal fun RowScope.HeroPlayButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Button(onClick = onClick, shapes = ButtonDefaults.shapes(), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.play"),
+internal fun RowScope.HeroPlayButton(onClick: () -> Unit, modifier: Modifier = Modifier, pos: GroupPos = GroupPos.Start) {
+    Button(onClick = onClick, shapes = groupButtonShapes(pos), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.play"),
         contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
         Icon(HocketIcons.Filled.PlayArrow, null, Modifier.size(ButtonDefaults.MediumIconSize))
         Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
@@ -258,8 +300,8 @@ internal fun RowScope.HeroPlayButton(onClick: () -> Unit, modifier: Modifier = M
 
 /** Shuffle beside Play: the same size, tonal. */
 @Composable
-internal fun RowScope.HeroShuffleButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    FilledTonalButton(onClick = onClick, shapes = ButtonDefaults.shapes(), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.shuffle"),
+internal fun RowScope.HeroShuffleButton(onClick: () -> Unit, modifier: Modifier = Modifier, pos: GroupPos = GroupPos.End) {
+    FilledTonalButton(onClick = onClick, shapes = groupButtonShapes(pos), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.shuffle"),
         colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest, contentColor = MaterialTheme.colorScheme.onSurface),
         contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
         Icon(HocketIcons.Filled.Shuffle, null, Modifier.size(ButtonDefaults.MediumIconSize))
@@ -268,10 +310,10 @@ internal fun RowScope.HeroShuffleButton(onClick: () -> Unit, modifier: Modifier 
     }
 }
 
-/** The page's menu beside Play and Shuffle: a medium round tonal button. */
+/** The page's menu beside Play and Shuffle: a medium tonal icon button, last in the group. */
 @Composable
 internal fun HeroMoreButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    FilledTonalIconButton(onClick = onClick, shapes = IconButtonDefaults.shapes(),
+    FilledTonalIconButton(onClick = onClick, shapes = androidx.compose.material3.IconButtonShapes(shape = groupShape(GroupPos.End), pressedShape = RoundedCornerShape(GROUP_INNER)),
         colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest, contentColor = MaterialTheme.colorScheme.onSurface),
         modifier = modifier.size(ButtonDefaults.MediumContainerHeight).testTag("detail.more")) {
         Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), Modifier.size(ButtonDefaults.MediumIconSize))
