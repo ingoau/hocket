@@ -193,23 +193,3 @@ private fun SavedQueueRow(sq: SavedQueue, index: Int, count: Int, onRename: () -
         ) { Text(sq.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }
-
-/**
- * Full-screen route for Queues (Home "see all", Library "Recent queues"): the playing queue, then the
- * pinned and recent ones. The undo history is out for now (issue #127).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SavedQueuesScreen(nav: NavHostController) {
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text(stringResource(R.string.queues_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
-            actions = {
-                AccountButton()
-            },
-            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-        )
-    }) { padding ->
-        RecentQueuesList(Modifier.fillMaxSize().padding(padding))
-    }
-}

@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -151,7 +152,9 @@ fun SearchScreen(nav: NavHostController) {
     }
 
     var kind by rememberSaveable { mutableStateOf(SearchKind.All) }
-    LaunchedEffect(query) { if (query.isBlank()) kind = SearchKind.All }
+    // A new query starts back on All: the kind picked for the last one may have nothing here.
+    var kindQuery by rememberSaveable { mutableStateOf(query) }
+    LaunchedEffect(query) { if (query != kindQuery) { kindQuery = query; kind = SearchKind.All } }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             // The M3 search bar: a full-round 56dp field on the highest container, no outline.
@@ -217,7 +220,7 @@ fun SearchScreen(nav: NavHostController) {
                         Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Songs }) {
                             Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.songs.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                                 Text(stringResource(R.string.search_see_all_songs), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                                Text(stringResource(R.string.search_songs_count, results.tracks.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(pluralStringResource(R.plurals.search_songs_count, results.tracks.size, results.tracks.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }

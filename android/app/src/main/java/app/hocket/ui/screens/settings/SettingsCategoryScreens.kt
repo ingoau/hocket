@@ -240,7 +240,7 @@ private fun HomeScreenSection() {
             runCatching { widgets.requestPinAppWidget(android.content.ComponentName(context, app.hocket.playback.NowPlayingWidget::class.java), null, null) }
         }, tag = "widget.add")
     }
-    SettingsSection(stringResource(R.string.settings_shortcuts))
+    SettingsSection(stringResource(R.string.settings_shortcuts), tag = "home.shortcuts")
     Text(stringResource(R.string.settings_shortcuts_summary, AppShortcuts.MAX), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
     AppShortcut.entries.forEach { shortcut ->
         val on = shortcut in current

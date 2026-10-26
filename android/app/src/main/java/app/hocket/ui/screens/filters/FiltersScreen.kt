@@ -96,7 +96,7 @@ fun FiltersScreen(nav: NavHostController) {
                             Icon(HocketIcons.Outlined.FilterAlt, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
                         }
                     },
-                    supportingContent = { Text(describe(f), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    supportingContent = { Text(describe(androidx.compose.ui.platform.LocalContext.current.resources, f), maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     trailingContent = {
                         Row {
                             IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.filter_play_named, f.name), tint = MaterialTheme.colorScheme.primary) }
@@ -117,7 +117,7 @@ fun FiltersScreen(nav: NavHostController) {
 }
 
 @Composable
-fun describe(f: Filter): String = FilterText.describe(f.root)
+fun describe(res: android.content.res.Resources, f: Filter): String = FilterText.describe(res, f.root)
 
 /** Whether a filter only works here (it reads what is on this device): the boards' "This device". */
 private fun preview(f: Filter): Boolean = uses(f.root) { FilterText.isLocal(it) }

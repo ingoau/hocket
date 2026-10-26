@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.nav.AppRoot
+import app.hocket.ui.screens.settings.SETTINGS_INDEX
 import app.hocket.ui.screens.settings.SettingsCategory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -109,7 +110,9 @@ class SettingsCategoriesTest {
             val rows = rowsOnScreen()
             val old = screenCategories[category]
             if (old != null) {
-                assertTrue("${category.id} is one of the older sub-screens and has no page rows of its own: $rows", rows.isEmpty())
+                // Its rows are only the settings search's jump targets on it, not page rows of the old list.
+                val anchors = SETTINGS_INDEX.filter { it.category == category }.map { it.tag }.toSet()
+                assertTrue("${category.id} is one of the older sub-screens; its only tagged rows are search targets: $rows", anchors.containsAll(rows))
                 seen += old
             } else {
                 assertEquals("rows of ${category.id}", expected.getValue(category), rows.toSet())

@@ -69,6 +69,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -121,6 +122,7 @@ internal fun PlayerAbout(
     val albumId = summary?.albumId
     val artistId = summary?.artistId
     val album by produceState<Album?>(initialValue = null, albumId) {
+        value = null
         value = albumId?.let { (client.query(Queries.album(it)) as? QueryResult.AlbumDetail)?.data }
     }
     val albumInfo by produceState<ExternalInfo?>(initialValue = null, albumId) {
@@ -295,8 +297,10 @@ private fun AboutTab(albumInfo: ExternalInfo?, artistInfo: ExternalInfo?, simila
                     similar.chunked(2).forEach { row ->
                         Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             row.forEach { r ->
-                                Surface(onClick = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
-                                    .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}" }) {
+                                val playNext = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }
+                                val playNextLabel = stringResource(R.string.action_play_next)
+                                Surface(onClick = playNext, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
+                                    .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true } }) {
                                     Row(Modifier.heightIn(min = 56.dp).padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                         Artwork(r.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(44.dp), RoundedCornerShape(12.dp))
                                         Column(Modifier.weight(1f)) {
@@ -329,12 +333,13 @@ private fun AboutTab(albumInfo: ExternalInfo?, artistInfo: ExternalInfo?, simila
             }
         } }
         val lastFm = artistInfo?.lastFmUrl ?: albumInfo?.lastFmUrl
-        val mbid = albumInfo?.musicBrainzId ?: artistInfo?.musicBrainzId
+        // The album's id is a MusicBrainz release, the artist's an artist.
+        val mbid = albumInfo?.musicBrainzId?.let { "release/$it" } ?: artistInfo?.musicBrainzId?.let { "artist/$it" }
         if (lastFm != null || mbid != null) add { shape ->
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                 val tonal = ButtonDefaults.filledTonalButtonColors()
                 lastFm?.let { url -> FilledTonalButton(onClick = { runCatching { uri.openUri(url) } }, colors = tonal, shape = if (mbid != null) corners(bs = Big) else corners(bs = Big, be = Big), modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("Last.fm"); Spacer(Modifier.width(8.dp)); Icon(HocketIcons.Filled.OpenInNew, null, Modifier.size(18.dp)) } }
-                mbid?.let { m -> FilledTonalButton(onClick = { runCatching { uri.openUri("https://musicbrainz.org/release/$m") } }, colors = tonal, shape = if (lastFm != null) corners(be = Big) else corners(bs = Big, be = Big), modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("MusicBrainz"); Spacer(Modifier.width(8.dp)); Icon(HocketIcons.Filled.OpenInNew, null, Modifier.size(18.dp)) } }
+                mbid?.let { m -> FilledTonalButton(onClick = { runCatching { uri.openUri("https://musicbrainz.org/$m") } }, colors = tonal, shape = if (lastFm != null) corners(be = Big) else corners(bs = Big, be = Big), modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("MusicBrainz"); Spacer(Modifier.width(8.dp)); Icon(HocketIcons.Filled.OpenInNew, null, Modifier.size(18.dp)) } }
             }
         }
     }
@@ -380,7 +385,7 @@ private fun FileTab(d: Track?) {
             }
         }
         Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(gap)) {
-            Tile(stringResource(R.string.player_about_bitrate), corners(), Modifier.weight(1f).fillMaxHeight()) { TileValue(d.bitRate?.takeIf { it > 0u }?.toString() ?: "–", d.bitRate?.takeIf { it > 0u }?.let { " kbps" }) }
+            Tile(stringResource(R.string.player_about_bitrate), corners(), Modifier.weight(1f).fillMaxHeight()) { TileValue(d.bitRate?.takeIf { it > 0u }?.toString() ?: "–", d.bitRate?.takeIf { it > 0u }?.let { " " + stringResource(R.string.about_kbps) }) }
             Tile(stringResource(R.string.player_about_size), corners(), Modifier.weight(1f).fillMaxHeight()) {
                 val size = d.sizeBytes?.takeIf { it > 0.0 }?.let { formatBytes(it) }
                 val (n, unit) = size?.split(' ', limit = 2)?.let { it[0] to it.getOrNull(1) } ?: ("–" to null)
@@ -389,7 +394,7 @@ private fun FileTab(d: Track?) {
         }
         val rg = d.replayGain
         val last = listOfNotNull(d.path?.takeIf { it.isNotBlank() }, d.musicBrainzId?.takeIf { it.isNotBlank() }).isEmpty()
-        if (rg?.trackGainDb != null || rg?.albumGainDb != null) Tile("ReplayGain", if (last) corners(bs = Big, be = Big) else corners(), Modifier.fillMaxWidth(), minHeight = 64.dp) {
+        if (rg?.trackGainDb != null || rg?.albumGainDb != null) Tile(stringResource(R.string.about_replaygain), if (last) corners(bs = Big, be = Big) else corners(), Modifier.fillMaxWidth(), minHeight = 64.dp) {
             Text(listOfNotNull(
                 rg.trackGainDb?.let { g -> stringResource(R.string.about_rg_track, db(g)) + (rg.trackPeak?.let { p -> stringResource(R.string.about_rg_peak, String.format(Locale.getDefault(), "%.2f", p)) } ?: "") },
                 rg.albumGainDb?.let { g -> stringResource(R.string.about_rg_album, db(g)) },

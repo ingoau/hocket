@@ -23,7 +23,7 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.ui.components.ArtworkPathCache
 import app.hocket.ui.player.HandoffSheet
 import app.hocket.ui.player.PlayerAbout
-import app.hocket.ui.queue.SavedQueuesScreen
+import app.hocket.ui.player.QueuesSheet
 import app.hocket.ui.screens.detail.AlbumDetailScreen
 import app.hocket.ui.screens.detail.ArtistDetailScreen
 import app.hocket.ui.screens.detail.PlaylistDetailScreen
@@ -65,8 +65,8 @@ class RedesignScreenshotTest {
     private val outDir: File? = (System.getProperty("hocket.screenshotDir") ?: System.getenv("HOCKET_SCREENSHOT_DIR"))
         ?.takeIf { it.isNotBlank() }?.let(::File)
 
-    @Test @Config(qualifiers = "+notnight") fun queuesLight() = capture("light-queues") { SavedQueuesScreen(rememberNavController()) }
-    @Test @Config(qualifiers = "+night") fun queuesDark() = capture("dark-queues") { SavedQueuesScreen(rememberNavController()) }
+    @Test @Config(qualifiers = "+notnight") fun queuesLight() = capture("light-queues", sheet = true) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { QueuesSheet(onDismiss = {}) } }
+    @Test @Config(qualifiers = "+night") fun queuesDark() = capture("dark-queues", sheet = true) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { QueuesSheet(onDismiss = {}) } }
 
     @Test @Config(qualifiers = "+notnight")
     fun playOn() = capture("light-play-on", sheet = true) {

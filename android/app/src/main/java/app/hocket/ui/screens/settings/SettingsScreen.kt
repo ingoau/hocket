@@ -48,6 +48,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -97,7 +100,7 @@ enum class SettingsCategory(val id: String, val route: Route) {
 }
 
 /**
- * Top-level settings: the account card, then one row per category (leading icon, title, chevron),
+ * Top-level settings: a search bar over every setting (see SettingsSearch), the account card, then one row per category (leading icon, title, chevron),
  * grouped in cards under headings (no summaries: they cluttered the list); each opens its own sub-screen. Every setting lives in exactly
  * one category.
  */
@@ -119,12 +122,22 @@ fun SettingsScreen(nav: NavHostController) {
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
-            SettingsCategory.GROUPS.forEach { (titleRes, group) ->
-                Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                    GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
-                    group.forEachIndexed { i, category ->
-                        CategoryRow(category, i, group.size, onClick = { nav.navigate(category.route) })
+            // Typing swaps the account card and categories for the matching settings; picking one
+            // opens its screen scrolled to it (SettingsJump). The query stays, so Back returns to the results.
+            var query by rememberSaveable { mutableStateOf("") }
+            val hits = rememberSettingsHits(query)
+            val open = { h: SettingsHit -> SettingsJump.request(h.tag); nav.navigate(h.category.route) }
+            SettingsSearchField(query, { query = it }, onSubmit = { hits.firstOrNull()?.let(open) })
+            if (query.isNotBlank()) {
+                SettingsSearchResults(hits, query, onPick = open)
+            } else {
+                AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
+                SettingsCategory.GROUPS.forEach { (titleRes, group) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                        GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
+                        group.forEachIndexed { i, category ->
+                            CategoryRow(category, i, group.size, onClick = { nav.navigate(category.route) })
+                        }
                     }
                 }
             }
@@ -159,7 +172,7 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
                 // The category's name for a screen reader: the card opens Account & server.
                 val accountLabel = str(R.string.settings_category_account)
                 Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.headlineMedium.merge(brandTitleStyle()), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.semantics { contentDescription = "${s?.username ?: ""}, $accountLabel" })
+                    modifier = Modifier.semantics { contentDescription = listOfNotNull(s?.username?.takeIf { it.isNotBlank() }, accountLabel).joinToString(", ") })
                 if (s != null) {
                     val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
                     Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -167,7 +180,8 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
             }
             if (s != null) {
                 Spacer(Modifier.height(8.dp))
-                val syncing = sync != null
+                // The core keeps the last progress (finished) after a sync, so only an unfinished one for this server is syncing.
+                val syncing = sync?.let { !it.finished && it.serverId == s.id } == true
                 Button(onClick = { client.dispatch(Commands.syncLibrary(s.id, false)) }, enabled = !syncing, shapes = ButtonDefaults.shapes(), modifier = Modifier.heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("settings.account.sync"),
                     contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
                     Icon(HocketIcons.Filled.Sync, null, Modifier.size(ButtonDefaults.MediumIconSize))

@@ -103,62 +103,104 @@ import app.hocket.ui.screens.library.sortLabel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import java.util.UUID
+import android.content.res.Resources
 
 /** Human text for a rule tree, and the field/op vocabulary (a superset of NSP, design: filters). */
 object FilterText {
     /** A filter's rules in one line: "Rating is 5 and Duration less than 4:00", a nested group in brackets. */
-    fun describe(node: FilterNode, nested: Boolean = false): String = when (node) {
-        is FilterNode.Rule -> "${fieldLabel(node.data.field)} ${condition(node.data)}"
+    fun describe(res: Resources, node: FilterNode, nested: Boolean = false): String = when (node) {
+        is FilterNode.Rule -> "${fieldLabel(res, node.data.field)} ${condition(res, node.data)}"
         else -> {
-            val parts = (if (node is FilterNode.Any) node.data else (node as FilterNode.All).data).map { describe(it, true) }.filter { it.isNotEmpty() }
-            val text = parts.joinToString(if (node is FilterNode.Any) " or " else " and ")
-            if (nested && parts.size > 1) "($text)" else text
+            val parts = (if (node is FilterNode.Any) node.data else (node as FilterNode.All).data).map { describe(res, it, true) }.filter { it.isNotEmpty() }
+            val text = parts.joinToString(res.getString(if (node is FilterNode.Any) R.string.filter_join_or else R.string.filter_join_and))
+            if (nested && parts.size > 1) res.getString(R.string.filter_nested, text) else text
         }
     }
 
     private val FIELD_NAMES = mapOf(
-        FilterField.Bpm to "BPM", FilterField.BitRate to "Bit rate", FilterField.FilePath to "File path", FilterField.FileType to "File type",
-        FilterField.HasCoverArt to "Has cover art", FilterField.LocalPlayCount to "Plays on this device", FilterField.LocalLastPlayed to "Last played on this device",
-        FilterField.AvailableOffline to "Available offline",
+        FilterField.Title to R.string.filter_field_title,
+        FilterField.Album to R.string.filter_field_album,
+        FilterField.Artist to R.string.filter_field_artist,
+        FilterField.AlbumArtist to R.string.filter_field_album_artist,
+        FilterField.Genre to R.string.filter_field_genre,
+        FilterField.Year to R.string.filter_field_year,
+        FilterField.DateAdded to R.string.filter_field_date_added,
+        FilterField.DateModified to R.string.filter_field_date_modified,
+        FilterField.LastPlayed to R.string.filter_field_last_played,
+        FilterField.PlayCount to R.string.filter_field_play_count,
+        FilterField.Rating to R.string.filter_field_rating,
+        FilterField.Loved to R.string.filter_field_loved,
+        FilterField.Duration to R.string.filter_field_duration,
+        FilterField.BitRate to R.string.filter_field_bit_rate,
+        FilterField.FilePath to R.string.filter_field_file_path,
+        FilterField.FileType to R.string.filter_field_file_type,
+        FilterField.Comment to R.string.filter_field_comment,
+        FilterField.Lyrics to R.string.filter_field_lyrics,
+        FilterField.HasCoverArt to R.string.filter_field_has_cover_art,
+        FilterField.Compilation to R.string.filter_field_compilation,
+        FilterField.DiscNumber to R.string.filter_field_disc_number,
+        FilterField.TrackNumber to R.string.filter_field_track_number,
+        FilterField.Bpm to R.string.filter_field_bpm,
+        FilterField.Key to R.string.filter_field_key,
+        FilterField.Energy to R.string.filter_field_energy,
+        FilterField.Mood to R.string.filter_field_mood,
+        FilterField.Downloaded to R.string.filter_field_downloaded,
+        FilterField.Cached to R.string.filter_field_cached,
+        FilterField.AvailableOffline to R.string.filter_field_available_offline,
+        FilterField.LocalPlayCount to R.string.filter_field_local_play_count,
+        FilterField.LocalLastPlayed to R.string.filter_field_local_last_played,
+        FilterField.InPlaylist to R.string.filter_field_in_playlist,
     )
 
-    /** "dateAdded" → "Date added", unless it has a name of its own (the desktop's labels). */
-    fun fieldLabel(f: FilterField): String = FIELD_NAMES[f] ?: f.string.replace(Regex("([A-Z])"), " $1").lowercase().replaceFirstChar { it.uppercase() }
+    fun fieldLabel(res: Resources, f: FilterField): String = res.getString(FIELD_NAMES.getValue(f))
 
-    fun opLabel(op: FilterOp): String = when (op) {
-        FilterOp.Is -> "is"; FilterOp.IsNot -> "is not"; FilterOp.Contains -> "contains"; FilterOp.NotContains -> "doesn’t contain"
-        FilterOp.StartsWith -> "starts with"; FilterOp.EndsWith -> "ends with"; FilterOp.Gt -> "greater than"; FilterOp.Lt -> "less than"
-        FilterOp.InTheRange -> "in the range"; FilterOp.Before -> "before"; FilterOp.After -> "after"; FilterOp.InTheLast -> "in the last"
-        FilterOp.NotInTheLast -> "not in the last"; FilterOp.IsTrue -> "is true"; FilterOp.IsFalse -> "is false"
-    }
+    private val OP_NAMES = mapOf(
+        FilterOp.Is to R.string.filter_op_is,
+        FilterOp.IsNot to R.string.filter_op_is_not,
+        FilterOp.Contains to R.string.filter_op_contains,
+        FilterOp.NotContains to R.string.filter_op_not_contains,
+        FilterOp.StartsWith to R.string.filter_op_starts_with,
+        FilterOp.EndsWith to R.string.filter_op_ends_with,
+        FilterOp.Gt to R.string.filter_op_gt,
+        FilterOp.Lt to R.string.filter_op_lt,
+        FilterOp.InTheRange to R.string.filter_op_in_the_range,
+        FilterOp.Before to R.string.filter_op_before,
+        FilterOp.After to R.string.filter_op_after,
+        FilterOp.InTheLast to R.string.filter_op_in_the_last,
+        FilterOp.NotInTheLast to R.string.filter_op_not_in_the_last,
+        FilterOp.IsTrue to R.string.filter_op_is_true,
+        FilterOp.IsFalse to R.string.filter_op_is_false,
+    )
+
+    fun opLabel(res: Resources, op: FilterOp): String = res.getString(OP_NAMES.getValue(op))
 
     private fun num(field: FilterField, n: Double): String = if (field == FilterField.Duration) app.hocket.ui.components.formatClock((n * 1000).toLong()) else n.toString().removeSuffix(".0")
 
     /** A rule's condition and value as it reads in the list ("is “Ambient”", "less than 4:00"). */
-    fun condition(rule: FilterRule): String {
-        val op = opLabel(rule.op)
+    fun condition(res: Resources, rule: FilterRule): String {
+        val op = opLabel(res, rule.op)
         return when (val v = rule.value) {
-            is FilterValue.Text -> "$op “${v.data}”"
-            is FilterValue.Number -> "$op ${num(rule.field, v.data)}"
-            is FilterValue.Range -> "$op ${num(rule.field, v.data.low)}–${num(rule.field, v.data.high)}"
-            is FilterValue.Date -> "$op ${v.data}"
-            is FilterValue.Days -> "$op ${v.data} days"
+            is FilterValue.Text -> res.getString(R.string.filter_cond_text, op, v.data)
+            is FilterValue.Number -> res.getString(R.string.filter_cond_value, op, num(rule.field, v.data))
+            is FilterValue.Range -> res.getString(R.string.filter_cond_range, op, num(rule.field, v.data.low), num(rule.field, v.data.high))
+            is FilterValue.Date -> res.getString(R.string.filter_cond_value, op, v.data)
+            is FilterValue.Days -> res.getQuantityString(R.plurals.filter_cond_days, v.data.toInt(), op, v.data.toInt())
             is FilterValue.Bool -> op
-            is FilterValue.List -> "$op " + v.data.joinToString(", ") { "“$it”" }
+            is FilterValue.List -> res.getString(R.string.filter_cond_value, op, v.data.joinToString(", ") { res.getString(R.string.filter_quoted, it) })
         }
     }
 
     private val LOCAL_FIELDS = listOf(FilterField.Downloaded, FilterField.Cached, FilterField.AvailableOffline, FilterField.LocalPlayCount, FilterField.LocalLastPlayed, FilterField.InPlaylist)
 
-    /** The rule sheet's field chips, by what they describe. */
-    val fieldGroups: List<Pair<String, List<FilterField>>> by lazy {
+    /** The rule sheet's field chips, by what they describe (string resources for the group names). */
+    val fieldGroups: List<Pair<Int, List<FilterField>>> by lazy {
         val groups = listOf(
-            "Song" to listOf(FilterField.Title, FilterField.Genre, FilterField.Year, FilterField.Duration, FilterField.Comment, FilterField.Lyrics, FilterField.DiscNumber, FilterField.TrackNumber),
-            "Album and artist" to listOf(FilterField.Album, FilterField.Artist, FilterField.AlbumArtist, FilterField.Compilation),
-            "Plays and ratings" to listOf(FilterField.PlayCount, FilterField.Rating, FilterField.Loved, FilterField.LastPlayed, FilterField.DateAdded, FilterField.DateModified),
-            "Sound" to listOf(FilterField.Bpm, FilterField.Energy, FilterField.Key, FilterField.Mood, FilterField.BitRate, FilterField.FileType),
-            "File" to listOf(FilterField.FilePath, FilterField.HasCoverArt),
-            "This device" to LOCAL_FIELDS,
+            R.string.filter_group_song to listOf(FilterField.Title, FilterField.Genre, FilterField.Year, FilterField.Duration, FilterField.Comment, FilterField.Lyrics, FilterField.DiscNumber, FilterField.TrackNumber),
+            R.string.filter_group_album_artist to listOf(FilterField.Album, FilterField.Artist, FilterField.AlbumArtist, FilterField.Compilation),
+            R.string.filter_group_plays to listOf(FilterField.PlayCount, FilterField.Rating, FilterField.Loved, FilterField.LastPlayed, FilterField.DateAdded, FilterField.DateModified),
+            R.string.filter_group_sound to listOf(FilterField.Bpm, FilterField.Energy, FilterField.Key, FilterField.Mood, FilterField.BitRate, FilterField.FileType),
+            R.string.filter_group_file to listOf(FilterField.FilePath, FilterField.HasCoverArt),
+            R.string.filter_group_device to LOCAL_FIELDS,
         )
         val rest = FilterField.entries.filter { f -> groups.none { f in it.second } }
         groups.mapIndexed { i, g -> if (i == 0) g.first to g.second + rest else g }
@@ -198,6 +240,7 @@ object FilterText {
 @Composable
 fun FilterBuilderScreen(nav: NavHostController, id: String?) {
     val client = LocalCoreClient.current
+    val res = LocalContext.current.resources
     val context = LocalContext.current
     val server by client.server.collectAsStateWithLifecycle()
     val saved by client.filters.collectAsStateWithLifecycle()
@@ -235,14 +278,14 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
         bottomBar = {
             // The live count and what the filter can become, over its outputs: Play (with the rest behind its arrow) and Share.
             Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp), shadowElevation = 4.dp) {
-                Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = app.hocket.ui.nav.BottomOverlayInset + 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val p = preview
                     Column(Modifier.padding(horizontal = 4.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
                         Text(stringResource(R.string.filter_count, p?.count?.toInt() ?: 0), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                         val cap = p?.capability
                         if (cap != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Icon(if (cap.serverExpressible) HocketIcons.Filled.Check else HocketIcons.Filled.Info, null, Modifier.size(16.dp), tint = if (cap.serverExpressible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(if (cap.serverExpressible) stringResource(R.string.filter_server_ok) else stringResource(R.string.filter_local_only, cap.localOnlyFields.joinToString { FilterText.fieldLabel(it) }),
+                            Text(if (cap.serverExpressible) stringResource(R.string.filter_server_ok) else stringResource(R.string.filter_local_only, cap.localOnlyFields.joinToString { FilterText.fieldLabel(res, it) }),
                                 style = MaterialTheme.typography.labelLarge, color = if (cap.serverExpressible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (server?.capabilities?.nativeApi == false) Text(stringResource(R.string.filter_smart_unavailable), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -257,7 +300,7 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
                                     }
                                 },
                                 trailingButton = {
-                                    SplitButtonDefaults.TrailingButton(checked = menu, onCheckedChange = { menu = it }, modifier = Modifier.heightIn(min = 56.dp).semantics { contentDescription = "" }) {
+                                    SplitButtonDefaults.TrailingButton(checked = menu, onCheckedChange = { menu = it }, modifier = Modifier.heightIn(min = 56.dp)) {
                                         Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.filter_more_outputs))
                                     }
                                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -308,10 +351,11 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
                     }
                     Segment(2, 3) {
                         Row(Modifier.heightIn(min = 60.dp).padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.filter_limit), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            val limitLabel = stringResource(R.string.filter_limit)
+                            Text(limitLabel, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                             OutlinedTextField(value = filter.limit?.toString() ?: "", onValueChange = { filter = filter.copy(limit = it.toUIntOrNull()) }, placeholder = { Text(stringResource(R.string.filter_no_limit), textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth()) },
                                 singleLine = true, shape = RoundedCornerShape(12.dp), textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = TextAlign.End),
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.width(128.dp).semantics { contentDescription = "" })
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.width(128.dp).semantics { contentDescription = limitLabel })
                         }
                     }
                 }
@@ -328,8 +372,9 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
     editing?.let { path ->
         val rule = (nodeAt(filter.root, path) as? FilterNode.Rule)?.data
         if (rule == null) editing = null
+        // The only top-level rule stays (its × is hidden too): removing it would leave a filter matching everything.
         else RuleSheet(rule, onChange = { filter = filter.copy(root = replaceAt(filter.root, path, FilterNode.Rule(it))) },
-            onRemove = { filter = filter.copy(root = removeAt(filter.root, path)); editing = null }, onDismiss = { editing = null })
+            onRemove = { filter = filter.copy(root = removeAt(filter.root, path)); editing = null }.takeUnless { path.size == 1 && children(filter.root).size == 1 }, onDismiss = { editing = null })
     }
     namingFor?.let { kind ->
         androidx.compose.material3.AlertDialog(onDismissRequest = { namingFor = null }, title = { Text(stringResource(if (kind == "smart") R.string.filter_create_smart else R.string.filter_create_static)) },
@@ -349,9 +394,16 @@ private fun withChildren(node: FilterNode, list: List<FilterNode>): FilterNode =
 private fun nodeAt(root: FilterNode, path: List<Int>): FilterNode? = if (path.isEmpty()) root else children(root).getOrNull(path.first())?.let { nodeAt(it, path.drop(1)) }
 private fun replaceAt(root: FilterNode, path: List<Int>, new: FilterNode): FilterNode =
     if (path.isEmpty()) new else withChildren(root, children(root).toMutableList().also { it[path.first()] = replaceAt(it[path.first()], path.drop(1), new) })
-private fun removeAt(root: FilterNode, path: List<Int>): FilterNode =
-    if (path.size == 1) withChildren(root, children(root).toMutableList().also { it.removeAt(path.first()) })
-    else withChildren(root, children(root).toMutableList().also { it[path.first()] = removeAt(it[path.first()], path.drop(1)) })
+/** Removes the node at [path]; a nested group left empty goes too (an empty Any matches nothing). */
+private fun removeAt(root: FilterNode, path: List<Int>): FilterNode {
+    val kids = children(root).toMutableList()
+    if (path.size == 1) kids.removeAt(path.first())
+    else {
+        val child = removeAt(kids[path.first()], path.drop(1))
+        if (child !is FilterNode.Rule && children(child).isEmpty()) kids.removeAt(path.first()) else kids[path.first()] = child
+    }
+    return withChildren(root, kids)
+}
 
 private fun newRule(): FilterNode = FilterNode.Rule(FilterRule(FilterField.Artist, FilterOp.Contains, FilterValue.Text("")))
 
@@ -390,11 +442,15 @@ private fun RulesGroup(node: FilterNode, path: List<Int>, top: Boolean, onChange
                 is FilterNode.Rule -> Surface(onClick = { onEdit(path + i) }, shape = shape, color = segmentColor(), modifier = Modifier.fillMaxWidth().testTag("filter.rule")) {
                     Row(Modifier.heightIn(min = if (top) 60.dp else 56.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                            Text(FilterText.fieldLabel(child.data.field), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(FilterText.condition(child.data), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(FilterText.fieldLabel(LocalContext.current.resources, child.data.field), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(FilterText.condition(LocalContext.current.resources, child.data), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        if (list.size > 1 || !top) IconButton(onClick = { onChange(withChildren(node, list.toMutableList().also { it.removeAt(i) })) }) {
-                            Icon(HocketIcons.Filled.Close, stringResource(R.string.filter_remove_named, FilterText.fieldLabel(child.data.field)))
+                        if (list.size > 1 || !top) IconButton(onClick = {
+                            // A nested group's last rule takes the group with it.
+                            val rest = list.toMutableList().also { it.removeAt(i) }
+                            if (rest.isEmpty() && onRemove != null) onRemove() else onChange(withChildren(node, rest))
+                        }) {
+                            Icon(HocketIcons.Filled.Close, stringResource(R.string.filter_remove_named, FilterText.fieldLabel(LocalContext.current.resources, child.data.field)))
                         }
                     }
                 }
@@ -423,20 +479,20 @@ private fun RulesGroup(node: FilterNode, path: List<Int>, top: Boolean, onChange
  * field has, its value; Remove rule, and Done (changes apply as they are made).
  */
 @Composable
-private fun RuleSheet(rule: FilterRule, onChange: (FilterRule) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+private fun RuleSheet(rule: FilterRule, onChange: (FilterRule) -> Unit, onRemove: (() -> Unit)?, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("filter.ruleSheet")) {
         Column(Modifier.navigationBarsPadding().padding(start = 16.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("${FilterText.fieldLabel(rule.field)} ${FilterText.condition(rule)}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            Text("${FilterText.fieldLabel(LocalContext.current.resources, rule.field)} ${FilterText.condition(LocalContext.current.resources, rule)}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 4.dp).semantics { heading() })
             SheetLabel(stringResource(R.string.filter_field))
             Surface(shape = RoundedCornerShape(20.dp), color = segmentColor()) {
                 Column(Modifier.fillMaxWidth().heightIn(max = 196.dp).verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     FilterText.fieldGroups.forEach { (label, fields) ->
-                        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, top = 10.dp, bottom = 6.dp))
+                        Text(stringResource(label), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, top = 10.dp, bottom = 6.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.selectableGroup()) {
                             fields.forEach { f ->
                                 FilterChip(selected = rule.field == f, onClick = { if (rule.field != f) { val op = FilterText.opsFor(f).first(); onChange(FilterRule(f, op, FilterText.defaultValue(f, op))) } },
-                                    label = { Text(FilterText.fieldLabel(f)) }, modifier = Modifier.semantics { role = Role.RadioButton })
+                                    label = { Text(FilterText.fieldLabel(LocalContext.current.resources, f)) }, modifier = Modifier.semantics { role = Role.RadioButton })
                             }
                         }
                     }
@@ -445,14 +501,14 @@ private fun RuleSheet(rule: FilterRule, onChange: (FilterRule) -> Unit, onRemove
             SheetLabel(stringResource(R.string.filter_op))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.selectableGroup()) {
                 FilterText.opsFor(rule.field).forEach { op ->
-                    FilterChip(selected = rule.op == op, onClick = { if (rule.op != op) onChange(rule.copy(op = op, value = FilterText.defaultValue(rule.field, op))) }, label = { Text(FilterText.opLabel(op)) },
+                    FilterChip(selected = rule.op == op, onClick = { if (rule.op != op) onChange(rule.copy(op = op, value = FilterText.defaultValue(rule.field, op))) }, label = { Text(FilterText.opLabel(LocalContext.current.resources, op)) },
                         modifier = Modifier.semantics { role = Role.RadioButton })
                 }
             }
             ValueEditor(rule.value, onChange = { onChange(rule.copy(value = it)) })
             if (FilterText.isLocal(rule.field)) Text(stringResource(R.string.filter_rule_local), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), modifier = Modifier.heightIn(min = 52.dp)) { Text(stringResource(R.string.filter_remove_rule)) }
+                if (onRemove != null) TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), modifier = Modifier.heightIn(min = 52.dp)) { Text(stringResource(R.string.filter_remove_rule)) }
                 Spacer(Modifier.weight(1f))
                 Button(onClick = onDismiss, shapes = ButtonDefaults.shapes(), modifier = Modifier.heightIn(min = 52.dp).testTag("filter.ruleSheet.done")) { Text(stringResource(R.string.action_done)) }
             }

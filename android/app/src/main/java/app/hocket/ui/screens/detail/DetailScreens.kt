@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -330,6 +331,11 @@ private sealed interface ArtistView {
     data class Releases(val kind: ReleaseKind) : ArtistView
 }
 
+private val ArtistViewSaver = androidx.compose.runtime.saveable.Saver<ArtistView?, String>(
+    save = { v -> when (v) { null -> null; ArtistView.TopSongs -> "top"; is ArtistView.Releases -> v.kind.string } },
+    restore = { v -> if (v == "top") ArtistView.TopSongs else ReleaseKind.entries.firstOrNull { it.string == v }?.let { ArtistView.Releases(it) } },
+)
+
 @Composable
 fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
@@ -370,7 +376,8 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val shelves = albums.byReleaseKind()
     val dot = stringResource(R.string.dot_separator)
     val counts = shelves.map { (kind, list) -> pluralStringResource(releaseCountRes(kind), list.size, list.size) }.joinToString(dot)
-    var view by remember(id) { mutableStateOf<ArtistView?>(null) }
+    // Saved as text, so the sub-view survives rotation: "top", or a release kind's id.
+    var view by rememberSaveable(id, stateSaver = ArtistViewSaver) { mutableStateOf<ArtistView?>(null) }
     var oldest by remember(id) { mutableStateOf(false) }
     androidx.activity.compose.BackHandler(enabled = view != null) { view = null }
     val openAlbum = { al: Album -> nav.navigate(Route.Album(al.id)) }
@@ -424,9 +431,11 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
                 item(key = "top") {
                     BoxWithConstraints(Modifier.fillMaxWidth()) {
                         val columnWidth = maxWidth - 72.dp
+                        val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
                         androidx.compose.foundation.lazy.LazyRow(
+                            state = rowState,
                             contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            flingBehavior = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(androidx.compose.foundation.lazy.rememberLazyListState()),
+                            flingBehavior = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(rowState),
                             modifier = Modifier.padding(top = 4.dp).testTag("artist.top"),
                         ) {
                             val columns = topSongs.withIndex().chunked(TOP_PER_COLUMN)

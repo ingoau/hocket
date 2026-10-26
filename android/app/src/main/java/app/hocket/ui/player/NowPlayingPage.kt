@@ -303,7 +303,7 @@ internal fun FullPlayer(
         }
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false })
-    if (queues) QueueSwitcherSheet(onDismiss = { queues = false })
+    if (queues) QueuesSheet(onDismiss = { queues = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })

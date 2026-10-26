@@ -244,17 +244,18 @@ private fun ServerSummary(server: ServerInfo, sync: app.hocket.core.api.SyncProg
                 Text(stringResource(R.string.setup_too_old, caps.serverVersion ?: "?"), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp))
             }
         }
-        FlowRow(Modifier.padding(top = 24.dp).semantics { contentDescription = "" }, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             CapChip(stringResource(R.string.setup_caps_lyrics), caps.songLyrics)
             CapChip(stringResource(R.string.setup_caps_sonic), caps.sonicSimilarity)
             CapChip(stringResource(R.string.setup_caps_native), caps.nativeApi)
         }
         if (caps.meetsFloor) {
-            val s = sync
-            Text(if (s == null || s.finished) stringResource(R.string.setup_synced) else stringResource(R.string.setup_syncing, s.phase), style = MaterialTheme.typography.bodyLarge,
+            // This server's sync only: after "Use a different server" the old one's finished run doesn't count.
+            val s = sync?.takeIf { it.serverId == server.id }
+            Text(when { s == null -> stringResource(R.string.setup_sync_starting); s.finished -> stringResource(R.string.setup_synced); else -> stringResource(R.string.setup_syncing, s.phase) }, style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 28.dp).semantics { liveRegion = LiveRegionMode.Polite })
             val total = s?.total?.toFloat()?.takeIf { it > 0f }
-            val progress = when { s == null || s.finished -> 1f; total != null -> s.done.toFloat() / total; else -> null }
+            val progress = when { s == null -> null; s.finished -> 1f; total != null -> s.done.toFloat() / total; else -> null }
             if (progress != null) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(6.dp))
             else LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(6.dp))
             Spacer(Modifier.height(40.dp))

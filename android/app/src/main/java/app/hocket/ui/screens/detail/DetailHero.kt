@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -103,6 +104,9 @@ internal fun rememberHeroMode(coverArt: String?, widthPx: Int, heightPx: Int): H
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
     if (coverArt == null) return HeroMode.None
     val size = if (batterySaver) smallerSize(ArtworkSizes.HERO) else ArtworkSizes.HERO
+    // The server never sends more than was asked for: below the header's width it can't be Large,
+    // so don't fetch the big file just to measure it.
+    if (size < widthPx) return HeroMode.Small
     val key = "$coverArt@$size"
     val natural = remember(key) { mutableStateOf(naturalSizes.get(key)?.second) }
     LaunchedEffect(key) {
@@ -229,12 +233,19 @@ internal fun HeroIconButton(icon: androidx.compose.ui.graphics.vector.ImageVecto
     ) { Icon(icon, label, Modifier.size(IconButtonDefaults.mediumIconSize)) }
 }
 
-/** Love as a medium toggle: filled (and round) when loved, a square on the surface when not. */
+/**
+ * Love as a medium toggle. Loved: a light (bright surface) square with the heart filled in the
+ * primary colour, rather than a filled primary square, which read as a dark block among the light
+ * buttons beside it. Not loved: the outlined heart on the surface, round.
+ */
 @Composable
 internal fun HeroLoveToggle(loved: Boolean, onBanner: Boolean, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     FilledIconToggleButton(
         checked = loved, onCheckedChange = onToggle, shapes = IconButtonDefaults.toggleableShapes(),
-        colors = IconButtonDefaults.filledIconToggleButtonColors(containerColor = if (onBanner) app.hocket.ui.components.segmentColor() else MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+        colors = IconButtonDefaults.filledIconToggleButtonColors(
+            containerColor = if (onBanner) app.hocket.ui.components.segmentColor() else MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            checkedContainerColor = MaterialTheme.colorScheme.surfaceBright, checkedContentColor = MaterialTheme.colorScheme.primary,
+        ),
         modifier = modifier.size(IconButtonDefaults.mediumContainerSize()).testTag("detail.love"),
     ) { Icon(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (loved) R.string.action_unlove else R.string.action_love), Modifier.size(IconButtonDefaults.mediumIconSize)) }
 }
@@ -313,7 +324,8 @@ internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Uni
             Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
         }
         Text(title.orEmpty(), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 8.dp).graphicsLayer { alpha = titleAlpha })
+            // Hidden until the bar fills in, and out of the accessibility tree till then (the header says it).
+            modifier = Modifier.weight(1f).padding(start = 8.dp).graphicsLayer { alpha = titleAlpha }.then(if (collapsed) Modifier else Modifier.clearAndSetSemantics { }))
         androidx.compose.runtime.CompositionLocalProvider(LocalHeroBarColors provides circle) { actions() }
     }
 }
