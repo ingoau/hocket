@@ -616,6 +616,7 @@
     <string name="settings_search_kw_battery">battery power energy saver</string>
     <string name="settings_search_kw_connect">connect remote coordinator relay network wifi lan mdns devices</string>
     <string name="settings_search_kw_pebble">pebble watch smartwatch wrist</string>
+    <string name="settings_search_kw_player_swipe_up">gesture swipe up player now playing queue lyrics play on devices connect output menu</string>
     <string name="settings_search_kw_customise">customize reorder order hide show menu buttons navigation bar swipe gestures</string>
     <string name="settings_search_kw_backup">export import restore file transfer</string>
     <string name="settings_search_kw_diagnostics">logs bug report debug developer</string>
@@ -701,6 +702,12 @@
     <string name="settings_swipe_right">Swipe right</string>
     <string name="settings_swipe_left">Swipe left</string>
     <string name="settings_swipe_none">None</string>
+    <string name="settings_player_swipe_up">Swipe up on the player</string>
+    <string name="settings_player_swipe_up_body">What swiping up on the artwork opens. The buttons under the controls open each of these too.</string>
+    <string name="settings_player_swipe_up_queue">Queue</string>
+    <string name="settings_player_swipe_up_lyrics">Lyrics</string>
+    <string name="settings_player_swipe_up_connect">Play on</string>
+    <string name="settings_player_swipe_up_menu">Song menu</string>
     <string name="settings_section_backup">Backup</string>
     <string name="settings_export_config">Export configuration</string>
     <string name="settings_export_with_secrets">Include secrets</string>

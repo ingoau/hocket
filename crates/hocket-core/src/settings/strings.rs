@@ -62,6 +62,7 @@ pub const TEXTS: &[SettingText] = &[
     t("swipe.queue.endToStart", "Queue: swipe left", "What swiping a queue item towards the start of the line does (left in left-to-right languages)."),
     t("swipe.list.startToEnd", "Song lists: swipe right", "What swiping a song in an album, playlist, search results or the library does, towards the end of the line."),
     t("swipe.list.endToStart", "Song lists: swipe left", "What swiping a song in an album, playlist, search results or the library does, towards the start of the line."),
+    t("swipe.playerUp", "Player: swipe up", "What swiping up on the player's artwork opens: the queue, the lyrics, the devices to play on or the song's menu."),
     t("shortcuts", "Keyboard shortcuts", "Custom key bindings for this device."),
     t("developer.mode", "Developer mode", "Keep detailed logs, and open developer diagnostics when you shake the phone or press Ctrl+Shift+D."),
     t("sync.enabled", "Sync settings between devices", "Send account-level settings through the coordinator and accept them from other devices."),

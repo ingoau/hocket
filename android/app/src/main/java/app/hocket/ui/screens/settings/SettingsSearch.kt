@@ -118,6 +118,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("customise.contextMenuSection", SettingsCategory.Customise, R.string.settings_context_menu, keywords = R.string.settings_search_kw_customise),
     SettingEntry("customise.mediaSessionSection", SettingsCategory.Customise, R.string.settings_media_buttons, keywords = R.string.settings_search_kw_media),
     SettingEntry("customise.swipe", SettingsCategory.Customise, R.string.settings_swipe_actions, keywords = R.string.settings_search_kw_customise),
+    SettingEntry("customise.playerSwipeUp", SettingsCategory.Customise, R.string.settings_player_swipe_up, R.string.settings_player_swipe_up_body, R.string.settings_search_kw_player_swipe_up),
     SettingEntry("backup.includeSecrets", SettingsCategory.Backup, R.string.settings_export_with_secrets, keywords = R.string.settings_search_kw_backup),
     SettingEntry("backup.export", SettingsCategory.Backup, R.string.settings_export_config, keywords = R.string.settings_search_kw_backup),
     SettingEntry("backup.import", SettingsCategory.Backup, R.string.settings_import_config, keywords = R.string.settings_search_kw_backup),

@@ -20,6 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import app.hocket.ui.components.GroupLabel
+import app.hocket.ui.components.SheetPull
+import app.hocket.ui.components.pulled
+import app.hocket.ui.components.pulledScrim
+import app.hocket.ui.components.rememberPulledSheetState
 import app.hocket.ui.components.Segment
 import app.hocket.ui.components.SegmentedGroup
 import app.hocket.ui.components.segmentColor
@@ -41,7 +45,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -78,7 +81,7 @@ val LocalOpenConnectSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
  * ([onOpenSettings]).
  */
 @Composable
-fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpenConnectSettings.current) {
+fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpenConnectSettings.current, pull: SheetPull? = null) {
     val client = LocalCoreClient.current
     val picker by client.handoffPicker.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
@@ -93,7 +96,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
     val self = devices.firstOrNull { it.isSelf }
     // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro").
     val currentOutput = outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("handoff.sheet")) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberPulledSheetState(pull), scrimColor = pulledScrim(pull), modifier = Modifier.pulled(pull).testTag("handoff.sheet")) {
         Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.handoff_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })

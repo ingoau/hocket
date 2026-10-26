@@ -99,6 +99,8 @@ pub mod keys {
     pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
     pub const SWIPE_LIST_END_TO_START: &str = "swipe.list.endToStart";
+    /// What swiping up on the phone's full player opens: [`SWIPE_PLAYER_UP_ACTIONS`].
+    pub const SWIPE_PLAYER_UP: &str = "swipe.playerUp";
     pub const SHORTCUTS: &str = "shortcuts";
     /// The Pebble watchapp (`docs/pebble.md`). Device-local: the watch belongs to this phone.
     pub const PEBBLE_TOUCH_NAVIGATION: &str = "pebble.touchNavigation";
@@ -427,6 +429,11 @@ pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "download",
 ];
 
+/// What swiping up on the phone's full player (on its artwork) opens: the
+/// queue or the lyrics in its place, or the device picker ("Play on") or the
+/// song's menu as a sheet that follows the finger.
+pub const SWIPE_PLAYER_UP_ACTIONS: &[&str] = &["queue", "lyrics", "connect", "menu"];
+
 /// Every setting. Order is the settings screen's order.
 pub static REGISTRY: &[SettingDef] = &[
     def(
@@ -603,6 +610,12 @@ pub static REGISTRY: &[SettingDef] = &[
         Synced,
         SettingKind::Enum(SWIPE_LIST_ACTIONS),
         || json!("playLater"),
+    ),
+    def(
+        SWIPE_PLAYER_UP,
+        Synced,
+        SettingKind::Enum(SWIPE_PLAYER_UP_ACTIONS),
+        || json!("queue"),
     ),
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
     def(PEBBLE_TOUCH_NAVIGATION, Local, SettingKind::Bool, || {

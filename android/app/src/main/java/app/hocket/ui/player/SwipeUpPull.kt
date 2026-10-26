@@ -13,6 +13,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import app.hocket.ui.components.SheetPull
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -20,40 +21,52 @@ import kotlinx.coroutines.launch
 import kotlin.math.exp
 
 /**
- * Swiping up on the open player opens the queue (Apple Music). The finger's travel past the open
- * sheet ([raw]: what the sheet's drag, or the page's scroll, left over) lifts the artwork, rubber-banded
- * to at most [maxLift] and a little smaller as it goes ([lift], [fraction]); released past [commit]
- * or flung up, the player switches to the queue ([onOpen]) and the lift eases out as the artwork
- * flies to the thumbnail beside the title, else it springs back. Only while [enabled] (the sheet
- * open, in artwork mode, nothing being swiped); dragging down first gives back the lift.
+ * Swiping up on the open player (`swipe.playerUp`) opens the queue (Apple Music), the lyrics, the
+ * device picker or the song's menu. The finger's travel past the open sheet (what the sheet's drag,
+ * or the page's scroll, left over) goes one of two ways:
+ *
+ * - into another mode ([onOpen]): it lifts the artwork ([raw]), rubber-banded to at most [maxLift]
+ *   and a little smaller as it goes ([lift], [fraction]); released past [commit] or flung up, the
+ *   player switches mode and the lift eases out as the artwork flies to the thumbnail beside the
+ *   title, else it springs back;
+ * - with [openSheet] set, into a sheet: the first upward pull shows it ([SheetPull]) and from there
+ *   the sheet's top follows the finger; released past [sheetCommit] or flung up it opens, else it
+ *   drops back and closes.
+ *
+ * Only while [enabled] (the sheet open, in artwork mode, nothing being swiped); dragging down first
+ * gives back the lift (or brings the sheet down).
  *
  * The sheet's own drag (one starting on the artwork, which sits outside the page's scroll) reaches it
  * as the `anchoredDraggable`'s overscroll; the page's scroll through the sheet's nested-scroll
  * connection ([pull], [release]).
  */
 @Stable
-internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
+internal class SwipeUpPull(private val scope: CoroutineScope) : OverscrollEffect {
     var enabled: () -> Boolean = { false }
     var onOpen: () -> Unit = {}
+    /** Set when the swipe brings up a sheet: shows it, following the given pull (false: nothing to show). */
+    var openSheet: ((SheetPull) -> Boolean)? = null
     var haptics: HapticFeedback? = null
     var reduced = false
-    /** The lift's limit, the travel that opens the queue and the fling (px/s) that does (set from the density). */
+    /** The lift's limit, the travel that opens the mode and the fling (px/s) that does (set from the density). */
     var maxLift = 1f
     var commit = Float.POSITIVE_INFINITY
     var flingVelocity = Float.POSITIVE_INFINITY
 
-    /** The finger's travel up past the open sheet (px). */
+    /** The finger's travel up past the open sheet (px), into another mode. */
     var raw by mutableFloatStateOf(0f)
         private set
+    /** The sheet under the finger, if the swipe brings one up. */
+    private var sheet: SheetPull? = null
     private var crossed = false
     private var settling: Job? = null
 
     /**
-     * A pull under the finger: lifted and not springing back or easing out. Only a held pull takes a
-     * downward drag or a fling, so the queue's own list (just opened) or the page is never blocked
-     * while the lift settles.
+     * A pull under the finger: lifted (or a sheet brought up) and not springing back or easing out.
+     * Only a held pull takes a downward drag or a fling, so the queue's own list (just opened) or the
+     * page is never blocked while the lift settles.
      */
-    val held: Boolean get() = raw > 0f && settling?.isActive != true
+    val held: Boolean get() = sheet?.held == true || (raw > 0f && settling?.isActive != true)
 
     /** How far the artwork is lifted (px, upwards): [raw] rubber-banded towards [maxLift]; none with reduced motion. */
     fun lift(): Float = if (reduced || maxLift <= 0f) 0f else maxLift * (1f - exp(-raw / maxLift))
@@ -61,28 +74,57 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
     /** [lift] as a share of [maxLift] (0..1). */
     fun fraction(): Float = if (maxLift <= 0f) 0f else lift() / maxLift
 
+    /** The travel that opens a sheet of [height] (px; 0 before it is laid out): half of it, at most twice [commit]. */
+    fun sheetCommit(height: Float): Float = if (height > 0f) minOf(height / 2f, commit * 2f) else commit
+
     /**
      * Takes [dy] (px, negative = up) that the sheet left over: up only while [enabled], down only to
-     * give back a lift. Returns what it consumed (in [dy]'s sign).
+     * give back a lift (or bring a sheet down). Returns what it consumed (in [dy]'s sign).
      */
     fun pull(dy: Float): Float {
-        if (dy == 0f || (dy < 0f && !enabled()) || (dy > 0f && !held)) return 0f
+        if (dy == 0f) return 0f
+        sheet?.let { s ->
+            if (!s.held) return 0f
+            val taken = s.drag(dy)
+            threshold(s.travel > sheetCommit(s.height))
+            return taken
+        }
+        if ((dy < 0f && !enabled()) || (dy > 0f && !held)) return 0f
+        openSheet?.let { open ->
+            if (dy > 0f || raw > 0f) return@let
+            val s = SheetPull(scope)
+            // Nothing to show (no song, a menu already open): the swipe does nothing.
+            if (!open(s)) return 0f
+            sheet = s
+            return s.drag(dy)
+        }
         settling?.cancel()
         val before = raw
         raw = (raw - dy).coerceAtLeast(0f)
-        val over = raw > commit
+        threshold(raw > commit)
+        return before - raw
+    }
+
+    /** A tick as the pull crosses the point where letting go opens. */
+    private fun threshold(over: Boolean) {
         if (over != crossed) {
             crossed = over
             haptics?.performHapticFeedback(if (over) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentTick)
         }
-        return before - raw
     }
 
-    /** The finger left with [velocity] (px/s, negative = up): open the queue or spring back. */
+    /** The finger left with [velocity] (px/s, negative = up): open the mode or the sheet, or spring back. */
     fun release(velocity: Float) {
         if (!held) return
-        val open = enabled() && (raw > commit || velocity < -flingVelocity)
         crossed = false
+        sheet?.let { s ->
+            sheet = null
+            val open = velocity < -flingVelocity || (velocity <= flingVelocity && s.travel > sheetCommit(s.height))
+            if (open) haptics?.performHapticFeedback(HapticFeedbackType.Confirm)
+            s.release(open, velocity)
+            return
+        }
+        val open = enabled() && (raw > commit || velocity < -flingVelocity)
         if (open) {
             haptics?.performHapticFeedback(HapticFeedbackType.Confirm)
             onOpen()
@@ -94,14 +136,17 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
     }
 
     /**
-     * Drops any lift at once: the sheet started moving or left the open player (back, the collapse
-     * button), or a drag ended without a release (cancelled), so the artwork never stays lifted.
+     * Drops any lift at once (and lets a sheet under the finger drop back): the sheet started moving
+     * or left the open player (back, the collapse button), or a drag ended without a release
+     * (cancelled), so the artwork never stays lifted.
      */
     fun reset() {
         settling?.cancel()
         settling = null
         crossed = false
         raw = 0f
+        sheet?.release(open = false)
+        sheet = null
     }
 
     override fun applyToScroll(delta: Offset, source: NestedScrollSource, performScroll: (Offset) -> Offset): Offset {
@@ -123,7 +168,7 @@ internal class QueuePull(private val scope: CoroutineScope) : OverscrollEffect {
         release(velocity.y)
     }
 
-    override val isInProgress: Boolean get() = raw > 0f
+    override val isInProgress: Boolean get() = raw > 0f || sheet != null
 
     companion object {
         val MAX_LIFT: Dp = 40.dp

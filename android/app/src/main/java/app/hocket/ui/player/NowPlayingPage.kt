@@ -54,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ripple
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -117,6 +118,7 @@ import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ArtworkEdge
 import app.hocket.core.api.ArtworkLayout
 import app.hocket.core.api.Command
@@ -183,6 +185,8 @@ internal fun FullPlayer(
     coverArt: String?,
     neighbourLayouts: Pair<ArtworkLayout?, ArtworkLayout?> = null to null,
     headerAlpha: () -> Float = { 1f },
+    swipeUp: SwipeUpPull? = null,
+    swipeUpAction: String? = null,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -191,6 +195,8 @@ internal fun FullPlayer(
     val track = entry?.track
     val density = LocalDensity.current
     var handoff by remember { mutableStateOf(false) }
+    /** The device picker brought up by a swipe, following the finger (null when opened otherwise). */
+    var handoffPull by remember { mutableStateOf<app.hocket.ui.components.SheetPull?>(null) }
     var queues by remember { mutableStateOf(false) }
     var sleepSheet by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
@@ -206,7 +212,8 @@ internal fun FullPlayer(
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
     hero.artPad = with(density) { ART_PAD.toPx() }
-    val openMenu = {
+    /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
+    val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
         // the sleep timer as its extra (it has no other place in the player).
         val sleep = client.sleepTimer.value
@@ -217,9 +224,24 @@ internal fun FullPlayer(
                     supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming")
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
-                onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")))
+                onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
+        } ?: false
+    }
+    // `swipe.playerUp` set to the device picker or the song menu: the swipe brings it up as a sheet
+    // that follows the finger (the queue and the lyrics are the sheet's own [SwipeUpPull.onOpen]).
+    if (swipeUp != null) SideEffect {
+        swipeUp.openSheet = when (swipeUpAction) {
+            SwipeOptions.PLAYER_UP_CONNECT -> { pull ->
+                // Dropping back closes this picker only, never one opened after it.
+                pull.onClosed = { if (handoffPull === pull) { handoff = false; handoffPull = null } }
+                handoffPull?.dismiss()
+                handoffPull = pull
+                handoff = true
+                true
+            }
+            SwipeOptions.PLAYER_UP_MENU -> { pull -> openMenu(pull) }
+            else -> null
         }
-        Unit
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = maxHeight
@@ -264,7 +286,7 @@ internal fun FullPlayer(
                         switcherOpen = queues,
                         onSwitchQueue = { queues = true },
                         onConnect = { handoff = true },
-                        onMore = openMenu,
+                        onMore = { openMenu(null); Unit },
                         modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
                     )
                 },
@@ -302,7 +324,7 @@ internal fun FullPlayer(
             }
         }
     }
-    if (handoff) HandoffSheet(onDismiss = { handoff = false })
+    if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
     if (queues) QueuesSheet(onDismiss = { queues = false })
     if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
@@ -1103,7 +1125,7 @@ internal fun PlayerArtwork(
                 val f = modeFraction()
                 // A card shrinks a little as it lifts towards the queue (the cover only: the
                 // neighbours stay a page away, off screen).
-                if (!hero.immersive) (1f - QueuePull.SHRINK * hero.liftFraction()).let { scaleX = it; scaleY = it }
+                if (!hero.immersive) (1f - SwipeUpPull.SHRINK * hero.liftFraction()).let { scaleX = it; scaleY = it }
                 shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
                 shadowElevation = hero.elevationFor(f, this)

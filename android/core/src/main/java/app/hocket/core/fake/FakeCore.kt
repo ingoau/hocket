@@ -167,6 +167,7 @@ class FakeCore(
         def(SettingKeys.NAV_MOBILE_BAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.HOME_SECTIONS, "[]", SettingScope.AccountSynced)
         def(SettingKeys.LIBRARY_PINS, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.SWIPE_PLAYER_UP, "\"queue\"", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DEVELOPER_MODE, "false", SettingScope.DeviceLocal)

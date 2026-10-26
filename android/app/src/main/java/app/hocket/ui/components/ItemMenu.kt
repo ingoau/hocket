@@ -29,7 +29,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -290,9 +289,10 @@ fun MenuSheet(
     onRan: () -> Unit = {},
     extraTop: (@Composable () -> Unit)? = null,
     tag: String = "songMenu",
+    pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
     fun hideThen(after: () -> Unit = {}) {
@@ -451,8 +451,9 @@ fun MenuSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        scrimColor = pulledScrim(pull),
         dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
-        modifier = Modifier.testTag(tag),
+        modifier = Modifier.pulled(pull).testTag(tag),
     ) {
         Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->

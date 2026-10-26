@@ -52,7 +52,7 @@ class SongMenuExtra(
  * context's extras, and the playlist it was opened from (names the registry's "Remove from …").
  */
 @Immutable
-data class SongMenuRequest(val track: TrackSummary, val target: ActionTarget, val extras: List<SongMenuExtra> = emptyList(), val context: String? = null)
+data class SongMenuRequest(val track: TrackSummary, val target: ActionTarget, val extras: List<SongMenuExtra> = emptyList(), val context: String? = null, val pull: SheetPull? = null)
 
 /**
  * Opens THE song menu. There is one per screen tree, hosted at the app level ([SongMenuHost]) and
@@ -67,13 +67,24 @@ class SongMenuController {
     /** On screen, with the registry's actions it was opened with. */
     internal var shown by mutableStateOf<Pair<SongMenuRequest, List<ActionDescriptor>>?>(null)
 
-    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.id)), extras: List<SongMenuExtra> = emptyList(), context: String? = null) {
-        if (shown == null) pending = SongMenuRequest(track, target, extras, context)
+    /** Opens the menu for [track]; with [pull], brought up by a drag that it follows (see [SheetPull]). */
+    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.id)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null): Boolean {
+        if (shown != null) return false
+        pending?.pull?.dismiss()
+        // A pull that drops back closes its own menu, never one opened after it.
+        pull?.onClosed = { if (pending?.pull === pull || shown?.first?.pull === pull) close() }
+        pending = SongMenuRequest(track, target, extras, context, pull)
+        return true
     }
 
     val isOpen: Boolean get() = pending != null || shown != null
 
-    internal fun close() { pending = null; shown = null }
+    internal fun close() {
+        pending?.pull?.dismiss()
+        shown?.first?.pull?.dismiss()
+        pending = null
+        shown = null
+    }
 }
 
 val LocalSongMenu = staticCompositionLocalOf<SongMenuController?> { null }
@@ -142,6 +153,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
                 onGoToArtist = track.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
                 onInfo = { infoFor = track },
                 onShare = { share = ShareRequest(it, subject, request.target) },
+                pull = request.pull,
             )
         }
     }

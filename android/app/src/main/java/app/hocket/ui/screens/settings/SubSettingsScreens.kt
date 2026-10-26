@@ -263,6 +263,22 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         Text(stringResource(R.string.settings_swipe_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         SwipeChoices(stringResource(R.string.settings_swipe_queue), SwipeOptions.QUEUE, SwipeSurface.Queue)
         SwipeChoices(stringResource(R.string.settings_swipe_lists), SwipeOptions.LIST, SwipeSurface.List)
+        // swipe.playerUp: what swiping up on the full player's artwork opens.
+        val playerUp = setting(SettingKeys.SWIPE_PLAYER_UP)
+        val playerUpOptions = listOf(
+            SwipeOptions.PLAYER_UP_QUEUE to stringResource(R.string.settings_player_swipe_up_queue),
+            SwipeOptions.PLAYER_UP_LYRICS to stringResource(R.string.settings_player_swipe_up_lyrics),
+            SwipeOptions.PLAYER_UP_CONNECT to stringResource(R.string.settings_player_swipe_up_connect),
+            SwipeOptions.PLAYER_UP_MENU to stringResource(R.string.settings_player_swipe_up_menu),
+        )
+        SettingsSection(stringResource(R.string.settings_player_swipe_up), tag = "customise.playerSwipeUp")
+        Text(stringResource(R.string.settings_player_swipe_up_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        ChoiceRow(
+            playerUpOptions,
+            isSelected = { (playerUp.string ?: SwipeOptions.PLAYER_UP_QUEUE) == it },
+            onSelect = { playerUp.setString(it) },
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("customise.${SettingKeys.SWIPE_PLAYER_UP}"),
+        )
     }
 }
 

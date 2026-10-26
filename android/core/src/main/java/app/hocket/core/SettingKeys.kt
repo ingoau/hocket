@@ -81,6 +81,8 @@ object SettingKeys {
     const val SWIPE_QUEUE_END_TO_START = "swipe.queue.endToStart"
     const val SWIPE_LIST_START_TO_END = "swipe.list.startToEnd"
     const val SWIPE_LIST_END_TO_START = "swipe.list.endToStart"
+    /** What swiping up on the full player opens: one of [SwipeOptions.PLAYER_UP]. */
+    const val SWIPE_PLAYER_UP = "swipe.playerUp"
 
     fun actionOrder(surface: String) = "actions.order.$surface"
 }
@@ -152,4 +154,11 @@ object SwipeOptions {
         SettingKeys.SWIPE_LIST_START_TO_END to ActionIds.PLAY_NEXT,
         SettingKeys.SWIPE_LIST_END_TO_START to ActionIds.PLAY_LATER,
     )
+
+    /** What swiping up on the full player can open (`SWIPE_PLAYER_UP_ACTIONS`); the first is the default. */
+    const val PLAYER_UP_QUEUE = "queue"
+    const val PLAYER_UP_LYRICS = "lyrics"
+    const val PLAYER_UP_CONNECT = "connect"
+    const val PLAYER_UP_MENU = "menu"
+    val PLAYER_UP = listOf(PLAYER_UP_QUEUE, PLAYER_UP_LYRICS, PLAYER_UP_CONNECT, PLAYER_UP_MENU)
 }
