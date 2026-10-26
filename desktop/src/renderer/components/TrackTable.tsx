@@ -75,6 +75,11 @@ export function fitColumns(columns: readonly ColumnId[], width: number): ColumnI
   return columns.filter((c) => kept.has(c));
 }
 
+/** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
+export function sameArtist(track: string | null | undefined, album: string | null | undefined): boolean {
+  return !track?.trim() || track.trim().toLowerCase() === (album ?? "").trim().toLowerCase();
+}
+
 export interface TrackTableProps {
   /** Loaded tracks (may be a window of the total when paging). */
   tracks: (Track | undefined)[];
@@ -102,6 +107,8 @@ export interface TrackTableProps {
   label?: string;
   /** Play intent (hover on a row's play button, or keyboard focus resting on a row) primes the track. */
   primer?: Primer;
+  /** An album's artist: the artist column leaves it out, naming only the tracks by someone else. */
+  omitArtist?: string;
 }
 
 export function TrackTable(props: TrackTableProps) {
@@ -333,7 +340,7 @@ export function TrackTable(props: TrackTableProps) {
                 data-track-id={tr?.id}
               >
                 {columns.map((c) => (
-                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} />
+                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} omitArtist={props.omitArtist} />
                 ))}
               </div>
             );
@@ -344,7 +351,7 @@ export function TrackTable(props: TrackTableProps) {
   );
 }
 
-function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer }) {
+function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer; omitArtist?: string }) {
   const navigate = useApp((s) => s.navigate);
   const cls = COLUMNS[col].num ? "td num" : "td";
   // Controls inside rows are not Tab stops: the row is (roving), and its
@@ -365,6 +372,7 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
     case "title":
       return <div className={`${cls} title`} role="gridcell" title={track.title}>{track.title}{track.explicit ? <span className="badge" style={{ marginLeft: 6 }}><span aria-hidden="true">E</span><span className="sr-only">{t("a11y.explicit")}</span></span> : null}</div>;
     case "artist":
+      if (omitArtist !== undefined && sameArtist(track.artist, omitArtist)) return <div className={`${cls} sub`} role="gridcell" />;
       return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.artistId) navigate({ view: "artist", id: track.artistId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.artist ?? t("misc.unknownArtist")}</a></div>;
     case "album":
       return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.album ?? t("misc.unknownAlbum")}</a></div>;

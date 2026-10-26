@@ -31,6 +31,7 @@ object SettingKeys {
     const val DISPLAY_IMMERSIVE_ARTWORK = "display.immersiveArtwork"
     /** Whether the full player shows the star rating (synced). */
     const val DISPLAY_PLAYER_RATING = "display.playerRating"
+    const val DISPLAY_ALBUM_TRACK_ARTISTS = "display.albumTrackArtists"
     const val DISPLAY_ACCENT = "display.accent"
     const val DISPLAY_DYNAMIC_COLOUR = "display.dynamicColour"
     const val ACTIONS_ORDER_CONTEXT_MENU = "actions.order.contextMenu"

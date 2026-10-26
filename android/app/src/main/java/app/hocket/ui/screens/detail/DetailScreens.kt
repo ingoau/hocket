@@ -76,6 +76,7 @@ import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
+import app.hocket.core.SettingKeys
 import app.hocket.core.Queries
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
@@ -267,6 +268,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val target = Commands.albums(listOf(a.id))
     val downloaded = pins.any { it.target == Commands.albumPin(a.id) }
     val dot = stringResource(R.string.dot_separator)
+    val settings by client.settings.collectAsStateWithLifecycle()
+    val allArtists = settings[SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS]?.value?.trim() == "true"
     DetailScaffold(nav, embedded, a.name, a.coverArt, shareKey = shareKey,
         barActions = {
             DetailLoveButton(a.loved, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
@@ -300,7 +303,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
                     Spacer(Modifier.width(4.dp))
                 },
                 selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) }, nowPlaying = playing,
-                segment = i to list.size, showSubtitle = false, nowPlayingMark = false, modifier = Modifier.segmentItem(i))
+                // The artist under the title where it isn't the album's (a feature, a compilation), or on every track by the setting.
+                segment = i to list.size, showSubtitle = allArtists || !sameArtist(t.artist, a.artist), nowPlayingMark = false, modifier = Modifier.segmentItem(i))
         }
         item(key = "footer") {
             val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.LONG)
@@ -327,6 +331,10 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     }
     if (albumSheet) ActionSheet(target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } })
 }
+
+/** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
+internal fun sameArtist(track: String?, album: String?): Boolean =
+    track.isNullOrBlank() || track.trim().equals(album?.trim(), ignoreCase = true)
 
 @Composable
 fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {

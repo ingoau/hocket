@@ -617,6 +617,7 @@
     <string name="settings_search_kw_cache">cache stream disk space offline</string>
     <string name="settings_search_kw_data">mobile data cellular metered bandwidth wifi</string>
     <string name="settings_search_kw_lyrics">lyrics lrclib online privacy timing offset translation</string>
+    <string name="settings_search_kw_album_artists">artist album tracks featuring compilation various</string>
     <string name="settings_search_kw_rating">love heart stars rating favourite favorite</string>
     <string name="settings_search_kw_battery">battery power energy saver</string>
     <string name="settings_search_kw_connect">connect remote coordinator relay network wifi lan mdns devices</string>
@@ -644,6 +645,8 @@
     <string name="settings_immersive_always">Always</string>
     <string name="settings_immersive_never">Never</string>
     <string name="settings_player_rating">Rating in the player</string>
+    <string name="settings_album_track_artists">Artists on album tracks</string>
+    <string name="settings_album_track_artists_body">Name the artist on every track of an album. Off names it only where it isn\'t the album\'s artist.</string>
     <string name="settings_player_rating_body">Show the star rating under the song. Off leaves it in the song\'s menu and details.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_replay_gain">ReplayGain</string>

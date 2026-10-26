@@ -1911,6 +1911,7 @@ export class FakeCore implements CoreHandle {
       ["display.queuePanelSplit", 0.5, "deviceLocal"],
       ["display.immersiveArtwork", "automatic", "deviceLocal"],
       ["display.playerRating", true, "accountSynced"],
+      ["display.albumTrackArtists", false, "accountSynced"],
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],

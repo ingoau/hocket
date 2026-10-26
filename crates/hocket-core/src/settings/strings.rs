@@ -34,6 +34,7 @@ pub const TEXTS: &[SettingText] = &[
     t("display.accent", "Accent colour", "Accent colour as a hex value, or empty for the default."),
     t("display.dynamicColour", "Dynamic colour", "Derive the accent from the current artwork."),
     t("display.playerRating", "Rating in the player", "Show the star rating under the song in the player. Off leaves it in the song's menu and details."),
+    t("display.albumTrackArtists", "Artists on album tracks", "Name the artist on every track of an album. Off names it only where it isn't the album's artist."),
     t("display.immersiveArtwork", "Immersive artwork", "Run the artwork edge to edge, carried on below it by a reflection or by its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours."),
     t("display.queuePanelSplit", "Queue / lyrics split", "Position of the divider between the queue and lyrics panels."),
     t("actions.order.contextMenu", "Context menu items", "Which actions appear in context menus, and in what order."),

@@ -1,8 +1,9 @@
 import { t } from "@shared/strings";
-import { useApp } from "../store/app";
+import { useApp, useSetting } from "../store/app";
+import { SK } from "@shared/settings-keys";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { TrackTable } from "../components/TrackTable";
+import { sameArtist, TrackTable, type ColumnId } from "../components/TrackTable";
 import { DetailHead } from "../components/DetailHead";
 import { Icon } from "../components/Icon";
 import { Heart, Stars } from "../components/Stars";
@@ -32,6 +33,11 @@ export function AlbumDetail({ id }: { id: string }) {
   const others = (more.data?.items ?? []).filter((x) => x.id !== id).slice(0, 12);
   const footnote = [a?.year ? t("album.released", { year: a.year }) : "", a?.created ? t("album.added", { date: fmtDate(a.created) }) : "", a?.playCount ? t("album.plays", { count: a.playCount }) : ""].filter(Boolean).join(" · ");
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
+  // The artist column names only the tracks by someone other than the album's artist (gone when
+  // none are), or every track by the setting.
+  const allArtists = useSetting(SK.displayAlbumTrackArtists, false);
+  const anyOther = list.some((x) => !sameArtist(x.artist, a?.artist));
+  const columns: ColumnId[] = ["index", "title", ...(allArtists || anyOther ? ["artist" as const] : []), "rating", "love", "plays", "duration", "offline"];
   const kept = a?.offline === "downloaded" || a?.offline === "downloading";
   return (
     <div className="view detail-page" data-testid="view-album">
@@ -65,7 +71,7 @@ export function AlbumDetail({ id }: { id: string }) {
             <span className="muted">{t("album.tracks", { count: list.length, duration: fmtTime(list.reduce((n, x) => n + (x.durationMs ?? 0), 0)) })}</span>
           </div>
           <div style={{ height: trackTableHeight(list.length), display: "flex", flexDirection: "column" }}>
-            <TrackTable tracks={list} total={list.length} columns={["index", "title", "artist", "rating", "love", "plays", "duration", "offline"]} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
+            <TrackTable tracks={list} total={list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
           </div>
           {footnote ? <div className="detail-footnote">{footnote}</div> : null}
         </section>
