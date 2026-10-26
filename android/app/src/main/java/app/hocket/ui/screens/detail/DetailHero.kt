@@ -433,12 +433,12 @@ internal fun ReleaseTile(a: Album, meta: String, onOpen: () -> Unit, onPlay: () 
 /**
  * The floating top bar over a detail page: back and the page's actions as bare icons over the
  * header; once the title has scrolled under it ([collapsed]) the bar fills in with the page's colour
- * and name. [overArt]: the icons sit over an immersive cover, whose top strip is light (true) or
+ * and name ([filled]: the colour alone, sooner, once anything scrolls under it). [overArt]: the icons sit over an immersive cover, whose top strip is light (true) or
  * dark (false): dark or white icons on the cover's shade, rather than the page's colours.
  */
 @Composable
-internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, overArt: Boolean? = null, shade: Boolean = false, actions: @Composable RowScope.() -> Unit) {
-    val bar by animateColorAsState(if (collapsed) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, label = "detailBar")
+internal fun DetailTopBar(title: String?, collapsed: Boolean, onBack: (() -> Unit)?, overArt: Boolean? = null, shade: Boolean = false, filled: Boolean = collapsed, actions: @Composable RowScope.() -> Unit) {
+    val bar by animateColorAsState(if (filled || collapsed) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, label = "detailBar")
     val titleAlpha by animateFloatAsState(if (collapsed) 1f else 0f, label = "detailBarTitle")
     // Over the middle of a cover (its top strip scrolled away), a shade for the white icons.
     val shadeAlpha by animateFloatAsState(if (shade) 1f else 0f, label = "detailBarShade")

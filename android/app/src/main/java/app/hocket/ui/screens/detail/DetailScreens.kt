@@ -137,7 +137,7 @@ fun DetailPane(nav: NavHostController, target: DetailTarget?) {
 @Composable
 private fun DetailScaffold(
     nav: NavHostController, embedded: Boolean, title: String?, coverArt: String?, roundArtwork: Boolean = false,
-    /** False where the artwork stands in for the page (a genre's first album): never edge to edge. */
+    /** False for a page whose artwork is never edge to edge (a playlist's, a genre's first album). */
     immersive: Boolean = true,
     loading: Boolean = false,
     shareKey: String? = null,
@@ -159,6 +159,7 @@ private fun DetailScaffold(
         // behind its icons: they turn white over a shade, whatever the strip was.
         val pastStripPx = with(LocalDensity.current) { 32.dp.toPx() }
         val pastStrip by remember(pastStripPx) { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > pastStripPx } }
+        val scrolled by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
         val overArt = when {
             !look.immersive || collapsed -> null
             pastStrip -> false
@@ -189,7 +190,9 @@ private fun DetailScaffold(
                             content()
                         }
                     }
-                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastStrip && !collapsed, actions = barActions)
+                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastStrip && !collapsed,
+                        // A card page: the bar fills in as soon as the tile reaches it.
+                        filled = collapsed || (!look.immersive && scrolled), actions = barActions)
                     overlay()
                 }
             }
@@ -620,7 +623,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val choosing = selecting || selectMode
     androidx.activity.compose.BackHandler(enabled = selectMode) { selectMode = false }
     if (p == null) {
-        DetailScaffold(nav, embedded, null, flyingCover, shareKey = shareKey, loading = true, listState = listState) {}
+        DetailScaffold(nav, embedded, null, flyingCover, immersive = false, shareKey = shareKey, loading = true, listState = listState) {}
         return
     }
     val context = Commands.playlistContext(p.serverId, p.id, p.name)
@@ -628,7 +631,8 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     val downloaded = pins.any { it.target == Commands.playlistPin(p.id) }
     val editable = !p.isSmart && p.isMine
     val dot = stringResource(R.string.dot_separator)
-    DetailScaffold(nav, embedded, p.name, p.coverArt, shareKey = shareKey, listState = listState,
+    // A playlist's cover (often a mosaic of its albums) shows as a tile, never edge to edge.
+    DetailScaffold(nav, embedded, p.name, p.coverArt, immersive = false, shareKey = shareKey, listState = listState,
         barActions = {
             DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
             DetailBarButton(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more), onClick = { playlistSheet = true })
