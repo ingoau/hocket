@@ -1,7 +1,7 @@
-// The queue view's header: the queue selector (the queue's name and a chevron;
-// it drops down the recent, saved queues — the old Recent tab — to restore
-// one, each with its own menu for pin, save as playlist and delete) and the
-// Autoplay toggle. Shared by the side panel and the fullscreen player.
+// The queue view's header: the queue's name and the Autoplay toggle. Shared by
+// the side panel and the fullscreen player. In the side panel the name opens
+// the Queues page (SavedQueues); in the fullscreen player, which has no pages,
+// it drops down the saved queues to restore one, each with its own menu.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "@shared/strings";
@@ -27,6 +27,20 @@ export function QueueHeader({ large = false }: { large?: boolean }) {
 }
 
 function QueueSelector({ large }: { large: boolean }) {
+  return large ? <QueueSelectorPopover /> : <QueuesLink />;
+}
+
+function QueuesLink() {
+  const label = useApp((s) => s.queue.contextLabel) ?? t("queue.untitled");
+  return (
+    <button type="button" className="qs-button" aria-label={t("queue.openQueues", { name: label })} title={t("queue.recentTitle")} onClick={() => showSideView("recent")} data-drill="recent" data-testid="queue-selector">
+      <span className="qs-label" data-testid="queue-selector-label">{label}</span>
+      <Icon name="chevronRight" size={20} className="qs-chevron" />
+    </button>
+  );
+}
+
+function QueueSelectorPopover() {
   const label = useApp((s) => s.queue.contextLabel) ?? t("queue.untitled");
   const saved = useApp((s) => s.savedQueues);
   const menuOpen = useApp((s) => !!s.contextMenu);
@@ -56,10 +70,10 @@ function QueueSelector({ large }: { large: boolean }) {
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [open]);
-  // Once placed, focus moves to the first queue (or the link to them all).
+  // Once placed, focus moves to the first queue.
   const placed = !!at;
   useEffect(() => {
-    if (open && placed) pop.current?.querySelector<HTMLElement>(".qs-item, .qs-all")?.focus({ preventScroll: true });
+    if (open && placed) pop.current?.querySelector<HTMLElement>(".qs-item")?.focus({ preventScroll: true });
   }, [open, placed]);
   useEffect(() => {
     if (!open) return;
@@ -83,7 +97,7 @@ function QueueSelector({ large }: { large: boolean }) {
       return;
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
-    const items = Array.from(pop.current?.querySelectorAll<HTMLElement>(".qs-item, .qs-all") ?? []);
+    const items = Array.from(pop.current?.querySelectorAll<HTMLElement>(".qs-item") ?? []);
     if (!items.length) return;
     e.preventDefault();
     e.stopPropagation();
@@ -103,10 +117,10 @@ function QueueSelector({ large }: { large: boolean }) {
   const host = button.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body;
   return (
     <>
-      <button ref={button} type="button" className={`qs-button ${large ? "large" : ""}`} aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("queue.selector")}: ${label}`} onClick={() => (open ? close(false) : setOpen(true))}
+      <button ref={button} type="button" className="qs-button large" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("queue.selector")}: ${label}`} onClick={() => (open ? close(false) : setOpen(true))}
         onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); close(); } }} data-testid="queue-selector">
         <span className="qs-label" data-testid="queue-selector-label">{label}</span>
-        <Icon name="chevronDown" size={large ? 28 : 20} className="qs-chevron" />
+        <Icon name="chevronDown" size={28} className="qs-chevron" />
       </button>
       {shownAt ? createPortal(
         <div {...presence.exitProps} className={`qs-popover ${presence.motion}`} role="dialog" aria-label={t("queue.selector")} style={{ left: shownAt.left, top: shownAt.top, width: shownAt.width, maxHeight: shownAt.maxHeight }} onKeyDown={onKey} data-testid="queue-selector-menu">
@@ -133,7 +147,6 @@ function QueueSelector({ large }: { large: boolean }) {
               ))}
             </ul>
           ) : <p className="qs-empty">{t("savedQueues.empty")}</p>}
-          {!large ? <button type="button" className="qs-all" onClick={() => { close(false); showSideView("recent"); }} data-testid="queue-selector-all"><Icon name="restore" size={18} />{t("queue.allRecent")}</button> : null}
         </div>,
         host,
       ) : null}

@@ -45,6 +45,8 @@ const SYMBOLS = {
   ArrowDownward: "arrow_downward", ArrowUpward: "arrow_upward", Bolt: "bolt", CalendarToday: "calendar_today", Schedule: "schedule",
   SortByAlpha: "sort_by_alpha", Speed: "speed", Timer: "timer", TrendingUp: "trending_up", Update: "update",
   BugReport: "bug_report", Code: "code", ContentCopy: "content_copy",
+  Bluetooth: "bluetooth", Headphones: "headphones", Usb: "usb",
+  OpenInNew: "open_in_new", Laptop: "laptop_windows", DesktopWindows: "desktop_windows", Warning: "warning", Equalizer: "equalizer",
 };
 
 /** Which glyphs each group emits. AutoMirrored ones flip in right-to-left layouts. */
@@ -59,11 +61,14 @@ const GROUPS = [
     "SelectAll", "Settings", "SettingsBackupRestore", "Share", "Shuffle", "SkipNext", "SkipPrevious", "Sort", "Speaker", "Star",
     "StarOutline", "Stop", "Sync", "Tune", "Visibility", "VisibilityOff", "VolumeOff", "VolumeUp", "Watch",
     "ArrowDownward", "ArrowUpward", "Bolt", "CalendarToday", "Schedule", "SortByAlpha", "Speed", "Timer", "TrendingUp", "Update",
-    "BugReport", "Code", "ContentCopy", "Dns",
+    "BugReport", "Code", "ContentCopy", "Dns", "Bluetooth", "Headphones", "Usb",
+    "OpenInNew", "Laptop", "DesktopWindows", "Warning", "Equalizer",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",
     "OfflineBolt", "Person", "PushPin", "Search", "StarOutline",
+    "Delete", "Edit", "Settings", "Palette", "Bolt", "Warning", "Laptop", "DesktopWindows", "PhoneAndroid", "Headphones",
+    "ContentCopy", "Speaker", "Lyrics", "Dns", "Devices", "BatterySaver", "Tune", "Sync",
   ] },
   { path: ["AutoMirrored", "Filled"], fill: true, mirror: true, names: [
     "ArrowBack", "Logout", "PlaylistAdd", "PlaylistPlay", "QueueMusic", "Redo", "Undo",

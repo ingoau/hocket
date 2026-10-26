@@ -261,6 +261,64 @@ pub struct Album {
     pub music_brainz_id: Option<String>,
     pub replay_gain: Option<ReplayGain>,
     pub offline: OfflineState,
+    /// OpenSubsonic release types, lowercased (`album`, `ep`, `single`, `live`...); empty when
+    /// the server doesn't send them. [`Album::release_kind`] reduces them to one shelf.
+    #[serde(default)]
+    pub release_types: Vec<String>,
+}
+
+/// An artist's or album's details from outside the library, through the server.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalInfo {
+    /// Biography or album notes as plain text (the server's HTML stripped, the trailing
+    /// "Read more on Last.fm" link dropped; `last_fm_url` carries it).
+    pub text: Option<String>,
+    pub music_brainz_id: Option<String>,
+    pub last_fm_url: Option<String>,
+    /// The largest image the server offered.
+    pub image_url: Option<String>,
+    /// Artists only: similar artists that are in the library.
+    #[serde(default)]
+    pub similar_artists: Vec<Artist>,
+}
+
+impl ExternalInfo {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none()
+            && self.music_brainz_id.is_none()
+            && self.last_fm_url.is_none()
+            && self.image_url.is_none()
+            && self.similar_artists.is_empty()
+    }
+}
+
+/// Which shelf of an artist's discography an album sits on.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReleaseKind {
+    Album,
+    Ep,
+    Single,
+    Compilation,
+}
+
+impl Album {
+    /// Compilations first (the flag is set for every server), then the release types; an album
+    /// with no types is an album.
+    pub fn release_kind(&self) -> ReleaseKind {
+        if self.is_compilation || self.release_types.iter().any(|t| t == "compilation") {
+            ReleaseKind::Compilation
+        } else if self.release_types.iter().any(|t| t == "ep") {
+            ReleaseKind::Ep
+        } else if self.release_types.iter().any(|t| t == "single") {
+            ReleaseKind::Single
+        } else {
+            ReleaseKind::Album
+        }
+    }
 }
 
 #[typeshare]
@@ -1883,6 +1941,13 @@ pub enum Command {
     DeleteSavedQueue {
         id: String,
     },
+    /// Rename a queue. `saved_queue_id: None` renames the queue that is
+    /// playing (its context label); otherwise the saved queue with that ID.
+    /// A blank label is ignored.
+    RenameQueue {
+        saved_queue_id: Option<String>,
+        label: String,
+    },
     SaveQueueAsPlaylist {
         saved_queue_id: Option<String>,
         name: String,
@@ -2230,6 +2295,16 @@ pub enum Query {
         id: ArtistId,
         count: u32,
     },
+    /// What the server knows about an artist from outside the library (Navidrome asks Last.fm
+    /// and the like): biography, links, similar artists. `ExternalInfo(None)` when there is
+    /// nothing, e.g. the server has no Last.fm key. Cached for a week.
+    ArtistInfo {
+        id: ArtistId,
+    },
+    /// As [`Query::ArtistInfo`] for an album (`getAlbumInfo2`): its notes and links.
+    AlbumInfo {
+        id: AlbumId,
+    },
     Genres {
         server_id: ServerId,
     },
@@ -2453,6 +2528,7 @@ pub enum QueryResult {
     AlbumDetail(Option<Album>),
     Artists(ArtistPage),
     ArtistDetail(Option<Artist>),
+    ExternalInfo(Option<ExternalInfo>),
     Genres(Vec<Genre>),
     Playlists(Vec<Playlist>),
     PlaylistDetail(Option<Playlist>),

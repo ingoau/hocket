@@ -45,9 +45,13 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
     case "openCommandPalette":
       app.setPaletteOpen(!app.paletteOpen);
       return;
-    case "findInList":
+    case "findInList": {
+      // On Settings, Find searches the settings; everywhere else, the library.
+      const settingsSearch = app.route.view === "settings" ? document.querySelector<HTMLInputElement>('[data-testid="settings-search"]') : null;
+      if (settingsSearch) { settingsSearch.focus(); settingsSearch.select(); return; }
       app.focusSearch();
       return;
+    }
     case "toggleQueuePanel":
       // In the fullscreen player Q and L switch its stage instead of the hidden side panel.
       if (app.fullscreen) {

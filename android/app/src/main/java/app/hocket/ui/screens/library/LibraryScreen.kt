@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.Arrangement
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.NavItem
 import app.hocket.ui.nav.icon
+import app.hocket.ui.nav.route
 import app.hocket.ui.nav.label
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
@@ -499,18 +500,19 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
 @Composable
 internal fun LibraryLinks(nav: NavHostController, joinedAbove: Boolean = false) {
     val links = listOf(
-        Triple(NavItem.RecentQueues, Route.SavedQueues, MaterialShapes.Cookie6Sided),
-        Triple(NavItem.Downloads, Route.Downloads, MaterialShapes.Pill),
-        Triple(NavItem.Filters, Route.Filters, MaterialShapes.Clover4Leaf),
-        Triple(NavItem.Stats, Route.Stats, MaterialShapes.Sunny),
+        NavItem.RecentQueues to MaterialShapes.Cookie6Sided,
+        NavItem.Downloads to MaterialShapes.Pill,
+        NavItem.Filters to MaterialShapes.Clover4Leaf,
+        NavItem.Stats to MaterialShapes.Sunny,
     )
+    val openQueues = app.hocket.ui.player.LocalOpenQueues.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
         links.chunked(2).forEachIndexed { r, row ->
             Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-                row.forEachIndexed { c, (item, route, iconShape) ->
+                row.forEachIndexed { c, (item, iconShape) ->
                     val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == 1, start = c == 0, end = c == 1)
                     Surface(
-                        onClick = { nav.navigate(route) { launchSingleTop = true } },
+                        onClick = { item.route()?.let { nav.navigate(it) { launchSingleTop = true } } ?: openQueues?.invoke() },
                         shape = shape,
                         color = MaterialTheme.colorScheme.surfaceContainer,
                         modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),

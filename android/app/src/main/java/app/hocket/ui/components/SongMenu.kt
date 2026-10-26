@@ -150,7 +150,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
     infoFor?.let { t ->
         ModalBottomSheet(onDismissRequest = { infoFor = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("songMenu.infoSheet")) {
             app.hocket.ui.player.PlayerAbout(
-                Modifier.fillMaxWidth().navigationBarsPadding(), track = t, title = stringResource(R.string.menu_song_info),
+                Modifier.fillMaxWidth().navigationBarsPadding(), track = t, title = stringResource(R.string.menu_song_info), onClose = { infoFor = null },
                 onOpenAlbum = navigator?.let { n -> { id -> infoFor = null; n.openAlbum(id) } },
                 onOpenArtist = navigator?.let { n -> { id -> infoFor = null; n.openArtist(id) } },
             )

@@ -157,52 +157,75 @@
 .home-section .scroller:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
 .home-section .scroller .tile { width: 172px; scroll-snap-align: start; }
 
-/* ---- Detail heroes -------------------------------------------------------- */
+/* ---- Detail pages (album, artist, playlist) -------------------------------- */
+/* The page scrolls as a whole: the hero, the actions under it, then sections. */
+.view.detail-page { overflow-y: auto; overflow-x: hidden; }
+.view.detail-page > .view-body { flex: 0 0 auto; overflow: visible; padding: 0 var(--detail-pad) 48px; }
+.view.detail-page { --detail-pad: clamp(20px, 3vw, 40px); }
+/* The hero, edge to edge across the top of the pane. Artwork is never stretched
+   past its own pixels (DetailHead): a cover with the pixels fills it and fades
+   into the page (Large); a smaller one sits at its size over a blurred wash of
+   itself (Small); with none, an accent gradient (None). */
 .detail-head {
-  margin: 12px var(--page-gutter); padding: 28px; gap: 28px; align-items: flex-end; border-radius: var(--shape-xl);
-  background-color: var(--bg-elev);
-  background-image: linear-gradient(135deg, var(--accent-soft) 0%, var(--surface-tonal) 72%);
+  position: relative; isolation: isolate; flex: 0 0 auto; margin: 0; display: flex; align-items: flex-end; gap: 36px;
+  padding: 0 var(--detail-pad) 36px; min-height: 384px; box-sizing: border-box; border-radius: 0 0 36px 36px;
+  color: #fff; background: #1d1a2b; overflow: hidden;
 }
-/* Big squircle artwork. */
-.detail-head .art { width: 216px; height: 216px; border-radius: 48px; box-shadow: var(--shadow); }
-.detail-head .art.round { width: 228px; height: 228px; }
-.detail-head .meta { gap: 8px; flex: 1 1 auto; }
-/* Eyebrow ("Albums", "Smart playlist"): a chip on the elevated surface. */
-.detail-head .meta > .muted.small:first-child {
-  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--shape-full);
-  background: var(--bg-elev); font-weight: 600; letter-spacing: 0.01em;
-}
+.detail-head .hero-backdrop { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.detail-head .hero-backdrop img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.detail-head .art { width: 232px; height: 232px; flex: 0 0 auto; border-radius: var(--shape-xl); object-fit: cover; background: rgba(255, 255, 255, 0.12); box-shadow: 0 18px 40px rgba(10, 6, 24, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.detail-head .art.round { width: 224px; height: 224px; border-radius: 50%; clip-path: none; }
+.detail-head .meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 auto; padding-bottom: 6px; }
+/* Eyebrow ("Public", "Smart playlist"): a chip on the image. */
+.detail-head .meta > .eyebrow { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--shape-full); background: rgba(255, 255, 255, 0.16); color: #fff; font-size: var(--fs-sm); font-weight: 600; }
 .detail-head .meta h1 {
-  font-size: var(--lib-hero-title-size); font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; padding-bottom: 2px;
+  margin: 0; font-size: var(--detail-title, clamp(44px, 4.6vw + 8px, 96px)); line-height: 0.96; font-weight: 800; letter-spacing: -0.035em; padding-bottom: 0.06em;
   white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
 }
-.detail-head .meta > div:not(.actions) { font-size: var(--fs-lg); }
-.detail-head .meta > .small { font-size: var(--fs-sm); }
-.detail-head .plain-link { font-weight: 700; }
-.detail-head .meta .actions { gap: 10px; margin-top: 16px; flex-wrap: wrap; }
-/* Play: a large extended FAB, squircle at rest, morphing to a full pill when pointed at. */
-.detail-head .meta .actions .btn.fab {
-  height: 56px; padding: 0 28px 0 20px; gap: 8px; border-radius: 18px; font-size: 17px; font-weight: 700; box-shadow: var(--shadow-2);
-}
-.detail-head .meta .actions .btn.fab:hover { border-radius: 28px; box-shadow: var(--shadow); }
-.detail-head .meta .actions .btn.fab:active { border-radius: var(--shape-md); }
-.detail-head .meta .actions .btn.tonal { height: 44px; padding: 0 18px 0 14px; font-size: var(--fs-lg); font-weight: 600; background: var(--bg-elev); }
-.detail-head .meta .actions .btn.tonal:hover { background: var(--state-selected); }
-/* Secondary actions: tonal icon buttons. */
-.detail-head .meta .actions .btn.icon { width: 44px; height: 44px; background: var(--bg-elev); }
-.detail-head .meta .actions .btn.icon:hover { background: var(--state-selected); }
-.detail-head .meta .actions .btn.icon svg { width: 22px; height: 22px; }
-.detail-head .meta .actions .btn.icon:where(.on, [aria-pressed="true"]) { border-radius: var(--shape-md); }
-.detail-head .meta .actions .stars { padding: 0 12px; height: 44px; align-items: center; border-radius: var(--shape-full); background: var(--bg-elev); }
-.detail-head .meta .actions .stars svg { width: 18px; height: 18px; }
-/* Artist pages: one section after another, with the page rhythm between them. */
-[data-testid="view-artist"] .view-body .section-heading { margin-top: 8px; }
-[data-testid="view-artist"] .view-body .section-heading ~ .section-heading { margin-top: 28px; }
+.detail-head .meta .detail-sub { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 14px; color: rgba(255, 255, 255, 0.84); }
+.detail-head .meta .detail-sub .plain-link { font-size: 18px; font-weight: 700; color: #fff; }
+.detail-head .meta .detail-note { font-size: 15px; color: rgba(255, 255, 255, 0.92); }
+.detail-head.hero-small .hero-backdrop img { filter: blur(64px) saturate(1.2) brightness(0.78); transform: scale(1.3); }
+.detail-head.hero-small .hero-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(14, 10, 24, 0.1) 0%, rgba(14, 10, 24, 0.42) 100%); }
+.detail-head.hero-small .art.pending { box-shadow: none; }
+.detail-head.hero-none { background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 80%, #fff) 0%, var(--accent) 45%, color-mix(in srgb, var(--accent) 40%, #000) 100%); }
+.detail-head.hero-none .art.placeholder { display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24); color: #fff; }
+/* Large: the cover across the top, fading into the page; the title sits on the fade in the page's own colours. */
+.detail-head.hero-large { min-height: 470px; border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
+.detail-head.hero-large .hero-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20, 16, 24, 0.22) 0%, transparent 26%, transparent 42%, color-mix(in srgb, var(--bg-elev) 80%, transparent) 74%, var(--bg-elev) 92%); }
+.detail-head.hero-large .meta > .eyebrow { background: color-mix(in srgb, var(--bg-elev) 70%, transparent); color: var(--fg); }
+.detail-head.hero-large .meta .detail-sub { color: var(--fg-muted); }
+.detail-head.hero-large .meta .detail-sub .plain-link { color: var(--accent-text); }
+.detail-head.hero-large .meta .detail-note { color: var(--fg); }
+/* The actions under the hero, on the page: Play, then round tonal icon buttons (square when on); the rating at the end. */
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad) 0; }
+.detail-actions .btn.fab { height: 56px; padding: 0 24px 0 18px; gap: 8px; border-radius: var(--shape-full); font-size: 16px; font-weight: 600; box-shadow: var(--shadow-1); transition: border-radius var(--dur-spring) var(--spring-fast); }
+.detail-actions .btn.fab:active { border-radius: var(--shape-md); }
+.detail-actions .btn.icon { width: 56px; height: 56px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
+.detail-actions .btn.icon:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
+.detail-actions .btn.icon:active { border-radius: var(--shape-md); }
+.detail-actions .btn.icon svg { width: 24px; height: 24px; }
+.detail-actions .btn.icon:where(.on, [aria-pressed="true"]) { border-radius: var(--shape-lg); background: var(--accent); color: var(--accent-fg); }
+.detail-actions .spacer { flex: 1 1 auto; }
+.detail-rating { display: flex; align-items: center; gap: 8px; }
+.detail-rating-label { font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); }
+.detail-rating .stars svg { width: 22px; height: 22px; }
+/* Sections below: a title with its summary or View more on the right. */
+.detail-section { padding-top: 28px; }
+.detail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
+.detail-section-head h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
+.detail-section-head .muted { font-size: var(--fs-md); }
+.detail-footnote { padding: 14px 8px 0; font-size: var(--fs-md); line-height: 20px; color: var(--fg-muted); }
+.btn.view-more { height: 40px; padding: 0 12px 0 16px; gap: 2px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); font-weight: 600; }
+.btn.view-more:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
+.detail-page .table { --table-inset: 0px; }
+.detail-page .home-section { padding: 0; }
 
 /* ---- Track tables --------------------------------------------------------- */
+/* The column labels sit on the page over a hairline, as a data table's header. */
 .table-head {
-  height: 34px; margin: 0 var(--table-inset) 6px; padding: 0 8px; border: 0; border-radius: var(--shape-full);
-  background: var(--bg-sunken); color: var(--fg-muted); font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0.01em;
+  height: 40px; margin: 0 var(--table-inset) 4px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0;
+  background: transparent; color: var(--fg-muted); font-size: var(--fs-md); font-weight: 500; letter-spacing: 0.01em;
 }
 .table-head .th.sortable:hover { background: var(--bg-hover); }
 .table-head .th.sorted { color: var(--fg); }
@@ -210,7 +233,7 @@
 .table-head .th.sortable .th-btn { transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
 .table-head .th.sortable .th-btn:active { border-radius: var(--shape-sm); }
 .tr {
-  border-radius: 15px;
+  font-size: 14px; border-radius: var(--shape-md);
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
 .tr:hover { background: var(--bg-hover); }
@@ -220,8 +243,8 @@
 .tr.playing:hover, .tr.playing.selected { background: var(--selection); }
 .tr.playing .td.title { color: var(--fg); font-weight: 700; }
 .tr.playing .td.index .icon { color: var(--accent-text); }
-.tr .art { width: 24px; height: 24px; border-radius: 8px; }
-.tr .row-play { background: var(--accent); color: var(--accent-fg); width: 24px; inset: 3px 0 3px auto; border-radius: 9px; transition: border-radius var(--dur-spring) var(--spring-fast), opacity var(--dur-short) var(--ease-emphasized); }
+.tr .art { width: 32px; height: 32px; border-radius: var(--shape-sm); }
+.tr .row-play { background: var(--accent); color: var(--accent-fg); width: 30px; inset: 5px 0 5px auto; border-radius: 10px; transition: border-radius var(--dur-spring) var(--spring-fast), opacity var(--dur-short) var(--ease-emphasized); }
 .tr .row-play:hover { background: var(--accent); border-radius: 50%; }
 .table .empty .empty-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 
@@ -268,12 +291,6 @@
   .group-songs { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   :is(.group-row .tile, .genre-row > li, .group-songs > li) { width: auto; }
   .view-header .actions { margin-left: 0; }
-  .detail-head { margin: 8px var(--page-gutter); padding: 16px; gap: 16px; align-items: flex-start; }
-  .detail-head .art, .detail-head .art.round { width: 128px; height: 128px; border-radius: 32px; }
-  .detail-head .art.round { border-radius: 0; }
-  .detail-head .meta { flex: 1 1 220px; }
-  .detail-head .meta .actions { margin-top: 8px; }
-  .detail-head .meta .actions .btn.fab { height: 52px; padding: 0 22px 0 18px; border-radius: 18px; }
   /* The carousels wrap into the same fluid grid as the library pages, so rows fill the width. */
   .home-section .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }
   .home-section .scroller .tile { width: auto; }
@@ -284,18 +301,10 @@
    so the hero's controls are never cut off; the track list keeps a bounded
    height of its own for virtualisation. */
 @media (max-height: 640px) {
-  .detail-head { padding: 12px 14px; gap: 14px; margin: 6px var(--page-gutter); }
-  .detail-head .art, .detail-head .art.round { width: 88px; height: 88px; border-radius: 24px; }
-  .detail-head .art.round { border-radius: 0; }
-  .detail-head .meta h1 { font-size: 28px; }
-  .detail-head .meta > div:not(.actions) { font-size: var(--fs-md); }
-  .detail-head .meta .actions { margin-top: 6px; gap: 8px; }
-  .detail-head .meta .actions .btn.fab { height: 44px; padding: 0 18px 0 14px; border-radius: 14px; font-size: var(--fs-lg); }
-  .detail-head .meta .actions .btn.fab:hover { border-radius: 22px; }
-  .detail-head .meta .actions .btn.tonal, .detail-head .meta .actions .btn.icon, .detail-head .meta .actions .stars { height: 40px; }
-  .detail-head .meta .actions .btn.icon { width: 40px; }
-  .view:has(> .detail-head) { overflow-y: auto; }
-  .view:has(> .detail-head) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
+  .detail-head { min-height: 240px; gap: 20px; padding-bottom: 20px; }
+  .detail-head.hero-large { min-height: 300px; }
+  .detail-head .art, .detail-head .art.round { width: 120px; height: 120px; }
+  .detail-head .meta h1 { font-size: 36px; }
   /* Songs, likewise: the page scrolls past its groups to a table that keeps a usable height. */
   .view:has(> .list-top) { overflow-y: auto; }
   .view:has(> .list-top) > .list-top .list-top-groups { max-height: none; overflow: visible; }
@@ -320,3 +329,44 @@
   .genre-tile::after, .section-icon, .empty-icon { forced-color-adjust: none; background: GrayText; color: Canvas; }
   .tr, .tile, .genre-tile, .tile .art { transition: none; }
 }
+
+/* Search: the kind chips under the heading, and each section's head with its "See all". */
+.search-kinds { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 var(--page-pad) 20px; }
+.search-header { align-items: baseline; gap: 12px; }
+.search-header h1 { font-size: 32px; line-height: 40px; font-weight: 800; letter-spacing: -0.02em; }
+.search-header > .muted { font-size: var(--fs-lg); }
+.search-kind { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: var(--shape-sm); border: 1px solid var(--border-strong, var(--border)); background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.search-kind:hover:not(:disabled) { background: var(--bg-hover); }
+.search-kind:disabled { opacity: 0.45; cursor: default; }
+.search-kind.on { background: var(--state-selected); border-color: transparent; color: var(--fg); }
+.search-kind:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.search-kind-count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.8; }
+.search-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.search-nothing, .search-asking { margin: 0; }
+
+/* Artist discography: each shelf's head carries its "View more"; the grid view's head its back arrow and order. */
+.shelf-head { display: flex; align-items: center; gap: 10px; margin-top: 24px; }
+.shelf-head .section-heading { margin: 0; }
+.shelf-head .spacer { flex: 1; }
+.shelf-head .seg-group .seg { flex: 0 0 auto; }
+.artist-about p { max-width: 72ch; font-size: 16px; line-height: 1.6; color: var(--fg); margin: 8px 0; white-space: pre-line; }
+.detail-section-head.shelf-head { margin-top: 0; justify-content: flex-start; }
+/* An artist's top songs: two columns of rows, the rank over each cover. */
+.top-songs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 2px 24px; margin-top: 4px; }
+.top-song { display: flex; align-items: center; gap: 4px; padding-right: 12px; border-radius: var(--shape-md); transition: background-color var(--dur-short) var(--ease-emphasized); }
+.top-song:hover { background: var(--bg-hover); }
+/* While the songs load: a row's height (8 + 44 + 8), in the same grid. */
+.top-song-placeholder { height: 60px; background: var(--surface-tonal-sunken, var(--bg-hover)); }
+.top-song-placeholder:hover { background: var(--surface-tonal-sunken, var(--bg-hover)); }
+.top-song.playing { background: var(--accent-soft); }
+.top-song-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: inherit; cursor: pointer; }
+.top-song-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.top-song-art { position: relative; flex: 0 0 auto; width: 44px; height: 44px; }
+.top-song-art .art { width: 44px; height: 44px; border-radius: var(--shape-sm); display: block; }
+.top-song-n { position: absolute; inset: 0; display: grid; place-items: center; border-radius: var(--shape-sm); background: rgba(0, 0, 0, 0.18); color: #fff; font-weight: 700; font-size: 15px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+.top-song-title, .top-song-sub { display: block; }
+.top-song-title { font-size: 15px; font-weight: 500; }
+.top-song.playing .top-song-title { color: var(--accent-text); font-weight: 700; }
+.top-song-sub { font-size: var(--fs-md); color: var(--fg-muted); }
+.top-song .heart:not(.on) { opacity: 0; }
+.top-song:hover .heart, .top-song:focus-within .heart { opacity: 1; }

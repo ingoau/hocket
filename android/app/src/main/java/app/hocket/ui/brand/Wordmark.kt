@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.background
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -158,6 +159,19 @@ fun HeaderLockup(modifier: Modifier = Modifier) {
             modifier = Modifier.clearAndSetSemantics {},
         )
     }
+}
+
+/**
+ * The app's tile (docs/brand.md): the two-voiced wave on the dark ink square, [size] wide, its
+ * corners the launcher's. Decorative; the screen names the app beside it.
+ */
+@Composable
+fun AppTile(size: Dp, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Box(
+        modifier.size(size).clearAndSetSemantics { }
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFF29234A), Brand.inkOnLight)), androidx.compose.foundation.shape.RoundedCornerShape(size * 0.24f)),
+        contentAlignment = Alignment.Center,
+    ) { VoicedMark(height = size * (Brand.WAVE_HEIGHT / 100f), voices = listOf(Brand.voice1, Brand.voice2)) }
 }
 
 /** The bare wave [height] tall, notes 1 and 3 in the first of [voices], 2 and 4 in the second. */

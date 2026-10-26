@@ -55,10 +55,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0006_artist_sort_index",
         include_str!("migrations/0006_artist_sort_index.sql"),
     ),
+    (
+        7,
+        "0007_album_release_types",
+        include_str!("migrations/0007_album_release_types.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -554,6 +559,7 @@ mod tests {
                 c.execute_batch(
                     "DROP INDEX idx_play_history_play;
                      ALTER TABLE tracks DROP COLUMN artists;
+                     ALTER TABLE albums DROP COLUMN release_types;
                      DELETE FROM schema_version WHERE version >= 4;
                      INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
                      INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
@@ -615,6 +621,7 @@ mod tests {
             db.with_conn(|c| {
                 c.execute_batch(
                     "ALTER TABLE tracks DROP COLUMN artists;
+                     ALTER TABLE albums DROP COLUMN release_types;
                      DELETE FROM schema_version WHERE version >= 5;
                      INSERT INTO tracks(id, server_id, title, artist_id, artist) VALUES ('t', 's', 'T', 'ar1', 'A feat. B');
                      INSERT INTO saved_state VALUES ('sync:s', '{\"gen\":3,\"phase\":\"done\",\"lastFullAt\":1790000000000.0,\"readyTables\":[\"tracks\"]}', 0);

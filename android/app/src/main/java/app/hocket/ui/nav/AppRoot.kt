@@ -126,7 +126,6 @@ import app.hocket.ui.screens.settings.SettingsScreen
 import app.hocket.ui.screens.settings.TranscodingSettingsScreen
 import app.hocket.ui.screens.setup.ServerSetupScreen
 import app.hocket.ui.screens.stats.StatsScreen
-import app.hocket.ui.queue.SavedQueuesScreen
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.rememberUpdatedState
@@ -169,7 +168,9 @@ fun AppRoot(
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
         val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
-        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor
+        // Set when the setup form signs in: setup stays up for the server's summary until Continue.
+        var holdSetup by rememberSaveable { mutableStateOf(false) }
+        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor && !holdSetup
         CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides appSnackbar) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
@@ -179,7 +180,7 @@ fun AppRoot(
                 Box(Modifier.weight(1f).fillMaxWidth().then(if (fakeBanner) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
                     when {
                         !started || !ready -> LoadingScreen()
-                        !inShell -> ServerSetupScreen(existing = server, needsRelogin = needsRelogin)
+                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
                         else -> MainShell(snackbar)
                     }
                 }
@@ -348,7 +349,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
         DeveloperTriggerEffect(developerMode) {
             if (nav.currentDestination?.hasRoute(Route.DeveloperDiagnostics::class) != true) nav.navigate(Route.DeveloperDiagnostics)
         }
-        CompositionLocalProvider(LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache) {
+        val openConnectSettings = remember(nav) { { nav.navigate(Route.ConnectSettings) { launchSingleTop = true } } }
+        // Queues is a drawer over whatever is showing, from the bar, the Library and Home alike.
+        var queuesOpen by rememberSaveable { mutableStateOf(false) }
+        val openQueues = remember { { queuesOpen = true } }
+        if (queuesOpen) app.hocket.ui.player.QueuesSheet(onDismiss = { queuesOpen = false })
+        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -380,7 +386,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val currentSelected by rememberUpdatedState(selected)
             val currentItems by rememberUpdatedState(items)
             val go: (NavItem) -> Unit = remember(nav) {
-                { item ->
+                go@{ item ->
+                    if (item.route() == null) { openQueues(); return@go }
                     val from = currentSelected
                     val handled = from == item && when (nav.reselectPlace(item)) {
                         Reselect.AtRoot -> { reselected.tryEmit(Unit); true }
@@ -593,7 +600,6 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.Artist>(transitions) { entry -> ArtistDetailScreen(nav, entry.toRoute<Route.Artist>().id) }
         screen<Route.Playlist>(transitions) { entry -> PlaylistDetailScreen(nav, entry.toRoute<Route.Playlist>().id) }
         screen<Route.Genre>(transitions) { entry -> GenreDetailScreen(nav, entry.toRoute<Route.Genre>().name) }
-        screen<Route.SavedQueues>(transitions) { SavedQueuesScreen(nav) }
         screen<Route.AudioSettings>(transitions) { AudioSettingsScreen(nav) }
         screen<Route.TranscodingSettings>(transitions) { TranscodingSettingsScreen(nav) }
         screen<Route.ConnectSettings>(transitions) { ConnectSettingsScreen(nav) }

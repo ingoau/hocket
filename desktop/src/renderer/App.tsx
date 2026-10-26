@@ -18,7 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toasts } from "./components/Toasts";
 import { Dialogs } from "./components/Dialogs";
 import { Router } from "./views/Router";
-import { Setup } from "./views/Setup";
+import { Setup, useSetupSummary } from "./views/Setup";
 import { executeAction } from "./store/actions";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
@@ -38,6 +38,7 @@ export function App() {
   const ready = useApp((s) => s.ready);
   // The core probes before installing: ServersChanged only arrives once a server is real.
   const hasServer = useApp((s) => s.servers.length > 0);
+  const setupSummary = useSetupSummary();
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
@@ -62,7 +63,7 @@ export function App() {
   useQueueDropReveal();
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
-  if (!hasServer) return <Setup />;
+  if (!hasServer || setupSummary) return <Setup />;
   const skip = (e: React.MouseEvent) => {
     e.preventDefault();
     document.getElementById("main")?.focus();

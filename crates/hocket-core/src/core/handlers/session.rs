@@ -1524,6 +1524,7 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::RestoreSavedQueue { .. } => "restoreSavedQueue",
         Command::PinSavedQueue { .. } => "pinSavedQueue",
         Command::DeleteSavedQueue { .. } => "deleteSavedQueue",
+        Command::RenameQueue { .. } => "renameQueue",
         _ => "session",
     }
 }
@@ -1566,6 +1567,7 @@ fn command_label(cmd: &Command) -> String {
             }
         }
         Command::DeleteSavedQueue { .. } => "Delete saved queue".into(),
+        Command::RenameQueue { .. } => "Rename queue".into(),
         _ => "Queue change".into(),
     }
 }

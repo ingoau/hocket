@@ -404,6 +404,22 @@ export class FakeCore implements CoreHandle {
         this.savedQueues = this.savedQueues.filter((s) => s.id !== cmd.data.id);
         this.emitSavedQueues();
         return;
+      case "renameQueue": {
+        const label = cmd.data.label.trim();
+        if (!label) return;
+        if (cmd.data.saved_queue_id) {
+          const q = this.savedQueues.find((s) => s.id === cmd.data.saved_queue_id);
+          if (!q) return;
+          q.label = label;
+          q.context = { ...q.context, label };
+          q.updatedAt = Date.now();
+          this.emitSavedQueues();
+        } else if (this.session.context) {
+          this.session.context = { ...this.session.context, label };
+          this.emitQueue();
+        }
+        return;
+      }
       case "saveQueueAsPlaylist":
         this.saveQueueAsPlaylist(cmd.data.saved_queue_id, cmd.data.name);
         return;
@@ -2398,6 +2414,30 @@ export class FakeCore implements CoreHandle {
       }
       case "artist":
         return { type: "artistDetail", data: lib?.artists.find((a) => a.id === q.data.id) };
+      case "artistInfo": {
+        const artist = lib?.artists.find((a) => a.id === q.data.id);
+        if (!artist) return { type: "externalInfo", data: undefined };
+        return {
+          type: "externalInfo",
+          data: {
+            text: `${artist.name} make quiet, close-miked songs about leaving and coming home. They record in kitchens and church halls and tour mostly by train.`,
+            lastFmUrl: `https://www.last.fm/music/${encodeURIComponent(artist.name)}`,
+            similarArtists: (lib?.artists ?? []).filter((a) => a.id !== artist.id).slice(0, 5),
+          },
+        };
+      }
+      case "albumInfo": {
+        const album = lib?.albums.find((a) => a.id === q.data.id);
+        if (!album) return { type: "externalInfo", data: undefined };
+        return {
+          type: "externalInfo",
+          data: {
+            text: `${album.name} was recorded over two winters with the windows open, so you can hear the street in the quiet parts.`,
+            lastFmUrl: `https://www.last.fm/music/${encodeURIComponent(album.artist ?? "")}/${encodeURIComponent(album.name)}`,
+            similarArtists: [],
+          },
+        };
+      }
       case "artistTopSongs": {
         const ids = (lib?.artistAlbums.get(q.data.id) ?? []).flatMap((a) => lib?.albumTracks.get(a) ?? []);
         const tracks = ids.map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t).sort((a, b) => b.playCount - a.playCount);

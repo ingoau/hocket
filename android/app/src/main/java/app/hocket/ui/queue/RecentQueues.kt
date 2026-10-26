@@ -1,6 +1,22 @@
 package app.hocket.ui.queue
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalIconToggleButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import app.hocket.ui.components.GroupLabel
+import app.hocket.ui.components.Segment
+import app.hocket.ui.components.SegmentOuter
+import app.hocket.ui.components.formatClock
+import app.hocket.ui.components.segmentedListColors
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -8,20 +24,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -45,118 +60,136 @@ import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
-import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
-import app.hocket.core.api.Command
 import app.hocket.core.api.SavedQueue
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.Artwork
-import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.formatAgo
 
 /**
- * Saved queues: pinned first, then recent; restore / pin / delete / save as playlist. [onRestore]
- * runs after a queue is restored (the player's queue switcher closes itself).
+ * Queues: the playing queue on a filled primary card (its name, size and place, rename and create
+ * playlist) above the pinned and recent saved queues as segmented groups, each row with pin, rename
+ * and delete. No artwork. Delete is immediate: the core makes it undoable like any queue change.
+ * [onRestore] runs after a queue is restored (the player's queue switcher closes itself).
  */
 @Composable
 fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset), onRestore: () -> Unit = {}) {
     val client = LocalCoreClient.current
     val saved by client.savedQueues.collectAsStateWithLifecycle()
+    val queue by client.queue.collectAsStateWithLifecycle()
     val connection by client.connection.collectAsStateWithLifecycle()
-    var deleting by remember { mutableStateOf<SavedQueue?>(null) }
-    var naming by remember { mutableStateOf<SavedQueue?>(null) }
-    if (saved.isEmpty()) {
-        EmptyState(stringResource(R.string.empty_saved_queues_title), if (!connection.connected) stringResource(R.string.empty_recent_offline) else stringResource(R.string.empty_saved_queues_body), modifier)
-        return
-    }
-    val pinned = saved.filter { it.pinned }
+    // The queue being renamed: a saved queue's id, "" for the playing queue, null for none.
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var naming by remember { mutableStateOf(false) }
+    val pinned = saved.filter { it.pinned }.sortedByDescending { it.lastInteractedAt }
     val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
-    LazyColumn(modifier, contentPadding = contentPadding) {
-        if (pinned.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_pinned)) }; items(pinned, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
-        if (recent.isNotEmpty()) { item { SectionHeader(stringResource(R.string.saved_recent)) }; items(recent, key = { it.id }) { SavedQueueRow(it, onDelete = { deleting = it }, onSaveAs = { naming = it }, onRestore = onRestore) } }
+    val playingLabel = queue.contextLabel?.takeIf { it.isNotBlank() }
+    val playingCount = queue.history.size + (if (queue.current != null) 1 else 0) + queue.playingNext.size + queue.totalUpcoming.toInt()
+    val playingIndex = if (queue.current != null) queue.history.size + 1 else 0
+    LazyColumn(modifier, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = contentPadding.calculateTopPadding(), bottom = contentPadding.calculateBottomPadding())) {
+        item(key = "playing.label") { GroupLabel(stringResource(R.string.queue_playing_now)) }
+        item(key = "playing") {
+            PlayingQueueCard(playingLabel, playingCount, playingIndex, onRename = { renaming = "" }, onCreatePlaylist = { naming = true })
+        }
+        if (pinned.isNotEmpty()) {
+            item(key = "pinned.label") { GroupLabel(stringResource(R.string.saved_pinned), Modifier.padding(top = 12.dp)) }
+            itemsIndexed(pinned, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, pinned.size, onRename = { renaming = q.id }, onRestore = onRestore) }
+        }
+        item(key = "recent.label") { GroupLabel(stringResource(R.string.saved_recent), Modifier.padding(top = 12.dp)) }
+        if (recent.isEmpty()) item(key = "recent.empty") {
+            Segment(0, 1) {
+                Text(
+                    if (!connection.connected && saved.isEmpty()) stringResource(R.string.empty_recent_offline) else stringResource(R.string.empty_saved_queues_body),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+        itemsIndexed(recent, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, recent.size, onRename = { renaming = q.id }, onRestore = onRestore) }
     }
-    deleting?.let { sq -> ConfirmDialog(stringResource(R.string.playlist_delete_confirm, sq.label), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.deleteSavedQueue(sq.id)) }, onDismiss = { deleting = null }) }
-    naming?.let { sq ->
-        var name by remember { mutableStateOf(sq.label) }
-        AlertDialog(onDismissRequest = { naming = null }, title = { Text(stringResource(R.string.queue_save_as_playlist)) },
-            text = { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.playlist_name)) }, singleLine = true) },
-            confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { client.dispatch(Commands.saveQueueAsPlaylist(sq.id, name.trim())); naming = null }) { Text(stringResource(R.string.action_save)) } },
-            dismissButton = { TextButton(onClick = { naming = null }) { Text(stringResource(R.string.action_cancel)) } })
+    renaming?.let { id ->
+        val initial = if (id.isEmpty()) playingLabel.orEmpty() else saved.firstOrNull { it.id == id }?.label.orEmpty()
+        NameDialog(stringResource(R.string.queue_rename_title), stringResource(R.string.queue_name), initial, stringResource(R.string.action_save),
+            onConfirm = { client.dispatch(Commands.renameQueue(id.ifEmpty { null }, it)) }, onDismiss = { renaming = null })
+    }
+    if (naming) {
+        NameDialog(stringResource(R.string.queue_create_playlist), stringResource(R.string.playlist_name), playingLabel.orEmpty(), stringResource(R.string.action_create),
+            onConfirm = { client.dispatch(Commands.saveQueueAsPlaylist(null, it)) }, onDismiss = { naming = false })
     }
 }
 
+/**
+ * The playing queue at the top of Queues, on the primary colour: its name, how long it is, where
+ * in it you are, and its two actions (Create playlist, Rename) as tonal buttons on the card.
+ */
 @Composable
-private fun SavedQueueRow(sq: SavedQueue, onDelete: () -> Unit, onSaveAs: () -> Unit, onRestore: () -> Unit) {
+private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: () -> Unit, onCreatePlaylist: () -> Unit) {
     val client = LocalCoreClient.current
-    Row(Modifier.fillMaxWidth().clickable { client.dispatch(Commands.restoreSavedQueue(sq.id)); onRestore() }.testTag("savedQueue.${sq.id}").padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Artwork(sq.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(8.dp))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(sq.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgo(sq.lastInteractedAt)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconToggleButton(checked = sq.pinned, onCheckedChange = { client.dispatch(Commands.pinSavedQueue(sq.id, it)) }) {
-            Icon(if (sq.pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (sq.pinned) R.string.saved_unpin else R.string.saved_pin), tint = if (sq.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = onSaveAs) { Icon(HocketIcons.Filled.PlaylistAdd, stringResource(R.string.queue_save_as_playlist)) }
-        IconButton(onClick = onDelete) { Icon(HocketIcons.Filled.Delete, stringResource(R.string.action_delete)) }
-    }
-}
-
-/** The undo history sheet content: newest first, each undoable directly; undo/redo at the top. */
-@Composable
-fun UndoHistoryPanel(modifier: Modifier = Modifier) {
-    val client = LocalCoreClient.current
-    val undo by client.undo.collectAsStateWithLifecycle()
-    val self = remember { client.session.value?.let { "" } ?: "" }
-    Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            TextButton(enabled = undo.canUndo, onClick = { client.dispatch(Command.Undo) }) { Text(undo.undoLabel?.let { stringResource(R.string.history_undo_label, it) } ?: stringResource(R.string.action_undo)) }
-            TextButton(enabled = undo.canRedo, onClick = { client.dispatch(Command.Redo) }) { Text(undo.redoLabel?.let { stringResource(R.string.history_redo_label, it) } ?: stringResource(R.string.action_redo)) }
-        }
-        if (undo.history.isEmpty()) { EmptyState(stringResource(R.string.empty_history_title), stringResource(R.string.empty_history_body)); return }
-        LazyColumn(contentPadding = PaddingValues(bottom = app.hocket.ui.nav.BottomContentInset)) {
-            items(undo.history, key = { it.id }) { e ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(HocketIcons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(e.label, style = MaterialTheme.typography.bodyLarge)
-                        Text(formatAgo(e.at) + (e.note?.let { stringResource(R.string.dot_separator) + it } ?: ""), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(onClick = { client.dispatch(Commands.undoEntry(e.id)) }) { Text(stringResource(R.string.history_undo_this)) }
+    val position by client.position.collectAsStateWithLifecycle()
+    val onCard = MaterialTheme.colorScheme.onPrimary
+    val onCardSoft = onCard.copy(alpha = 0.82f)
+    val tonal = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+    Surface(color = MaterialTheme.colorScheme.primary, contentColor = onCard, shape = RoundedCornerShape(SegmentOuter + 4.dp), modifier = Modifier.fillMaxWidth().testTag("queues.playing")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(label ?: stringResource(R.string.player_mode_queue), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (count == 0) stringResource(R.string.queue_empty_meta) else stringResource(R.string.saved_tracks, count), style = MaterialTheme.typography.bodyMedium, color = onCardSoft, maxLines = 1)
+                    if (index > 0) Text(stringResource(R.string.queue_where, index, count, formatClock(position)), style = MaterialTheme.typography.bodySmall, color = onCardSoft, maxLines = 1)
+                    else if (count == 0) Text(stringResource(R.string.queue_empty_hint), style = MaterialTheme.typography.bodySmall, color = onCardSoft, maxLines = 1)
+                }
+                if (index > 0) Icon(HocketIcons.Filled.Equalizer, null, tint = onCard)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = onCreatePlaylist, enabled = count > 0, colors = tonal, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("queues.playing.createPlaylist")) {
+                    Icon(HocketIcons.AutoMirrored.Filled.PlaylistAdd, null, Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(stringResource(R.string.queue_create_playlist))
+                }
+                if (label != null) FilledTonalButton(onClick = onRename, colors = tonal, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("queues.playing.rename")) {
+                    Icon(HocketIcons.Outlined.Edit, null, Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(stringResource(R.string.queue_rename))
                 }
             }
         }
     }
 }
 
-/**
- * Full-screen route for saved queues (Home "see all", Library "Recent queues"): pinned and recent
- * queues, plus the undo history in a sheet (both used to be tabs of the player's queue).
- */
-@OptIn(ExperimentalMaterial3Api::class)
+/** A one-field dialog for naming something; a blank name can't be confirmed. */
 @Composable
-fun SavedQueuesScreen(nav: NavHostController) {
-    var undoHistory by remember { mutableStateOf(false) }
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text(stringResource(R.string.home_saved_queues), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
-            actions = {
-                IconButton(onClick = { undoHistory = true }, modifier = Modifier.testTag("savedQueues.undoHistory")) { Icon(HocketIcons.Filled.History, stringResource(R.string.queue_undo_history)) }
-                AccountButton()
+private fun NameDialog(title: String, label: String, initial: String, confirm: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) },
+        text = { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(label) }, singleLine = true, modifier = Modifier.testTag("queues.nameField")) },
+        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name.trim()); onDismiss() }) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+}
+
+@Composable
+private fun SavedQueueRow(sq: SavedQueue, index: Int, count: Int, onRename: () -> Unit, onRestore: () -> Unit) {
+    val client = LocalCoreClient.current
+    Box(Modifier.padding(top = if (index > 0) ListItemDefaults.SegmentedGap else 0.dp)) {
+        SegmentedListItem(
+            onClick = { client.dispatch(Commands.restoreSavedQueue(sq.id)); onRestore() },
+            shapes = ListItemDefaults.segmentedShapes(index, count),
+            colors = segmentedListColors(),
+            modifier = Modifier.testTag("savedQueue.${sq.id}"),
+            supportingContent = {
+                Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgo(sq.lastInteractedAt)), maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
-            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-        )
-    }) { padding ->
-        RecentQueuesList(Modifier.fillMaxSize().padding(padding))
-    }
-    if (undoHistory) {
-        ModalBottomSheet(onDismissRequest = { undoHistory = false }) {
-            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
-            UndoHistoryPanel(Modifier.fillMaxWidth().heightIn(min = 240.dp))
-        }
+            trailingContent = {
+                Row {
+                    // Pinned reads as a filled tonal toggle; unpinned as a plain outlined pin.
+                    FilledTonalIconToggleButton(checked = sq.pinned, onCheckedChange = { client.dispatch(Commands.pinSavedQueue(sq.id, it)) },
+                        colors = IconButtonDefaults.filledTonalIconToggleButtonColors(containerColor = Color.Transparent, checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer, checkedContentColor = MaterialTheme.colorScheme.primary),
+                        shapes = IconButtonDefaults.toggleableShapes(), modifier = Modifier.testTag("savedQueue.${sq.id}.pin")) {
+                        Icon(if (sq.pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (sq.pinned) R.string.saved_unpin else R.string.saved_pin))
+                    }
+                    IconButton(onClick = onRename, shapes = IconButtonDefaults.shapes(), modifier = Modifier.testTag("savedQueue.${sq.id}.rename")) { Icon(HocketIcons.Outlined.Edit, stringResource(R.string.queue_rename_named, sq.label)) }
+                    IconButton(onClick = { client.dispatch(Commands.deleteSavedQueue(sq.id)) }, shapes = IconButtonDefaults.shapes(), modifier = Modifier.testTag("savedQueue.${sq.id}.delete")) { Icon(HocketIcons.Outlined.Delete, stringResource(R.string.queue_delete_named, sq.label)) }
+                }
+            },
+        ) { Text(sq.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }

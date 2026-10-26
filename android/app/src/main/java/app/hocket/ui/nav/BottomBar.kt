@@ -160,7 +160,8 @@ fun NavHostController.reselectPlace(item: NavItem): Reselect {
     return Reselect.Popped
 }
 
-fun NavItem.route(): Route = when (this) {
+/** The place's screen; null for Queues, which opens as a drawer over the current place. */
+fun NavItem.route(): Route? = when (this) {
     NavItem.Home -> Route.Home
     NavItem.Search -> Route.Search
     NavItem.Library -> Route.Library()
@@ -169,7 +170,7 @@ fun NavItem.route(): Route = when (this) {
     NavItem.Albums -> Route.Albums
     NavItem.Songs -> Route.Songs
     NavItem.Genres -> Route.Genres
-    NavItem.RecentQueues -> Route.SavedQueues
+    NavItem.RecentQueues -> null
     NavItem.Stats -> Route.Stats
     NavItem.Downloads -> Route.Downloads
     NavItem.Filters -> Route.Filters
@@ -185,7 +186,7 @@ fun NavItem.isScreen(destination: NavDestination): Boolean = when (this) {
     NavItem.Albums -> destination.hasRoute(Route.Albums::class)
     NavItem.Songs -> destination.hasRoute(Route.Songs::class)
     NavItem.Genres -> destination.hasRoute(Route.Genres::class)
-    NavItem.RecentQueues -> destination.hasRoute(Route.SavedQueues::class)
+    NavItem.RecentQueues -> false
     NavItem.Stats -> destination.hasRoute(Route.Stats::class)
     NavItem.Downloads -> destination.hasRoute(Route.Downloads::class)
     NavItem.Filters -> destination.hasRoute(Route.Filters::class)
@@ -212,13 +213,14 @@ fun selectedPlace(backStack: List<NavBackStackEntry>, items: List<NavItem>, root
  * of the stack's root entry (the one above the start destination), null for the start's own.
  */
 fun NavHostController.goToPlace(item: NavItem): String? {
+    val route = item.route() ?: return null
     // Settings is opened over a place, not part of it: switching places closes it (and anything
     // opened from it) instead of saving it into that place's stack, where it would come back on
     // return; for Home, whose stack is restored under the start destination, that meant Home
     // reopened Settings and could never be reached.
     val entries = currentBackStack.value.filter { it.destination !is NavGraph }
     entries.drop(1).firstOrNull { it.destination.isSettings() }?.let { popBackStack(it.destination.id, inclusive = true) }
-    navigate(item.route()) {
+    navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true

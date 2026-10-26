@@ -159,6 +159,12 @@ class ExoBackend(
         .setDeviceVolumeControlEnabled(true)
         .build()
 
+    init {
+        // The output picked in the Connect sheet (speaker, earphones, ...) for this app's playback only.
+        AudioOutputs.start(context)
+        AudioOutputs.attach { device -> player.setPreferredAudioDevice(device) }
+    }
+
     private var preBufferPlayer: ExoPlayer? = null
     /** The main player's audio session as effect apps see it (the pre-buffer player stays silent). */
     private val effects = AudioEffectSession(context)
@@ -436,6 +442,7 @@ class ExoBackend(
         preBufferPlayer?.release()
         preBufferPlayer = null
         effects.close()
+        AudioOutputs.detach()
         player.release()
     }
 

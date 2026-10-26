@@ -108,6 +108,9 @@ export async function keyboardSetup(page: Page): Promise<void> {
   await expect(page.getByTestId("setup-password")).toBeFocused();
   await page.keyboard.type("secret");
   await page.keyboard.press("Enter");
+  // The summary takes focus on Continue: Enter goes in.
+  await expect(page.getByTestId("setup-continue")).toBeFocused({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 

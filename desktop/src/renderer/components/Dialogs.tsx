@@ -1,13 +1,17 @@
 // Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info.
 import { useEffect, useRef, useState } from "react";
-import type { Album, Track } from "@core/api";
+import type { Album, DeviceInfo } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
-import { fmtBytes, fmtDate, fmtDuration, fmtTime } from "../lib/format";
+import { fmtDate, fmtDuration, fmtRelative, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { deviceIcon } from "./ConnectPill";
+import { Slider } from "./controls";
+import { useVolumeControl } from "../lib/volume";
+import { SongInfo } from "./SongInfo";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 
@@ -38,14 +42,17 @@ export function Dialogs() {
     }
     trapTab(e);
   };
+  // The Play on popover rises from the player bar, whose height varies (taller in the narrow layout).
+  const playerTop = dialog.kind === "connect" ? document.querySelector('[data-testid="player-bar"]')?.getBoundingClientRect().top : undefined;
+  const popoverStyle = playerTop !== undefined ? ({ "--popover-bottom": `${Math.max(0, window.innerHeight - playerTop)}px` } as React.CSSProperties) : undefined;
   return (
-    <div className={`overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div {...exitProps} className={`dialog ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
+    <div className={`overlay ${dialog.kind === "connect" ? "overlay-popover" : ""} ${closing ? "closing" : ""}`} style={popoverStyle} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div {...exitProps} className={`dialog ${dialog.kind === "trackInfo" ? "dialog-wide" : ""} ${dialog.kind === "connect" ? "dialog-popover connect-popover" : ""} ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
         {dialog.kind === "sleepTimer" ? <SleepTimerDialog /> : null}
         {dialog.kind === "connect" ? <ConnectDialog /> : null}
-        {dialog.kind === "trackInfo" ? <TrackInfo trackId={dialog.trackId} /> : null}
+        {dialog.kind === "trackInfo" ? <SongInfo trackId={dialog.trackId} /> : null}
         {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
       </div>
     </div>
@@ -115,11 +122,15 @@ function SleepTimerDialog() {
   );
 }
 
+// Play on: this computer (one row, whatever it outputs to), then the other
+// devices signed in to the server, each saying whether it is playing, ready to
+// take over, still preparing, or when it was last seen.
 function ConnectDialog() {
   const close = useApp((s) => s.closeDialog);
   const devices = useApp((s) => s.devices);
   const handoff = useApp((s) => s.handoff);
   const connection = useApp((s) => s.connection);
+  const navigate = useApp((s) => s.navigate);
   const others = devices.filter((d) => !d.isSelf);
   const self = devices.find((d) => d.isSelf);
   const pick = (id: string) => {
@@ -127,76 +138,61 @@ function ConnectDialog() {
     close();
   };
   const tier = connection.tier === "coordinator" ? t("connect.tier.coordinator") : connection.tier === "lan" ? t("connect.tier.lan") : t("connect.tier.local");
+  const row = (d: DeviceInfo, name: string, sub: string, trailing: React.ReactNode, testId?: string) => (
+    <li key={d.id}>
+      <button type="button" className={`connect-row ${d.playing ? "on" : ""}`} aria-current={d.playing || undefined} onClick={() => pick(d.id)} data-testid={testId}>
+        <span className="connect-row-icon"><Icon name={d.isSelf ? "laptop" : deviceIcon(d.platform)} size={22} /></span>
+        <span className="grow" style={{ minWidth: 0 }}>
+          <span className="truncate connect-row-name">{name}</span>
+          <span className="truncate connect-row-sub">{sub}</span>
+        </span>
+        {d.playing ? <Icon name="equalizer" size={22} /> : trailing}
+      </button>
+    </li>
+  );
   return (
     <>
-      <h2 className="dialog-title" id="dialog-title">{t("connect.title")}</h2>
-      <div className="muted small">{tier}{connection.peerCount ? ` · ${t("connect.peers", { count: connection.peerCount })}` : ""}</div>
-      <ul className="list plain-list">
-        {self ? (
-          <li><button type="button" className="li" onClick={() => pick(self.id)}>
-            <Icon name="devices" size={14} />
-            <span className="grow">{self.name} <span className="faint">· {t("connect.thisDevice")}</span></span>
-            {self.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}
-          </button></li>
-        ) : null}
-        {others.map((d) => {
-          const target = handoff.targets.find((x) => x.id === d.id) ?? d;
-          return (
-            <li key={d.id}><button type="button" className="li" onClick={() => pick(d.id)} data-testid="device-choice">
-              <Icon name="devices" size={14} />
-              <span className="grow">{d.name} <span className="faint">· {d.platform}</span></span>
-              {d.playing ? <span className="badge ok">{t("connect.playing")}</span> : target.ready ? <span className="badge synced">{t("connect.ready")}</span> : handoff.open ? <span className="badge">{t("connect.preparing")}</span> : null}
-            </button></li>
-          );
-        })}
-        {!others.length ? <li className="li muted" style={{ height: "auto", padding: 10 }}>{t("connect.noDevices")}</li> : null}
-      </ul>
-      <div className="buttons">
-        <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>
+      <div className="connect-head">
+        <h2 className="dialog-title" id="dialog-title">{t("connect.title")}</h2>
+        <button type="button" className="btn icon" aria-label={t("misc.close")} title={t("misc.close")} onClick={close} data-testid="connect-close"><Icon name="close" size={22} /></button>
       </div>
+      <ConnectVolume />
+      <ul className="plain-list connect-group" data-testid="connect-self">
+        {self ? row(self, t("connect.thisComputer"), self.playing ? t("connect.playing") : t("connect.playHere"), null) : null}
+      </ul>
+      <div className="connect-heading">
+        <h3>{t("connect.others")}</h3>
+        <span className="small muted">{tier}</span>
+      </div>
+      {others.length ? (
+        <ul className="plain-list connect-group">
+          {others.map((d) => {
+            const target = handoff.targets.find((x) => x.id === d.id) ?? d;
+            const preparing = !d.playing && !target.ready && handoff.open;
+            const sub = d.playing ? t("connect.playing") : target.ready ? t("connect.ready") : preparing ? t("connect.preparing") : t("connect.seen", { when: fmtRelative(d.lastSeen) });
+            const trailing = preparing ? <Icon name="spinner" size={20} className="spin" /> : target.ready && d.lastSeen ? <span className="small muted connect-seen">{t("connect.seen", { when: fmtRelative(d.lastSeen) })}</span> : null;
+            return row(d, d.name, sub, trailing, "device-choice");
+          })}
+        </ul>
+      ) : <p className="small muted connect-empty">{t("connect.noDevices")}</p>}
+      <button type="button" className="btn tonal connect-settings" onClick={() => { close(); navigate({ view: "settings", param: "connect" }); }} data-testid="connect-settings"><Icon name="devices" size={20} />{t("connect.settings")}</button>
     </>
   );
 }
 
-function TrackInfo({ trackId }: { trackId: string }) {
-  const close = useApp((s) => s.closeDialog);
-  const { data } = useQuery(() => ({ type: "track", data: { id: trackId } }), "trackDetail", [trackId]);
-  const tr = data as Track | undefined;
-  if (!tr) return <><h2 className="dialog-title" id="dialog-title">{t("misc.loading")}</h2></>;
-  const rows: [string, string | number | undefined][] = [
-    ["Title", tr.title], ["Artist", tr.artist], ["Album", tr.album], ["Album artist", tr.albumArtist], ["Year", tr.year], ["Genre", tr.genre],
-    ["Track", tr.trackNumber !== undefined ? `${tr.discNumber ?? 1}-${tr.trackNumber}` : undefined], ["Duration", fmtTime(tr.durationMs)],
-    ["Format", tr.suffix ? `${tr.suffix.toUpperCase()} · ${tr.bitRate ?? "?"} kbps · ${tr.sampleRate ?? "?"} Hz · ${tr.bitDepth ?? "?"} bit` : undefined],
-    ["Size", fmtBytes(tr.sizeBytes)], ["Path", tr.path], ["Plays", tr.playCount], ["Last played", fmtDate(tr.lastPlayed)], ["Added", fmtDate(tr.created)],
-    ["ReplayGain", tr.replayGain?.trackGainDb !== undefined ? `track ${tr.replayGain.trackGainDb.toFixed(1)} dB · album ${tr.replayGain.albumGainDb?.toFixed(1) ?? "–"} dB` : undefined],
-    ["BPM", tr.sonic?.bpm], ["Key", tr.sonic?.key], ["Energy", tr.sonic?.energy !== undefined ? Math.round(tr.sonic.energy * 100) + "%" : undefined], ["Mood", tr.sonic?.mood],
-    ["Offline", tr.offline !== "none" ? tr.offline : undefined],
-  ];
+/** The volume of whatever is playing, as in the player bar, with its level. */
+function ConnectVolume() {
+  const v = useVolumeControl();
+  const silent = v.muted || v.shown === 0;
   return (
-    <>
-      <div className="row">
-        <Artwork id={tr.coverArt} size={64} className="art" />
-        <div className="grow">
-          <h2 className="dialog-title truncate" id="dialog-title">{tr.title}</h2>
-          <div className="muted truncate">{tr.artist}</div>
-        </div>
+    <div className="connect-volume" role="group" aria-labelledby="connect-volume-label">
+      <div id="connect-volume-label" className="connect-volume-label">{t("connect.volume")}</div>
+      <div className="connect-volume-row">
+        <button type="button" className="btn icon sm" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute}><Icon name={silent ? "mute" : "volume"} size={20} /></button>
+        <Slider min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} className="grow" data-testid="connect-volume" />
+        <span className="connect-volume-pct">{v.unknown ? "–" : `${Math.round(v.shown * 100)}%`}</span>
       </div>
-      {/* Scrolls when long: focusable so the keyboard can scroll it. */}
-      <div className="list" style={{ padding: 6 }} tabIndex={0} role="group" aria-labelledby="dialog-title">
-      <dl className="info-list">
-        {rows.filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => (
-          <div key={k} className="row small" style={{ padding: "2px 4px" }}>
-            <dt className="muted" style={{ width: 90, flex: "0 0 auto" }}>{k}</dt>
-            <dd className="grow truncate" title={String(v)}>{String(v)}</dd>
-          </div>
-        ))}
-      </dl>
-      </div>
-      <div className="buttons">
-        {tr.path ? <button type="button" className="btn" onClick={() => bridge().shell.showItemInFolder(tr.path as string)}><Icon name="folder" size={14} /> {t("action.showInFolder")}</button> : null}
-        <button type="button" className="btn" onClick={close}>{t("misc.close")}</button>
-      </div>
-    </>
+    </div>
   );
 }
 

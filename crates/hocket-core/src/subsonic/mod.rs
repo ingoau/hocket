@@ -240,6 +240,7 @@ pub trait SubsonicApi: Send + Sync + 'static {
         count: u32,
         include_not_present: bool,
     ) -> ApiFuture<'_, ArtistInfo2>;
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo>;
     /// `sonicSimilarity` extension. `Unsupported` when not advertised.
     fn sonic_similar_tracks(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<SonicMatch>>;
     fn star(&self, targets: &[StarTarget]) -> ApiFuture<'_, ()>;

@@ -103,3 +103,35 @@ class ListSortPrefs(context: Context) {
 
     fun set(list: String, sort: String) = prefs.edit().putString(list, sort).apply()
 }
+
+/**
+ * Recent searches: kept on this phone only (never synced to the server or other devices). Newest
+ * first, once each ignoring case, at most [MAX]. SharedPreferences, like [ListSortPrefs], so the
+ * list is there on the search tab's first frame.
+ */
+class RecentSearchPrefs(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("hocket-recent-searches", Context.MODE_PRIVATE)
+
+    fun list(): List<String> = prefs.getString(KEY, null)?.split('\n')?.filter { it.isNotBlank() }?.take(MAX) ?: emptyList()
+
+    fun remember(query: String): List<String> {
+        val q = query.trim()
+        if (q.isEmpty()) return list()
+        return save(listOf(q) + list().filterNot { it.equals(q, ignoreCase = true) })
+    }
+
+    fun forget(query: String): List<String> = save(list() - query)
+
+    fun clear(): List<String> = save(emptyList())
+
+    private fun save(items: List<String>): List<String> {
+        val kept = items.take(MAX)
+        prefs.edit().putString(KEY, kept.joinToString("\n")).apply()
+        return kept
+    }
+
+    private companion object {
+        const val KEY = "recent"
+        const val MAX = 6
+    }
+}

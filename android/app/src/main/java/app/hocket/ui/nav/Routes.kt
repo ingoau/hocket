@@ -23,7 +23,6 @@ sealed interface Route {
     @Serializable data class Artist(val id: String) : Route
     @Serializable data class Playlist(val id: String) : Route
     @Serializable data class Genre(val name: String) : Route
-    @Serializable data object SavedQueues : Route
     @Serializable data object AudioSettings : Route
     @Serializable data object TranscodingSettings : Route
     @Serializable data object ConnectSettings : Route

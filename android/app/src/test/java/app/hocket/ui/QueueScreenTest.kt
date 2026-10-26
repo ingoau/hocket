@@ -17,7 +17,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.RepeatMode
 import app.hocket.ui.queue.QueuePanel
-import app.hocket.ui.queue.SavedQueuesScreen
+import app.hocket.ui.queue.RecentQueuesList
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -161,15 +161,16 @@ class QueueScreenTest {
     }
 
     @Test
-    fun savedQueuesAndUndoHistoryMovedToTheirOwnScreen() {
+    fun queuesScreenShowsThePlayingQueueThenPinnedAndRecent() {
         val core = TestCore()
-        compose.setThemedContent(core) { SavedQueuesScreen(rememberNavController()) }
+        compose.setThemedContent(core) { RecentQueuesList() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("queues.playing").assertIsDisplayed()
         compose.onNodeWithText("Pinned").assertIsDisplayed()
         compose.onNodeWithText("Recent").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Undo history").performClick()
-        compose.onNodeWithText("Nothing to undo").assertIsDisplayed()
+        // The undo history is out for now (issue #127).
+        compose.onNodeWithContentDescription("Undo history").assertDoesNotExist()
     }
 
     /**

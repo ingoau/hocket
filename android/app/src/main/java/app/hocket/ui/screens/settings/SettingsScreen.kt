@@ -1,6 +1,34 @@
 package app.hocket.ui.screens.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.toShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import app.hocket.core.Commands
+import app.hocket.ui.brand.brandTitleStyle
+import app.hocket.ui.components.GroupLabel
+import app.hocket.ui.components.segmentColor
+import app.hocket.ui.components.segmentedListColors
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,7 +40,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -21,11 +48,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,12 +64,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
-import app.hocket.core.SettingKeys
-import app.hocket.core.api.ConnectionTier
-import app.hocket.core.api.ReplayGainMode
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.formatAgo
-import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
@@ -62,20 +89,19 @@ enum class SettingsCategory(val id: String, val route: Route) {
     About("about", Route.About);
 
     companion object {
-        /** How the list is grouped (Android system-settings style: related categories share a card). */
-        val GROUPS: List<List<SettingsCategory>> = listOf(
-            listOf(Account),
-            listOf(Appearance, Playback, Audio, Streaming),
-            listOf(Downloads, Lyrics, Library, Battery),
-            listOf(Connect, Pebble, Customise),
-            listOf(Backup, Advanced, About),
+        /** How the list is grouped under its headings (Android system-settings style: related categories share a card). Account is the card on top. */
+        val GROUPS: List<Pair<Int, List<SettingsCategory>>> = listOf(
+            R.string.settings_group_look_and_sound to listOf(Appearance, Playback, Audio, Streaming),
+            R.string.settings_group_library_and_storage to listOf(Downloads, Lyrics, Library, Battery),
+            R.string.settings_group_devices_and_controls to listOf(Connect, Pebble, Customise),
+            R.string.settings_group_app to listOf(Backup, Advanced, About),
         )
     }
 }
 
 /**
- * Top-level settings: one row per category (leading icon, title, a one-line summary of the current
- * values, chevron), grouped in cards; each opens its own sub-screen. Every setting lives in exactly
+ * Top-level settings: a search bar over every setting (see SettingsSearch), the account card, then one row per category (leading icon, title, chevron),
+ * grouped in cards under headings (no summaries: they cluttered the list); each opens its own sub-screen. Every setting lives in exactly
  * one category.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,16 +110,34 @@ fun SettingsScreen(nav: NavHostController) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
-        topBar = { LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.settings_title), modifier = Modifier.semantics { heading() }) }, scrollBehavior = scroll) },
+        topBar = {
+            LargeFlexibleTopAppBar(
+                title = { Text(stringResource(R.string.settings_title), style = brandTitleStyle(), modifier = Modifier.semantics { heading() }) },
+                navigationIcon = { if (nav.previousBackStackEntry != null) androidx.compose.material3.IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                scrollBehavior = scroll,
+            )
+        },
     ) { padding ->
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SettingsCategory.GROUPS.forEach { group ->
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    group.forEachIndexed { i, category ->
-                        CategoryRow(category, first = i == 0, last = i == group.lastIndex, onClick = { nav.navigate(category.route) })
+            // Typing swaps the account card and categories for the matching settings; picking one
+            // opens its screen scrolled to it (SettingsJump). The query stays, so Back returns to the results.
+            var query by rememberSaveable { mutableStateOf("") }
+            val hits = rememberSettingsHits(query)
+            val open = { h: SettingsHit -> SettingsJump.request(h.tag); nav.navigate(h.category.route) }
+            SettingsSearchField(query, { query = it }, onSubmit = { hits.firstOrNull()?.let(open) })
+            if (query.isNotBlank()) {
+                SettingsSearchResults(hits, query, onPick = open)
+            } else {
+                AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
+                SettingsCategory.GROUPS.forEach { (titleRes, group) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                        GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
+                        group.forEachIndexed { i, category ->
+                            CategoryRow(category, i, group.size, onClick = { nav.navigate(category.route) })
+                        }
                     }
                 }
             }
@@ -101,39 +145,103 @@ fun SettingsScreen(nav: NavHostController) {
     }
 }
 
+/**
+ * Who is signed in and to which server, centred on a tonal card: the user's initial on a cookie,
+ * their name in the word mark's face, the server, then the last sync as a button that syncs now,
+ * and the shortcuts to listening stats and devices as a pair of tiles.
+ */
 @Composable
-private fun CategoryRow(category: SettingsCategory, first: Boolean, last: Boolean, onClick: () -> Unit) {
-    val outer = 24.dp
-    val inner = 6.dp
-    val shape = RoundedCornerShape(topStart = if (first) outer else inner, topEnd = if (first) outer else inner, bottomStart = if (last) outer else inner, bottomEnd = if (last) outer else inner)
-    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-        ListItem(
-            headlineContent = { Text(category.title()) },
-            supportingContent = { Text(category.summary(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            leadingContent = { Icon(category.icon(), null, tint = MaterialTheme.colorScheme.primary) },
-            trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
-            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-            modifier = Modifier.clickable(onClick = onClick).testTag("settings.category.${category.id}"),
-        )
+private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -> Unit) {
+    val client = LocalCoreClient.current
+    val server by client.server.collectAsStateWithLifecycle()
+    val sync by client.syncProgress.collectAsStateWithLifecycle()
+    val s = server
+    val scheme = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(32.dp), color = scheme.secondaryContainer, contentColor = scheme.onSecondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).clickable(onClick = onOpen).testTag("settings.category.account").padding(vertical = 8.dp)
+                    .semantics(mergeDescendants = true) { },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    Modifier.size(88.dp).background(Brush.linearGradient(listOf(scheme.primary.copy(alpha = 0.78f), scheme.primary)), MaterialShapes.Cookie9Sided.toShape()),
+                    contentAlignment = Alignment.Center,
+                ) { Text((s?.username?.firstOrNull() ?: '?').uppercase(), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold, color = scheme.onPrimary, modifier = Modifier.clearAndSetSemantics { }) }
+                Spacer(Modifier.height(12.dp))
+                // The category's name for a screen reader: the card opens Account & server.
+                val accountLabel = str(R.string.settings_category_account)
+                Text(s?.username ?: stringResource(R.string.settings_category_account), style = MaterialTheme.typography.headlineMedium.merge(brandTitleStyle()), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { contentDescription = listOfNotNull(s?.username?.takeIf { it.isNotBlank() }, accountLabel).joinToString(", ") })
+                if (s != null) {
+                    val host = s.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
+                    Text(if (s.name.isNotBlank() && s.name != host) stringResource(R.string.settings_account_on, s.name, host) else host, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else Text(stringResource(R.string.settings_summary_no_server), style = MaterialTheme.typography.bodyLarge)
+            }
+            if (s != null) {
+                Spacer(Modifier.height(8.dp))
+                // The core keeps the last progress (finished) after a sync, so only an unfinished one for this server is syncing.
+                val syncing = sync?.let { !it.finished && it.serverId == s.id } == true
+                Button(onClick = { client.dispatch(Commands.syncLibrary(s.id, false)) }, enabled = !syncing, shapes = ButtonDefaults.shapes(), modifier = Modifier.heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("settings.account.sync"),
+                    contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
+                    Icon(HocketIcons.Filled.Sync, null, Modifier.size(ButtonDefaults.MediumIconSize))
+                    Spacer(Modifier.width(ButtonDefaults.MediumIconSpacing))
+                    val last = s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced)
+                    Text(if (syncing) stringResource(R.string.settings_syncing) else stringResource(R.string.settings_last_sync_now, last), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                AccountTile(stringResource(R.string.settings_account_stats), HocketIcons.Outlined.BarChart, RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp), onStats, Modifier.weight(1f).fillMaxHeight().testTag("settings.account.stats"))
+                AccountTile(stringResource(R.string.settings_account_devices), HocketIcons.Outlined.Devices, RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp, topStart = 6.dp, bottomStart = 6.dp), onDevices, Modifier.weight(1f).fillMaxHeight().testTag("settings.account.devices"))
+            }
+        }
     }
 }
 
+/** A shortcut on the account card: its icon over its label, on the card's lifted surface. */
+@Composable
+private fun AccountTile(label: String, icon: ImageVector, shape: Shape, onClick: () -> Unit, modifier: Modifier) {
+    Surface(onClick = onClick, shape = shape, color = segmentColor(), contentColor = MaterialTheme.colorScheme.onSurface, modifier = modifier) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index, count),
+        colors = segmentedListColors(),
+        leadingContent = {
+            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Icon(category.icon(), null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+        },
+        trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
+        modifier = Modifier.testTag("settings.category.${category.id}"),
+    ) { Text(category.title()) }
+}
+
 private fun SettingsCategory.icon(): ImageVector = when (this) {
-    SettingsCategory.Account -> HocketIcons.Filled.AccountCircle
-    SettingsCategory.Appearance -> HocketIcons.Filled.Palette
+    SettingsCategory.Account -> HocketIcons.Outlined.Person
+    SettingsCategory.Appearance -> HocketIcons.Outlined.Palette
     SettingsCategory.Playback -> HocketIcons.AutoMirrored.Filled.QueueMusic
     SettingsCategory.Audio -> HocketIcons.Filled.GraphicEq
     SettingsCategory.Streaming -> HocketIcons.Filled.NetworkCheck
-    SettingsCategory.Downloads -> HocketIcons.Filled.Download
-    SettingsCategory.Lyrics -> HocketIcons.Filled.Lyrics
-    SettingsCategory.Library -> HocketIcons.Filled.LibraryMusic
-    SettingsCategory.Battery -> HocketIcons.Filled.BatterySaver
-    SettingsCategory.Connect -> HocketIcons.Filled.Devices
+    SettingsCategory.Downloads -> HocketIcons.Outlined.Download
+    SettingsCategory.Lyrics -> HocketIcons.Outlined.Lyrics
+    SettingsCategory.Library -> HocketIcons.Outlined.LibraryMusic
+    SettingsCategory.Battery -> HocketIcons.Outlined.BatterySaver
+    SettingsCategory.Connect -> HocketIcons.Outlined.Devices
     SettingsCategory.Pebble -> HocketIcons.Filled.Watch
-    SettingsCategory.Customise -> HocketIcons.Filled.Tune
+    SettingsCategory.Customise -> HocketIcons.Outlined.Tune
     SettingsCategory.Backup -> HocketIcons.Filled.SettingsBackupRestore
     SettingsCategory.Advanced -> HocketIcons.Filled.Code
-    SettingsCategory.About -> HocketIcons.Filled.Info
+    SettingsCategory.About -> HocketIcons.Outlined.Info
 }
 
 @Composable
@@ -156,70 +264,6 @@ fun SettingsCategory.title(): String = stringResource(
         SettingsCategory.About -> R.string.settings_section_about
     },
 )
-
-/** One line of the category's current values. */
-@Composable
-private fun SettingsCategory.summary(): String {
-    val client = LocalCoreClient.current
-    val dot = stringResource(R.string.dot_separator)
-    val onLabel = stringResource(R.string.settings_on)
-    val offLabel = stringResource(R.string.settings_off)
-    fun on(b: Boolean) = if (b) onLabel else offLabel
-    return when (this) {
-        SettingsCategory.Account -> {
-            val server by client.server.collectAsStateWithLifecycle()
-            val s = server
-            if (s == null) stringResource(R.string.settings_summary_no_server)
-            else stringResource(R.string.settings_server_body, s.url, s.username) + dot + (s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced))
-        }
-        SettingsCategory.Appearance -> {
-            val theme = setting(SettingKeys.DISPLAY_THEME).string ?: "system"
-            val accent = setting(SettingKeys.DISPLAY_ACCENT).string
-            val themeLabel = stringResource(when (theme) { "light" -> R.string.settings_theme_light; "dark" -> R.string.settings_theme_dark; else -> R.string.settings_theme_system })
-            val accentName = accent?.let { hex -> ACCENTS.firstOrNull { it.first.equals(hex, true) }?.let { stringResource(it.second) } ?: hex }
-            stringResource(R.string.settings_theme) + ": " + themeLabel + dot + stringResource(R.string.settings_accent) + ": " + (accentName ?: stringResource(R.string.settings_accent_dynamic))
-        }
-        SettingsCategory.Playback -> {
-            val queue by client.queue.collectAsStateWithLifecycle()
-            val cap = setting(SettingKeys.QUEUE_SAVED_CAP).int ?: 10
-            stringResource(R.string.settings_autoplay_short) + ": " + on(queue.autoplay) + dot + stringResource(R.string.settings_summary_saved_cap, cap)
-        }
-        SettingsCategory.Audio -> {
-            val audio by client.audio.collectAsStateWithLifecycle()
-            val rg = stringResource(when (audio.replayGain) { ReplayGainMode.Off -> R.string.settings_rg_off; ReplayGainMode.Track -> R.string.settings_rg_track; ReplayGainMode.Album -> R.string.settings_rg_album; ReplayGainMode.Auto -> R.string.settings_rg_auto })
-            stringResource(R.string.settings_replay_gain) + ": " + rg + dot + stringResource(R.string.settings_gapless) + ": " + on(audio.gapless)
-        }
-        SettingsCategory.Streaming -> stringResource(R.string.settings_summary_streaming)
-        SettingsCategory.Downloads -> {
-            val storage by client.storage.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_summary_downloads, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))
-        }
-        SettingsCategory.Lyrics -> stringResource(R.string.settings_summary_external_lyrics) + ": " + on(setting(SettingKeys.LYRICS_EXTERNAL_ENABLED).bool ?: false) +
-            dot + stringResource(R.string.lyrics_offset_value, setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS).int ?: 0)
-        SettingsCategory.Library -> {
-            val bridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED).bool ?: false
-            val threshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD).int ?: 4
-            stringResource(R.string.settings_love_threshold) + ": " + (if (bridge) "$threshold★" else stringResource(R.string.settings_love_threshold_off)) + dot + stringResource(R.string.nav_filters) + dot + stringResource(R.string.nav_stats)
-        }
-        SettingsCategory.Battery -> {
-            val saver by client.batterySaver.collectAsStateWithLifecycle()
-            stringResource(R.string.settings_battery_saver) + ": " + on(saver)
-        }
-        SettingsCategory.Connect -> {
-            val connection by client.connection.collectAsStateWithLifecycle()
-            when (connection.tier) {
-                ConnectionTier.Local -> stringResource(R.string.connection_local)
-                ConnectionTier.Lan -> stringResource(R.string.connection_lan, connection.peerCount.toInt())
-                ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
-            }
-        }
-        SettingsCategory.Pebble -> stringResource(R.string.pebble_auto_open) + ": " + on(setting(SettingKeys.PEBBLE_AUTO_OPEN).bool ?: false)
-        SettingsCategory.Customise -> stringResource(R.string.settings_bottom_bar) + dot + stringResource(R.string.settings_context_menu) + dot + stringResource(R.string.settings_media_buttons) + dot + stringResource(R.string.settings_swipe_actions)
-        SettingsCategory.Backup -> stringResource(R.string.settings_summary_backup)
-        SettingsCategory.Advanced -> stringResource(R.string.settings_summary_advanced, on(setting(SettingKeys.DEVELOPER_MODE).bool ?: false))
-        SettingsCategory.About -> stringResource(R.string.settings_licence)
-    }
-}
 
 @Composable
 internal fun str(id: Int): String = stringResource(id)

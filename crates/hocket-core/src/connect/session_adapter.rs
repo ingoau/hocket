@@ -211,6 +211,10 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             pinned: *pinned,
         },
         SessionOp::DeleteSavedQueue { id } => QueueOp::DeleteSavedQueue { id: id.clone() },
+        SessionOp::RenameQueue { id, label } => QueueOp::RenameQueue {
+            id: id.clone(),
+            label: label.clone(),
+        },
         SessionOp::TouchSavedQueue { id } => QueueOp::TouchSavedQueue { id: id.clone() },
         SessionOp::MergeSavedQueues { remote } => QueueOp::MergeSavedQueues {
             remote: remote.clone(),
@@ -417,6 +421,10 @@ mod tests {
                 pinned: true,
             },
             SessionOp::DeleteSavedQueue { id: "i".into() },
+            SessionOp::RenameQueue {
+                id: None,
+                label: "l".into(),
+            },
             SessionOp::TouchSavedQueue { id: "i".into() },
             SessionOp::MergeSavedQueues { remote: vec![] },
         ];

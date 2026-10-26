@@ -149,7 +149,7 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
     Ok(t)
 }
 
-pub const ALBUM_COLUMNS: &str = "id, server_id, name, artist_id, artist, year, genre, song_count, duration_ms, cover_art, rating, loved, play_count, created, last_played, is_compilation, music_brainz_id, rg_album_gain, rg_album_peak, offline";
+pub const ALBUM_COLUMNS: &str = "id, server_id, name, artist_id, artist, year, genre, song_count, duration_ms, cover_art, rating, loved, play_count, created, last_played, is_compilation, music_brainz_id, rg_album_gain, rg_album_peak, offline, release_types";
 
 pub fn album_from_row(row: &Row) -> rusqlite::Result<Album> {
     let gain: Option<f64> = row.get(17)?;
@@ -182,6 +182,12 @@ pub fn album_from_row(row: &Row) -> rusqlite::Result<Album> {
             })
         },
         offline: offline_from_i64(row.get(19)?),
+        release_types: row
+            .get::<_, String>(20)?
+            .split(',')
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect(),
     })
 }
 
@@ -1237,13 +1243,14 @@ pub(crate) fn upsert_albums_in(
     sync_gen: i64,
 ) -> DbResult<usize> {
     let mut st = tx.prepare_cached(
-        "INSERT INTO albums(id, server_id, name, artist_id, artist, year, genre, song_count, duration_ms, cover_art, rating, loved, play_count, created, changed, last_played, is_compilation, music_brainz_id, rg_album_gain, rg_album_peak, sync_gen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+        "INSERT INTO albums(id, server_id, name, artist_id, artist, year, genre, song_count, duration_ms, cover_art, rating, loved, play_count, created, changed, last_played, is_compilation, music_brainz_id, rg_album_gain, rg_album_peak, sync_gen, release_types)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT(server_id, id) DO UPDATE SET
            name = excluded.name, artist_id = excluded.artist_id, artist = excluded.artist, year = excluded.year, genre = excluded.genre,
            song_count = excluded.song_count, duration_ms = excluded.duration_ms, cover_art = excluded.cover_art, rating = excluded.rating, loved = excluded.loved,
            play_count = excluded.play_count, created = excluded.created, changed = excluded.changed, last_played = excluded.last_played, is_compilation = excluded.is_compilation,
-           music_brainz_id = excluded.music_brainz_id, rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak, sync_gen = excluded.sync_gen",
+           music_brainz_id = excluded.music_brainz_id, rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak, sync_gen = excluded.sync_gen,
+           release_types = excluded.release_types",
     )?;
     let mut comp = tx.prepare_cached("UPDATE tracks SET is_compilation = ?3 WHERE server_id = ?1 AND album_id = ?2 AND is_compilation != ?3")?;
     let mut n = 0;
@@ -1272,6 +1279,7 @@ pub(crate) fn upsert_albums_in(
             rg.album_gain_db,
             rg.album_peak,
             sync_gen,
+            a.release_types.join(","),
         ])?;
         comp.execute(params![a.server_id, a.id, a.is_compilation as i64])?;
     }
@@ -1608,6 +1616,7 @@ mod tests {
                     artist: Some("Boards of Canada".into()),
                     artist_id: Some("ar-Boards of Canada".into()),
                     year: Some(1998),
+                    release_types: vec!["ep".into(), "live".into()],
                     ..Default::default()
                 },
                 Album {
@@ -2003,6 +2012,13 @@ mod tests {
         };
         assert_eq!(db.albums(&q).unwrap()[0].id, "al-Diamond Life");
         assert!(db.album("al-Diamond Life").unwrap().unwrap().is_compilation);
+        let ep = db.album("al-Music Has the Right").unwrap().unwrap();
+        assert_eq!(ep.release_types, vec!["ep".to_string(), "live".to_string()]);
+        assert_eq!(ep.release_kind(), crate::api::ReleaseKind::Ep);
+        assert_eq!(
+            db.album("al-Diamond Life").unwrap().unwrap().release_kind(),
+            crate::api::ReleaseKind::Compilation
+        );
         assert_eq!(db.album_tracks("al-Music Has the Right").unwrap().len(), 2);
         assert_eq!(db.artist_tracks("ar-Sade").unwrap().len(), 1);
 

@@ -11,6 +11,7 @@ import { openContextMenu } from "./ContextMenu";
 import { executeAction, type ActionContext } from "../store/actions";
 import { fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
+import { TRACK_HEAD_H, TRACK_ROW_H } from "../lib/track-row";
 import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
@@ -18,7 +19,7 @@ import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
 import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
 
-export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
+export type ColumnId = "index" | "position" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
 interface Column {
   id: ColumnId;
@@ -32,6 +33,8 @@ interface Column {
 
 const COLUMNS: Record<ColumnId, Column> = {
   index: { id: "index", label: t("col.track"), width: "40px", num: true },
+  /** A list's own order (a playlist's position), where "index" is the album track number. */
+  position: { id: "position", label: t("col.track"), width: "40px", num: true },
   art: { id: "art", label: "", sr: t("col.art"), width: "34px" },
   title: { id: "title", label: t("col.title"), width: "minmax(140px, 3fr)", sort: "title" },
   artist: { id: "artist", label: t("col.artist"), width: "minmax(100px, 2fr)", sort: "artist" },
@@ -48,7 +51,7 @@ const COLUMNS: Record<ColumnId, Column> = {
 };
 
 /** Columns in the order they give way when the table is narrow (last goes first); the title never does. */
-const COLUMN_PRIORITY: ColumnId[] = ["title", "duration", "artist", "index", "art", "album", "rating", "love", "offline", "year", "plays", "genre", "added", "bpm"];
+const COLUMN_PRIORITY: ColumnId[] = ["title", "duration", "artist", "index", "position", "art", "album", "rating", "love", "offline", "year", "plays", "genre", "added", "bpm"];
 
 function minWidth(c: ColumnId): number {
   return Number(/(\d+)px/.exec(COLUMNS[c].width)?.[1] ?? 40);
@@ -132,7 +135,7 @@ export function TrackTable(props: TrackTableProps) {
     const f = focusRef.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 6, rangeExtractor });
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => TRACK_ROW_H, overscan: 6, rangeExtractor });
   const items = rowVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!onNeedRange || !items.length) return;
@@ -152,6 +155,17 @@ export function TrackTable(props: TrackTableProps) {
     bridge().dispatch({ type: "setSelection", data: { target } });
   }, [setSelection, scope]);
 
+  // A table shown in full on its page (album, playlist) doesn't scroll itself: the page does. Keeping
+  // the focused row in view and sizing Page Up/Down then go by the page's scroller instead.
+  const ownScroll = () => { const el = parentRef.current; return !!el && el.scrollHeight > el.clientHeight + 1; };
+  const visibleHeight = () => {
+    const el = parentRef.current;
+    if (!el) return 300;
+    if (ownScroll()) return el.clientHeight;
+    let up = el.parentElement;
+    while (up && !(up.scrollHeight > up.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(up).overflowY))) up = up.parentElement;
+    return Math.min(el.clientHeight, (up ?? document.documentElement).clientHeight - TRACK_HEAD_H);
+  };
   const moveFocus = (i: number) => {
     setFocusIdx(i);
     pendingFocus.current = i;
@@ -163,6 +177,7 @@ export function TrackTable(props: TrackTableProps) {
     if (!el) return;
     pendingFocus.current = undefined;
     el.focus({ preventScroll: true });
+    if (!ownScroll()) el.scrollIntoView({ block: "nearest" });
   });
 
   const click = (e: React.MouseEvent, i: number) => {
@@ -207,7 +222,7 @@ export function TrackTable(props: TrackTableProps) {
       publish(clearSelection());
       return;
     }
-    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor((parentRef.current?.clientHeight ?? 300) / 30) - 1));
+    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor(visibleHeight() / TRACK_ROW_H) - 1));
     if (next !== undefined) {
       e.preventDefault();
       e.stopPropagation();
@@ -337,9 +352,10 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
   if (!track) return <div className={cls} role="gridcell">{col === "title" ? <span className="faint">…</span> : ""}</div>;
   switch (col) {
     case "index":
+    case "position":
       return (
         <div className={`${cls} index`} role="gridcell">
-          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{track.trackNumber ?? index + 1}</span>}
+          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span>}
           {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
           {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
         </div>

@@ -40,6 +40,8 @@ object Commands {
     fun restoreSavedQueue(id: String) = Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(id))
     fun pinSavedQueue(id: String, pinned: Boolean) = Command.PinSavedQueue(CommandPinSavedQueueInner(id, pinned))
     fun deleteSavedQueue(id: String) = Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(id))
+    /** Renames a saved queue, or the playing one when [savedQueueId] is null; a blank label is ignored. */
+    fun renameQueue(savedQueueId: String?, label: String) = Command.RenameQueue(CommandRenameQueueInner(savedQueueId, label))
     fun saveQueueAsPlaylist(savedQueueId: String?, name: String) =
         Command.SaveQueueAsPlaylist(CommandSaveQueueAsPlaylistInner(savedQueueId, name))
     fun setSavedQueueCap(cap: Int) = Command.SetSavedQueueCap(CommandSetSavedQueueCapInner(cap.toUInt()))
@@ -145,6 +147,9 @@ object Queries {
         Query.Tracks(QueryTracksInner(serverId, filter, sort, descending, page))
     fun trackCount(serverId: ServerId, filter: FilterNode? = null) = Query.TrackCount(QueryTrackCountInner(serverId, filter))
     fun track(id: TrackId) = Query.Track(QueryTrackInner(id))
+    /** The server's artist and album info (Last.fm notes, links, similar artists), cached by the core. */
+    fun artistInfo(id: ArtistId) = Query.ArtistInfo(QueryArtistInfoInner(id))
+    fun albumInfo(id: AlbumId) = Query.AlbumInfo(QueryAlbumInfoInner(id))
     fun tracksByIds(ids: List<TrackId>) = Query.TracksByIds(QueryTracksByIdsInner(ids))
     fun albums(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false, artistId: ArtistId? = null, genre: String? = null) =
         Query.Albums(QueryAlbumsInner(serverId, artistId, genre, sort, descending, page))
@@ -185,6 +190,8 @@ object ArtworkSizes {
     const val LIST = 160
     const val GRID = 320
     const val FULL = 640
+    /** A detail page's full-bleed header: asked big, shown full-bleed only when it came back at least the header's size (never upscaled). */
+    const val HERO = 1200
 }
 
 /** A [Track] shrunk to what lists and the queue need. */

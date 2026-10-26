@@ -95,17 +95,17 @@ fun AudioSettingsScreen(nav: NavHostController) {
     LaunchedEffect(Unit) { client.dispatch(Command.RefreshOutputDevices) }
     SubScreen(nav, stringResource(R.string.settings_section_audio)) {
         val rgOptions = listOf(ReplayGainMode.Off to stringResource(R.string.settings_rg_off), ReplayGainMode.Track to stringResource(R.string.settings_rg_track), ReplayGainMode.Album to stringResource(R.string.settings_rg_album), ReplayGainMode.Auto to stringResource(R.string.settings_rg_auto))
-        SettingRow(stringResource(R.string.settings_replay_gain))
+        SettingRow(stringResource(R.string.settings_replay_gain), tag = "audio.replayGain")
         ChoiceRow(rgOptions, isSelected = { audio.replayGain == it }, onSelect = { m -> client.dispatch(Commands.setAudioSettings(audio.copy(replayGain = m))) }, modifier = Modifier.padding(horizontal = 16.dp))
         val preampLabel = stringResource(R.string.settings_preamp)
         val preampValue = stringResource(R.string.settings_db, audio.replayGainPreampDb)
-        SettingRow(preampLabel, preampValue)
+        SettingRow(preampLabel, preampValue, tag = "audio.preamp")
         // Spoken as "Preamp, +3.0 dB" rather than a bare percentage.
         LabelledSlider(value = audio.replayGainPreampDb.toFloat(), onValueChange = { client.dispatch(Commands.setAudioSettings(audio.copy(replayGainPreampDb = it.toDouble()))) }, valueRange = -15f..15f,
             label = preampLabel, valueText = preampValue, modifier = Modifier.padding(horizontal = 16.dp))
-        SwitchRow(stringResource(R.string.settings_normalisation), audio.normalisation, { client.dispatch(Commands.setAudioSettings(audio.copy(normalisation = it))) })
-        SwitchRow(stringResource(R.string.settings_gapless), audio.gapless, { client.dispatch(Commands.setAudioSettings(audio.copy(gapless = it))) })
-        SettingsSection(stringResource(R.string.settings_eq))
+        SwitchRow(stringResource(R.string.settings_normalisation), audio.normalisation, { client.dispatch(Commands.setAudioSettings(audio.copy(normalisation = it))) }, tag = "audio.normalisation")
+        SwitchRow(stringResource(R.string.settings_gapless), audio.gapless, { client.dispatch(Commands.setAudioSettings(audio.copy(gapless = it))) }, tag = "audio.gapless")
+        SettingsSection(stringResource(R.string.settings_eq), tag = "audio.eq")
         SwitchRow(stringResource(R.string.settings_eq_enabled), audio.eq.enabled, { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(enabled = it)))) })
         val eqPreampLabel = stringResource(R.string.settings_eq_preamp)
         val eqPreampValue = stringResource(R.string.settings_db, audio.eq.preampDb)
@@ -125,7 +125,7 @@ fun AudioSettingsScreen(nav: NavHostController) {
             }, tag = "audio.systemEq") { Chevron() }
         }
         if (outputs.isNotEmpty()) {
-            SettingsSection(stringResource(R.string.settings_output_device))
+            SettingsSection(stringResource(R.string.settings_output_device), tag = "audio.output")
             val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
             ChoiceRow(outputs.map { it.id to it.name }, isSelected = { selectedOutput == it }, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
         }
@@ -204,13 +204,13 @@ private fun ProfileEditor(title: String, networkId: String) {
     fun push(p: TranscodingProfile) = client.dispatch(Commands.setTranscodingProfile(networkId.takeIf { it != "default" }, p))
     SettingsSection(title)
     val originalLabel = stringResource(R.string.settings_format_original)
-    SettingRow(stringResource(R.string.settings_format))
+    SettingRow(stringResource(R.string.settings_format), tag = "transcoding.format")
     ChoiceRow(listOf(null, "opus", "mp3", "aac").map { it to (it ?: originalLabel) }, isSelected = { profile.format == it }, onSelect = { push(profile.copy(format = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
     val bitrates = listOf(null, 96, 128, 192, 320).map { b -> b to (b?.let { stringResource(R.string.settings_bitrate_kbps, it) } ?: stringResource(R.string.settings_bitrate_unlimited)) }
-    SettingRow(stringResource(R.string.settings_max_bitrate))
+    SettingRow(stringResource(R.string.settings_max_bitrate), tag = "transcoding.bitrate")
     ChoiceRow(bitrates, isSelected = { profile.maxBitRate?.toInt() == it }, onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, modifier = Modifier.padding(horizontal = 16.dp))
     var cannot by remember(profile) { mutableStateOf(profile.cannotDecode.joinToString(", ")) }
-    OutlinedTextField(value = cannot, onValueChange = { cannot = it }, label = { Text(stringResource(R.string.settings_cannot_decode)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    OutlinedTextField(value = cannot, onValueChange = { cannot = it }, label = { Text(stringResource(R.string.settings_cannot_decode)) }, singleLine = true, modifier = Modifier.fillMaxWidth().settingAnchor("transcoding.cannotDecode").testTag(settingTag("transcoding.cannotDecode")).padding(horizontal = 16.dp),
         trailingIcon = { TextButton(onClick = { push(profile.copy(cannotDecode = cannot.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() })) }) { Text(stringResource(R.string.action_save)) } })
 }
 
@@ -223,7 +223,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
     val lan = setting(SettingKeys.CONNECT_LAN_DISCOVERY)
     var url by remember(connection.coordinatorUrl) { mutableStateOf(connection.coordinatorUrl ?: "") }
     SubScreen(nav, stringResource(R.string.settings_category_connect)) {
-        OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.settings_coordinator_url)) }, placeholder = { Text(stringResource(R.string.settings_coordinator_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
+        OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.settings_coordinator_url)) }, placeholder = { Text(stringResource(R.string.settings_coordinator_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().settingAnchor("connect.coordinator").testTag(settingTag("connect.coordinator")).padding(16.dp))
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(shapes = ButtonDefaults.shapes(), onClick = { client.dispatch(Commands.setCoordinatorUrl(url.trim().ifEmpty { null })); client.dispatch(Command.ConnectCoordinator) }) { Text(stringResource(R.string.settings_coordinator_connect)) }
             TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, enabled = connection.connected) { Text(stringResource(R.string.settings_coordinator_disconnect)) }
@@ -234,7 +234,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
             app.hocket.core.api.ConnectionTier.Coordinator -> stringResource(R.string.connection_coordinator, connection.peerCount.toInt())
         }
         SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" })
-        SwitchRow(stringResource(R.string.settings_lan_discovery), lan.bool ?: true, { client.dispatch(Commands.setLanDiscovery(it)) }, scope = lan.scope)
+        SwitchRow(stringResource(R.string.settings_lan_discovery), lan.bool ?: true, { client.dispatch(Commands.setLanDiscovery(it)) }, scope = lan.scope, tag = "connect.lan")
         devices.firstOrNull { it.isSelf }?.let { SettingRow(stringResource(R.string.settings_device_name, it.name), it.id) }
     }
 }
@@ -247,19 +247,19 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
     val mediaSetting = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION)
     SubScreen(nav, stringResource(R.string.settings_section_customise)) {
         // The phone's bottom bar: a device-local choice of two to five places (Settings is never one).
-        SettingsSection(stringResource(R.string.settings_bottom_bar))
+        SettingsSection(stringResource(R.string.settings_bottom_bar), tag = "customise.bottomBar")
         BottomBarEditor(Modifier.testTag("customise.bottomBar"))
-        SettingsSection(stringResource(R.string.settings_context_menu))
+        SettingsSection(stringResource(R.string.settings_context_menu), tag = "customise.contextMenuSection")
         Text(stringResource(R.string.settings_reorder_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         // Canonical registry ids for the contextMenu surface; an empty stored list means the registry default.
         val allMenu = ActionIds.CONTEXT_MENU
         val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu
         ChooseAndOrder(allMenu, menuIds, minEnabled = 1, label = { actionLabel(it) }, tag = "customise.contextMenu") { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
-        SettingsSection(stringResource(R.string.settings_media_buttons))
+        SettingsSection(stringResource(R.string.settings_media_buttons), tag = "customise.mediaSessionSection")
         val allMedia = ActionIds.MEDIA_SESSION
         val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMedia
         ChooseAndOrder(allMedia, mediaIds, minEnabled = 0, label = { actionLabel(it) }, tag = "customise.mediaSession") { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
-        SettingsSection(stringResource(R.string.settings_swipe_actions))
+        SettingsSection(stringResource(R.string.settings_swipe_actions), tag = "customise.swipe")
         Text(stringResource(R.string.settings_swipe_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         SwipeChoices(stringResource(R.string.settings_swipe_queue), SwipeOptions.QUEUE, SwipeSurface.Queue)
         SwipeChoices(stringResource(R.string.settings_swipe_lists), SwipeOptions.LIST, SwipeSurface.List)

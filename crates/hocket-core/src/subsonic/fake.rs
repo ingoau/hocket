@@ -786,6 +786,18 @@ impl SubsonicApi for FakeServer {
         })
     }
 
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo> {
+        let id = id.to_string();
+        Box::pin(async move {
+            self.gate("getAlbumInfo2")?;
+            let st = self.state.lock();
+            Ok(AlbumInfo {
+                notes: st.albums.get(&id).map(|a| format!("About {}", a.name)),
+                ..Default::default()
+            })
+        })
+    }
+
     fn artist_info2(&self, id: &str, _count: u32, _inp: bool) -> ApiFuture<'_, ArtistInfo2> {
         let id = id.to_string();
         Box::pin(async move {

@@ -75,7 +75,8 @@ impl Actor {
             | Command::SetQueueMode { .. }
             | Command::SkipUnavailable { .. }
             | Command::PinSavedQueue { .. }
-            | Command::DeleteSavedQueue { .. }) => self.queue_command(c),
+            | Command::DeleteSavedQueue { .. }
+            | Command::RenameQueue { .. }) => self.queue_command(c),
 
             // -- saved queues --
             Command::RestoreSavedQueue { id } => self.restore_saved_queue(id),

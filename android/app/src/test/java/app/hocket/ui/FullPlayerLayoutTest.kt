@@ -705,6 +705,8 @@ class FullPlayerLayoutTest {
         assertEquals("About this song", title.config[SemanticsActions.OnClick].label)
         tap("player.title")
         compose.waitUntil(5_000) { exists("player.about") }
+        // The file's details are under the File tab.
+        tap("player.about.tab.2")
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Format").fetchSemanticsNodes().isNotEmpty() }
     }
 

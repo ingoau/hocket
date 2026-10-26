@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,8 +82,10 @@ fun Artwork(
             else Modifier
         ),
     ) {
-        if (path == null) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
-        if (path != null) {
+        // A file the loader cannot read shows the id's gradient too, never an empty card.
+        var failed by remember(path) { mutableStateOf(false) }
+        if (path == null || failed) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
+        if (path != null && !failed) {
             val request = remember(path, requested, startedWithCachedPath) {
                 // Decoded at the requested artwork size, not the view's: a view that resizes (the
                 // player's artwork going edge to edge) keeps its image instead of reloading it.
@@ -94,7 +97,7 @@ fun Artwork(
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                onError = { cacheKey?.let { ArtworkPathCache.remove(it) } },
+                onError = { cacheKey?.let { ArtworkPathCache.remove(it) }; failed = true },
             )
         }
     }
@@ -144,6 +147,7 @@ fun IconArt(icon: ImageVector, shape: Shape, modifier: Modifier = Modifier, icon
 }
 
 fun smallerSize(size: Int): Int = when (size) {
+    ArtworkSizes.HERO -> ArtworkSizes.FULL
     ArtworkSizes.FULL -> ArtworkSizes.GRID
     ArtworkSizes.GRID -> ArtworkSizes.LIST
     ArtworkSizes.LIST -> ArtworkSizes.THUMB

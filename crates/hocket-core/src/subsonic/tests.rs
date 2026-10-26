@@ -551,6 +551,9 @@ async fn album_list2_types() {
         .unwrap();
     assert_eq!(albums.len(), 2);
     assert!(album_from_id3("srv1", &albums[1]).is_compilation);
+    let ep = album_from_id3("srv1", &albums[0]);
+    assert_eq!(ep.release_types, vec!["ep".to_string(), "live".to_string()]);
+    assert_eq!(ep.release_kind(), crate::api::ReleaseKind::Ep);
     let req = &t.requests_to("getAlbumList2")[0];
     assert_eq!(query_param(req, "type").as_deref(), Some("byYear"));
     assert_eq!(query_param(req, "fromYear").as_deref(), Some("1990"));
