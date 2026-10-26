@@ -145,5 +145,12 @@ class SwipeActionsTest {
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_LIST_END_TO_START]?.value == "\"${ActionIds.ADD_TO_PLAYLIST}\"" }
         compose.onNodeWithTag("customise.${SettingKeys.SWIPE_QUEUE_START_TO_END}").performScrollTo().onChildren().filterToOne(hasText("None")).performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_QUEUE_START_TO_END]?.value == "\"${SwipeOptions.NONE}\"" }
+        // The player's swipe up: the queue by default, any of the four choosable.
+        val playerUp = compose.onNodeWithTag("customise.${SettingKeys.SWIPE_PLAYER_UP}").performScrollTo()
+        playerUp.onChildren().filterToOne(hasText("Queue")).assertIsOn()
+        playerUp.onChildren().filterToOne(hasText("Play on")).performClick()
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_CONNECT}\"" }
+        playerUp.onChildren().filterToOne(hasText("Song menu")).performClick()
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_MENU}\"" }
     }
 }

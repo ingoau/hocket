@@ -258,7 +258,7 @@ internal class HeroGeometry {
     var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
     var swipe: () -> Float = { 0f }
-    /** The swipe up to the queue ([QueuePull]): the artwork's lift (px, upwards) and its share of the most (read in layer lambdas). */
+    /** The swipe up to the queue or the lyrics ([SwipeUpPull]): the artwork's lift (px, upwards) and its share of the most (read in layer lambdas). */
     var lift: () -> Float = { 0f }
     var liftFraction: () -> Float = { 0f }
 
@@ -419,14 +419,14 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             state.draggable.updateAnchors(DraggableAnchors { SheetValue.Collapsed at collapsedOffset; SheetValue.Expanded at 0f }, state.draggable.targetValue)
         }
         val haptics = LocalHapticFeedback.current
-        // Swiping up on the open player opens the queue (see [QueuePull]).
-        val queuePull = remember { QueuePull(scope) }
+        // Swiping up on the open player opens the queue, the lyrics or a sheet (see [SwipeUpPull]).
+        val queuePull = remember { SwipeUpPull(scope) }
         queuePull.haptics = haptics
         queuePull.reduced = reducedMotion
         with(density) {
-            queuePull.maxLift = QueuePull.MAX_LIFT.toPx()
-            queuePull.commit = QueuePull.COMMIT.toPx()
-            queuePull.flingVelocity = QueuePull.FLING.toPx()
+            queuePull.maxLift = SwipeUpPull.MAX_LIFT.toPx()
+            queuePull.commit = SwipeUpPull.COMMIT.toPx()
+            queuePull.flingVelocity = SwipeUpPull.FLING.toPx()
         }
         val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * NowPlayingSheetState.POSITIONAL_THRESHOLD }, animationSpec = Motion.sheet)
 
@@ -593,7 +593,10 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             state.mode == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded &&
                 !carousel.busy && !state.draggable.isAnimationRunning
         }
-        queuePull.onOpen = { state.mode = PlayerMode.Queue }
+        // `swipe.playerUp`: the queue or the lyrics take the artwork's place; the device picker and
+        // the song menu come up as sheets ([FullPlayer] sets [SwipeUpPull.openSheet] for those).
+        val swipeUp = settings[app.hocket.core.SettingKeys.SWIPE_PLAYER_UP]?.value?.trim()?.removeSurrounding("\"")
+        queuePull.onOpen = { state.mode = if (swipeUp == app.hocket.core.SwipeOptions.PLAYER_UP_LYRICS) PlayerMode.Lyrics else PlayerMode.Queue }
         // The sheet moving (a collapse by the button, back or the scrim) drops any lift, so the
         // artwork in flight takes over from an unlifted one.
         LaunchedEffect(queuePull, state) {
@@ -708,6 +711,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 neighbours = neighbours,
                                 neighbourLayouts = previousLayout to nextLayout,
                                 headerAlpha = { HeroGeometry.headerAlpha(state.progress) },
+                                swipeUp = queuePull,
+                                swipeUpAction = swipeUp,
                             )
                         }
                     }

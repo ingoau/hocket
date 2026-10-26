@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.semantics.SemanticsActions
@@ -308,6 +309,96 @@ class NowPlayingSheetTest {
             dragUp("player.artwork", 160f * density, 600)
             advanceUntil("the queue") { modeSelected("queue") && displayed("queue.list") }
             assertTrue(sheetOpen())
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** Sets `swipe.playerUp` to [action] and waits for it to reach the client. */
+    private fun swipeUpOpens(core: TestCore, action: String) {
+        core.client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.SWIPE_PLAYER_UP, "\"$action\""))
+        compose.waitUntil(5_000) { core.client.settings.value[app.hocket.core.SettingKeys.SWIPE_PLAYER_UP]?.value == "\"$action\"" }
+    }
+
+    private fun exists(tag: String): Boolean = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    private fun topOf(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
+
+    /** With `swipe.playerUp` on the lyrics, the same swipe opens the lyrics instead of the queue. */
+    @Test
+    fun swipingUpCanOpenTheLyrics() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_LYRICS)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            dragUp("player.artwork", 160f * compose.density.density, 600)
+            advanceUntil("the lyrics") { modeSelected("lyrics") && displayed("lyrics.page") }
+            assertFalse(modeSelected("queue"))
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /**
+     * With `swipe.playerUp` on "Play on", the swipe brings the device picker up under the finger:
+     * its top follows the finger; let go short and slowly, it drops back and closes; a long swipe
+     * opens it, and the player stays in artwork mode throughout.
+     */
+    @Test
+    fun swipingUpCanBringUpPlayOnUnderTheFinger() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_CONNECT)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            val step = 10f * compose.density.density
+            compose.onNodeWithTag("player.artwork").performTouchInput {
+                down(center)
+                moveBy(Offset(0f, -viewConfiguration.touchSlop - 1f))
+                repeat(4) { moveBy(Offset(0f, -step)) }
+            }
+            advanceUntil("the picker to come up") { exists("handoff.sheet") && topOf("handoff.sheet") < topOf("player.playPause") + 10_000f }
+            repeat(5) { compose.mainClock.advanceTimeByFrame() }
+            val first = topOf("handoff.sheet")
+            compose.onNodeWithTag("player.artwork").performTouchInput { repeat(4) { moveBy(Offset(0f, -step)) } }
+            repeat(5) { compose.mainClock.advanceTimeByFrame() }
+            val second = topOf("handoff.sheet")
+            assertEquals("the sheet follows the finger", 4 * step, first - second, 2f)
+            // Held still, then let go: short of half the sheet, it drops back and closes.
+            compose.mainClock.advanceTimeBy(500)
+            compose.onNodeWithTag("player.artwork").performTouchInput { advanceEventTime(500); up() }
+            advanceUntil("the picker to close") { !exists("handoff.sheet") }
+            assertTrue("the swipe changed the mode", modes.none { modeSelected(it) })
+            // A long swipe opens it.
+            dragUp("player.artwork", 400f * compose.density.density, 300)
+            advanceUntil("the picker") { exists("handoff.sheet") }
+            repeat(120) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("the picker stays open", exists("handoff.sheet"))
+            assertTrue(modes.none { modeSelected(it) })
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** With `swipe.playerUp` on the menu, a swipe up opens the song's menu. */
+    @Test
+    fun swipingUpCanOpenTheSongMenu() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_MENU)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            dragUp("player.artwork", 400f * compose.density.density, 300)
+            advanceUntil("the song menu") { exists("songMenu") }
+            repeat(120) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("the menu stays open", exists("songMenu"))
+            assertTrue(modes.none { modeSelected(it) })
         } finally {
             compose.mainClock.autoAdvance = true
         }
