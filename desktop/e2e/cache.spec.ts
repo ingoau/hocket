@@ -108,17 +108,19 @@ test.describe("album priming", () => {
     const row = page.getByTestId("track-row").nth(2);
     const trackId = (await row.getAttribute("data-track-id")) ?? "";
     const play = row.getByTestId("row-play");
+    // The page scrolls as a whole and a scroll cancels intent: bring the row into view first.
+    await row.scrollIntoViewIfNeeded();
     // Passing over it doesn't count.
     await play.hover();
     await page.waitForTimeout(120);
-    await page.getByTestId("view-album").locator("h1").hover();
+    await row.locator(".td.title").hover();
     await page.waitForTimeout(500);
     expect((await primes(page)).filter((p) => p.kind === "track")).toEqual([]);
     // Resting on it does, after ~300 ms.
     await play.hover();
     await expect.poll(async () => (await primes(page)).filter((p) => p.kind === "track").map((p) => p.id), { timeout: 3000, intervals: [50] }).toEqual([trackId]);
     // Once per track per visit.
-    await page.getByTestId("view-album").locator("h1").hover();
+    await row.locator(".td.title").hover();
     await play.hover();
     await page.waitForTimeout(700);
     expect((await primes(page)).filter((p) => p.kind === "track")).toHaveLength(1);
@@ -205,7 +207,7 @@ test.describe("available offline", () => {
     await expect(page.getByTestId("library-offline")).toHaveText("Available offline");
     await openPlace(page, "offline");
     await expect(page.getByTestId("view-downloads")).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Available offline" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("heading", { level: 1, name: "Available offline" })).toBeVisible();
     const table = page.getByTestId("available-offline-table");
     await expect(table.getByTestId("track-row").first()).toBeVisible();
     const count = async () => Number(((await page.getByTestId("available-offline-count").textContent()) ?? "0").replace(/\D/g, ""));
@@ -219,11 +221,10 @@ test.describe("available offline", () => {
       await setTheme(page, theme);
       await expectNoViolations(page, `${theme} downloads / available offline`);
     }
-    // The tabs switch with the keyboard.
-    await page.getByRole("tab", { name: "Available offline" }).focus();
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.getByRole("tab", { name: "Downloads" })).toHaveAttribute("aria-selected", "true");
-    await page.keyboard.press("ArrowRight");
+    // Back to Downloads, and in again from the storage card.
+    await page.getByTestId("downloads-back").click();
+    await expect(page.getByRole("heading", { level: 1, name: "Downloads" })).toBeVisible();
+    await page.getByTestId("downloads-open-offline").click();
     await expect(page.getByTestId("available-offline-table")).toBeVisible();
     // Clearing the stream cache leaves only downloads.
     await page.getByRole("button", { name: "Clear stream cache" }).click();

@@ -162,8 +162,8 @@ test.describe("now playing", () => {
     await expect(page.getByTestId("toggle-side-panel")).toHaveAttribute("aria-expanded", "true");
     await page.getByTestId("toggle-side-panel").click();
     await expect(panel).toHaveCount(0);
-    // L and Q do what the buttons do.
-    await page.getByTestId("content").click();
+    // L and Q do what the buttons do (with focus off the track table, whose letters type ahead).
+    await page.getByTestId("album-head").click();
     await page.keyboard.press("l");
     await expect(panel).toHaveAttribute("data-view", "lyrics");
     await page.keyboard.press("q");

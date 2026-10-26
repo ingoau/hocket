@@ -10,8 +10,7 @@ import { Icon } from "./Icon";
 export type HeroMode = "large" | "small" | "none";
 
 /** The Large header's height by default; a cover must cover it (and the header's width) at the screen's pixel density. */
-export const LARGE_HERO_HEIGHT = 420;
-export const COMPACT_HERO_HEIGHT = 320;
+export const LARGE_HERO_HEIGHT = 470;
 
 /**
  * Large only when the image has the pixels to fill `width` × `height` CSS px at `dpr` without being
@@ -27,8 +26,8 @@ export function heroMode(natural: { width: number; height: number } | undefined,
   return scale <= 1 ? "large" : "small";
 }
 
-/** `compact`: the album and playlist pages, whose track list scrolls under a fixed header, keep it shorter. */
-export function DetailHead({ coverArt, round = false, compact = false, icon = "music", onContextMenu, children, testId }: { coverArt: string | undefined; round?: boolean; compact?: boolean; icon?: string; onContextMenu?: (e: React.MouseEvent) => void; children: ReactNode; testId?: string }) {
+/** The hero holds `children` (an eyebrow, the title, its lines); `actions` sit under it, on the page. */
+export function DetailHead({ coverArt, round = false, icon = "music", onContextMenu, children, actions, testId }: { coverArt: string | undefined; round?: boolean; icon?: string; onContextMenu?: (e: React.MouseEvent) => void; children: ReactNode; actions?: ReactNode; testId?: string }) {
   // null while resolving; undefined when there is no cover (or it could not be fetched).
   const [resolved, setResolved] = useState<{ id: string; url: string | undefined } | undefined>(undefined);
   useEffect(() => {
@@ -49,9 +48,10 @@ export function DetailHead({ coverArt, round = false, compact = false, icon = "m
     return () => ro.disconnect();
   }, []);
   useLayoutEffect(() => setNatural(undefined), [url]);
-  const mode = heroMode(natural, url, width, compact ? COMPACT_HERO_HEIGHT : LARGE_HERO_HEIGHT, window.devicePixelRatio || 1);
+  const mode = heroMode(natural, url, width, LARGE_HERO_HEIGHT, window.devicePixelRatio || 1);
   return (
-    <div ref={ref} className={`detail-head hero-${mode}${compact ? " compact" : ""}`} data-hero={mode} onContextMenu={onContextMenu} data-testid={testId}>
+    <>
+    <div ref={ref} className={`detail-head hero-${mode}`} data-hero={mode} onContextMenu={onContextMenu} data-testid={testId}>
       {url ? (
         <div className="hero-backdrop" aria-hidden="true">
           <img src={url} alt="" draggable={false} onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })} />
@@ -61,5 +61,7 @@ export function DetailHead({ coverArt, round = false, compact = false, icon = "m
       {mode === "none" ? <div className={`art placeholder${round ? " round" : ""}`} aria-hidden="true"><Icon name={icon} size={64} /></div> : null}
       <div className="meta">{children}</div>
     </div>
+    {actions ? <div className="detail-actions">{actions}</div> : null}
+    </>
   );
 }

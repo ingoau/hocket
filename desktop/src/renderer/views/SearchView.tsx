@@ -7,7 +7,6 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { TrackTable } from "../components/TrackTable";
-import { Icon } from "../components/Icon";
 import { useQuery } from "../store/queries";
 import { Tile, TileList } from "../components/Tile";
 
@@ -41,11 +40,11 @@ export function SearchView({ query }: { query: string }) {
   const nothing = !!found && counts.all === 0 && !!server;
   return (
     <div className="view page-search" data-testid="view-search">
-      <div className="view-header"><h1>{query}</h1><span className="muted count-chip">{counts.all}</span></div>
+      <div className="view-header search-header"><h1>{query}</h1>{found ? <span className="muted" data-testid="search-count">{t(counts.all === 1 ? "search.resultsOne" : "search.results", { count: counts.all })}</span> : null}</div>
       <div className="search-kinds" role="group" aria-label={t("search.kinds")} data-testid="search-kinds">
         {KINDS.map((k) => (
           <button key={k} type="button" className={`search-kind ${kind === k ? "on" : ""}`} aria-pressed={kind === k} disabled={k !== "all" && counts[k] === 0} onClick={() => setKind(k)} data-testid={`search-kind-${k}`}>
-            {kind === k ? <Icon name="check" size={16} /> : null}{t(`search.kind.${k}`)}{k !== "all" ? <span className="search-kind-count">{counts[k]}</span> : null}
+            {t(`search.kind.${k}`)}{k !== "all" ? <span className="search-kind-count">{counts[k]}</span> : null}
           </button>
         ))}
       </div>
@@ -57,7 +56,7 @@ export function SearchView({ query }: { query: string }) {
               <h2 className="section-heading" id="search-tracks">{t("search.tracks")}</h2>
               {kind === "all" && songs.length > PREVIEW ? <button type="button" className="btn text sm" onClick={() => setKind("songs")} data-testid="search-see-all-songs">{t("search.seeAllSongs", { count: songs.length })}</button> : null}
             </div>
-            <TrackTable tracks={shownSongs} total={shownSongs.length} columns={["art", "title", "artist", "album", "rating", "duration"]} scope={`search:${query}`} label={t("search.tracks")} onPlay={(i) => play(i)} emptyMessage={t("search.noResults", { query })} />
+            <TrackTable tracks={shownSongs} total={shownSongs.length} columns={["art", "title", "artist", "album", "love", "offline", "duration"]} scope={`search:${query}`} label={t("search.tracks")} onPlay={(i) => play(i)} emptyMessage={t("search.noResults", { query })} />
           </section>
         ) : null}
         {show("albums") ? (

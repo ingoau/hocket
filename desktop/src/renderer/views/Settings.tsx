@@ -41,7 +41,8 @@ export function Settings({ section }: { section?: string }) {
     <div className="view page-settings" data-testid="view-settings">
       <div className="settings">
         <nav className="settings-nav" aria-label={t("settings.title")}>
-          <AccountCard onOpen={() => navigate({ view: "settings", param: "general" }, true)} current={current === "general"} />
+          <p className="settings-nav-title" aria-hidden="true">{t("settings.title")}</p>
+          <AccountCard />
           {SECTION_GROUPS.map((g) => (
             <div key={g.title} className="settings-nav-group" role="group" aria-labelledby={`settings-group-${g.title}`}>
               <h2 className="settings-nav-heading" id={`settings-group-${g.title}`}>{t(g.title)}</h2>
@@ -72,20 +73,32 @@ export function Settings({ section }: { section?: string }) {
   );
 }
 
-/** The signed-in account and its server at the top of the nav: who, where, and when the library last synced. */
-function AccountCard({ onOpen, current }: { onOpen: () => void; current: boolean }) {
+/** The signed-in account and its server at the top of the nav: who and where, a sync button saying when the library last synced, and the two pages people look for here. */
+function AccountCard() {
   const server = useApp((s) => s.servers[0]);
+  const navigate = useApp((s) => s.navigate);
+  const syncing = useApp((s) => s.jobs.some((j) => j.kind === "librarySync" && (j.state === "running" || j.state === "queued")));
   if (!server) return null;
   const host = server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const last = server.lastSync ? t("settings.account.synced", { when: fmtRelative(server.lastSync) }) : t("settings.account.notSynced");
   return (
-    <button type="button" className={`settings-account ${current ? "active" : ""}`} onClick={onOpen} data-testid="settings-account">
-      <span className="settings-account-avatar" aria-hidden="true">{(server.username[0] ?? "?").toUpperCase()}</span>
-      <span className="grow" style={{ minWidth: 0 }}>
-        <span className="truncate settings-account-name">{server.username}</span>
-        <span className="truncate settings-account-sub">{server.name && server.name !== host ? t("settings.account.on", { server: server.name, host }) : host}</span>
-        <span className="truncate settings-account-sub">{server.lastSync ? t("settings.account.synced", { when: fmtRelative(server.lastSync) }) : t("settings.account.notSynced")}</span>
-      </span>
-    </button>
+    <div className="settings-account" role="group" aria-labelledby="settings-account-name" data-testid="settings-account">
+      <div className="settings-account-who">
+        <span className="settings-account-avatar" aria-hidden="true">{(server.username[0] ?? "?").toUpperCase()}</span>
+        <span className="grow" style={{ minWidth: 0 }}>
+          <span className="truncate settings-account-name" id="settings-account-name">{server.username}</span>
+          <span className="truncate settings-account-sub">{server.name && server.name !== host ? t("settings.account.on", { server: server.name, host }) : host}</span>
+        </span>
+      </div>
+      <button type="button" className="btn primary settings-account-sync" disabled={syncing} onClick={() => bridge().dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })} data-testid="settings-account-sync">
+        <Icon name="sync" size={18} className={syncing ? "spin" : undefined} />
+        <span className="truncate">{syncing ? t("settings.account.syncing") : t("settings.account.syncNow", { last })}</span>
+      </button>
+      <div className="settings-account-links">
+        <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "stats" })} data-testid="settings-account-stats"><Icon name="stats" size={18} />{t("settings.account.stats")}</button>
+        <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "settings", param: "connect" }, true)} data-testid="settings-account-devices"><Icon name="devices" size={18} />{t("settings.account.devices")}</button>
+      </div>
+    </div>
   );
 }
 

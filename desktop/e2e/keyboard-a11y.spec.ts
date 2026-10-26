@@ -147,8 +147,7 @@ test.describe("keyboard only", () => {
     await page.keyboard.press("Space");
     await expect(play).toHaveAttribute("aria-label", "Play");
     // The album's rating: one Tab stop, arrows rate, Delete clears.
-    const header = page.getByTestId("view-album").locator(".detail-head");
-    const group = header.getByRole("radiogroup");
+    const group = page.getByTestId("view-album").locator(".detail-rating").getByRole("radiogroup");
     await expect(group).toHaveAttribute("aria-label", /^Rating for /);
     await tabTo(page, (f) => f.role === "radio" && f.region === "main", "the album rating");
     await page.keyboard.press("ArrowRight");

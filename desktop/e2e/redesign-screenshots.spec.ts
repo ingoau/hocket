@@ -2,7 +2,8 @@
 // detail pages, Search, Setup, Downloads, Stats, Filters, Song info) for
 // reviewing by eye against the final designs. Not an assertion test: it runs
 // only with an output folder. HOCKET_SCREENSHOT_ONLY limits which shots are
-// written (comma-separated name fragments):
+// written (comma-separated name fragments) and HOCKET_SCREENSHOT_THEME to
+// light or dark the theme:
 //
 //   pnpm build && HOCKET_SCREENSHOT_DIR=/tmp/shots xvfb-run -a pnpm test:e2e redesign-screenshots
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -43,7 +44,8 @@ test("redesigned screens", async () => {
   test.skip(!out, "set HOCKET_SCREENSHOT_DIR");
   test.setTimeout(0);
   mkdirSync(out!, { recursive: true });
-  for (const theme of ["light", "dark"] as const) {
+  const themes = (["light", "dark"] as const).filter((th) => !process.env.HOCKET_SCREENSHOT_THEME || process.env.HOCKET_SCREENSHOT_THEME === th);
+  for (const theme of themes) {
     const userData = mkdtempSync(join(tmpdir(), "hocket-redesign-shots-"));
     const { app, page } = await launchFake(userData);
     const shot = async (name: string) => {
@@ -60,9 +62,16 @@ test("redesigned screens", async () => {
         await page.getByTestId("setup-username").fill("maren");
         await expect(page.getByTestId("setup-cleartext")).toBeVisible();
         await shot("setup");
-        await page.getByTestId("setup-url").fill("");
-      }
-      await completeSetup(page);
+        // Then what the server turned out to be, while the first sync runs.
+        await page.getByTestId("setup-url").fill("https://music.example.org");
+        await page.getByTestId("setup-username").fill("alice");
+        await page.getByTestId("setup-password").fill("secret");
+        await page.getByTestId("setup-connect").click();
+        await expect(page.getByTestId("setup-summary")).toBeVisible({ timeout: 15_000 });
+        await shot("setup-summary");
+        await page.getByTestId("setup-continue").click();
+        await expect(page.getByTestId("app")).toBeVisible();
+      } else await completeSetup(page);
       await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });
       await setSetting(page, "display.theme", theme);
       await resizeWindow(app, page, 1456, 912);
@@ -75,6 +84,9 @@ test("redesigned screens", async () => {
       await expect(page.getByTestId("saved-queues")).toBeVisible();
       await shot("queues");
       await page.getByTestId("sidebar-back").click();
+      // The rest as the designs show them, with the side panel closed.
+      await page.getByTestId("toggle-queue").click();
+      await expect(page.getByTestId("right-panel")).toHaveCount(0);
 
       // Play on.
       await page.getByTestId("connect-button").click();
@@ -116,6 +128,11 @@ test("redesigned screens", async () => {
       await page.locator('[data-testid="context-menu"] [data-action="ui.info"]').click();
       await expect(page.getByTestId("dialog-trackInfo").locator("dl").first()).toBeVisible();
       await shot("song-info");
+      if (wanted("song-info")) {
+        await page.getByTestId("song-info-tab-around").click();
+        await page.waitForTimeout(600);
+        await shot("song-info-around");
+      }
       await page.keyboard.press("Escape");
 
       // Downloads: the table and the storage card.
@@ -136,6 +153,10 @@ test("redesigned screens", async () => {
       await openPlace(page, "filters");
       await expect(page.getByTestId("view-filter-builder")).toBeVisible();
       await shot("filters");
+      await page.getByTestId("rule-edit").first().click();
+      await expect(page.getByTestId("rule-editor")).toBeVisible();
+      await shot("filters-rule");
+      await page.keyboard.press("Escape");
 
       // Settings: grouped nav with the account card.
       await page.getByTestId("nav-settings").click();
