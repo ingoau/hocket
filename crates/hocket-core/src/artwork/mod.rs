@@ -46,6 +46,9 @@ const COARSE_MIN: u32 = 4;
 /// The outermost row this share one colour: extend it, whatever is above (the art's own edge
 /// carries on exactly, and nothing is flipped).
 const EDGE_ROW_FLAT: f64 = 0.95;
+/// ...as long as this share of the strip above is that colour too: a border or a backdrop (a
+/// cream frame round a photo, a caption on it), not a hairline or a fringe under busy art.
+const EDGE_ROW_BACKING: f64 = 0.5;
 /// The share of the edge strip in one colour above which the artwork carries on in that colour
 /// with a crisp edge (no fade, no blur). Between FLAT_MIN and this the edge is plain but not
 /// uniform (low-contrast texture: dark ground, grain, a gradient), and a crisp cut into one flat
@@ -251,10 +254,11 @@ fn edge(
     // The outermost row alone (a few pixels of the original): one colour means a border, a
     // backdrop or a plain band, and the art can simply carry on in it.
     let last_median = img.median(N - 1..N);
-    // Only when the rows just above are that colour too: a thin border (or a fringe) under busy
-    // art would otherwise carry on as a flat band the art never shows.
+    // Only when the rows just above are mostly that colour too: a hairline (or a fringe) under
+    // busy art would otherwise carry on as a flat band the art never shows, while a real border
+    // (or a backdrop with a caption on it) is most of the strip.
     let last_row_flat = img.share_within(N - 1..N, last_median, FLAT_TOL) >= EDGE_ROW_FLAT
-        && img.share_within(strip.clone(), last_median, FLAT_TOL) >= FLAT_MIN;
+        && img.share_within(strip.clone(), last_median, FLAT_TOL) >= EDGE_ROW_BACKING;
     let median = if last_row_flat {
         last_median
     } else {

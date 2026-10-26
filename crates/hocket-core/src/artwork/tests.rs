@@ -619,3 +619,19 @@ fn a_border_under_busy_art_is_not_carried_on_flat() {
     let l = c.auto();
     assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
+
+#[test]
+fn a_border_with_a_caption_on_it_carries_on_flat() {
+    // Surrender (RÜFÜS DU SOL): a photo framed in cream, the frame deep enough to be a backdrop,
+    // the band names printed on it near the edge. The frame carries on in its colour, crisp.
+    let mut c = noise();
+    c.fill(0, S - 24, S, 24, [236, 230, 220]);
+    c.fill(0, 0, 8, S, [236, 230, 220]);
+    c.fill(S - 8, 0, 8, S, [236, 230, 220]);
+    // The caption: a few short red marks in the frame.
+    for i in 0..4 {
+        c.fill(S - 40 + i * 8, S - 8, 5, 3, [200, 60, 60]);
+    }
+    let l = c.auto();
+    assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
