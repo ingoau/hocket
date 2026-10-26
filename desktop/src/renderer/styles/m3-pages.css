@@ -36,6 +36,28 @@
 .settings-account-link:last-child { border-radius: var(--shape-xs) var(--shape-lg) var(--shape-lg) var(--shape-xs); }
 .settings-account-link:hover { background: color-mix(in srgb, var(--fg) 5%, var(--bg-elev)); }
 .settings-account-link .icon { color: var(--accent-text); }
+/* Settings search: an M3 search bar at the top of the nav; typing swaps the
+   sections for the matching settings, each naming its section. */
+.settings-search { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.settings-search-field { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 6px 0 16px; border-radius: var(--shape-full); background: var(--surface-tonal); color: var(--fg-muted); }
+.settings-search-field:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+.settings-search-input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; color: var(--fg); font: inherit; font-size: 15px; outline: none; }
+.settings-search-input::placeholder { color: var(--fg-muted); }
+.settings-search-input::-webkit-search-cancel-button { display: none; }
+.settings-search-results { display: flex; flex-direction: column; gap: 2px; }
+.settings-search-hit { all: unset; box-sizing: border-box; width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; min-height: 56px; justify-content: center; cursor: pointer; background: var(--surface-tonal-sunken); border-radius: var(--shape-xs); }
+.settings-search-results li:first-child .settings-search-hit { border-top-left-radius: var(--shape-lg); border-top-right-radius: var(--shape-lg); }
+.settings-search-results li:last-child .settings-search-hit { border-bottom-left-radius: var(--shape-lg); border-bottom-right-radius: var(--shape-lg); }
+.settings-search-hit:hover { background: color-mix(in srgb, var(--fg) 6%, var(--surface-tonal-sunken)); }
+.settings-search-hit:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.settings-search-hit-label { font-size: 14px; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+.settings-search-hit-section { font-size: var(--fs-sm); color: var(--fg-muted); }
+.settings-search-empty { padding: 12px 14px; }
+.settings-search-empty p { margin: 0 0 4px; }
+/* The picked setting, for a moment after a search jumps to it. */
+.page-settings .setting-row.setting-flash, .page-settings .setting-flash > .section-title, .page-settings h2.setting-flash { animation: setting-flash 1.8s ease-out; }
+@keyframes setting-flash { 0%, 35% { background: var(--state-selected); box-shadow: 0 0 0 2px var(--focus-ring); } 100% { box-shadow: 0 0 0 2px transparent; } }
+@media (prefers-reduced-motion: reduce) { .page-settings .setting-row.setting-flash, .page-settings .setting-flash > .section-title, .page-settings h2.setting-flash { animation: none; background: var(--state-selected); box-shadow: 0 0 0 2px var(--focus-ring); } }
 .page-settings .settings-nav .nav-item { height: 44px; padding: 0 18px 0 14px; gap: 14px; font-size: 14px; color: var(--fg-muted); flex: 0 0 auto; }
 .page-settings .settings-nav .nav-item + .nav-item { margin-top: 0; }
 .page-settings .settings-nav .nav-item .icon { opacity: 1; width: 20px; height: 20px; }
@@ -267,6 +289,11 @@
   .page-settings .settings-nav .nav-item .icon { width: 18px; height: 18px; }
   /* Narrow, the nav is one wrapping row of chips: no headings, no account card. */
   .page-settings .settings-nav-group { display: contents; }
+  /* With the search field over the chips the nav can outgrow a short window (200% zoom): the nav
+     and the page scroll together instead of the body scrolling under a nav that gets cut off. */
+  .page-settings .settings { overflow: auto; grid-template-rows: auto auto; }
+  .page-settings .settings-body { overflow: visible; }
+  .page-settings .settings-search { flex: 1 0 100%; margin-bottom: 4px; }
   .page-settings .settings-nav-heading, .page-settings .settings-account, .page-settings .settings-nav-title { display: none; }
   .page-settings .settings-body { padding: 16px var(--page-gutter) 28px; }
   .page-settings .setting-row { padding: 12px 16px; gap: 10px; }
@@ -611,7 +638,8 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .dl-legend .dot.cache { background: color-mix(in srgb, var(--accent) 55%, var(--bg-elev)); }
 .dl-legend .dot.free { box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
 .dl-link { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: var(--shape-xl); background: var(--state-selected); color: var(--accent-text); cursor: pointer; transition: border-radius var(--dur-spring) var(--spring-fast); }
-.dl-link:hover { background: color-mix(in srgb, var(--fg) 6%, var(--state-selected)); }
+/* Hover outlines the card rather than shading it: a lighter fill under the accent text drops below 4.5:1 in dark. */
+.dl-link:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-text) 45%, transparent); }
 .dl-link:active { border-radius: var(--shape-lg); }
 .dl-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .dl-link-title, .dl-link-sub { display: block; }
@@ -629,6 +657,11 @@ button.m3-switch { border: 0; padding: 0; background: none; }
   .downloads-body { grid-template-columns: minmax(0, 1fr); }
   .dl-side { position: static; order: -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
   .dl-storage { grid-row: span 2; }
+}
+/* Narrow (a small window, 200% zoom): the Files column goes, so the title keeps room for its name. */
+@container (max-width: 640px) {
+  .dl-table th:nth-child(4), .dl-table td:nth-child(4) { display: none; }
+  .dl-table th:nth-child(2) { width: 28%; }
 }
 
 /* Stats: the period chips, and each chart's readout of the bar under the pointer (or the peak). */
@@ -743,7 +776,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 @keyframes fb-pop-in { from { transform: scale(0.96); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .fb-pop { animation: none; } }
 .fb-pop-head { display: flex; align-items: center; gap: 8px; }
-.fb-pop-head h4 { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 700; }
+.fb-pop-head h2 { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 700; }
 .fb-pop-label { display: block; margin-top: 4px; font-size: var(--fs-sm); font-weight: 650; color: var(--fg-muted); }
 .fb-fields { max-height: 176px; overflow-y: auto; padding: 0 10px 10px; border-radius: var(--shape-lg); background: var(--surface-tonal-sunken); }
 .fb-field-group { padding: 9px 2px 5px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); }

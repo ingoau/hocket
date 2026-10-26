@@ -31,6 +31,8 @@ export function AlbumDetail({ id }: { id: string }) {
   const more = useQuery(() => (a?.artistId ? { type: "albums", data: { server_id: serverId, artist_id: a.artistId, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 13 } } } : null), "albums", [a?.artistId, serverId]);
   const others = (more.data?.items ?? []).filter((x) => x.id !== id).slice(0, 12);
   const footnote = [a?.year ? t("album.released", { year: a.year }) : "", a?.created ? t("album.added", { date: fmtDate(a.created) }) : "", a?.playCount ? t("album.plays", { count: a.playCount }) : ""].filter(Boolean).join(" · ");
+  // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
+  const kept = a?.offline === "downloaded" || a?.offline === "downloading";
   return (
     <div className="view detail-page" data-testid="view-album">
       <DetailHead coverArt={a?.coverArt} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
@@ -38,7 +40,7 @@ export function AlbumDetail({ id }: { id: string }) {
           <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(list[0]?.id)} data-testid="album-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(0, true)} data-testid="album-shuffle"><Icon name="shuffle" size={24} /></button>
           {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
-          {a ? <button type="button" className={`btn icon ${a.offline !== "none" ? "on" : ""}`} aria-pressed={a.offline !== "none"} aria-label={a.offline !== "none" ? t("album.downloaded") : t("album.download")} title={a.offline !== "none" ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(a.offline !== "none" ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={a.offline !== "none"} /></button> : null}
+          {a ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button> : null}
           <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } })} data-testid="album-more"><Icon name="more" /></button>
           <span className="spacer" />
           {a ? (

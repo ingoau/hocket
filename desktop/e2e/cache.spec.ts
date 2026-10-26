@@ -226,6 +226,16 @@ test.describe("available offline", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Downloads" })).toBeVisible();
     await page.getByTestId("downloads-open-offline").click();
     await expect(page.getByTestId("available-offline-table")).toBeVisible();
+    // And by keyboard: Enter on the back arrow and on the storage card's link, then the arrow keys through the rows.
+    await page.getByTestId("downloads-back").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { level: 1, name: "Downloads" })).toBeVisible();
+    await page.getByTestId("downloads-open-offline").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { level: 1, name: "Available offline" })).toBeVisible();
+    await table.getByTestId("track-row").first().locator(".td.title").click();
+    await page.keyboard.press("ArrowDown");
+    await expect(table.getByTestId("track-row").nth(1)).toBeFocused();
     // Clearing the stream cache leaves only downloads.
     await page.getByRole("button", { name: "Clear stream cache" }).click();
     await expect.poll(count).toBeLessThan(all);

@@ -141,8 +141,9 @@
 .connect-empty { margin: 0; }
 /* Play on opens as a popover over the player bar's Play on button, not a
    centred modal: no scrim, anchored bottom right. */
-.overlay.overlay-popover { background: transparent; align-items: flex-end; justify-content: flex-end; padding: 0 64px calc(var(--player-h) - 4px) 0; }
-.dialog.connect-popover { width: 380px; padding: 12px 10px 10px; gap: 8px; border-radius: var(--shape-xl); background: var(--surface-tonal); box-shadow: var(--shadow-2); transform-origin: bottom right; }
+.overlay.overlay-popover { background: transparent; align-items: flex-end; justify-content: flex-end; padding: 0 64px calc(var(--popover-bottom, var(--player-h)) - 4px) 0; }
+/* Never taller than the room above the player bar: it scrolls instead (an overflow at the top of a flex-end box can't be scrolled to). */
+.dialog.connect-popover { max-height: calc(100vh - var(--popover-bottom, var(--player-h)) - 12px); overflow-y: auto; width: 380px; padding: 12px 10px 10px; gap: 8px; border-radius: var(--shape-xl); background: var(--surface-tonal); box-shadow: var(--shadow-2); transform-origin: bottom right; }
 .connect-head { display: flex; align-items: center; gap: 8px; padding: 4px 4px 0 14px; }
 .connect-head .dialog-title { flex: 1; font-size: 22px; }
 .connect-volume { padding: 12px 14px 10px; border-radius: var(--shape-lg); background: var(--bg-sunken); display: flex; flex-direction: column; gap: 4px; }
@@ -175,7 +176,7 @@
 .si-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .si-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; padding-top: 4px; }
 .si-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.si-card { scroll-margin-top: 64px; background: var(--surface-tonal-sunken); border-radius: var(--shape-xl); padding: 18px 14px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.si-card { scroll-margin-top: calc(var(--si-tabs-h, 56px) + 8px); background: var(--surface-tonal-sunken); border-radius: var(--shape-xl); padding: 18px 14px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .si-eyebrow { margin: 0; padding: 0 6px; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
 .si-card h4, .si-around-head h4 { margin: 0; font-size: 16px; font-weight: 700; }
 .si-big { padding: 0 6px; color: var(--fg-muted); font-size: 16px; }
@@ -196,7 +197,7 @@
 .si-file { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 11px 14px; background: var(--bg-elev); border-radius: var(--shape-md); }
 .si-file-label { font-size: var(--fs-md); }
 .si-file code { font-size: var(--fs-sm); overflow-wrap: anywhere; user-select: text; }
-.si-around { scroll-margin-top: 64px; padding-top: 28px; }
+.si-around { scroll-margin-top: calc(var(--si-tabs-h, 56px) + 8px); padding-top: 28px; }
 .si-around-title { margin: 0 0 16px; font-size: 28px; font-weight: 800; letter-spacing: -0.01em; }
 .si-around-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .si-around-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }

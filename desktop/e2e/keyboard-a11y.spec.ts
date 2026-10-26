@@ -4,7 +4,7 @@
 // traps and focus return for menus, dialogs, the palette and the fullscreen
 // player, the queue listbox and selector, and the seek/volume/splitter sliders.
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, openPlace, test } from "./fixtures";
 import { focused, hasRing, keyboardSetup, type FocusInfo } from "./a11y-helpers";
 
 /** Press Tab (or Shift+Tab) until the focused element matches; fails after `max` presses. */
@@ -354,5 +354,38 @@ test.describe("keyboard only", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("palette")).toHaveCount(0);
     await expect(page.getByTestId("nav-library")).toBeFocused();
+  });
+  test("filter rule editor: each chip group is one Tab stop with arrows inside, Enter and Remove rule keep focus on the rules", async ({ hocket }) => {
+    const { page } = hocket;
+    await keyboardSetup(page);
+    await openPlace(page, "filters");
+    await page.getByTestId("new-filter").click();
+    const editor = page.getByTestId("rule-editor");
+    await expect(editor).toBeVisible();
+    // It opens on the chosen field; the arrows move the choice along the chips.
+    const fields = editor.getByRole("radiogroup", { name: "Field" });
+    await expect(fields.getByRole("radio", { checked: true })).toBeFocused();
+    const before = (await fields.getByRole("radio", { checked: true }).textContent()) ?? "";
+    await page.keyboard.press("ArrowRight");
+    const after = fields.getByRole("radio", { checked: true });
+    await expect(after).not.toHaveText(before);
+    await expect(after).toBeFocused();
+    // Tab leaves the field chips for the condition chips (one stop), then the value.
+    await page.keyboard.press("Tab");
+    await expect(editor.getByRole("radiogroup", { name: "Condition" }).getByRole("radio", { checked: true })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(editor.getByTestId("rule-value")).toBeFocused();
+    await page.keyboard.type("Ambient");
+    // Enter closes the editor onto its rule.
+    await page.keyboard.press("Enter");
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId("rule-edit").first()).toBeFocused();
+    // A new rule's Remove rule leaves focus on the rule before it, not the page.
+    await page.getByTestId("add-rule").click();
+    await expect(editor).toBeVisible();
+    await editor.getByRole("button", { name: "Remove rule" }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId("rule")).toHaveCount(1);
+    await expect(page.getByTestId("rule-edit").first()).toBeFocused();
   });
 });

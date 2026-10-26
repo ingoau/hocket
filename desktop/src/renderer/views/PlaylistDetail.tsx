@@ -28,13 +28,15 @@ export function PlaylistDetail({ id }: { id: string }) {
   const editable = !!p && !p.isSmart && p.isMine;
   const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   const by = p?.owner ? t("playlist.by", { owner: p.owner }) : "";
+  // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
+  const kept = p?.offline === "downloaded" || p?.offline === "downloading";
   return (
     <div className="view detail-page" data-testid="view-playlist">
       <DetailHead coverArt={p?.coverArt} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(rows[0]?.id)} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(0, true)} data-testid="playlist-shuffle"><Icon name="shuffle" size={24} /></button>
-          {p ? <button type="button" className={`btn icon ${p.offline !== "none" ? "on" : ""}`} aria-pressed={p.offline !== "none"} aria-label={p.offline !== "none" ? t("album.downloaded") : t("album.download")} title={p.offline !== "none" ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(p.offline !== "none" ? "unpin" : "download", { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-download"><Icon name="download" size={24} filled={p.offline !== "none"} /></button> : null}
+          {p ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-download"><Icon name="download" size={24} filled={kept} /></button> : null}
           <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => p && openMenuFromButton(e, { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-more"><Icon name="more" /></button>
         </>
       }>

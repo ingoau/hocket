@@ -15,9 +15,15 @@ import { BrandMark } from "../components/BrandMark";
 // Whether this window is showing the post-connect summary: set when Connect is
 // pressed, cleared by Continue. App keeps Setup on screen while it is set.
 let summaryOpen = false;
+// When Connect was pressed: the summary's sync is the first library sync queued after it.
+let openedAt = 0;
+// "Use a different server" was pressed: the summary stays up until the server is gone (so the app
+// behind it never shows for a server being removed), then gives way to the form.
+let leaving = false;
 const listeners = new Set<() => void>();
 function setSummary(open: boolean): void {
   summaryOpen = open;
+  if (open) openedAt = Date.now();
   for (const l of listeners) l();
 }
 /** True from pressing Connect until Continue on the summary. */
@@ -28,6 +34,9 @@ export function useSetupSummary(): boolean {
 export function Setup() {
   const server = useApp((s) => s.servers[0]);
   const summary = useSetupSummary();
+  useEffect(() => {
+    if (!server && leaving) { leaving = false; setSummary(false); }
+  }, [server]);
   return (
     <main className="setup" data-testid="setup">
       {/* The lockup (docs/brand.md): the bare wave and the lowercase word mark, read once as "Hocket". */}
@@ -97,13 +106,15 @@ function ConnectForm() {
 /** What the server turned out to be, while the first sync runs. */
 function Summary({ server }: { server: ServerInfo }) {
   const jobs = useApp((s) => s.jobs);
-  const sync = jobs.find((j) => j.kind === "librarySync");
-  const running = !!sync && (sync.state === "running" || sync.state === "queued");
-  const pct = sync?.total ? Math.min(100, Math.round((sync.done / sync.total) * 100)) : running ? 0 : 100;
+  // This server's first sync; until the core queues it, it is about to start (0%), not done.
+  const sync = jobs.filter((j) => j.kind === "librarySync" && j.createdAt >= openedAt - 1000).sort((a, b) => b.createdAt - a.createdAt)[0];
+  const failed = sync?.state === "failed" || sync?.state === "cancelled";
+  const synced = sync ? sync.state === "done" : !!server.lastSync;
+  const pct = synced ? 100 : sync?.total ? Math.min(100, Math.round((sync.done / sync.total) * 100)) : 0;
   const c = server.capabilities;
   const host = server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const caps: [string, boolean][] = [[t("setup.cap.lyrics"), c.songLyrics], [t("setup.cap.similar"), c.sonicSimilarity], [t("setup.cap.smart"), c.nativeApi]];
-  const different = () => { bridge().dispatch({ type: "removeServer", data: { server_id: server.id } }); setSummary(false); };
+  const different = () => { leaving = true; bridge().dispatch({ type: "removeServer", data: { server_id: server.id } }); };
   return (
     <section className="setup-card setup-summary" aria-labelledby="setup-found" data-testid="setup-summary">
       <h1 id="setup-found" className={`setup-version ${c.meetsFloor ? "" : "old"}`}>{c.serverVersion ? t("setup.version", { version: c.serverVersion }) : t("setup.connected")}</h1>
@@ -112,15 +123,16 @@ function Summary({ server }: { server: ServerInfo }) {
       <ul className="plain-list setup-caps" aria-label={t("setup.capabilities")}>
         {caps.map(([label, ok]) => <li key={label} className={`setup-cap ${ok ? "ok" : ""}`}><Icon name={ok ? "check" : "close"} size={18} />{label}<span className="sr-only">, {ok ? t("setup.cap.yes") : t("setup.cap.no")}</span></li>)}
       </ul>
-      {c.meetsFloor ? (
+      {failed ? <div className="setup-old" role="alert" data-testid="setup-sync-failed">{t("setup.syncFailed")}</div> : (
         <>
-          <div className="setup-sync" role="status"><span>{running ? t("setup.syncing") : t("setup.synced")}</span><span>{pct}%</span></div>
+          <div className="setup-sync" role="status"><span>{synced ? t("setup.synced") : t("setup.syncing")}</span><span>{pct}%</span></div>
           <div className="setup-meter" role="progressbar" aria-label={t("setup.syncing")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}><span style={{ width: `${pct}%` }} /></div>
         </>
-      ) : null}
+      )}
+      {/* An older server still works, with fewer features (the warning above says which), so Continue is always offered. */}
       <div className="setup-buttons">
         <button type="button" className="btn tonal" onClick={different} data-testid="setup-different">{t("setup.different")}</button>
-        {c.meetsFloor ? <button type="button" className="btn primary" onClick={() => setSummary(false)} autoFocus data-testid="setup-continue">{t("setup.continue")}</button> : null}
+        <button type="button" className="btn primary" onClick={() => setSummary(false)} autoFocus data-testid="setup-continue">{t("setup.continue")}</button>
       </div>
     </section>
   );

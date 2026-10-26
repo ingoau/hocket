@@ -34,8 +34,10 @@ export function Stats() {
   const [days, setDays] = useState(30);
   const navigate = useApp((s) => s.navigate);
   const { data, loading } = useQuery(() => ({ type: "stats", data: { period_days: days } }), "stats", [days]);
-  const hours = Math.floor((data?.totalMs ?? 0) / 3_600_000);
-  const minutes = Math.round(((data?.totalMs ?? 0) % 3_600_000) / 60_000);
+  // Rounded to the minute first, so 2 h 59 m 40 s reads 3 h 0 min, never 2 h 60 min.
+  const totalMinutes = Math.round((data?.totalMs ?? 0) / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   return (
     <div className="view page-stats" data-testid="view-stats">
       <div className="view-header">
@@ -53,7 +55,7 @@ export function Stats() {
             <div className="stat-top">
               <div className="stat-heroes">
                 <div className="stat-hero"><div className="stat-figure">{data.totalPlays}</div><div className="stat-label">{t("stats.playsLabel")}</div></div>
-                <div className="stat-hero"><div className="stat-figure">{hours}<span className="stat-unit"> h</span></div><div className="stat-label">{t("stats.minutesListened", { minutes })}</div></div>
+                <div className="stat-hero"><div className="stat-figure">{hours}<span className="stat-unit">{t("stats.unitHours")}</span> {minutes}<span className="stat-unit">{t("stats.unitMinutes")}</span></div><div className="stat-label">{t("stats.timeListened")}</div></div>
               </div>
               <Chart title={t("stats.byHour")} values={data.playsByHour} labels={data.playsByHour.map((_, i) => (i % 6 === 0 || i === 23 ? String(i) : ""))} readout={(i) => t("stats.readout", { what: hourSpan(i), count: data.playsByHour[i] ?? 0 })} peak={(i) => t("stats.peakHour", { what: hourSpan(i) })} a11y={data.playsByHour.map((v, i) => `${i}:00 ${v}`).join(", ")} testId="stats-hours" />
               <Chart title={t("stats.byWeekday")} values={data.playsByWeekday} labels={DAYS} readout={(i) => t("stats.readout", { what: DAYS_LONG[i] ?? "", count: data.playsByWeekday[i] ?? 0 })} peak={(i) => t("stats.peakDay", { what: DAYS_LONG[i] ?? "" })} a11y={data.playsByWeekday.map((v, i) => `${DAYS[i]} ${v}`).join(", ")} testId="stats-days" />

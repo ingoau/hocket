@@ -11,7 +11,7 @@ import { openContextMenu } from "./ContextMenu";
 import { executeAction, type ActionContext } from "../store/actions";
 import { fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
-import { TRACK_ROW_H } from "../lib/track-row";
+import { TRACK_HEAD_H, TRACK_ROW_H } from "../lib/track-row";
 import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
@@ -155,6 +155,17 @@ export function TrackTable(props: TrackTableProps) {
     bridge().dispatch({ type: "setSelection", data: { target } });
   }, [setSelection, scope]);
 
+  // A table shown in full on its page (album, playlist) doesn't scroll itself: the page does. Keeping
+  // the focused row in view and sizing Page Up/Down then go by the page's scroller instead.
+  const ownScroll = () => { const el = parentRef.current; return !!el && el.scrollHeight > el.clientHeight + 1; };
+  const visibleHeight = () => {
+    const el = parentRef.current;
+    if (!el) return 300;
+    if (ownScroll()) return el.clientHeight;
+    let up = el.parentElement;
+    while (up && !(up.scrollHeight > up.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(up).overflowY))) up = up.parentElement;
+    return Math.min(el.clientHeight, (up ?? document.documentElement).clientHeight - TRACK_HEAD_H);
+  };
   const moveFocus = (i: number) => {
     setFocusIdx(i);
     pendingFocus.current = i;
@@ -166,6 +177,7 @@ export function TrackTable(props: TrackTableProps) {
     if (!el) return;
     pendingFocus.current = undefined;
     el.focus({ preventScroll: true });
+    if (!ownScroll()) el.scrollIntoView({ block: "nearest" });
   });
 
   const click = (e: React.MouseEvent, i: number) => {
@@ -210,7 +222,7 @@ export function TrackTable(props: TrackTableProps) {
       publish(clearSelection());
       return;
     }
-    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor((parentRef.current?.clientHeight ?? 300) / TRACK_ROW_H) - 1));
+    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor(visibleHeight() / TRACK_ROW_H) - 1));
     if (next !== undefined) {
       e.preventDefault();
       e.stopPropagation();

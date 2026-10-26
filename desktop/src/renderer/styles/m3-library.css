@@ -355,6 +355,9 @@
 .top-songs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 2px 24px; margin-top: 4px; }
 .top-song { display: flex; align-items: center; gap: 4px; padding-right: 12px; border-radius: var(--shape-md); transition: background-color var(--dur-short) var(--ease-emphasized); }
 .top-song:hover { background: var(--bg-hover); }
+/* While the songs load: a row's height (8 + 44 + 8), in the same grid. */
+.top-song-placeholder { height: 60px; background: var(--surface-tonal-sunken, var(--bg-hover)); }
+.top-song-placeholder:hover { background: var(--surface-tonal-sunken, var(--bg-hover)); }
 .top-song.playing { background: var(--accent-soft); }
 .top-song-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: inherit; cursor: pointer; }
 .top-song-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

@@ -5,6 +5,7 @@
 // the other outputs (save, smart or static playlist, export .nsp) on its arrow,
 // and a sample of what matches.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Filter, FilterField, FilterNode, FilterOp, FilterPreview, FilterRule, FilterValue, SortOrder } from "@core/api";
 import { FilterFieldValues, SortOrderValues } from "@core/api";
 import { t } from "@shared/strings";
@@ -31,6 +32,43 @@ const OPS: Record<"text" | "num" | "date" | "bool" | "list", FilterOp[]> = {
   list: ["is", "isNot"],
 };
 const OP_LABEL: Record<FilterOp, string> = { is: "is", isNot: "is not", contains: "contains", notContains: "doesn't contain", startsWith: "starts with", endsWith: "ends with", gt: "greater than", lt: "less than", inTheRange: "in the range", before: "before", after: "after", inTheLast: "in the last (days)", notInTheLast: "not in the last (days)", isTrue: "is true", isFalse: "is false" };
+
+/** The condition as it reads in a rule's sentence: the editor's label without its "(days)" unit hint. */
+const COND_LABEL: Record<FilterOp, string> = { ...OP_LABEL, inTheLast: "in the last", notInTheLast: "not in the last" };
+
+/**
+ * Arrow keys (and Home/End) move the choice within a radio group, as a native radio group does,
+ * so the group is one Tab stop: only the chosen radio (see [rovingTab]) is in the Tab order.
+ */
+function radioKeys(e: React.KeyboardEvent<HTMLElement>) {
+  if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const radios = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]:not([disabled])')];
+  const i = radios.indexOf(document.activeElement as HTMLElement);
+  if (i < 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const n = radios.length;
+  const j = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1) + n) % n;
+  radios[j]!.focus();
+  radios[j]!.click();
+}
+/** The Tab stop of a radio group: the chosen radio, or the first when none is. */
+const rovingTab = (checked: boolean, index: number, anyChecked: boolean) => (checked || (!anyChecked && index === 0) ? 0 : -1);
+
+/**
+ * After a rule leaves the tree, focus goes to the rule now in its place (or the one before it), else
+ * to its group's Add rule, so the keyboard isn't dropped on the page.
+ */
+function focusAfterRemove(row: HTMLElement | null) {
+  const list = row?.parentElement;
+  const index = list ? [...list.children].indexOf(row!) : -1;
+  const root = row?.closest(".page-filter-builder");
+  requestAnimationFrame(() => {
+    const rules = list?.isConnected ? [...list.querySelectorAll<HTMLElement>(":scope > [data-testid='rule'] > .fb-rule-main")] : [];
+    const target = rules[Math.min(index, rules.length - 1)] ?? root?.querySelector<HTMLElement>("[data-testid='add-rule']");
+    target?.focus();
+  });
+}
 
 const FIELD_NAMES: Partial<Record<FilterField, string>> = { bpm: "BPM", bitRate: "Bit rate", filePath: "File path", fileType: "File type", hasCoverArt: "Has cover art", localPlayCount: "Plays on this device", localLastPlayed: "Last played on this device", availableOffline: "Available offline" };
 
@@ -67,13 +105,13 @@ function defaultValue(field: FilterField, op: FilterOp): FilterValue {
 
 const LOCAL_FIELDS: FilterField[] = ["downloaded", "cached", "availableOffline", "localPlayCount", "localLastPlayed", "inPlaylist"];
 /** The field chips in the rule editor, by what they describe. */
-const FIELD_GROUPS: { label: string; fields: FilterField[] }[] = [
-  { label: "Song", fields: ["title", "genre", "year", "duration", "comment", "lyrics", "discNumber", "trackNumber"] },
-  { label: "Album and artist", fields: ["album", "artist", "albumArtist", "compilation"] },
-  { label: "Plays and ratings", fields: ["playCount", "rating", "loved", "lastPlayed", "dateAdded", "dateModified"] },
-  { label: "Sound", fields: ["bpm", "energy", "key", "mood", "bitRate", "fileType"] },
-  { label: "File", fields: ["filePath", "hasCoverArt"] },
-  { label: "This device", fields: LOCAL_FIELDS },
+const FIELD_GROUPS: { label: Parameters<typeof t>[0]; fields: FilterField[] }[] = [
+  { label: "filters.group.song", fields: ["title", "genre", "year", "duration", "comment", "lyrics", "discNumber", "trackNumber"] },
+  { label: "filters.group.albumArtist", fields: ["album", "artist", "albumArtist", "compilation"] },
+  { label: "filters.group.plays", fields: ["playCount", "rating", "loved", "lastPlayed", "dateAdded", "dateModified"] },
+  { label: "filters.group.sound", fields: ["bpm", "energy", "key", "mood", "bitRate", "fileType"] },
+  { label: "filters.group.file", fields: ["filePath", "hasCoverArt"] },
+  { label: "filters.group.device", fields: LOCAL_FIELDS },
 ];
 const UNGROUPED = FilterFieldValues.filter((f) => !FIELD_GROUPS.some((g) => g.fields.includes(f)));
 if (UNGROUPED.length) FIELD_GROUPS[0]!.fields.push(...UNGROUPED);
@@ -83,11 +121,11 @@ const num = (field: FilterField, n: number) => (field === "duration" ? fmtTime(n
 /** A rule as it reads in the list: its field, then its condition and value ("is “Ambient”", "less than 4:00"). */
 export function describeCondition(rule: FilterRule): string {
   const v = rule.value;
-  const op = OP_LABEL[rule.op].replace(" (days)", "");
+  const op = COND_LABEL[rule.op];
   switch (v.type) {
     case "text": return `${op} “${v.data}”`;
     case "number": return `${op} ${num(rule.field, v.data)}`;
-    case "days": return `${op} ${v.data} days`;
+    case "days": return `${op} ${t(v.data === 1 ? "filters.daysCount.one" : "filters.daysCount.other", { count: v.data })}`;
     case "date": return `${op} ${v.data}`;
     case "range": return `${op} ${num(rule.field, v.data.low)}–${num(rule.field, v.data.high)}`;
     case "list": return `${op} ${v.data.map((x) => `“${x}”`).join(", ")}`;
@@ -174,8 +212,8 @@ export function FilterBuilder({ id, embedded = false }: { id: string; embedded?:
           </div>
           <div className="fb-card fb-sort">
             <h3 id="fb-sort-label">{t("filters.sortBy")}</h3>
-            <div className="fb-chips" role="radiogroup" aria-labelledby="fb-sort-label">
-              {sorts.map((s) => <button key={s} type="button" role="radio" aria-checked={filter.sort === s} className={`fb-chip ${filter.sort === s ? "on" : ""}`} onClick={() => setFilter({ ...filter, sort: s as SortOrder })}>{t(`sort.${s}` as never)}</button>)}
+            <div className="fb-chips" role="radiogroup" aria-labelledby="fb-sort-label" onKeyDown={radioKeys}>
+              {sorts.map((s, i) => <button key={s} type="button" role="radio" aria-checked={filter.sort === s} tabIndex={rovingTab(filter.sort === s, i, sorts.includes(filter.sort))} className={`fb-chip ${filter.sort === s ? "on" : ""}`} onClick={() => setFilter({ ...filter, sort: s as SortOrder })}>{t(`sort.${s}` as never)}</button>)}
             </div>
           </div>
           <div className="fb-rows">
@@ -215,7 +253,11 @@ const samePath = (a: Path | null, b: Path) => !!a && a.length === b.length && a.
 function GroupEditor({ node, path, onChange, root = false, onRemove, editing, onEdit }: { node: FilterNode; path: Path; onChange: (n: FilterNode) => void; root?: boolean; onRemove?: () => void } & EditProps) {
   if (node.type === "rule") return null;
   const children = node.data;
-  const setChild = (i: number, n: FilterNode | null) => onChange(n ? { ...node, data: children.map((c, j) => (j === i ? n : c)) } : { ...node, data: children.filter((_, j) => j !== i) });
+  const setChild = (i: number, n: FilterNode | null) => {
+    // A nested group left without rules would match nothing (any) or everything (all): it goes too.
+    if (!n && !root && children.length === 1 && onRemove) { onRemove(); return; }
+    onChange(n ? { ...node, data: children.map((c, j) => (j === i ? n : c)) } : { ...node, data: children.filter((_, j) => j !== i) });
+  };
   const addRule = () => { onChange({ ...node, data: [...children, { type: "rule", data: defaultRule() }] }); onEdit([...path, children.length]); };
   const addGroup = () => { onChange({ ...node, data: [...children, { type: "any", data: [{ type: "rule", data: defaultRule() }] }] }); onEdit([...path, children.length, 0]); };
   const toggle = (type: "all" | "any") => onChange({ type, data: children });
@@ -224,7 +266,7 @@ function GroupEditor({ node, path, onChange, root = false, onRemove, editing, on
       {children.map((c, i) => c.type === "rule" ? (
         <RuleRow key={i} rule={c.data} path={[...path, i]} onChange={(r) => setChild(i, r ? { type: "rule", data: r } : null)} canRemove={children.length > 1 || !root} editing={editing} onEdit={onEdit} />
       ) : (
-        <div key={i} role="listitem"><GroupEditor node={c} path={[...path, i]} onChange={(n) => setChild(i, n)} onRemove={() => setChild(i, null)} editing={editing} onEdit={onEdit} /></div>
+        <div key={i} role="listitem"><GroupEditor node={c} path={[...path, i]} onChange={(n) => setChild(i, n)} onRemove={() => { setChild(i, null); onEdit(null); }} editing={editing} onEdit={onEdit} /></div>
       ))}
     </div>
   );
@@ -232,9 +274,9 @@ function GroupEditor({ node, path, onChange, root = false, onRemove, editing, on
     return (
       <div className="rule-group root" data-testid="rule-group">
         <div className="fb-group-head">
-          <div className="button-group" role="radiogroup" aria-label={t("filters.match")}>
-            <button type="button" role="radio" aria-checked={node.type === "all"} className={`seg ${node.type === "all" ? "on" : ""}`} onClick={() => toggle("all")}>{t("filters.matchAllOf")}</button>
-            <button type="button" role="radio" aria-checked={node.type === "any"} className={`seg ${node.type === "any" ? "on" : ""}`} onClick={() => toggle("any")}>{t("filters.matchAnyOf")}</button>
+          <div className="button-group" role="radiogroup" aria-label={t("filters.match")} onKeyDown={radioKeys}>
+            <button type="button" role="radio" aria-checked={node.type === "all"} tabIndex={node.type === "all" ? 0 : -1} className={`seg ${node.type === "all" ? "on" : ""}`} onClick={() => toggle("all")}>{t("filters.matchAllOf")}</button>
+            <button type="button" role="radio" aria-checked={node.type === "any"} tabIndex={node.type === "any" ? 0 : -1} className={`seg ${node.type === "any" ? "on" : ""}`} onClick={() => toggle("any")}>{t("filters.matchAnyOf")}</button>
           </div>
           <span className="grow" />
           <span className="small muted">{t("filters.clickToEdit")}</span>
@@ -270,7 +312,7 @@ function RuleRow({ rule, path, onChange, canRemove, editing, onEdit }: { rule: F
         <span className="fb-rule-field">{fieldLabel(rule.field)}</span>
         <span className="fb-rule-cond truncate">{describeCondition(rule)}</span>
       </button>
-      {canRemove ? <button type="button" className="btn icon sm fb-rule-x" aria-label={`${t("filters.removeRule")}: ${fieldLabel(rule.field)}`} onClick={() => { onChange(null); onEdit(null); }}><Icon name="close" size={18} /></button> : null}
+      {canRemove ? <button type="button" className="btn icon sm fb-rule-x" aria-label={`${t("filters.removeRule")}: ${fieldLabel(rule.field)}`} onClick={() => { focusAfterRemove(ref.current); onChange(null); onEdit(null); }}><Icon name="close" size={18} /></button> : null}
       {open ? <RuleEditor anchor={ref} rule={rule} onChange={onChange} onClose={() => onEdit(null)} canRemove={canRemove} /> : null}
     </div>
   );
@@ -281,54 +323,68 @@ function RuleEditor({ anchor, rule, onChange, onClose, canRemove }: { anchor: Re
   const kind = kindOf(rule.field);
   const ops = OPS[kind];
   const pop = useRef<HTMLElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  // Viewport coordinates (the popover is portalled to the body, so no ancestor's containment offsets
+  // it). Under the rule when there's room for it, else on whichever side has more; above, it hangs
+  // from its bottom edge so a short one sits against the rule. Follows the rule as the page scrolls.
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
     const place = () => {
       const r = anchor.current?.getBoundingClientRect();
       if (!r) return;
       const width = Math.min(440, window.innerWidth - 24);
       const left = Math.max(12, Math.min(r.left + 12, window.innerWidth - width - 12));
-      const below = window.innerHeight - r.bottom - 12;
-      const top = below >= 360 ? r.bottom + 6 : Math.max(12, r.top - Math.min(520, window.innerHeight - 24) - 6);
-      setPos({ left, top, maxHeight: below >= 360 ? below - 6 : Math.min(520, r.top - 18) });
+      const below = window.innerHeight - r.bottom - 18;
+      const above = r.top - 18;
+      if (below >= 360 || below >= above) setPos({ left, top: r.bottom + 6, maxHeight: Math.max(120, below) });
+      else setPos({ left, bottom: window.innerHeight - r.top + 6, maxHeight: Math.max(120, above) });
     };
     place();
+    // Opened together with its rule (a new filter's first rule), the rule's ref is attached only
+    // after this effect, so place it again on the next frame.
+    const frame = requestAnimationFrame(place);
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [anchor]);
   useEffect(() => {
     const down = (e: MouseEvent) => { if (!pop.current?.contains(e.target as Node) && !anchor.current?.contains(e.target as Node)) onClose(); };
     document.addEventListener("mousedown", down);
     return () => document.removeEventListener("mousedown", down);
   }, [anchor, onClose]);
-  useEffect(() => { pop.current?.querySelector<HTMLElement>("input, [aria-checked='true']")?.focus(); }, []);
+  // Focus moves in once it is placed (hidden until then, it can't take focus).
+  const placed = pos !== null;
+  useEffect(() => { if (placed) pop.current?.querySelector<HTMLElement>("input, [aria-checked='true']")?.focus(); }, [placed]);
   const setField = (field: FilterField) => {
     const op = OPS[kindOf(field)].includes(rule.op) ? rule.op : (OPS[kindOf(field)][0] as FilterOp);
     onChange({ field, op, value: defaultValue(field, op) });
   };
   const setOp = (op: FilterOp) => onChange({ ...rule, op, value: rule.value.type === defaultValue(rule.field, op).type ? rule.value : defaultValue(rule.field, op) });
   const v = rule.value;
-  const done = (e: React.KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); onClose(); } };
   const close = () => { onClose(); anchor.current?.querySelector<HTMLElement>(".fb-rule-main")?.focus(); };
-  return (
-    <section ref={pop} className="fb-pop" role="dialog" aria-label={t("filters.editRule")} style={pos ? { left: pos.left, top: pos.top, maxHeight: pos.maxHeight } : { visibility: "hidden" }}
+  const done = (e: React.KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); close(); } };
+  const fieldsChecked = FIELD_GROUPS.some((g) => g.fields.includes(rule.field));
+  let fieldIndex = 0;
+  return createPortal(
+    <section ref={pop} className="fb-pop" role="dialog" aria-label={t("filters.editRule")}
+      style={pos ? { left: pos.left, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxHeight, transformOrigin: pos.bottom !== undefined ? "bottom left" : undefined } : { visibility: "hidden" }}
       onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } }} data-testid="rule-editor">
       <div className="fb-pop-head">
-        <h4 className="truncate">{fieldLabel(rule.field)} {describeCondition(rule)}</h4>
+        <h2 className="truncate">{fieldLabel(rule.field)} {describeCondition(rule)}</h2>
         <button type="button" className="btn icon sm" aria-label={t("misc.close")} onClick={close}><Icon name="close" size={18} /></button>
       </div>
       <div className="fb-pop-label" id="fb-field-label">{t("filters.field")}</div>
-      <div className="fb-fields">
+      {/* One choice across the groups, so one Tab stop; each group's heading names its chips. */}
+      <div className="fb-fields" role="radiogroup" aria-labelledby="fb-field-label" onKeyDown={radioKeys}>
         {FIELD_GROUPS.map((g) => (
-          <div key={g.label} role="radiogroup" aria-label={g.label}>
-            <div className="fb-field-group">{g.label}</div>
-            <div className="fb-chips">{g.fields.map((f) => <button key={f} type="button" role="radio" aria-checked={rule.field === f} className={`fb-chip ${rule.field === f ? "on" : ""}`} onClick={() => setField(f)}>{fieldLabel(f)}</button>)}</div>
+          <div key={g.label} role="group" aria-labelledby={`fb-group-${g.label}`}>
+            <div className="fb-field-group" id={`fb-group-${g.label}`}>{t(g.label)}</div>
+            <div className="fb-chips">{g.fields.map((f) => <button key={f} type="button" role="radio" aria-checked={rule.field === f} tabIndex={rovingTab(rule.field === f, fieldIndex++, fieldsChecked)} className={`fb-chip ${rule.field === f ? "on" : ""}`} onClick={() => setField(f)}>{fieldLabel(f)}</button>)}</div>
           </div>
         ))}
       </div>
       <div className="fb-pop-label" id="fb-op-label">{t("filters.condition")}</div>
-      <div className="fb-chips" role="radiogroup" aria-labelledby="fb-op-label">
-        {ops.map((o) => <button key={o} type="button" role="radio" aria-checked={rule.op === o} className={`fb-chip ${rule.op === o ? "on" : ""}`} onClick={() => setOp(o)}>{OP_LABEL[o]}</button>)}
+      <div className="fb-chips" role="radiogroup" aria-labelledby="fb-op-label" onKeyDown={radioKeys}>
+        {ops.map((o, i) => <button key={o} type="button" role="radio" aria-checked={rule.op === o} tabIndex={rovingTab(rule.op === o, i, ops.includes(rule.op))} className={`fb-chip ${rule.op === o ? "on" : ""}`} onClick={() => setOp(o)}>{OP_LABEL[o]}</button>)}
       </div>
       {v.type === "text" ? <label className="fb-value"><span className="fb-pop-label">{t("filters.value")}</span><input className="input" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "text", data: e.target.value } })} onKeyDown={done} data-testid="rule-value" /></label> : null}
       {v.type === "number" ? <label className="fb-value"><span className="fb-pop-label">{rule.field === "duration" ? t("filters.seconds") : t("filters.value")}</span><input className="input" type="number" step="any" value={v.data} onChange={(e) => onChange({ ...rule, value: { type: "number", data: Number(e.target.value) } })} onKeyDown={done} data-testid="rule-value" /></label> : null}
@@ -343,11 +399,12 @@ function RuleEditor({ anchor, rule, onChange, onClose, canRemove }: { anchor: Re
       {v.type === "list" ? <label className="fb-value"><span className="fb-pop-label">{t("filters.values")}</span><input className="input" value={v.data.join(", ")} onChange={(e) => onChange({ ...rule, value: { type: "list", data: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } })} onKeyDown={done} /></label> : null}
       {LOCAL_FIELDS.includes(rule.field) ? <p className="small muted fb-local">{t("filters.localNote")}</p> : null}
       <div className="fb-pop-foot">
-        {canRemove ? <button type="button" className="btn text danger-text" onClick={() => { onChange(null); onClose(); }}>{t("filters.removeRule")}</button> : null}
+        {canRemove ? <button type="button" className="btn text danger-text" onClick={() => { focusAfterRemove(anchor.current); onChange(null); onClose(); }}>{t("filters.removeRule")}</button> : null}
         <span className="grow" />
-        <span className="kbd" aria-hidden="true">Enter</span>
+        <span className="kbd" aria-hidden="true">{t("key.enter")}</span>
         <button type="button" className="btn primary" onClick={close} data-testid="rule-done">{t("filters.done")}</button>
       </div>
-    </section>
+    </section>,
+    document.body,
   );
 }

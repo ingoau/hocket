@@ -31,9 +31,11 @@ function Rows({ rows }: { rows: Row[] }) {
   );
 }
 
+const ORDINAL_RULES = new Intl.PluralRules("en", { type: "ordinal" });
+/** 1 → "1st", 12 → "12th", 23 → "23rd", by the ordinal plural category. */
 const ordinal = (n: number) => {
-  const s = n % 100 >= 11 && n % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
-  return `${n}${s}`;
+  const cat = ORDINAL_RULES.select(n);
+  return t(cat === "one" || cat === "two" || cat === "few" ? `songInfo.ordinal.${cat}` : "songInfo.ordinal.other", { n });
 };
 
 export function SongInfo({ trackId }: { trackId: string }) {
@@ -63,12 +65,29 @@ export function SongInfo({ trackId }: { trackId: string }) {
   const rank = siblings.length > 1 && (tr.playCount ?? 0) > 0 ? 1 + siblings.filter((s) => (s.playCount ?? 0) > (tr.playCount ?? 0)).length : undefined;
   const jump = (s: Section) => {
     setOn(s);
+    const bar = scroller.current?.querySelector<HTMLElement>(".si-tabs");
+    if (bar) scroller.current!.style.setProperty("--si-tabs-h", `${bar.offsetHeight}px`);
     scroller.current?.querySelector(`#si-${s}`)?.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  };
+  // Scrolled by hand, the chips follow: the last section whose top has reached the chip bar, keeping
+  // the chosen one when it starts level with that (the cards side by side share a top).
+  const spy = () => {
+    const box = scroller.current;
+    const bar = box?.querySelector<HTMLElement>(".si-tabs");
+    if (!box || !bar) return;
+    // Jumps land a section's heading just under the bar, whatever its height (the chips wrap when narrow).
+    box.style.setProperty("--si-tabs-h", `${bar.offsetHeight}px`);
+    const line = bar.getBoundingClientRect().bottom + 12;
+    const tops = SECTIONS.map((s) => box.querySelector(`#si-${s}`)?.getBoundingClientRect().top ?? Infinity);
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 2;
+    const reached = atEnd ? SECTIONS.length - 1 : tops.reduce((last, top, i) => (top <= line ? i : last), 0);
+    const top = tops[reached]!;
+    setOn((cur) => (Math.abs(tops[SECTIONS.indexOf(cur)]! - top) < 2 && !atEnd ? cur : SECTIONS[reached]!));
   };
   return (
     <>
       <button type="button" className="btn icon si-close" aria-label={t("misc.close")} title={t("misc.close")} onClick={close} data-testid="song-info-close"><Icon name="close" size={22} /></button>
-      <div className="si-scroll" ref={scroller} tabIndex={0} role="group" aria-labelledby="dialog-title">
+      <div className="si-scroll" ref={scroller} tabIndex={0} role="group" aria-labelledby="dialog-title" onScroll={spy}>
         <header className="si-head">
           <h2 className="dialog-title si-title" id="dialog-title">{tr.title}</h2>
           <div className="si-sub">

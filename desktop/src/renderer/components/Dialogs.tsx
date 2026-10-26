@@ -42,8 +42,11 @@ export function Dialogs() {
     }
     trapTab(e);
   };
+  // The Play on popover rises from the player bar, whose height varies (taller in the narrow layout).
+  const playerTop = dialog.kind === "connect" ? document.querySelector('[data-testid="player-bar"]')?.getBoundingClientRect().top : undefined;
+  const popoverStyle = playerTop !== undefined ? ({ "--popover-bottom": `${Math.max(0, window.innerHeight - playerTop)}px` } as React.CSSProperties) : undefined;
   return (
-    <div className={`overlay ${dialog.kind === "connect" ? "overlay-popover" : ""} ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
+    <div className={`overlay ${dialog.kind === "connect" ? "overlay-popover" : ""} ${closing ? "closing" : ""}`} style={popoverStyle} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div {...exitProps} className={`dialog ${dialog.kind === "trackInfo" ? "dialog-wide" : ""} ${dialog.kind === "connect" ? "dialog-popover connect-popover" : ""} ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}

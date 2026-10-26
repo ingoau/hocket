@@ -92,11 +92,15 @@ export function ArtistDetail({ id }: { id: string }) {
                   <h2 id="artist-top-title">{t("artist.topSongs")}</h2>
                   {topAll.length > TOP_PREVIEW ? <button type="button" className="btn view-more" aria-expanded={allTop} onClick={() => setAllTop(!allTop)} data-testid="artist-top-more">{allTop ? t("release.viewLess") : t("release.viewMore")}<Icon name={allTop ? "chevronUp" : "chevronRight"} size={18} /></button> : null}
                 </div>
-                {topSection.kind === "loading" ? <div className="top-songs-loading" style={{ height: topSection.height }} aria-busy="true" data-testid="artist-top-loading" /> : (
+                {topSection.kind === "loading" ? (
+                  <ol className="plain-list top-songs" aria-busy="true" aria-labelledby="artist-top-title" data-testid="artist-top-loading">
+                    {Array.from({ length: topSection.rows }, (_, i) => <li key={i} className="top-song top-song-placeholder" aria-hidden="true" />)}
+                  </ol>
+                ) : (
                   <ol className="plain-list top-songs" aria-labelledby="artist-top-title" data-testid="artist-top">
                     {topList.map((tr, i) => (
                       <li key={tr.id} className={`top-song ${tr.id === playing ? "playing" : ""}`} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } })}>
-                        <button type="button" className="top-song-main" onClick={() => playTop(i)} aria-label={t("artist.playTop", { title: tr.title, n: i + 1 })} data-testid="artist-top-row">
+                        <button type="button" className="top-song-main" onClick={() => playTop(i)} aria-label={tr.id === playing ? `${t("artist.playTop", { title: tr.title, n: i + 1 })}, ${t("a11y.playingTrack")}` : t("artist.playTop", { title: tr.title, n: i + 1 })} aria-current={tr.id === playing || undefined} data-testid="artist-top-row">
                           <span className="top-song-art"><Artwork id={tr.coverArt} size={96} className="art" /><span className="top-song-n" aria-hidden="true">{tr.id === playing ? <Icon name="equalizer" size={18} /> : i + 1}</span></span>
                           <span className="grow" style={{ minWidth: 0 }}>
                             <span className="truncate top-song-title">{tr.title}</span>
