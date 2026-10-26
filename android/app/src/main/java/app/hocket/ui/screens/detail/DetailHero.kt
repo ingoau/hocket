@@ -214,7 +214,7 @@ internal fun DetailHero(
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to lerp(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.primary, 0.14f), 1f to Color.Transparent)))
             Column(Modifier.fillMaxWidth().padding(top = statusTop + 72.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (coverArt != null) {
-                    val side = minOf(width * 0.62f, 264.dp)
+                    val side = minOf(width * 0.74f, 320.dp)
                     val shape = if (round) CircleShape else RoundedCornerShape(28.dp)
                     Artwork(coverArt, if (round) ArtworkSizes.FULL else ArtworkSizes.FULL, title, Modifier.size(side).shadow(24.dp, shape, ambientColor = MaterialTheme.colorScheme.primary, spotColor = Color.Black)
                         .sharedArtworkDestination(shareKey).testTag("detail.artwork"), shape)
