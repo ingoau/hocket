@@ -87,6 +87,8 @@ fun ActionSheet(
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
     extraTop: (@Composable () -> Unit)? = null,
+    /** Rows the page adds (a playlist's Select songs). */
+    extras: List<SongMenuExtra> = emptyList(),
 ) {
     val client = LocalCoreClient.current
     val resources = LocalResources.current
@@ -107,6 +109,7 @@ fun ActionSheet(
         MenuSheet(
             subject, target, actions,
             onDismiss = { sheetOpen = false; if (share == null && !picker && info == null) onDismiss() },
+            extras = extras,
             onAddToPlaylist = { picker = true },
             onShare = { share = ShareRequest(it, subject, target) },
             onGoToAlbum = onGoToAlbum,
@@ -154,6 +157,7 @@ private suspend fun menuSubject(
                 meta = songs(a.songCount.toInt()) + dot + durationWords(resources, a.durationMs.toLong()),
                 coverArt = a.coverArt,
                 loved = if (a.loved) Tick.On else Tick.Off,
+                rating = a.rating.toInt(),
                 downloaded = a.offline == OfflineState.Downloaded || pins.any { it.target == Commands.albumPin(a.id) },
                 downloadNote = songs(a.songCount.toInt()),
                 albumId = a.id, album = a.name,

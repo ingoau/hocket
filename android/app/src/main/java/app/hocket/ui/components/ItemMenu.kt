@@ -223,8 +223,9 @@ fun menuLayout(
     val love = LoveToggle(take(ActionIds.LOVE), take(ActionIds.UNLOVE)).takeIf { it.love != null || it.unlove != null }
     val rateable = actions.any { it.id in RATE_IDS }
     used += RATE_IDS
-    // One song always has its stars (as the player does); several, where the registry rates them.
-    val stars = kind == MenuKind.Song || (rateable && kind == MenuKind.Songs)
+    // One song always has its stars (as the player does); several songs and an album, where the
+    // registry rates them (an album's page has no stars of its own).
+    val stars = kind == MenuKind.Song || (rateable && (kind == MenuKind.Songs || kind == MenuKind.Album))
     val addTo = take(ActionIds.ADD_TO_PLAYLIST)?.let { MenuEntry.Action(it) }
     val download = MenuEntry.Download(take(ActionIds.DOWNLOAD), take(ActionIds.UNPIN)).takeIf { it.download != null || it.remove != null }
     val pin = MenuEntry.LibraryPin(take(ActionIds.PIN_TO_LIBRARY), take(ActionIds.UNPIN_FROM_LIBRARY)).takeIf { it.pin != null || it.unpin != null }

@@ -253,6 +253,12 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
         if (!involved || transitions.motion == PageMotion.Tab || transitions.motion == PageMotion.Reduced) 0f
         else if (state == EnterExitState.Visible) 0f else 1f
     }
+    // The bottom bar crossfades between the moving pages' colours with this progress ([PageChrome]).
+    val chrome = LocalPageChrome.current
+    androidx.compose.runtime.LaunchedEffect(chrome, entryId) {
+        androidx.compose.runtime.snapshotFlow { progress }.collect { chrome.reportProgress(entryId, it, transitions.topEntryId, transitions.coveredEntryId) }
+    }
+    androidx.compose.runtime.DisposableEffect(chrome, entryId) { onDispose { chrome.clearProgress(entryId) } }
     Box(
         Modifier
             .fillMaxSize()
