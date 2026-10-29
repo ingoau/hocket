@@ -14,7 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.ui.components.ARTWORK_RETRIES
+import app.hocket.ui.components.ARTWORK_RETRY_MS
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import app.hocket.ui.components.ArtworkPathCache
 import androidx.compose.ui.Alignment
@@ -177,11 +184,22 @@ object ImmersiveArtwork {
 fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ImmersiveArtwork.Resolved?> {
     val client = LocalCoreClient.current
     val state = remember(coverArt, preference, dark) { mutableStateOf(ImmersiveArtwork.cached(coverArt, preference, dark)) }
-    LaunchedEffect(state) {
-        if (state.value != null || coverArt == null) return@LaunchedEffect
+    // A cover the core could not fetch (a network drop) is asked for again, as [Artwork] does: a
+    // card meanwhile, the immersive layout once the file comes.
+    val network by client.network.collectAsStateWithLifecycle()
+    // Known from the first frame when worked out already (a file in hand, whatever its layout).
+    var fetched by remember(state) { mutableStateOf(state.value != null) }
+    var attempt by remember(state, network) { mutableIntStateOf(0) }
+    LaunchedEffect(state, attempt, network) {
+        if (fetched || coverArt == null) return@LaunchedEffect
         val path = client.artworkPath(coverArt, ArtworkSizes.GRID)
         if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
         state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
+        if (path != null) { fetched = true; return@LaunchedEffect }
+        if (attempt < ARTWORK_RETRIES) {
+            delay(ARTWORK_RETRY_MS shl attempt)
+            attempt++
+        }
     }
     return state
 }

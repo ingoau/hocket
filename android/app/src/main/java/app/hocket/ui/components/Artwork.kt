@@ -49,8 +49,8 @@ import java.io.File
  * a library. Battery saver drops one size step (design: battery saver).
  *
  * A size the core could not fetch (a network drop: it answers "no file" for a failed fetch as for a
- * missing image) or a file the loader cannot read is asked for again, a few times with a growing
- * wait and once more on every network change, and meanwhile a smaller copy already fetched for
+ * missing image; it remembers a 404, so asking again costs nothing then) or a file the loader cannot
+ * read is asked for again, a few times with a growing wait, afresh on every network change, and meanwhile a smaller copy already fetched for
  * another place (the mini player's) stands in for the gradient.
  */
 @Composable
@@ -69,8 +69,9 @@ fun Artwork(
     // gradient, so a shared-element remount never flashes an empty white card.
     val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
     val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
-    var attempt by remember(cacheKey) { mutableIntStateOf(0) }
     val network by client.network.collectAsStateWithLifecycleCompat()
+    // A fresh run of retries on each network change (the link may take a moment to carry traffic).
+    var attempt by remember(cacheKey, network) { mutableIntStateOf(0) }
     LaunchedEffect(cacheKey, attempt, network) {
         if (state.value?.path != null) return@LaunchedEffect
         val path = client.artworkPath(coverArt, requested)
@@ -100,14 +101,14 @@ fun Artwork(
             else Modifier
         ),
     ) {
-        // A file the loader cannot read shows the id's gradient too, never an empty card.
         var standFailed by remember(stand) { mutableStateOf(false) }
         var loaded by remember(path) { mutableStateOf(false) }
-        if (path == null && (stand == null || standFailed)) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
+        // The gradient stays under the stand-in while that decodes, never an empty card.
+        if (path == null) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
         if (!loaded && stand != null && !standFailed) {
             AsyncImage(
                 model = remember(stand, requested) { ImageRequest.Builder(platformContext).data(File(stand.path.removePrefix("file://"))).size(requested).build() },
-                contentDescription = contentDescription,
+                contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 onError = { ArtworkPathCache.remove(stand.key); standFailed = true },
@@ -141,8 +142,8 @@ private class Resolved(val path: String?)
 
 private const val ARTWORK_CROSSFADE_MS = 120
 /** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and on each network change after). */
-private const val ARTWORK_RETRIES = 4
-private const val ARTWORK_RETRY_MS = 2_000L
+internal const val ARTWORK_RETRIES = 4
+internal const val ARTWORK_RETRY_MS = 2_000L
 
 /**
  * Process-wide memory of `Query.Artwork` answers ("id@size" to a file path), bounded LRU. Only
