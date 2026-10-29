@@ -345,12 +345,15 @@ impl Actor {
         };
         let caches = self.caches.clone();
         self.spawn(async move {
-            let path = caches
-                .artwork_path(api.as_ref(), &id, size)
-                .await
-                .ok()
-                .flatten()
-                .map(|p| p.to_string_lossy().into_owned());
+            // A failed fetch answers "no file" like a missing image; the
+            // shell asks again (a later attempt, a network change).
+            let path = match caches.artwork_path(api.as_ref(), &id, size).await {
+                Ok(p) => p.map(|p| p.to_string_lossy().into_owned()),
+                Err(e) => {
+                    tracing::debug!(target: "hocket_core", id = %id, size, error = %e, "artwork fetch failed");
+                    None
+                }
+            };
             let _ = reply.send(QueryResult::Path(path));
         });
     }

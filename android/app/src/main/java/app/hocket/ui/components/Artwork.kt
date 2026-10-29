@@ -10,6 +10,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,6 +35,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import java.io.File
 
 /**
@@ -45,6 +47,11 @@ import java.io.File
  * plain `surfaceContainerHigh` backdrop. When the core has no file (fake core, offline), a
  * deterministic two-tone gradient derived from the id stands in, so the fake core still looks like
  * a library. Battery saver drops one size step (design: battery saver).
+ *
+ * A size the core could not fetch (a network drop: it answers "no file" for a failed fetch as for a
+ * missing image; it remembers a 404, so asking again costs nothing then) or a file the loader cannot
+ * read is asked for again, a few times with a growing wait, afresh on every network change, and meanwhile a smaller copy already fetched for
+ * another place (the mini player's) stands in for the gradient.
  */
 @Composable
 fun Artwork(
@@ -62,16 +69,28 @@ fun Artwork(
     // gradient, so a shared-element remount never flashes an empty white card.
     val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
     val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
-    LaunchedEffect(cacheKey) {
+    val network by client.network.collectAsStateWithLifecycleCompat()
+    // A fresh run of retries on each network change (the link may take a moment to carry traffic).
+    var attempt by remember(cacheKey, network) { mutableIntStateOf(0) }
+    LaunchedEffect(cacheKey, attempt, network) {
         if (state.value?.path != null) return@LaunchedEffect
         val path = client.artworkPath(coverArt, requested)
         if (cacheKey != null && path != null) ArtworkPathCache.put(cacheKey, path)
         state.value = Resolved(path)
+        if (path == null && coverArt != null && attempt < ARTWORK_RETRIES) {
+            delay(ARTWORK_RETRY_MS shl attempt)
+            attempt++
+        }
     }
     val resolved = state.value
     val platformContext = LocalPlatformContext.current
     val r = resolved
     val path = r?.path
+    // Until this size shows, a smaller file already known for the same cover, scaled up (looked up
+    // again after each answer, so one fetched meanwhile for another place is picked up).
+    val stand = remember(coverArt, requested, r) {
+        if (coverArt != null && (path == null || !startedWithCachedPath)) ArtworkPathCache.smaller(coverArt, requested) else null
+    }
     // A remount that already knows the file (shared-element overlay, a second card of the same
     // album) must not paint the empty surfaceContainerHigh card or crossfade in over it — that is
     // the white flash on the Albums tile fan and the albums page Recent row. Unresolved still
@@ -82,10 +101,20 @@ fun Artwork(
             else Modifier
         ),
     ) {
-        // A file the loader cannot read shows the id's gradient too, never an empty card.
-        var failed by remember(path) { mutableStateOf(false) }
-        if (path == null || failed) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
-        if (path != null && !failed) {
+        var standFailed by remember(stand) { mutableStateOf(false) }
+        var loaded by remember(path) { mutableStateOf(false) }
+        // The gradient stays under the stand-in while that decodes, never an empty card.
+        if (path == null) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
+        if (!loaded && stand != null && !standFailed) {
+            AsyncImage(
+                model = remember(stand, requested) { ImageRequest.Builder(platformContext).data(File(stand.path.removePrefix("file://"))).size(requested).build() },
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                onError = { ArtworkPathCache.remove(stand.key); standFailed = true },
+            )
+        }
+        if (path != null) {
             val request = remember(path, requested, startedWithCachedPath) {
                 // Decoded at the requested artwork size, not the view's: a view that resizes (the
                 // player's artwork going edge to edge) keeps its image instead of reloading it.
@@ -97,7 +126,13 @@ fun Artwork(
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                onError = { cacheKey?.let { ArtworkPathCache.remove(it) }; failed = true },
+                onSuccess = { loaded = true },
+                // Asked again (the core fetches afresh a file that has gone), a bounded number of times.
+                onError = {
+                    cacheKey?.let { ArtworkPathCache.remove(it) }
+                    state.value = Resolved(null)
+                    if (attempt < ARTWORK_RETRIES) attempt++
+                },
             )
         }
     }
@@ -106,6 +141,9 @@ fun Artwork(
 private class Resolved(val path: String?)
 
 private const val ARTWORK_CROSSFADE_MS = 120
+/** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and on each network change after). */
+internal const val ARTWORK_RETRIES = 4
+internal const val ARTWORK_RETRY_MS = 2_000L
 
 /**
  * Process-wide memory of `Query.Artwork` answers ("id@size" to a file path), bounded LRU. Only
@@ -120,6 +158,15 @@ object ArtworkPathCache {
     fun get(key: String): String? = synchronized(map) { map[key] }
     fun put(key: String, path: String) { synchronized(map) { map[key] = path } }
     fun remove(key: String) { synchronized(map) { map.remove(key) } }
+
+    /** The largest file known for [id] below [size], or null. */
+    fun smaller(id: String, size: Int): Known? = synchronized(map) {
+        SIZES.filter { it < size }.sortedDescending().firstNotNullOfOrNull { s -> key(id, s).let { k -> map[k]?.let { Known(k, it) } } }
+    }
+
+    class Known(val key: String, val path: String)
+
+    private val SIZES = listOf(ArtworkSizes.THUMB, ArtworkSizes.LIST, ArtworkSizes.GRID, ArtworkSizes.FULL, ArtworkSizes.HERO)
 }
 
 @Composable
