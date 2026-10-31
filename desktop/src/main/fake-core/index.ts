@@ -83,6 +83,11 @@ interface FakeOptions {
   trackCount?: number;
 }
 
+/** The track credits the artist: as its artist or one of its artists. */
+function creditsArtist(tr: Track, id: string): boolean {
+  return tr.artistId === id || (tr.artists ?? []).some((x) => x.id === id);
+}
+
 function clone<T>(v: T): T {
   return structuredClone(v);
 }
@@ -2413,8 +2418,21 @@ export class FakeCore implements CoreHandle {
         const items = this.sortArtists(lib?.artists ?? [], q.data.sort ?? "default", q.data.descending ?? false);
         return { type: "artists", data: { items: items.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit), offset: q.data.page.offset, total: items.length } };
       }
-      case "artist":
-        return { type: "artistDetail", data: lib?.artists.find((a) => a.id === q.data.id) };
+      case "artist": {
+        const found = lib?.artists.find((a) => a.id === q.data.id);
+        if (found || !lib) return { type: "artistDetail", data: found };
+        // As the core: a guest with no artist row is made from the tracks that credit them.
+        const credited = lib.tracks.filter((tr) => creditsArtist(tr, q.data.id));
+        const first = credited[0];
+        if (!first) return { type: "artistDetail", data: undefined };
+        const name = first.artists?.find((x) => x.id === q.data.id)?.name ?? first.artist ?? "";
+        return { type: "artistDetail", data: { id: q.data.id, serverId: first.serverId, name, albumCount: 0, songCount: credited.length, coverArt: undefined, artistImageUrl: undefined, loved: false, musicBrainzId: undefined, biography: undefined } };
+      }
+      case "artistAppearsOn": {
+        const on = new Set((lib?.tracks ?? []).filter((tr) => creditsArtist(tr, q.data.id)).map((tr) => tr.albumId));
+        const items = this.sortAlbums((lib?.albums ?? []).filter((a) => a.artistId !== q.data.id && on.has(a.id)), "year", true);
+        return { type: "albums", data: { items, offset: 0, total: items.length } };
+      }
       case "artistInfo": {
         const artist = lib?.artists.find((a) => a.id === q.data.id);
         if (!artist) return { type: "externalInfo", data: undefined };

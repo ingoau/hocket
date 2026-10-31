@@ -1,7 +1,9 @@
 // An artist: the header (its picture, never stretched — see DetailHead), the
 // top songs, the discography as one shelf per release kind (albums, EPs,
 // singles, compilations; "View more" opens the kind's full grid, newest or
-// oldest first), then About from the server's artist info (Last.fm).
+// oldest first), "Featured on" (others' albums they're credited on a track of:
+// a guest with no albums of their own still has a page), then About from the
+// server's artist info (Last.fm).
 import { useEffect, useRef, useState } from "react";
 import type { Album } from "@core/api";
 import { t } from "@shared/strings";
@@ -21,6 +23,9 @@ import { byReleaseKind, type ReleaseKind } from "../lib/release-kind";
 /** Releases on a shelf before "View more". */
 const SHELF = 8;
 
+/** A shelf on the page: a release kind, or the albums they're featured on. */
+type Shelf = ReleaseKind | "featured";
+
 export function releaseCounts(groups: { kind: ReleaseKind; albums: unknown[] }[]): string {
   return groups.map((g) => t(g.albums.length === 1 ? `release.count.${g.kind}.one` : `release.count.${g.kind}.other`, { count: g.albums.length })).join(" · ");
 }
@@ -31,14 +36,15 @@ export function ArtistDetail({ id }: { id: string }) {
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const artist = useQuery(() => ({ type: "artist", data: { id } }), "artistDetail", [id]);
   const albums = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 500 } } }), "albums", [id, serverId]);
+  const featured = useQuery(() => ({ type: "artistAppearsOn", data: { id } }), "albums", [id]);
   const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: TOP_SONGS_COUNT } }), "trackList", [id]);
   const info = useQuery(() => ({ type: "artistInfo", data: { id } }), "externalInfo", [id], { static: true });
   const [allTop, setAllTop] = useState(false);
-  const [grid, setGrid] = useState<ReleaseKind | null>(null);
+  const [grid, setGrid] = useState<Shelf | null>(null);
   const [oldest, setOldest] = useState(false);
   useEffect(() => { setGrid(null); setAllTop(false); }, [id]);
   // Focus follows the swap: onto the grid's back arrow going in, back onto that shelf's View more coming out.
-  const lastGrid = useRef<ReleaseKind | null>(null);
+  const lastGrid = useRef<Shelf | null>(null);
   useEffect(() => {
     const target = grid ? '[data-testid="artist-grid-back"]' : lastGrid.current ? `[data-testid="artist-shelf-more-${lastGrid.current}"]` : null;
     if (grid) lastGrid.current = grid;
@@ -51,11 +57,17 @@ export function ArtistDetail({ id }: { id: string }) {
   const topSection = topSongsSection(top.data ? topList.length : undefined, top.error !== undefined);
   const playTop = (i: number) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topAll.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } });
   const groups = byReleaseKind(albums.data?.items ?? []);
+  const featuredOn = featured.data?.items ?? [];
+  const shelves: { kind: Shelf; title: string; count: string; albums: Album[] }[] = [
+    ...groups.map((g) => ({ kind: g.kind, title: t(`release.kind.${g.kind}`), count: releaseCounts([g]), albums: g.albums })),
+    ...(featuredOn.length ? [{ kind: "featured" as const, title: t("artist.featuredOn"), count: releaseCounts([{ kind: "album", albums: featuredOn }]), albums: featuredOn }] : []),
+  ];
   const about = a?.biography || info.data?.text;
+  // Featured on names whose album it is; their own shelves need not.
   const tile = (al: Album) => (
-    <Tile key={al.id} title={al.name} subtitle={`${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
+    <Tile key={al.id} title={al.name} subtitle={al.artistId !== id && al.artist ? [al.artist, al.year].filter(Boolean).join(" · ") : `${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
   );
-  const open = groups.find((g) => g.kind === grid);
+  const open = shelves.find((g) => g.kind === grid);
   return (
     <div className="view detail-page" data-testid="view-artist">
       <DetailHead coverArt={a?.coverArt} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })} actions={
@@ -74,15 +86,15 @@ export function ArtistDetail({ id }: { id: string }) {
           <section className="detail-section home-section" aria-labelledby="artist-grid-title" data-testid="artist-grid">
             <div className="detail-section-head shelf-head">
               <button type="button" className="btn icon" aria-label={t("nowPlaying.back")} title={t("nowPlaying.back")} onClick={() => setGrid(null)} data-testid="artist-grid-back"><Icon name="back" size={22} /></button>
-              <h2 id="artist-grid-title">{t(`release.kind.${open.kind}`)}</h2>
-              <span className="muted">{releaseCounts([open])}</span>
+              <h2 id="artist-grid-title">{open.title}</h2>
+              <span className="muted">{open.count}</span>
               <span className="spacer" />
               <div className="seg-group" role="group" aria-label={t("release.order")}>
                 <button type="button" className={`seg ${!oldest ? "on" : ""}`} aria-pressed={!oldest} onClick={() => setOldest(false)} data-testid="artist-grid-newest">{t("release.newest")}</button>
                 <button type="button" className={`seg ${oldest ? "on" : ""}`} aria-pressed={oldest} onClick={() => setOldest(true)} data-testid="artist-grid-oldest">{t("release.oldest")}</button>
               </div>
             </div>
-            <TileList label={t(`release.kind.${open.kind}`)} className="grid">{(oldest ? [...open.albums].reverse() : open.albums).map(tile)}</TileList>
+            <TileList label={open.title} className="grid">{(oldest ? [...open.albums].reverse() : open.albums).map(tile)}</TileList>
           </section>
         ) : (
           <>
@@ -114,13 +126,13 @@ export function ArtistDetail({ id }: { id: string }) {
                 )}
               </section>
             ) : null}
-            {groups.map((g) => (
+            {shelves.map((g) => (
               <section key={g.kind} className="detail-section home-section artist-shelf" aria-labelledby={`artist-shelf-${g.kind}`} data-testid={`artist-shelf-${g.kind}`}>
                 <div className="detail-section-head">
-                  <h2 id={`artist-shelf-${g.kind}`}>{t(`release.kind.${g.kind}`)}</h2>
+                  <h2 id={`artist-shelf-${g.kind}`}>{g.title}</h2>
                   {g.albums.length > SHELF ? <button type="button" className="btn view-more" onClick={() => { setGrid(g.kind); setOldest(false); }} data-testid={`artist-shelf-more-${g.kind}`}>{t("release.viewMore")}<Icon name="chevronRight" size={18} /></button> : null}
                 </div>
-                <TileList label={t(`release.kind.${g.kind}`)} className="scroller">{g.albums.slice(0, SHELF).map(tile)}</TileList>
+                <TileList label={g.title} className="scroller">{g.albums.slice(0, SHELF).map(tile)}</TileList>
               </section>
             ))}
             {about ? (

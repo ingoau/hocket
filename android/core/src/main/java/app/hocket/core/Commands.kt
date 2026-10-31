@@ -161,6 +161,8 @@ object Queries {
     fun artists(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false) =
         Query.Artists(QueryArtistsInner(serverId, page, sort, descending))
     fun artist(id: ArtistId) = Query.Artist(QueryArtistInner(id))
+    /** Others' albums the artist is credited on a track of ("Featured on"), newest first. */
+    fun artistAppearsOn(id: ArtistId) = Query.ArtistAppearsOn(QueryArtistAppearsOnInner(id))
     fun artistTopSongs(id: ArtistId, count: Int) = Query.ArtistTopSongs(QueryArtistTopSongsInner(id, count.toUInt()))
     fun genres(serverId: ServerId) = Query.Genres(QueryGenresInner(serverId))
     fun playlists(serverId: ServerId) = Query.Playlists(QueryPlaylistsInner(serverId))

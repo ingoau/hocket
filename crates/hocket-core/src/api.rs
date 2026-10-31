@@ -2288,7 +2288,14 @@ pub enum Query {
         #[serde(default)]
         descending: bool,
     },
+    /// `ArtistDetail`. An artist with no albums of their own (a guest on others' tracks) has no
+    /// row from the server; they are answered from the tracks that credit them.
     Artist {
+        id: ArtistId,
+    },
+    /// `Albums`: the albums the artist is on (credited on a track) without being the album's
+    /// artist, the page's "Featured on". Newest first, all of them.
+    ArtistAppearsOn {
         id: ArtistId,
     },
     ArtistTopSongs {

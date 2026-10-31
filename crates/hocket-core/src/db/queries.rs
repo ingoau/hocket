@@ -193,6 +193,10 @@ pub fn album_from_row(row: &Row) -> rusqlite::Result<Album> {
 
 pub const ARTIST_COLUMNS: &str = "id, server_id, name, album_count, song_count, cover_art, artist_image_url, loved, music_brainz_id, biography";
 
+/// SQL over `tracks t`: the track credits artist `?1`, as its artist or one of its artists.
+/// `instr` skips the JSON for the many tracks that can't name them.
+const CREDITS_ARTIST: &str = "(t.artist_id = ?1 OR (instr(t.artists, ?1) > 0 AND EXISTS (SELECT 1 FROM json_each(t.artists) j WHERE json_extract(j.value, '$.id') = ?1)))";
+
 pub fn artist_from_row(row: &Row) -> rusqlite::Result<Artist> {
     Ok(Artist {
         id: row.get(0)?,
@@ -697,6 +701,66 @@ impl Db {
                 artist_from_row,
             )
             .optional()?)
+        })
+    }
+
+    /// [`Db::artist`], or for an artist the server lists no row for (Navidrome's `getArtists`
+    /// names album artists only, so one who is only ever a track artist, a guest, has none) a
+    /// stand-in made from the tracks that credit them: their name and song count. `None` when
+    /// no track credits them either. `server_id`: only that server's tracks (the active one), so
+    /// the same library mirrored from two servers is counted once.
+    pub fn artist_or_credited(
+        &self,
+        id: &str,
+        server_id: Option<&str>,
+    ) -> DbResult<Option<Artist>> {
+        if let Some(a) = self.artist(id)? {
+            return Ok(Some(a));
+        }
+        self.with_conn(|c| {
+            let sql = format!(
+                "SELECT t.server_id, json_name, CASE WHEN t.artist_id = ?1 THEN t.artist END, count(*) OVER ()
+                 FROM (SELECT t.*, (SELECT json_extract(j.value, '$.name') FROM json_each(t.artists) j WHERE json_extract(j.value, '$.id') = ?1) AS json_name
+                       FROM tracks t WHERE (?2 IS NULL OR t.server_id = ?2) AND {CREDITS_ARTIST}) t
+                 ORDER BY json_name IS NULL LIMIT 1"
+            );
+            let row = c
+                .query_row(&sql, params![id, server_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        // A credit's own name wins over the track's artist string ("A feat. B").
+                        r.get::<_, Option<String>>(1)?.or(r.get::<_, Option<String>>(2)?),
+                        r.get::<_, i64>(3)?,
+                    ))
+                })
+                .optional()?;
+            Ok(row.map(|(server_id, name, songs)| Artist {
+                id: id.to_string(),
+                server_id,
+                name: name.unwrap_or_default(),
+                song_count: songs.max(0) as u32,
+                ..Default::default()
+            }))
+        })
+    }
+
+    /// The albums an artist is credited on a track of without being the album's artist: guest
+    /// spots, compilations. Newest first. `server_id` as for [`Db::artist_or_credited`].
+    pub fn artist_appears_on(&self, id: &str, server_id: Option<&str>) -> DbResult<Vec<Album>> {
+        self.with_conn(|c| {
+            let album_cols = ALBUM_COLUMNS
+                .split(", ")
+                .map(|col| format!("a.{col}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut st = c.prepare_cached(&format!(
+                "SELECT {album_cols} FROM albums a
+                 WHERE a.artist_id IS NOT ?1 AND (?2 IS NULL OR a.server_id = ?2)
+                   AND (a.server_id, a.id) IN (SELECT t.server_id, t.album_id FROM tracks t WHERE (?2 IS NULL OR t.server_id = ?2) AND {CREDITS_ARTIST})
+                 ORDER BY a.year IS NULL, a.year DESC, a.name COLLATE NOCASE ASC"
+            ))?;
+            let rows = st.query_map(params![id, server_id], album_from_row)?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
 
@@ -1506,6 +1570,111 @@ mod tests {
         let back = db.track("1").unwrap().unwrap();
         assert_eq!(back.artists.len(), 1);
         assert_eq!(back.artists[0].name, "Marlowe Reed feat. Juno");
+    }
+
+    /// A guest the server lists no artist row for still has a page: their name and songs from
+    /// the tracks that credit them, and the albums they are on as "Featured on". Their own
+    /// album's artist is not featured on it; a later plain sync (no artist list) keeps the
+    /// primary artist credited.
+    #[test]
+    fn a_guest_without_an_artist_row_is_found_through_their_credits() {
+        let db = Db::open_in_memory().unwrap();
+        let album = |id: &str, artist: &str, year: u32| Album {
+            id: id.into(),
+            server_id: "s".into(),
+            name: id.into(),
+            artist_id: Some(artist.into()),
+            year: Some(year),
+            ..Default::default()
+        };
+        db.upsert_albums(
+            &[
+                album("al-Night", "ar-Marlowe", 2019),
+                album("al-Later", "ar-Marlowe", 2023),
+                album("al-Own", "ar-Juno", 2021),
+            ],
+            &[None, None, None],
+            1,
+        )
+        .unwrap();
+        let credits = |id: &str, album: &str| {
+            let mut x = t(id, id, album, "Marlowe");
+            x.artists = vec![
+                api::ArtistRef {
+                    id: Some("ar-Marlowe".into()),
+                    name: "Marlowe".into(),
+                },
+                api::ArtistRef {
+                    id: Some("ar-Juno".into()),
+                    name: "Juno".into(),
+                },
+            ];
+            x
+        };
+        let solo = t("3", "Solo", "Night", "Marlowe");
+        // Their own song names them only in its artist string: the credits' name wins.
+        let mut own = t("4", "Own", "Own", "Juno");
+        own.artist = Some("Juno feat. Marlowe".into());
+        db.upsert_tracks(
+            &[credits("1", "Night"), credits("2", "Later"), solo, own],
+            &[None; 4],
+            1,
+        )
+        .unwrap();
+        // The same library mirrored from a second server stays out of the first's answers.
+        let mut twin = credits("1", "Night");
+        twin.server_id = "s2".into();
+        db.upsert_tracks(&[twin], &[None], 1).unwrap();
+        db.upsert_albums(
+            &[Album {
+                server_id: "s2".into(),
+                ..album("al-Night", "ar-Marlowe", 2019)
+            }],
+            &[None],
+            1,
+        )
+        .unwrap();
+        // Only Juno's own album gives them an artist row on a real server; here neither has one.
+        let juno = db
+            .artist_or_credited("ar-Juno", Some("s"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(juno.name, "Juno");
+        assert_eq!(juno.server_id, "s");
+        assert_eq!(juno.song_count, 3);
+        let ids = |v: Vec<Album>| v.into_iter().map(|a| a.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(db.artist_appears_on("ar-Juno", Some("s")).unwrap()),
+            vec!["al-Later", "al-Night"]
+        );
+        assert!(db.artist_appears_on("ar-Marlowe", None).unwrap().is_empty());
+        assert_eq!(
+            db.artist_or_credited("ar-Marlowe", None)
+                .unwrap()
+                .unwrap()
+                .name,
+            "Marlowe"
+        );
+        assert!(db.artist_or_credited("ar-Nobody", None).unwrap().is_none());
+        // A row from the server wins over the stand-in.
+        db.upsert_artists(
+            &[Artist {
+                id: "ar-Juno".into(),
+                server_id: "s".into(),
+                name: "JUNO".into(),
+                album_count: 1,
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            db.artist_or_credited("ar-Juno", Some("s"))
+                .unwrap()
+                .unwrap()
+                .name,
+            "JUNO"
+        );
     }
 
     /// Artists by plays and by newest album go by the albums they are the album artist of; one

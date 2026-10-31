@@ -226,6 +226,9 @@
     <plurals name="release_count_compilations"><item quantity="one">%d compilation</item><item quantity="other">%d compilations</item></plurals>
     <string name="artist_top_songs">Top songs</string>
     <string name="artist_biography">About</string>
+    <string name="artist_featured_on">Featured on</string>
+    <string name="artist_missing_title">Not in your library</string>
+    <string name="artist_missing_body">No song in your library credits this artist.</string>
     <string name="genre_albums">Albums</string>
     <string name="genre_songs">Songs</string>
     <string name="rating_stars">Rating</string>

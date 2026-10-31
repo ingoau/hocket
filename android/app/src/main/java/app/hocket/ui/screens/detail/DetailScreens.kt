@@ -357,11 +357,18 @@ private const val SHELF = 8
 private sealed interface ArtistView {
     data object TopSongs : ArtistView
     data class Releases(val kind: ReleaseKind) : ArtistView
+    data object Featured : ArtistView
 }
 
 private val ArtistViewSaver = androidx.compose.runtime.saveable.Saver<ArtistView?, String>(
-    save = { v -> when (v) { null -> null; ArtistView.TopSongs -> "top"; is ArtistView.Releases -> v.kind.string } },
-    restore = { v -> if (v == "top") ArtistView.TopSongs else ReleaseKind.entries.firstOrNull { it.string == v }?.let { ArtistView.Releases(it) } },
+    save = { v -> when (v) { null -> null; ArtistView.TopSongs -> "top"; ArtistView.Featured -> "featured"; is ArtistView.Releases -> v.kind.string } },
+    restore = { v ->
+        when (v) {
+            "top" -> ArtistView.TopSongs
+            "featured" -> ArtistView.Featured
+            else -> ReleaseKind.entries.firstOrNull { it.string == v }?.let { ArtistView.Releases(it) }
+        }
+    },
 )
 
 @Composable
@@ -373,6 +380,10 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val flyingCover = flyingCoverArt(shareKey)
     var artist by rememberCachedState<Artist?>(listOf("detail.artist", id)) { null }
     var albums by rememberCachedState(listOf("detail.artistAlbums", id)) { emptyList<Album>() }
+    // Others' albums they're credited on: a guest with no albums of their own still has a page.
+    var featured by rememberCachedState(listOf("detail.artistFeatured", id)) { emptyList<Album>() }
+    // The core answered and knows no such artist: say so rather than load forever.
+    var missing by remember(id) { mutableStateOf(false) }
     // null until the first answer: the section keeps its rows' space (skeletons) meanwhile, so the
     // albums below never jump when the songs arrive.
     var top by rememberCachedState<List<Track>?>(listOf("detail.artistTop", id)) { null }
@@ -380,11 +391,15 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     // The artist and its albums come from the local mirror: show them as soon as they are read.
     // They used to wait for the top songs too, which on a first visit means a server round trip.
     LaunchedEffect(id, libraryGen, server?.id) {
-        val ar = (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data
+        val detail = client.query(Queries.artist(id)) as? QueryResult.ArtistDetail
+        val ar = detail?.data
         val al = server?.id?.let { sid -> (client.query(Queries.albums(sid, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
+        val fe = (client.query(Queries.artistAppearsOn(id)) as? QueryResult.Albums)?.data?.items
         // Together, so the header and the albums do not pop in one after another.
         albums = al ?: albums
+        featured = fe ?: featured
         artist = ar ?: artist
+        missing = detail != null && artist == null
     }
     // Cached by the core (and refreshed behind the page), so usually as quick as the rest.
     LaunchedEffect(id, libraryGen) {
@@ -395,7 +410,9 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     LaunchedEffect(id) { about = (client.query(Queries.artistInfo(id)) as? QueryResult.ExternalInfo)?.data?.text ?: about }
     val ar = artist
     if (ar == null) {
-        DetailScaffold(nav, embedded, null, flyingCover, roundArtwork = true, shareKey = shareKey, loading = true) {}
+        DetailScaffold(nav, embedded, null, flyingCover, roundArtwork = true, shareKey = shareKey, loading = !missing) {
+            if (missing) item(key = "missing") { EmptyState(stringResource(R.string.artist_missing_title), stringResource(R.string.artist_missing_body), Modifier.padding(top = 48.dp)) }
+        }
         return
     }
     val context = Commands.artistContext(ar.serverId, ar.id, ar.name)
@@ -411,6 +428,8 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val openAlbum = { al: Album -> nav.navigate(Route.Album(al.id)) }
     val playAlbum = { al: Album -> client.dispatch(Commands.playContext(Commands.albumContext(al.serverId, al.id, al.name))) }
     val releaseMeta = @Composable { al: Album -> listOfNotNull(al.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.saved_tracks, al.songCount.toInt())).joinToString(dot) }
+    // Featured on names whose album it is.
+    val featuredMeta = { al: Album -> listOfNotNull(al.artist, al.year?.takeIf { it > 0u }?.toString()).joinToString(dot) }
     val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list[i].serverId, list.map { it.id }, i, ar.name)) } }
     val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, modifier: Modifier ->
         TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary()) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
@@ -421,16 +440,19 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
             val list = top.orEmpty()
             itemsIndexed(list, key = { _, t -> "all" + t.id }) { i, t -> topRow(i, t, i to list.size, Modifier.segmentItem(i)) }
         }
-        is ArtistView.Releases -> {
-            val list = shelves.firstOrNull { it.first == v.kind }?.second.orEmpty()
-            ArtistSubPage(ar.name, stringResource(releaseKindRes(v.kind)), pluralStringResource(releaseCountRes(v.kind), list.size, list.size), onBack = { view = null }, trailing = {
+        is ArtistView.Releases, ArtistView.Featured -> {
+            val kind = (v as? ArtistView.Releases)?.kind
+            val list = if (kind == null) featured else shelves.firstOrNull { it.first == kind }?.second.orEmpty()
+            val countRes = releaseCountRes(kind ?: ReleaseKind.Album)
+            val meta = @Composable { al: Album -> if (kind == null) featuredMeta(al) else releaseMeta(al) }
+            ArtistSubPage(ar.name, stringResource(if (kind == null) R.string.artist_featured_on else releaseKindRes(kind)), pluralStringResource(countRes, list.size, list.size), onBack = { view = null }, trailing = {
                 ConnectedPair(stringResource(R.string.release_newest), stringResource(R.string.release_oldest), first = !oldest, onPick = { oldest = !it })
             }) {
                 val ordered = if (oldest) list.reversed() else list
                 items(ordered.chunked(2), key = { row -> "grid." + row.first().id }) { row ->
                     Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         row.forEach { al ->
-                            BoxWithConstraints(Modifier.weight(1f)) { ReleaseTile(al, releaseMeta(al), onOpen = { openAlbum(al) }, onPlay = { playAlbum(al) }, size = maxWidth) }
+                            BoxWithConstraints(Modifier.weight(1f)) { ReleaseTile(al, meta(al), onOpen = { openAlbum(al) }, onPlay = { playAlbum(al) }, size = maxWidth) }
                         }
                         if (row.size == 1) Spacer(Modifier.weight(1f))
                     }
@@ -439,7 +461,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         }
         null -> DetailScaffold(nav, embedded, ar.name, ar.coverArt, roundArtwork = true, shareKey = shareKey,
             barActions = { DetailLoveButton(ar.loved, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) },
-            below = { HeroLine(counts.ifEmpty { stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
+            below = { HeroLine(counts.ifEmpty { if (ar.albumCount == 0u && ar.songCount > 0u) stringResource(R.string.saved_tracks, ar.songCount.toInt()) else stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
             heroActions = {
                 HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
                 HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
@@ -484,6 +506,14 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
                     }
                 }
                 item(key = "shelf.${kind.string}") { ReleaseShelf(list.take(SHELF), onOpen = openAlbum, onPlay = playAlbum, modifier = Modifier.padding(top = 4.dp)) { releaseMeta(it) } }
+            }
+            if (featured.isNotEmpty()) {
+                item(key = "h.featured") {
+                    DetailSectionHead(stringResource(R.string.artist_featured_on), Modifier.padding(top = 24.dp)) {
+                        if (featured.size > SHELF) ViewMoreButton(onClick = { view = ArtistView.Featured; oldest = false }, modifier = Modifier.testTag("artist.shelf.more.featured"))
+                    }
+                }
+                item(key = "shelf.featured") { ReleaseShelf(featured.take(SHELF), onOpen = openAlbum, onPlay = playAlbum, modifier = Modifier.padding(top = 4.dp).testTag("artist.featured")) { featuredMeta(it) } }
             }
             // About comes last: the server's biography (Last.fm).
             (ar.biography?.takeIf { it.isNotBlank() } ?: about?.takeIf { it.isNotBlank() })?.let { bio ->

@@ -418,6 +418,11 @@ test.describe("the artist in the now playing subtitle", () => {
     // The guest opens the guest's page.
     await menu.getByTestId("artist-menu-artist").nth(1).click();
     await expect(page.getByTestId("view-artist").locator("h1").first()).toHaveText(track.artists![1]!.name);
+    // Their page features the album the guest spot is on, naming whose album it is.
+    const featured = page.getByTestId("artist-shelf-featured");
+    await expect(featured.locator("h2")).toHaveText("Featured on");
+    const album = ((await page.evaluate((id) => window.hocket.query({ type: "track", data: { id } }), "tr-1")) as { data: { album: string; albumArtist: string } }).data;
+    await expect(featured.getByTestId("artist-album").filter({ hasText: album.album })).toContainText(album.albumArtist);
   });
 
   test("shows the artist alone and opens a menu of the track's artists and its album, from the bar, the side panel and the fullscreen player", async ({ hocket }) => {
