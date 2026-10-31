@@ -440,6 +440,7 @@ const STRINGS = {
   "artist.topSongs": "Top songs",
   "artist.playTop": "{n}. {title}",
   "artist.about": "About",
+  "artist.featuredOn": "Featured on",
   "songInfo.listening": "Your listening",
   "songInfo.plays": "plays",
   "songInfo.lastPlayed": "Last played",

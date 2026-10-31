@@ -1433,6 +1433,12 @@ class FakeCore(
             QueryResult.Artists(ArtistPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
         is Query.Artist -> QueryResult.ArtistDetail(library.artist(q.data.id))
+        is Query.ArtistAppearsOn -> {
+            val id = q.data.id
+            val on = library.tracks.filter { t -> t.artistId == id || t.artists.orEmpty().any { it.id == id } }.mapNotNull { it.albumId }.toSet()
+            val items = library.sortedAlbums(library.albums.filter { it.artistId != id && it.id in on }, SortOrder.Year, true)
+            QueryResult.Albums(AlbumPage(items, 0u, items.size.toUInt()))
+        }
         // Made-up Last.fm details, so the song info and artist pages have something to show.
         is Query.ArtistInfo -> QueryResult.ExternalInfo(library.artist(q.data.id)?.let { a ->
             ExternalInfo(text = "${a.name} make quiet, close-miked songs about leaving and coming home.", lastFmUrl = "https://www.last.fm/music/${a.name.replace(' ', '+')}",

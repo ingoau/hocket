@@ -99,7 +99,17 @@ impl Actor {
                         total: 0,
                     }),
             ),
-            Query::Artist { id } => QueryResult::ArtistDetail(self.db.artist(&id).ok().flatten()),
+            Query::Artist { id } => {
+                QueryResult::ArtistDetail(self.db.artist_or_credited(&id).ok().flatten())
+            }
+            Query::ArtistAppearsOn { id } => {
+                let items = self.db.artist_appears_on(&id).unwrap_or_default();
+                QueryResult::Albums(AlbumPage {
+                    total: items.len() as u32,
+                    items,
+                    offset: 0,
+                })
+            }
             Query::ArtistTopSongs { id, count } => {
                 self.artist_top_songs(id, count, reply);
                 return;
@@ -384,7 +394,7 @@ impl Actor {
     /// server. Offline with nothing cached: the artist's most played tracks
     /// from the mirror.
     fn artist_top_songs(&mut self, id: String, count: u32, reply: oneshot::Sender<QueryResult>) {
-        let Some(artist) = self.db.artist(&id).ok().flatten() else {
+        let Some(artist) = self.db.artist_or_credited(&id).ok().flatten() else {
             let _ = reply.send(QueryResult::TrackList(vec![]));
             return;
         };
@@ -455,7 +465,12 @@ impl Actor {
     /// reached. An empty answer is cached too (most servers without a Last.fm key), for a day.
     fn external_info(&mut self, of: InfoOf, id: String, reply: oneshot::Sender<QueryResult>) {
         let owner = match of {
-            InfoOf::Artist => self.db.artist(&id).ok().flatten().map(|a| a.server_id),
+            InfoOf::Artist => self
+                .db
+                .artist_or_credited(&id)
+                .ok()
+                .flatten()
+                .map(|a| a.server_id),
             InfoOf::Album => self.db.album(&id).ok().flatten().map(|a| a.server_id),
         };
         let Some(sid) = self.server_id().or(owner) else {
