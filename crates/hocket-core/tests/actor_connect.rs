@@ -970,3 +970,99 @@ async fn a_room_rekeying_the_current_item_does_not_restart_it() {
     let (_, pos) = b.backend.current().unwrap();
     assert!(pos >= 40_000, "still where it was, at {pos}");
 }
+
+/// The persisted sync point (`connect:<scope>`) of a core's database.
+fn persisted_sync_base(t: &TestCore) -> serde_json::Value {
+    let db = t.open_db();
+    let key = db
+        .saved_state_keys("connect:")
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("connect state persisted");
+    let json = db.saved_state_get_raw(&key).unwrap().unwrap();
+    serde_json::from_str::<serde_json::Value>(&json).unwrap()["syncBase"].clone()
+}
+
+/// The room acknowledges a skip only after the document was saved (a slow
+/// network): the sync point that ack moves is saved too. Were it not, skips
+/// made after a restart and before the device rejoins would look like a fork
+/// of a session that moved on without it, and be replaced by the room's
+/// state (the queue jumping back to where it was).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skips_made_before_rejoining_after_a_restart_are_kept() {
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new_partitionable();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let ids: Vec<String> = (0..6).map(|i| format!("t{i}")).collect();
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: ids.clone(),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    // The follower is the one that records a sync point with the leader.
+    let ((leader, _), (follower, slot)) = if persisted_sync_base(&a).is_null() {
+        ((a, 1), (b, 2))
+    } else {
+        ((b, 2), (a, 1))
+    };
+    let name = if slot == 1 { "a" } else { "b" };
+    leader.run(Command::OpenHandoffPicker).await;
+    TestCore::run_all_for(&[&leader, &follower], 2_000.0).await;
+    leader
+        .run(Command::HandoffTo {
+            device_id: follower.device_id.clone(),
+        })
+        .await;
+    TestCore::run_all_for(&[&leader, &follower], 2_000.0).await;
+    assert!(follower.backend.is_playing(), "the follower plays");
+
+    net.set_held(true);
+    follower.run(Command::Next).await;
+    // The document is saved; the ack is still on its way.
+    follower.run_for(1_000.0).await;
+    net.set_held(false);
+    TestCore::run_all_for(&[&leader, &follower], 1_000.0).await;
+    assert_eq!(leader.current_track_id().await.as_deref(), Some("t1"));
+    let acked = follower
+        .snapshot()
+        .await
+        .session
+        .expect("a session")
+        .revision;
+    follower.core.shutdown().await;
+    assert_eq!(
+        persisted_sync_base(&follower)["revision"],
+        serde_json::json!(acked),
+        "the acked revision is the saved sync point"
+    );
+
+    // Restarted out of reach of the room, the follower skips twice...
+    net.set_partitioned(true);
+    let TestCore {
+        clock, server, dir, ..
+    } = follower;
+    let follower = TestCore::start_in(name, server, Some(net.clone()), slot, clock, dir).await;
+    follower.run_for(1_000.0).await;
+    follower.run(Command::Play).await;
+    follower.run(Command::Next).await;
+    follower.run(Command::Next).await;
+    follower.run_for(1_000.0).await;
+    assert_eq!(follower.current_track_id().await.as_deref(), Some("t3"));
+
+    // ...and rejoining keeps them: the room never moved on.
+    net.set_partitioned(false);
+    TestCore::run_all_for(&[&leader, &follower], 10_000.0).await;
+    assert!(follower.snapshot().await.connection.connected, "rejoined");
+    assert_eq!(follower.current_track_id().await.as_deref(), Some("t3"));
+    assert_eq!(leader.current_track_id().await.as_deref(), Some("t3"));
+    leader.core.shutdown().await;
+    follower.core.shutdown().await;
+}
