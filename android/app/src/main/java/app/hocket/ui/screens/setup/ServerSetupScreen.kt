@@ -110,19 +110,18 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
         started -> SetupStep.Form
         else -> SetupStep.Welcome
     }
-    val valid = url.startsWith("http://") || url.startsWith("https://")
     fun connect() {
-        urlError = !valid
-        if (!valid || username.isBlank()) return
+        val cleanUrl = normaliseServerUrl(url)
+        urlError = cleanUrl == null
+        if (cleanUrl == null || username.isBlank()) return
         error = null
         connecting = true
         onConnecting()
-        val cleanUrl = url.trim().trimEnd('/')
         // The core never keeps the password: it lives in the platform keystore and is replayed on
         // every start. CoreHost stores it only once the core reports the server reachable with it.
         CoreHost.login(client::dispatch, ServerCredential(cleanUrl, username.trim(), password, null))
     }
-    val cleartext = url.trim().startsWith("http://")
+    val cleartext = url.trim().startsWith("http://", ignoreCase = true)
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
@@ -216,6 +215,18 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
             }
         }
     }
+}
+
+/**
+ * The typed server address as the core should get it: trimmed, without trailing slashes, and with
+ * the scheme lower-cased (keyboards and people capitalise it, as in "Https://"). Null when it does
+ * not start with http:// or https://, in any case, followed by a host.
+ */
+internal fun normaliseServerUrl(raw: String): String? {
+    val trimmed = raw.trim().trimEnd('/')
+    val scheme = listOf("https://", "http://").firstOrNull { trimmed.startsWith(it, ignoreCase = true) } ?: return null
+    val rest = trimmed.substring(scheme.length)
+    return if (rest.isEmpty()) null else scheme + rest
 }
 
 /** "hocket" in the word mark's face at [size], the brand's ink. */

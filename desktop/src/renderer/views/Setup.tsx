@@ -8,6 +8,7 @@ import type { ServerInfo } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
+import { normaliseServerUrl } from "../lib/server-url";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
@@ -67,8 +68,8 @@ function ConnectForm() {
   const cleartext = /^http:\/\/./i.test(url.trim());
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const u = url.trim().replace(/\/+$/, "");
-    if (!/^https?:\/\/.+/.test(u)) return setError(t("setup.errorUrl"));
+    const u = normaliseServerUrl(url);
+    if (!u) return setError(t("setup.errorUrl"));
     if (!username.trim() || !password) return setError(t("setup.errorCredentials"));
     setError(undefined);
     setBusy(true);
