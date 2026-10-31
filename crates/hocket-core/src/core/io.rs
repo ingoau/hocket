@@ -233,6 +233,9 @@ pub mod memory {
         partitioned: bool,
         /// Cut switches of the live relayed links.
         cuts: Vec<tokio::sync::watch::Sender<bool>>,
+        /// Holds every relayed link's traffic while true (see
+        /// [`MemoryNet::set_held`]).
+        hold: Option<tokio::sync::watch::Sender<bool>>,
     }
 
     /// The shared hub. Clone the `Arc` into every core's [`MemoryIo`].
@@ -251,8 +254,21 @@ pub mod memory {
         /// networks keep their direct channels).
         pub fn new_partitionable() -> Arc<MemoryNet> {
             let net = MemoryNet::default();
-            net.hub.lock().relayed = true;
+            {
+                let mut h = net.hub.lock();
+                h.relayed = true;
+                h.hold = Some(tokio::sync::watch::channel(false).0);
+            }
             Arc::new(net)
+        }
+
+        /// Hold every message on the open links (nothing is lost and no
+        /// link closes: a slow network), or deliver what was held, in order.
+        /// Only on a [`MemoryNet::new_partitionable`] network.
+        pub fn set_held(&self, held: bool) {
+            let h = self.hub.lock();
+            let hold = h.hold.as_ref().expect("set_held needs new_partitionable()");
+            hold.send_replace(held);
         }
 
         /// Partition every device from every other (open links are cut and
@@ -391,49 +407,61 @@ pub mod memory {
     /// sees the link close.
     fn relay(
         to: mpsc::UnboundedSender<WireMessage>,
-        mut cut: tokio::sync::watch::Receiver<bool>,
+        cut: tokio::sync::watch::Receiver<bool>,
+        hold: tokio::sync::watch::Receiver<bool>,
     ) -> mpsc::UnboundedSender<WireMessage> {
-        let (tx, mut rx) = mpsc::unbounded_channel::<WireMessage>();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    m = rx.recv() => match m {
-                        Some(m) if !*cut.borrow() => {
-                            if to.send(m).is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    },
-                    _ = cut.changed() => break,
-                }
-            }
-        });
+        let (tx, rx) = mpsc::unbounded_channel::<WireMessage>();
+        tokio::spawn(pump(rx, to, cut, hold));
         tx
     }
 
     /// A receiver fed from `from` until the link is cut.
     fn relay_rx(
-        mut from: mpsc::UnboundedReceiver<WireMessage>,
-        mut cut: tokio::sync::watch::Receiver<bool>,
+        from: mpsc::UnboundedReceiver<WireMessage>,
+        cut: tokio::sync::watch::Receiver<bool>,
+        hold: tokio::sync::watch::Receiver<bool>,
     ) -> mpsc::UnboundedReceiver<WireMessage> {
         let (tx, rx) = mpsc::unbounded_channel::<WireMessage>();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    m = from.recv() => match m {
-                        Some(m) if !*cut.borrow() => {
-                            if tx.send(m).is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    },
-                    _ = cut.changed() => break,
+        tokio::spawn(pump(from, tx, cut, hold));
+        rx
+    }
+
+    /// Move messages from `from` to `to` until the link is cut, keeping
+    /// them back (in order) while `hold` is set.
+    async fn pump(
+        mut from: mpsc::UnboundedReceiver<WireMessage>,
+        to: mpsc::UnboundedSender<WireMessage>,
+        mut cut: tokio::sync::watch::Receiver<bool>,
+        mut hold: tokio::sync::watch::Receiver<bool>,
+    ) {
+        let mut held = std::collections::VecDeque::new();
+        loop {
+            if !*hold.borrow() {
+                while let Some(m) = held.pop_front() {
+                    if to.send(m).is_err() {
+                        return;
+                    }
                 }
             }
-        });
-        rx
+            tokio::select! {
+                m = from.recv() => match m {
+                    Some(_) if *cut.borrow() => return,
+                    Some(m) if *hold.borrow() => held.push_back(m),
+                    Some(m) => {
+                        if to.send(m).is_err() {
+                            return;
+                        }
+                    }
+                    None => return,
+                },
+                _ = cut.changed() => return,
+                r = hold.changed() => {
+                    if r.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     impl ConnectIo for MemoryIo {
@@ -484,13 +512,17 @@ pub mod memory {
                         let (cut_tx, cut_rx) = tokio::sync::watch::channel(false);
                         h.cuts.retain(|c| !c.is_closed());
                         h.cuts.push(cut_tx);
-                        cut_rx
+                        let hold = h.hold.as_ref().expect("relayed").subscribe();
+                        (cut_rx, hold)
                     });
                     drop(h);
                     let (a_tx, a_rx) = mpsc::unbounded_channel::<WireMessage>();
                     let (b_tx, b_rx) = mpsc::unbounded_channel::<WireMessage>();
                     let (a_tx, b_rx) = match cut {
-                        Some(cut) => (relay(a_tx, cut.clone()), relay_rx(b_rx, cut)),
+                        Some((cut, hold)) => (
+                            relay(a_tx, cut.clone(), hold.clone()),
+                            relay_rx(b_rx, cut, hold),
+                        ),
                         None => (a_tx, b_rx),
                     };
                     let server_side = Connection {

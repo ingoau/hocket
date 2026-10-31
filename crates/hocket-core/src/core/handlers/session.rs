@@ -168,6 +168,7 @@ impl Actor {
     /// reactions queue.
     pub(crate) fn engine_input(&mut self, input: Input) {
         self.queued_inputs.push_back(input);
+        let base_before = self.engine.as_ref().and_then(|e| e.sync_base().cloned());
         let mut guard = 0;
         while let Some(input) = self.queued_inputs.pop_front() {
             let outs = match &mut self.engine {
@@ -182,6 +183,14 @@ impl Actor {
                 self.log("error", "engine reaction loop did not converge");
                 self.queued_inputs.clear();
                 break;
+            }
+        }
+        // An ack for our own op moves the sync point without changing the
+        // document: save it too, or after a restart the next fast-forward
+        // misses and ops made before rejoining are filed and replaced.
+        if let Some(e) = &self.engine {
+            if e.sync_base() != base_before.as_ref() {
+                self.mark_doc_dirty();
             }
         }
     }
