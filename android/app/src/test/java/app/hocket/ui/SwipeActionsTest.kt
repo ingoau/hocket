@@ -88,8 +88,9 @@ class SwipeActionsTest {
         compose.waitForIdle()
         val image = compose.onNodeWithTag("row").captureToImage().toPixelMap()
         val action = actionColour.toArgb()
-        // Beside the row: the revealed action. On the slid row's middle: not the action's colour.
-        assertEquals(action, image[image.width / 10, image.height / 2].toArgb())
+        // Beside the row (in the background's padding, clear of its icon): the revealed action. On the
+        // slid row's middle: not the action's colour.
+        assertEquals(action, image[4, image.height / 2].toArgb())
         assertFalse(image[image.width * 3 / 4, image.height / 2].toArgb() == action)
         compose.onNodeWithTag("row").performTouchInput { cancel() }
     }
