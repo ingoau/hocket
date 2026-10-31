@@ -111,7 +111,7 @@ jobs:
       - run: scripts/build-android-core.sh release
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
         working-directory: android
-      # Every push to main is a release: v0.1.<run number>, with a matching versionName and a
+      # Every push to main is a pre-release: v0.1.<run number>, with a matching versionName and a
       # versionCode that only goes up. Signed with the key the installed app already uses.
       - name: Build release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -140,7 +140,7 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "hocket-$VERSION.apk"
           git log -1 --format=%B > notes.md
           gh release create "v$VERSION" "hocket-$VERSION.apk" \
-            --target "$GITHUB_SHA" --title "Hocket $VERSION" --notes-file notes.md
+            --target "$GITHUB_SHA" --title "Hocket $VERSION" --notes-file notes.md --prerelease
 
   fuzz:
     name: Fuzz (${{ matrix.target }})
