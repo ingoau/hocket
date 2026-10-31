@@ -32,6 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -137,6 +140,8 @@ fun SwipeActionBox(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     swipeSurface: Color = Color.Unspecified,
+    /** The outline [swipeSurface] is drawn in (a segment's rounded corners). */
+    swipeShape: Shape = RectangleShape,
     content: @Composable () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -197,7 +202,7 @@ fun SwipeActionBox(
         Box(
             Modifier
                 .graphicsLayer { translationX = if (rtl) -offset else offset }
-                .drawBehind { if (offset != 0f && swipeSurface.isSpecified) drawRect(swipeSurface) },
+                .drawBehind { if (offset != 0f && swipeSurface.isSpecified) drawOutline(swipeShape.createOutline(size, layoutDirection, this), swipeSurface) },
         ) { content() }
     }
 }
