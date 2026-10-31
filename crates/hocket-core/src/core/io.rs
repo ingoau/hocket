@@ -446,7 +446,8 @@ pub mod memory {
             tokio::select! {
                 m = from.recv() => match m {
                     Some(_) if *cut.borrow() => return,
-                    Some(m) if *hold.borrow() => held.push_back(m),
+                    // Behind what is held, even as the hold lifts: in order.
+                    Some(m) if *hold.borrow() || !held.is_empty() => held.push_back(m),
                     Some(m) => {
                         if to.send(m).is_err() {
                             return;
