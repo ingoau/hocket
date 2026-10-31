@@ -82,9 +82,6 @@ jobs:
     # The APK bundles the watchapp the pebble job built, when there is one.
     needs: pebble
     runs-on: ubuntu-latest
-    # Pushes to main publish a signed release APK (the last two steps) for Obtainium to pick up.
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -111,8 +108,8 @@ jobs:
       - run: scripts/build-android-core.sh release
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
         working-directory: android
-      # Every push to main is a pre-release: v0.1.<run number>, with a matching versionName and a
-      # versionCode that only goes up. Signed with the key the installed app already uses.
+      # Release APK for pushes to main (published by the release job): versionName 0.1.<run number>
+      # and a versionCode that only goes up. Signed with the key the installed app already uses.
       - name: Build release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: android
@@ -131,15 +128,88 @@ jobs:
           ./gradlew --no-daemon assembleRelease \
             -PversionCode=${{ github.run_number }} -PversionName=0.1.${{ github.run_number }}
           rm "$RUNNER_TEMP/release.jks"
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hocket-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  desktop-dist:
+    name: Desktop package (${{ matrix.os }})
+    # Installers for the release job; pushes to main only. One OS failing doesn't hold back the
+    # others or the release.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo install typeshare-cli
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop
+      - run: pnpm pkg set version=0.1.${{ github.run_number }}
+        working-directory: desktop
+      - run: pnpm gen
+        working-directory: desktop
+      # Unsigned (no signing identity is configured; don't go looking for one on the runner).
+      - run: pnpm dist --publish never
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hocket-desktop-${{ runner.os }}
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.exe
+            desktop/release/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Release
+    # Every push to main is a pre-release, v0.1.<run number>, once the signed APK exists. The
+    # watchapp and desktop installers go on it when their jobs succeeded.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.android.result == 'success' }}
+    needs: [pebble, android, desktop-dist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
       - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: 0.1.${{ github.run_number }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk "hocket-$VERSION.apk"
+          mkdir dist
+          cp artifacts/hocket-apk/app-release.apk "dist/hocket-$VERSION.apk"
+          if [ -f artifacts/hocket-pbw/hocket.pbw ]; then
+            cp artifacts/hocket-pbw/hocket.pbw "dist/hocket-$VERSION.pbw"
+          fi
+          find artifacts -path 'artifacts/hocket-desktop-*' -type f -exec cp {} dist/ \;
+          ls -l dist
           git log -1 --format=%B > notes.md
-          gh release create "v$VERSION" "hocket-$VERSION.apk" \
+          gh release create "v$VERSION" dist/* \
             --target "$GITHUB_SHA" --title "Hocket $VERSION" --notes-file notes.md --prerelease
 
   fuzz:
