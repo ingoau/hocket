@@ -217,7 +217,6 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     }
 }
 
-/** "hocket" in the word mark's face at [size], the brand's ink. */
 /**
  * The typed server address as the core should get it: trimmed, without trailing slashes, and with
  * the scheme lower-cased (keyboards and people capitalise it, as in "Https://"). Null when it does
@@ -230,6 +229,7 @@ internal fun normaliseServerUrl(raw: String): String? {
     return if (rest.isEmpty()) null else scheme + rest
 }
 
+/** "hocket" in the word mark's face at [size], the brand's ink. */
 @Composable
 private fun Wordmark(size: androidx.compose.ui.unit.Dp) {
     val sp = with(LocalDensity.current) { size.toSp() }
