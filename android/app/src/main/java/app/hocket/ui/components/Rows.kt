@@ -226,6 +226,9 @@ fun TrackRow(
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
+    val shape = segment?.let { (i, n) -> segmentedShape(i, n) } ?: androidx.compose.ui.graphics.RectangleShape
+    // The playing row of a group is lifted to the secondary container, as the boards show it.
+    val color = when { segment == null -> MaterialTheme.colorScheme.surface; nowPlaying -> MaterialTheme.colorScheme.secondaryContainer; else -> segmentColor() }
     // The row (and the caller's modifier) stays the one merged accessibility item; only its content
     // slides under the swipe.
     SelectableRow(
@@ -236,16 +239,18 @@ fun TrackRow(
             .joinToString(", ").ifEmpty { null },
         actions = actions,
         clickLabel = stringResource(R.string.action_play),
-        shape = segment?.let { (i, n) -> segmentedShape(i, n) } ?: androidx.compose.ui.graphics.RectangleShape,
-        // The playing row of a group is lifted to the secondary container, as the boards show it.
-        color = when { segment == null -> MaterialTheme.colorScheme.surface; nowPlaying -> MaterialTheme.colorScheme.secondaryContainer; else -> segmentColor() },
+        shape = shape,
+        color = color,
     ) {
         SwipeActionBox(
             startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
             endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
             // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
             enabled = swipe != null && !selectionActive,
-            swipeSurface = if (segment == null) MaterialTheme.colorScheme.surface else Color.Unspecified,
+            // The sliding content carries the row's own colour and shape, so the action's background
+            // never shows through it.
+            swipeSurface = color,
+            swipeShape = shape,
         ) {
             Row(Modifier.heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()

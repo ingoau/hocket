@@ -5,7 +5,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onChildren
@@ -66,6 +69,29 @@ class SwipeActionsTest {
         compose.waitUntil(5_000) { core.client.queue.value.playingNext.firstOrNull()?.track?.id == a.id }
         compose.onNodeWithTag("row.b").performTouchInput { swipeLeft() }
         compose.waitUntil(5_000) { core.client.queue.value.playingNext.lastOrNull()?.track?.id == b.id }
+    }
+
+    @Test
+    fun aSegmentedRowSlidesOpaqueOverTheActionsBackground() {
+        // An album's tracks are segments; mid-swipe, the action's colour must show only beside the
+        // sliding row, never through it (it read "Play next" through the title).
+        val core = TestCore()
+        val track = core.fake.library.tracks.first()
+        var actionColour = androidx.compose.ui.graphics.Color.Unspecified
+        compose.setThemedContent(core) {
+            actionColour = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
+            TrackRow(track.toSummary(), onClick = {}, onMore = {}, segment = 0 to 1, showArtwork = false, modifier = Modifier.testTag("row"))
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("row").performTouchInput { down(centerLeft + androidx.compose.ui.geometry.Offset(10f, 0f)); moveBy(androidx.compose.ui.geometry.Offset(width * 0.2f, 0f)); moveBy(androidx.compose.ui.geometry.Offset(width * 0.2f, 0f)) }
+        compose.waitForIdle()
+        val image = compose.onNodeWithTag("row").captureToImage().toPixelMap()
+        val action = actionColour.toArgb()
+        // Beside the row: the revealed action. On the slid row's middle: not the action's colour.
+        assertEquals(action, image[image.width / 10, image.height / 2].toArgb())
+        assertFalse(image[image.width * 3 / 4, image.height / 2].toArgb() == action)
+        compose.onNodeWithTag("row").performTouchInput { cancel() }
     }
 
     @Test
