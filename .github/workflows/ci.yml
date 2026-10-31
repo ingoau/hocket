@@ -82,6 +82,9 @@ jobs:
     # The APK bundles the watchapp the pebble job built, when there is one.
     needs: pebble
     runs-on: ubuntu-latest
+    # Pushes to main publish a signed release APK (the last two steps) for Obtainium to pick up.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -108,6 +111,36 @@ jobs:
       - run: scripts/build-android-core.sh release
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
         working-directory: android
+      # Every push to main is a release: v0.1.<run number>, with a matching versionName and a
+      # versionCode that only goes up. Signed with the key the installed app already uses.
+      - name: Build release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: android
+        env:
+          HOCKET_KEYSTORE_B64: ${{ secrets.HOCKET_KEYSTORE_B64 }}
+          HOCKET_KEYSTORE_PASSWORD: ${{ secrets.HOCKET_KEYSTORE_PASSWORD }}
+          HOCKET_KEY_ALIAS: ${{ secrets.HOCKET_KEY_ALIAS }}
+          HOCKET_KEY_PASSWORD: ${{ secrets.HOCKET_KEY_PASSWORD }}
+        run: |
+          if [ -z "$HOCKET_KEYSTORE_B64" ]; then
+            echo "::error::HOCKET_KEYSTORE_B64 isn't set; refusing to publish an unsigned APK"
+            exit 1
+          fi
+          echo "$HOCKET_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export HOCKET_KEYSTORE="$RUNNER_TEMP/release.jks"
+          ./gradlew --no-daemon assembleRelease \
+            -PversionCode=${{ github.run_number }} -PversionName=0.1.${{ github.run_number }}
+          rm "$RUNNER_TEMP/release.jks"
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: 0.1.${{ github.run_number }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "hocket-$VERSION.apk"
+          git log -1 --format=%B > notes.md
+          gh release create "v$VERSION" "hocket-$VERSION.apk" \
+            --target "$GITHUB_SHA" --title "Hocket $VERSION" --notes-file notes.md
 
   fuzz:
     name: Fuzz (${{ matrix.target }})
