@@ -42,7 +42,9 @@ export function CommandPalette() {
     setActive(0);
     setResults(undefined);
     void bridge().query({ type: "actions", data: { surface: "palette", target: { type: "none" } } }).then((r) => r.type === "actions" && setActions(r.data));
-    setTimeout(() => input.current?.focus(), 0);
+    // At once, not on a timer: the shell is inert now but keeps focus until the
+    // browser's focus fixup, and a key typed meanwhile (Escape) would go to it.
+    input.current?.focus();
   }, [open]);
 
   useEffect(() => {
