@@ -10,15 +10,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -150,8 +147,8 @@ internal class NavBarColours(val container: Color, val indicator: Color, val sel
 
 /**
  * The bar in [scheme]'s colours: a pill a little tinted towards the primary container (darker than
- * the mini player), the selected capsule in the mini player's own container colour, its content in
- * the primary colour. Crossfades ([Motion.COLOUR_MS]) when the scheme changes.
+ * the mini player in a dark theme), the selected capsule in the mini player's container colour (the
+ * full primary container in a light theme), its content in the primary colour (dark) or on it (light). Crossfades ([Motion.COLOUR_MS]) when the scheme changes.
  */
 @Composable
 private fun navBarColours(scheme: ColorScheme): NavBarColours {
@@ -159,8 +156,9 @@ private fun navBarColours(scheme: ColorScheme): NavBarColours {
     val spec = androidx.compose.animation.core.tween<Color>(app.hocket.ui.theme.Motion.COLOUR_MS)
     @Composable fun a(c: Color) = animateColorAsState(c, spec, label = "navBarColour").value
     return NavBarColours(
-        container = a(lerp(if (dark) scheme.surfaceContainer else scheme.surfaceContainerHigh, scheme.primaryContainer, if (dark) 0.3f else 0.4f)),
-        indicator = a(app.hocket.ui.player.miniContainer(scheme, dark)),
+        container = a(lerp(if (dark) scheme.surfaceContainer else scheme.surfaceContainerHigh, scheme.primaryContainer, if (dark) 0.3f else 0.2f)),
+        // In light themes the full primary container, so the capsule stands clear of the pale pill.
+        indicator = a(if (dark) app.hocket.ui.player.miniContainer(scheme, dark) else scheme.primaryContainer),
         selected = a(if (dark) scheme.primary else scheme.onPrimaryContainer),
         unselected = a(scheme.onSurfaceVariant),
     )
@@ -169,8 +167,8 @@ private fun navBarColours(scheme: ColorScheme): NavBarColours {
 internal object FloatingNavBarDefaults {
     val PillHeight: Dp = 56.dp
     /** Room around the places inside the pill. */
-    val Padding: Dp = 6.dp
-    /** An unselected place's width (its touch target is the pill's inner height tall). */
+    val Padding: Dp = 4.dp
+    /** An unselected place's width (the pill's inner height, 48 dp, is every place's height). */
     val ItemWidth: Dp = 48.dp
     val SideMargin: Dp = HeroGeometry.MINI_MARGIN
     val BottomMargin: Dp = 8.dp

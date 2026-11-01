@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.foundation.border
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -161,9 +162,10 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                             track?.coverArt, ArtworkSizes.LIST, null,
                             Modifier
                                 .size(HeroGeometry.THUMB_SIZE)
-                                .border(1.dp, colours.content.copy(alpha = 0.14f), RoundedCornerShape(HeroGeometry.THUMB_CORNER))
                                 .onGloballyPositioned { hero.thumb = hero.measure(it) }
-                                .graphicsLayer { alpha = if (thumbHidden()) 0f else 1f },
+                                // The ring hides with the thumbnail while the artwork flies.
+                                .graphicsLayer { alpha = if (thumbHidden()) 0f else 1f }
+                                .border(1.dp, colours.content.copy(alpha = 0.14f), RoundedCornerShape(HeroGeometry.THUMB_CORNER)),
                             RoundedCornerShape(HeroGeometry.THUMB_CORNER),
                         )
                         Spacer(Modifier.width(12.dp))
@@ -265,6 +267,14 @@ internal val MINI_PROGRESS_ROOM = 10.dp
 private fun MiniProgress(position: () -> Long, durationMs: Float, active: Color, track: Color, modifier: Modifier) {
     Spacer(
         modifier.height(4.dp).drawBehind {
+            // Fills from the leading edge: mirrored right to left.
+            if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) { scale(-1f, 1f) { drawProgress(position, durationMs, active, track) } }
+            else drawProgress(position, durationMs, active, track)
+        },
+    )
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawProgress(position: () -> Long, durationMs: Float, active: Color, track: Color) {
             val h = size.height
             val r = androidx.compose.ui.geometry.CornerRadius(h / 2f)
             val gap = 4.dp.toPx()
@@ -274,8 +284,6 @@ private fun MiniProgress(position: () -> Long, durationMs: Float, active: Color,
             val start = (if (x > 0f) maxOf(x, h) + gap else 0f)
             if (size.width - start > h) drawRoundRect(track, topLeft = Offset(start, 0f), size = Size(size.width - start, h), cornerRadius = r)
             drawCircle(active, radius = h * 0.4f, center = Offset(size.width - h / 2f, h / 2f))
-        },
-    )
 }
 
 /** The mini player card's colours, from its artwork. */
@@ -291,7 +299,8 @@ internal fun nowPlayingScheme(coverArt: String?): ColorScheme? {
     val dark = app.hocket.ui.theme.LocalDarkTheme.current
     val worked = artworkSeed(coverArt).value
     var last by remember { androidx.compose.runtime.mutableStateOf<Color?>(null) }
-    androidx.compose.runtime.SideEffect { if (worked != null) last = worked }
+    // Nothing playing forgets them, so the next song never starts in a long-gone cover's colours.
+    androidx.compose.runtime.SideEffect { if (coverArt == null) last = null else if (worked != null) last = worked }
     val seed = worked ?: last.takeIf { coverArt != null }
     return remember(seed, dark) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark) } }
 }
