@@ -21,7 +21,6 @@ import app.hocket.core.client.continuesTo
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import android.os.Looper
-import android.util.Log
 
 /**
  * The `MediaSessionAdapter` seam on Android: a Media3 [Player] whose state is exactly the core's
@@ -102,11 +101,10 @@ class CoreSessionPlayer(
                 if (after.size >= UPCOMING_SHOWN) break
                 if (seen.add(entry.item.key)) after.add(entry) else dropped++
             }
-            if (dropped > 0) Log.w(TAG, "dropped $dropped queue entries with duplicate keys")
+            if (dropped > 0) PlaybackLog.w("dropped $dropped queue entries with duplicate keys")
             return QueueTimeline(history + current + after, history.size)
         }
 
-        private const val TAG = "CoreSessionPlayer"
     }
 
     /** The queue entries the playlist shows and where the current one is. */

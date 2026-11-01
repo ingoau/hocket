@@ -65,7 +65,7 @@ import kotlin.math.roundToInt
  * cuts off controllers that are already connected ([setExternalControl], [listenerObserver]).
  */
 class MediaSessionBridge(
-    context: Context,
+    private val context: Context,
     val player: CoreSessionPlayer,
     private val dispatch: (Command) -> Unit,
     launchIntent: Intent?,
@@ -101,6 +101,18 @@ class MediaSessionBridge(
     private fun permitted(session: MediaSession, controller: MediaSession.ControllerInfo): Boolean =
         session.isMediaNotificationController(controller) || control.permits(controller.packageName, controller.uid)
 
+    /** A controller for the log: its package, and which of Media3's stand-ins it is, if one. */
+    private fun who(session: MediaSession, controller: MediaSession.ControllerInfo): String {
+        val role = when {
+            session.isMediaNotificationController(controller) -> " (notification)"
+            session.isAutomotiveController(controller) -> " (automotive)"
+            session.isAutoCompanionController(controller) -> " (Auto companion)"
+            controller.packageName == context.packageName -> " (this app)"
+            else -> ""
+        }
+        return "${controller.packageName}$role"
+    }
+
     private fun <T : Any> refused(): ListenableFuture<LibraryResult<T>> = Futures.immediateFuture(LibraryResult.ofError<T>(SessionError.ERROR_PERMISSION_DENIED))
 
     /** Runs a browse request on [scope] and completes the future with its result. */
@@ -112,7 +124,11 @@ class MediaSessionBridge(
 
     val session: MediaLibraryService.MediaLibrarySession = MediaLibraryService.MediaLibrarySession.Builder(context, player, object : MediaLibraryService.MediaLibrarySession.Callback {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-                if (!permitted(session, controller)) return MediaSession.ConnectionResult.reject()
+                if (!permitted(session, controller)) {
+                    PlaybackLog.i("controller refused: ${who(session, controller)}")
+                    return MediaSession.ConnectionResult.reject()
+                }
+                PlaybackLog.d("controller connected: ${who(session, controller)}")
                 ArtworkProvider.allow(controller.packageName)
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                     .setAvailableSessionCommands(sessionCommands)
@@ -120,8 +136,29 @@ class MediaSessionBridge(
                     .build()
             }
 
+            override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+                PlaybackLog.d("controller disconnected: ${who(session, controller)}")
+            }
+
+            override fun onMediaButtonEvent(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean {
+                @Suppress("DEPRECATION")
+                val key = intent.getParcelableExtra<android.view.KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                PlaybackLog.i("media button ${key?.let(PlaybackLog::key) ?: "(no key)"} via ${who(session, controller)}")
+                return super.onMediaButtonEvent(session, controller, intent)
+            }
+
+            override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo, playerCommand: Int): Int {
+                // Every transport request reaches the core as a plain command; this is the one place
+                // that knows which app (or key, through Media3's stand-in controller) asked.
+                if (playerCommand != Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM) {
+                    PlaybackLog.i("${PlaybackLog.command(playerCommand)} from ${who(session, controller)}")
+                }
+                return super.onPlayerCommandRequest(session, controller, playerCommand)
+            }
+
             override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
                 if (!permitted(session, controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                PlaybackLog.d("custom command ${customCommand.customAction} from ${who(session, controller)}")
                 when (customCommand.customAction) {
                     CMD_LOVE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Love))
                     CMD_SHUFFLE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Shuffle))
@@ -141,8 +178,13 @@ class MediaSessionBridge(
                 // follows is still the core's to judge.
                 return async {
                     val item = this@MediaSessionBridge.browser.resumeItem()
+                    val position = if (item == null) 0L else this@MediaSessionBridge.browser.resumePositionMs()
+                    PlaybackLog.i(
+                        "playback resumption ${if (isForPlayback) "to play" else "asked what would play"} from ${who(session, controller)}: " +
+                            (item?.let { "${it.mediaId} at $position ms" } ?: "nothing to resume"),
+                    )
                     if (item == null) MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
-                    else MediaSession.MediaItemsWithStartPosition(listOf(item), 0, this@MediaSessionBridge.browser.resumePositionMs())
+                    else MediaSession.MediaItemsWithStartPosition(listOf(item), 0, position)
                 }
             }
 
