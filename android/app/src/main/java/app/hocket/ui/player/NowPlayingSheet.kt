@@ -359,7 +359,7 @@ internal class HeroGeometry {
         /** The floating mini player: side margin, gap above the navigation bar, corners, shadow and widest size. */
         val MINI_MARGIN: Dp = 16.dp
         val MINI_GAP: Dp = NowPlayingSheetState.MINI_GAP
-        val MINI_CORNER: Dp = 16.dp
+        val MINI_CORNER: Dp = 22.dp
         val MINI_ELEVATION: Dp = 8.dp
         val MINI_MAX_WIDTH: Dp = 600.dp
         /** How much the artwork shrinks while paused (Navic). */
