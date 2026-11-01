@@ -298,6 +298,26 @@ h3 { font-size: var(--fs-lg); }
 .dev-banner { background: #f0b04a; color: #201400; font-size: var(--fs-xs); padding: 2px 10px; text-align: center; }
 .offline-banner { background: var(--bg-active); color: var(--fg-muted); font-size: var(--fs-xs); padding: 2px 10px; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
 .offline-banner .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
+/* Save to Coordinator: the upload bar under the offline banner, and its dialog. */
+.report-bar { background: var(--surface-tonal, var(--bg-active)); color: var(--fg); font-size: var(--fs-xs); padding: 3px 10px; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.report-bar.failed { color: var(--fg); }
+.report-bar.failed svg { color: var(--warn); }
+.report-bar .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
+.report-bar .report-progress { width: 160px; }
+.dialog.dialog-report { width: 560px; max-height: 90vh; overflow-y: auto; }
+.report-dialog { display: flex; flex-direction: column; gap: 14px; }
+.report-dialog .report-note { font-family: inherit; font-size: var(--fs-md); min-height: 96px; }
+.report-section { display: flex; flex-direction: column; gap: 6px; }
+.report-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.report-section-title { margin: 0; font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); }
+.report-section p { margin: 0; }
+.report-thumbs { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.report-thumb { position: relative; width: 88px; height: 88px; border-radius: var(--shape-md); overflow: hidden; background: var(--bg-sunken); border: 1px solid var(--border); }
+.report-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.report-thumb .report-thumb-remove { position: absolute; top: 4px; right: 4px; width: 24px; background: var(--bg-elev); border-radius: var(--shape-full); }
+.report-thumb .report-thumb-remove:hover { background: var(--bg-hover); }
+.report-recording { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border-radius: var(--shape-md); background: var(--bg-sunken); }
+.report-recording-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Sidebar */
 .sidebar { display: flex; flex-direction: column; background: var(--bg-sunken); border-right: 1px solid var(--border); min-height: 0; min-width: 0; position: relative; }

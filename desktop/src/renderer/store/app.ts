@@ -74,7 +74,9 @@ export type DialogState =
   | { kind: "sleepTimer" }
   | { kind: "connect" }
   | { kind: "trackInfo"; trackId: string }
-  | { kind: "albumInfo"; albumId: string };
+  | { kind: "albumInfo"; albumId: string }
+  /** Save to Coordinator; `allDevices` as the diagnostics page's bundle options. */
+  | { kind: "report"; allDevices: boolean };
 
 /** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
 export interface PlaylistPickerState {
@@ -395,7 +397,10 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
       if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);
   };
+  // A report upload already running (resumed as the core started) has sent its events by now: ask.
+  let reportEventSeen = false;
   const offEvent = b.onEvent((e) => {
+    if (e.type === "reportUploadChanged") reportEventSeen = true;
     useApp.getState().applyEvent(e);
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
@@ -417,6 +422,11 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   const onOnline = () => b.window.reportNetwork(navigator.onLine);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOnline);
+  if (kind === "main") {
+    void b.query({ type: "reportUpload" }).then((r) => {
+      if (r.type === "reportUpload" && !reportEventSeen) useApp.getState().applyEvent({ type: "reportUploadChanged", data: { status: r.data } });
+    }).catch(() => undefined);
+  }
   // Attach: the core re-emits everything with current state.
   b.dispatch({ type: "requestSnapshot" });
   return () => {

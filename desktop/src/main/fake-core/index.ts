@@ -8,10 +8,10 @@
 // insertions, shuffle permutation), undo is snapshot-based, jobs progress on
 // timers, and there is one fake remote device ("Pixel 8") so Connect UI has
 // something to show.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -159,6 +159,8 @@ export class FakeCore implements CoreHandle {
   private network: Snapshot["network"] = { kind: "wifi", metered: false, networkId: "home" };
   private resumeOffer: ResumeOffer | undefined;
   private sleepTimer: SleepTimer | undefined;
+  /** The report upload (Save to Coordinator), as the native core's `Query::ReportUpload`. */
+  private reportUpload: { status: ReportUploadStatus; attachments: ReportAttachment[]; failOnce: boolean; run: number } | undefined;
   private selection: ActionTarget = { type: "none" };
   private playHistory: PlayHistoryEntry[] = [];
   /** The current PlayerNotice's code (the core's English message goes with it). */
@@ -685,6 +687,15 @@ export class FakeCore implements CoreHandle {
         this.sleepTimer = cmd.data.timer;
         this.emit({ type: "sleepTimerChanged", data: { timer: this.sleepTimer } });
         return;
+      case "startReportUpload":
+        this.startReportUpload(cmd.data.note, cmd.data.bundle, cmd.data.attachments);
+        return;
+      case "retryReportUpload":
+        if (this.reportUpload?.status.state === "failed") this.runReportUpload();
+        return;
+      case "dismissReportUpload":
+        this.finishReportUpload();
+        return;
       case "backendReport":
         return;
       case "mediaSessionCommand":
@@ -744,6 +755,8 @@ export class FakeCore implements CoreHandle {
       roomAnswered: step >= 1,
       coordinator: viaCoordinator && step >= 1 ? source("coordinator", "Coordinator", "received", 1, 1) : undefined,
       devices: step >= 1 ? others.map((d) => source(d.id, d.name, step >= 3 ? "received" : step >= 2 ? "receiving" : "waiting", step >= 3 ? 3 : step >= 2 ? 1 : 0, step >= 2 ? 3 : 0)) : [],
+      // The fake coordinator keeps reports for everyone.
+      reportUpload: viaCoordinator && step >= 1,
     });
     return new Promise((resolve) => {
       // Settled at shutdown too (later() never fires then), so nobody waits on it forever.
@@ -757,6 +770,65 @@ export class FakeCore implements CoreHandle {
         resolve(`Other devices in the Connect room (${others.length} of ${others.length} sent a bundle, 2.0 s)\n\n${sections.filter(Boolean).join("\n")}`);
       });
     });
+  }
+
+  // ---- Report upload ---------------------------------------------------
+  /**
+   * As the native core's report upload, played out over about 1.5 s in steps. A note starting
+   * with "fail:" fails once at about half way (network), so e2e can see Retry.
+   */
+  private startReportUpload(note: string, bundle: string, attachments: ReportAttachment[]): void {
+    if (this.reportUpload?.status.state === "uploading") {
+      this.emit({ type: "log", data: { level: "warn", target: "fake_core::report", message: "a report is already uploading: ignored" } });
+      return;
+    }
+    // The previous one (done or failed) goes: a new upload replaces it.
+    this.finishReportUpload(false);
+    let total = new TextEncoder().encode(bundle).length;
+    for (const a of attachments) {
+      try {
+        total += statSync(a.path).size;
+      } catch {
+        /* the native core fails with `unreadable`; the fake one doesn't mind */
+      }
+    }
+    this.reportUpload = { status: { state: "uploading", sentBytes: 0, totalBytes: total, reportId: undefined, error: undefined, errorDetail: undefined, startedAt: Date.now() }, attachments, failOnce: note.startsWith("fail:"), run: 0 };
+    this.runReportUpload();
+  }
+
+  private runReportUpload(): void {
+    const job = this.reportUpload;
+    if (!job) return;
+    const run = ++job.run;
+    const steps = 6;
+    const from = job.status.sentBytes;
+    job.status = { ...job.status, state: "uploading", error: undefined, errorDetail: undefined, reportId: job.status.reportId ?? "R-20261101-test" };
+    this.emit({ type: "reportUploadChanged", data: { status: job.status } });
+    for (let step = 1; step <= steps; step++) {
+      // Real time, whatever the time scale: e2e watches it go.
+      this.later(step * 250 * this.opts.timeScale, () => {
+        if (this.reportUpload !== job || job.run !== run || job.status.state !== "uploading") return;
+        const sentBytes = Math.round(from + ((job.status.totalBytes - from) * step) / steps);
+        if (job.failOnce && step === steps / 2) {
+          job.failOnce = false;
+          job.status = { ...job.status, sentBytes, state: "failed", error: "network", errorDetail: "fake core: connection reset" };
+        } else {
+          job.status = { ...job.status, sentBytes, state: step === steps ? "done" : "uploading" };
+          // As the native core: the platform's copies go once the coordinator has them.
+          if (step === steps) for (const a of job.attachments) if (a.deleteAfter) rmSync(a.path, { force: true });
+        }
+        this.emit({ type: "reportUploadChanged", data: { status: job.status } });
+      });
+    }
+  }
+
+  /** Dismiss: forget it, deleting the copies the platform made for it. */
+  private finishReportUpload(emit = true): void {
+    const job = this.reportUpload;
+    if (!job) return;
+    this.reportUpload = undefined;
+    for (const a of job.attachments) if (a.deleteAfter) rmSync(a.path, { force: true });
+    if (emit) this.emit({ type: "reportUploadChanged", data: { status: undefined } });
   }
 
   // ---- Lifecycle -------------------------------------------------------
@@ -2550,6 +2622,8 @@ export class FakeCore implements CoreHandle {
       }
       case "exportAudio":
         return { type: "audioFile", data: undefined };
+      case "reportUpload":
+        return { type: "reportUpload", data: this.reportUpload?.status };
       default: {
         const never: never = q;
         void never;

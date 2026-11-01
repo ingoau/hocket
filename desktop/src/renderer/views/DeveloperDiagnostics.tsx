@@ -1,5 +1,6 @@
-// Developer diagnostics: the last hour of logs plus versions and device details, to save, copy,
-// show in the file manager or (macOS) share, with the bundles of the other devices in the Connect
+// Developer diagnostics: the last hour of logs plus versions and device details, to save (to a
+// file, or to the coordinator when it keeps reports for this account), copy, show in the file
+// manager or (macOS) share, with the bundles of the other devices in the Connect
 // room and its coordinator. With developer mode on, the page asks them as it opens (and on Refresh)
 // and shows each one's progress; the actions wait for that to finish. Main builds the bundle on
 // every action; the page only previews this device's.
@@ -20,6 +21,9 @@ export function DeveloperDiagnostics() {
   const devMode = useSetting(SK.developerMode, false);
   const setSetting = useApp((s) => s.setSetting);
   const roomStatus = useApp((s) => s.roomDiagnostics);
+  const viaCoordinator = useApp((s) => s.connection.tier === "coordinator" && s.connection.connected);
+  const uploading = useApp((s) => s.reportUpload?.state === "uploading");
+  const openDialog = useApp((s) => s.openDialog);
   const [summary, setSummary] = useState<DiagnosticsSummary | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   // Other devices only ever answer while developer mode is on here too.
@@ -73,6 +77,8 @@ export function DeveloperDiagnostics() {
   const blocked = busy || waiting;
   // Main asks one collection at a time (and reuses one that just finished), so the newest status is this page's.
   const status = roomStatus ?? collected;
+  // Offered only once the coordinator has said this account may (never greyed out), and not while one goes up.
+  const canReport = status?.reportUpload === true && viaCoordinator && !uploading;
 
   return (
     <div className="view page-developer" data-testid="view-developer">
@@ -92,6 +98,9 @@ export function DeveloperDiagnostics() {
           </div>
           <div className="developer-actions">
             <button type="button" className="btn primary" disabled={blocked} onClick={() => run(async () => { const p = await bridge().diagnostics.save(options); return p ? t("developer.saved", { name: fileName(p) }) : undefined; })} data-testid="developer-save"><Icon name="save" size={16} /> {t("developer.save")}</button>
+            {canReport ? (
+              <button type="button" className="btn" onClick={() => openDialog({ kind: "report", allDevices: options.allDevices === true })} data-testid="developer-save-coordinator"><Icon name="cloud" size={16} /> {t("developer.saveToCoordinator")}</button>
+            ) : null}
             {summary?.canShare ? (
               <button type="button" className="btn" disabled={blocked} onClick={() => run(async () => { await bridge().diagnostics.share(options); return undefined; })} data-testid="developer-share"><Icon name="share" size={16} /> {t("developer.share")}</button>
             ) : null}
