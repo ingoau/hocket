@@ -2543,8 +2543,18 @@ impl Engine {
                 let t = self.transport();
                 self.out.push(Output::TransportChanged { transport: t });
             }
-            Msg::TransportRequest { command, .. } => {
+            Msg::TransportRequest { command, from } => {
                 if self.held.is_some() {
+                    let name = self
+                        .devices
+                        .iter()
+                        .find(|d| d.id == from)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| from.clone());
+                    self.log(
+                        "debug",
+                        format!("transport request {command:?} from {name}"),
+                    );
                     self.out.push(Output::TransportCommand(command));
                 } else {
                     self.log("debug", "transport request for a lease we do not hold");

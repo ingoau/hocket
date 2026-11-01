@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaLibraryService
 import app.hocket.core.CoreHandle
@@ -59,7 +58,6 @@ import kotlinx.coroutines.launch
  */
 class PlaybackService : MediaLibraryService() {
     companion object {
-        private const val TAG = "PlaybackService"
         const val IDLE_TIMEOUT_MS = 5 * 60_000L
         const val ACTION_BIND_CORE = "app.hocket.playback.BIND_CORE"
         const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
@@ -99,10 +97,12 @@ class PlaybackService : MediaLibraryService() {
     private var serverId: String? = null
     private var libraryNotify: Job? = null
     private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
+    private val audioRoutes = AudioRouteLog(this)
 
     override fun onCreate() {
         super.onCreate()
         core = CoreHost.acquire(this)
+        PlaybackLog.i("service created")
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val browser = LibraryBrowser(this, { core }, { serverId }, scope)
@@ -124,8 +124,9 @@ class PlaybackService : MediaLibraryService() {
         battery.start()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             routeDiscovery = runCatching { ConnectRouteDiscovery(this).also { it.start() } }
-                .onFailure { Log.w(TAG, "route discovery unavailable: ${it.message}") }.getOrNull()
+                .onFailure { PlaybackLog.w("route discovery unavailable: ${it.message}") }.getOrNull()
         }
+        audioRoutes.start()
         core.dispatch(Command.RequestSnapshot)
         scheduleIdleStop()
     }
@@ -198,7 +199,7 @@ class PlaybackService : MediaLibraryService() {
         idleJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
             if (!bridge.player.state.isPlaying && boundClients == 0 && !backend.isBusy()) {
-                Log.i(TAG, "Idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
+                PlaybackLog.i("idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
                 pauseAllPlayersAndStopSelf()
             } else if (boundClients == 0) {
                 // Still playing, buffering or recovering: look again later.
@@ -208,6 +209,7 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        PlaybackLog.i("start command #$startId: ${PlaybackLog.intent(intent)}")
         val result = super.onStartCommand(intent, flags, startId)
         if (intent?.action == Intent.ACTION_MEDIA_BUTTON) foregroundHold.hold()
         return result
@@ -218,6 +220,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onBind(intent: Intent?): IBinder? {
         if (isLocalBind(intent)) {
             boundClients++
+            PlaybackLog.d("app bound ($boundClients bound)")
             idleJob?.cancel()
             return LocalBinder()
         }
@@ -228,6 +231,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onUnbind(intent: Intent?): Boolean {
         if (isLocalBind(intent)) {
             boundClients = (boundClients - 1).coerceAtLeast(0)
+            PlaybackLog.d("app unbound ($boundClients bound)")
             if (!bridge.player.state.isPlaying) scheduleIdleStop()
             return true
         }
@@ -235,16 +239,26 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onRebind(intent: Intent?) {
-        if (isLocalBind(intent)) { boundClients++; idleJob?.cancel() } else super.onRebind(intent)
+        if (isLocalBind(intent)) {
+            boundClients++
+            PlaybackLog.d("app rebound ($boundClients bound)")
+            idleJob?.cancel()
+        } else {
+            super.onRebind(intent)
+        }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The UI unbinds shortly after (ForegroundBinder); with nothing playing the service then goes.
         // A player that is still buffering or recovering from a network error is not "nothing".
-        if (!bridge.player.state.isPlaying && !backend.isBusy()) pauseAllPlayersAndStopSelf()
+        val stop = !bridge.player.state.isPlaying && !backend.isBusy()
+        PlaybackLog.i(if (stop) "task removed with nothing playing; stopping" else "task removed while playing; staying")
+        if (stop) pauseAllPlayersAndStopSelf()
     }
 
     override fun onDestroy() {
+        PlaybackLog.i("service destroyed")
+        audioRoutes.stop()
         // Whatever was showing stays, but nothing plays from here any more.
         NowPlayingWidget.update(this, WidgetState.of(bridge.player.state, null).copy(playing = false))
         network.stop()

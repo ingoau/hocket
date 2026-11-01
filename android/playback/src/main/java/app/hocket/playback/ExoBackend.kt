@@ -2,7 +2,6 @@ package app.hocket.playback
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -97,7 +96,6 @@ class ExoBackend(
     internal enum class Stall { Paused, Buffering, Nothing }
 
     internal companion object {
-        private const val TAG = "ExoBackend"
         /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
         private const val POSITION_INTERVAL_MS = 1_000L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
@@ -227,6 +225,14 @@ class ExoBackend(
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // Who the change came from: the core's own play and pause are "requested"; a pause
+                // from the platform (focus, a headset leaving) is the one that explains itself here.
+                val why = PlaybackLog.playWhenReadyReason(reason)
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                    PlaybackLog.d("player ${if (playWhenReady) "playing" else "pausing"}: $why")
+                } else {
+                    PlaybackLog.i("player ${if (playWhenReady) "playing" else "pausing"}: $why")
+                }
                 if (playWhenReady) return
                 if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = false)))
@@ -239,6 +245,7 @@ class ExoBackend(
             }
 
             override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+                PlaybackLog.i("playback suppression: ${PlaybackLog.suppressionReason(playbackSuppressionReason)}")
                 if (playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS) {
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = true)))
                 }
@@ -273,7 +280,7 @@ class ExoBackend(
                     return
                 }
                 recoveryAttempts++
-                Log.w(TAG, "playback error on $key: ${error.errorCodeName}; retrying in ${delayMs}ms (attempt $recoveryAttempts)")
+                PlaybackLog.w("playback error on $key: ${error.errorCodeName}; retrying in ${delayMs}ms (attempt $recoveryAttempts)")
                 report(BackendReport.Error(BackendReportErrorInner(key, message, false)))
                 report(BackendReport.Buffering(BackendReportBufferingInner(key, true)))
                 scheduleRecovery(key, delayMs)
@@ -306,11 +313,11 @@ class ExoBackend(
             return
         }
         if (!online) {
-            Log.i(TAG, "offline; waiting for connectivity before retrying $key")
+            PlaybackLog.i("offline; waiting for connectivity before retrying $key")
             scheduleRecovery(key, RECOVERY_DELAYS_MS.last())
             return
         }
-        Log.i(TAG, "retrying $key (attempt $recoveryAttempts)")
+        PlaybackLog.i("retrying $key (attempt $recoveryAttempts)")
         player.prepare()
     }
 

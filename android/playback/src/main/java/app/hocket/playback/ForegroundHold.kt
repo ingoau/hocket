@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +28,6 @@ class ForegroundHold(
     private val playbackOngoing: () -> Boolean,
 ) {
     companion object {
-        private const val TAG = "ForegroundHold"
         private const val CHANNEL = "hocket-starting"
         private const val NOTIFICATION_ID = 0x40c3e7
         const val HOLD_MS = 15_000L
@@ -55,7 +53,7 @@ class ForegroundHold(
             ServiceCompat.startForeground(service, NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } catch (e: IllegalStateException) {
             // Not allowed from here (a plain start in the background): nothing was promised either.
-            Log.w(TAG, "could not hold the foreground: ${e.message}")
+            PlaybackLog.w("could not hold the foreground: ${e.message}")
             return
         }
         job?.cancel()
