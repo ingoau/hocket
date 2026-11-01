@@ -270,7 +270,7 @@ fun NavItem.label(): String = stringResource(
     },
 )
 
-/** The label under the bar icon: [label], shortened where the full one does not fit five across. */
+/** The bar's label (beside the selected place's icon): [label], shortened where the full one is long. */
 @Composable
 fun NavItem.barLabel(): String = if (this == NavItem.RecentQueues) stringResource(R.string.nav_recent_queues_short) else label()
 

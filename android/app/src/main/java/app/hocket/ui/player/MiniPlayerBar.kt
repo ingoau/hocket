@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -199,7 +200,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                 val bufferingLabel = stringResource(R.string.player_buffering)
                 // Play/pause in its own filled container: a rounded square while playing that
                 // softens into a pill when paused.
-                val playCorner by androidx.compose.animation.core.animateDpAsState(if (playing) 14.dp else 20.dp, Motion.pressDp, label = "miniPlayCorner")
+                val playCorner by androidx.compose.animation.core.animateDpAsState(if (playing) 14.dp else 22.dp, Motion.dp, label = "miniPlayCorner")
                 androidx.compose.material3.FilledIconButton(
                     onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); client.dispatch(Command.TogglePlay) },
                     shape = RoundedCornerShape(playCorner),
@@ -259,7 +260,12 @@ internal class MiniPlayerColours(val container: Color, val content: Color, val c
 internal fun miniPlayerColours(coverArt: String?): MiniPlayerColours {
     val dark = app.hocket.ui.theme.LocalDarkTheme.current
     val appScheme = MaterialTheme.colorScheme
-    val seed by artworkSeed(coverArt)
+    val worked = artworkSeed(coverArt).value
+    // While a new cover's colours are worked out, keep the last ones rather than dipping through
+    // the app's own scheme and back; only no artwork at all falls back to the app's.
+    var last by remember { androidx.compose.runtime.mutableStateOf<Color?>(null) }
+    androidx.compose.runtime.SideEffect { if (worked != null) last = worked }
+    val seed = worked ?: last.takeIf { coverArt != null }
     val scheme = remember(seed, dark) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark) } } ?: appScheme
     val container = androidx.compose.ui.graphics.lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, if (dark) 0.6f else 0.75f)
     val spec = androidx.compose.animation.core.tween<Color>(Motion.COLOUR_MS)

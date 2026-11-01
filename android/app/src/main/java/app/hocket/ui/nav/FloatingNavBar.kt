@@ -2,6 +2,8 @@ package app.hocket.ui.nav
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
@@ -82,21 +84,25 @@ internal fun FloatingNavBar(items: List<NavItem>, selected: NavItem?, onSelect: 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             items.forEach { item ->
-                FloatingNavItem(item, item == selected, onClick = { onSelect(item) })
+                val isSelected = item == selected
+                // The icon-only places are measured first; the selected one's label gets what is
+                // left (ellipsized), so five places fit on a narrow phone at a large font size.
+                FloatingNavItem(item, isSelected, onClick = { onSelect(item) }, modifier = if (isSelected) Modifier.weight(1f, fill = false) else Modifier)
             }
         }
     }
 }
 
 @Composable
-private fun FloatingNavItem(item: NavItem, selected: Boolean, onClick: () -> Unit) {
+private fun FloatingNavItem(item: NavItem, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val reduced = LocalReducedMotion.current
     val label = item.barLabel()
-    val container by animateColorAsState(if (selected) scheme.secondaryContainer else scheme.secondaryContainer.copy(alpha = 0f), label = "navItemContainer")
-    val content by animateColorAsState(if (selected) scheme.onSecondaryContainer else scheme.onSurfaceVariant, label = "navItemContent")
+    val colourSpec = if (reduced) snap() else spring<Color>(stiffness = Spring.StiffnessMediumLow)
+    val container by animateColorAsState(if (selected) scheme.secondaryContainer else scheme.secondaryContainer.copy(alpha = 0f), colourSpec, label = "navItemContainer")
+    val content by animateColorAsState(if (selected) scheme.onSecondaryContainer else scheme.onSurfaceVariant, colourSpec, label = "navItemContent")
     Row(
-        Modifier
+        modifier
             .heightIn(min = 48.dp)
             .height(FloatingNavBarDefaults.PillHeight - 16.dp)
             .clip(CircleShape)

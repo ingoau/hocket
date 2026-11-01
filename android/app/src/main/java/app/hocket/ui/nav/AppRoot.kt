@@ -308,9 +308,9 @@ val BottomOverlayInset: Dp
 
 /**
  * The phone navigation bar's height before it has been measured: the floating bar's pill and its
- * bottom margin ([FloatingNavBarDefaults.Height]) plus the edge-to-edge navigation-bar inset under it. Using it from the first frame means
- * the content padding and the sheet's collapsed anchor do not jump when the bar is first measured
- * (the measurement only corrects it where the bar grows, e.g. at very large font sizes).
+ * bottom margin ([FloatingNavBarDefaults.Height]) plus the edge-to-edge navigation-bar inset under
+ * it. Using it from the first frame means the content padding and the sheet's collapsed anchor do
+ * not jump when the bar is first measured (the measurement only corrects it if they disagree).
  */
 private val ShortNavBarHeight = FloatingNavBarDefaults.Height
 
@@ -425,6 +425,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // corners over black, as a card pushed back under the sheet (read in the draw phase, so
             // dragging the sheet never recomposes the page).
             val recede = !LocalReducedMotion.current
+            // (The sheet's own scrim dims the page itself as it recedes.)
             if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
             Row(
                 Modifier.fillMaxSize().then(hiddenWhenCovered).graphicsLayer {
@@ -459,7 +460,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         }
                     }
                 }
-                // Content runs to the bottom of the screen: the transparent navigation bar and the
+                // Content runs to the bottom of the screen: the floating navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     val contentNavigator = remember(nav, sharedArtwork) {
@@ -493,8 +494,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             )
             }
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
-            // The scrim the bar and the mini player float on (Navic): the surface colour eased in
-            // from transparent, so content scrolling under them fades out instead of clashing.
+            // The scrim the bar and the mini player float on: the surface colour eased in from
+            // transparent, so content scrolling under and around them fades out instead of clashing.
             // The status bar's icons for the page on top (a detail page over its cover), unless the
             // full player covers it and sets its own.
             PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
@@ -503,11 +504,11 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // shadow); without one, a short fade above the bar.
                 val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
-                // (The page's own colours already ease in, so no animation of its own here: the bar's
-                // labels and the scrim under them always change together.)
+                // (The page's own colours already ease in, so no animation of its own here: the bar
+                // and the scrim under it always change together.)
                 val surface = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme).surface
-                // Solid behind the bar's labels (so rows scrolling under them don't show through),
-                // eased in above.
+                // Solid around the bar (so rows scrolling past its edges don't show through), eased
+                // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }.background(scrim).testTag("bottomScrim"))
