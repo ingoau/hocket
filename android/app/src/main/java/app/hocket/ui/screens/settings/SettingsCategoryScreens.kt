@@ -133,6 +133,8 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
         val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
         SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, stringResource(R.string.settings_player_rating_body), playerRating.scope, tag = "display.playerRating")
+        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR)
+        SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, stringResource(R.string.settings_floating_nav_bar_body), floatingBar.scope, tag = "display.floatingNavBar")
         val albumArtists = setting(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS)
         SwitchRow(stringResource(R.string.settings_album_track_artists), albumArtists.bool ?: false, { albumArtists.setBool(it) }, stringResource(R.string.settings_album_track_artists_body), albumArtists.scope, tag = "display.albumTrackArtists")
     }

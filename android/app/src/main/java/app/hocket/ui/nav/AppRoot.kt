@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
@@ -308,12 +309,18 @@ val BottomOverlayInset: Dp
     @Composable get() = LocalBottomBarInset.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
 /**
- * The phone navigation bar's height before it has been measured: Material's short navigation bar
- * is 64 dp plus the edge-to-edge navigation-bar inset under it. Using it from the first frame means
- * the content padding and the sheet's collapsed anchor do not jump when the bar is first measured
- * (the measurement only corrects it where the bar grows, e.g. at very large font sizes).
+ * The standard phone navigation bar's height before it has been measured (Material's short
+ * navigation bar; the floating one is [FloatingNavBarDefaults.Height]), plus the edge-to-edge
+ * navigation-bar inset under it. Using it from the first frame means the content padding and the sheet's collapsed anchor do
+ * not jump when the bar is first measured (the measurement only corrects it if they disagree).
  */
 private val ShortNavBarHeight = 64.dp
+
+/** How much the page behind the full player shrinks as it opens (a share of its size). */
+private const val RecedeScale = 0.05f
+
+/** The receding page's corners with the player fully open. */
+private val RecedeCorner = 20.dp
 
 /** The collapsed wide navigation rail's width, before it is measured. */
 private val CollapsedRailWidth = 96.dp
@@ -346,6 +353,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
         }
         // Developer mode: a shake (or Ctrl+Shift+D) opens developer diagnostics.
         val developerMode = setting(SettingKeys.DEVELOPER_MODE).bool ?: false
+        // The phone's bar: the compact floating pill, or the standard full-width bar.
+        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
         DeveloperTriggerEffect(developerMode) {
             if (nav.currentDestination?.hasRoute(Route.DeveloperDiagnostics::class) != true) nav.navigate(Route.DeveloperDiagnostics)
         }
@@ -369,8 +378,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // the content column ends above it and the sheet's collapsed anchor sits on it. Known from
             // the first frame (fixed height + inset); the measurement only corrects it when it differs.
             val systemBottomPx = WindowInsets.navigationBars.getBottom(density)
-            var navBarMeasuredPx by remember { mutableIntStateOf(-1) }
-            val navBarHeightPx = if (navBarMeasuredPx >= 0) navBarMeasuredPx else with(density) { ShortNavBarHeight.roundToPx() } + systemBottomPx
+            var navBarMeasuredPx by remember(floatingBar) { mutableIntStateOf(-1) }
+            val navBarHeightPx = if (navBarMeasuredPx >= 0) navBarMeasuredPx else with(density) { (if (floatingBar) FloatingNavBarDefaults.Height else ShortNavBarHeight).roundToPx() } + systemBottomPx
             val bottomInsetPx = if (wide) systemBottomPx else navBarHeightPx
             var railWidthPx by remember { mutableIntStateOf(-1) }
             // While the full player covers the screen, what is behind it (the page, the navigation
@@ -382,6 +391,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val transitions = remember { ShellTransitionInfo() }
             transitions.reducedMotion = LocalReducedMotion.current
             transitions.layoutDirection = LocalLayoutDirection.current
+            transitions.density = density.density
             val reselected = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
             val currentSelected by rememberUpdatedState(selected)
             val currentItems by rememberUpdatedState(items)
@@ -416,7 +426,27 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
-            Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
+            // As the full player rises, the page behind it recedes: it shrinks a little into rounded
+            // corners over black, as a card pushed back under the sheet (read in the draw phase, so
+            // dragging the sheet never recomposes the page).
+            val recede = !LocalReducedMotion.current
+            // (The sheet's own scrim dims the page itself as it recedes.)
+            if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
+            Row(
+                Modifier.fillMaxSize().then(hiddenWhenCovered).graphicsLayer {
+                    val p = sheet.progress.coerceIn(0f, 1f)
+                    // Fully under the open player: not drawn at all (and left at its own size,
+                    // so whatever reads its bounds meanwhile sees the page as laid out).
+                    alpha = if (p >= 1f) 0f else 1f
+                    if (recede && p > 0f && p < 1f) {
+                        val s = 1f - RecedeScale * p
+                        scaleX = s
+                        scaleY = s
+                        shape = RoundedCornerShape(RecedeCorner * p)
+                        clip = true
+                    }
+                },
+            ) {
                 if (wide) {
                     val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
                     Box(Modifier.onSizeChanged { railWidthPx = it.width }) {
@@ -435,7 +465,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         }
                     }
                 }
-                // Content runs to the bottom of the screen: the transparent navigation bar and the
+                // Content runs to the bottom of the screen: the floating navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     val contentNavigator = remember(nav, sharedArtwork) {
@@ -469,8 +499,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             )
             }
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
-            // The scrim the bar and the mini player float on (Navic): the surface colour eased in
-            // from transparent, so content scrolling under them fades out instead of clashing.
+            // The scrim the bar and the mini player float on: the surface colour eased in from
+            // transparent, so content scrolling under and around them fades out instead of clashing.
             // The status bar's icons for the page on top (a detail page over its cover), unless the
             // full player covers it and sets its own.
             PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
@@ -479,14 +509,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // shadow); without one, a short fade above the bar.
                 val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
-                // (The page's own colours already ease in, so no animation of its own here: the bar's
-                // labels and the scrim under them always change together.)
+                // (The page's own colours already ease in, so no animation of its own here: the bar
+                // and the scrim under it always change together.)
                 val surface = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme).surface
-                // Solid behind the bar's labels (so rows scrolling under them don't show through),
-                // eased in above.
+                // Solid around the bar (so rows scrolling past its edges don't show through), eased
+                // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -494,25 +524,27 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
                 MaterialTheme(colorScheme = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme)) {
-                ShortNavigationBar(
-                    // Transparent over the scrim (Navic's detached style).
-                    containerColor = Color.Transparent,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .zIndex(20f)
-                        .onSizeChanged { navBarMeasuredPx = it.height }
-                        .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        // Its icons fade quickly as the player grows over them.
-                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
-                        .testTag("navBar")
-                        .then(hiddenWhenCovered),
-                ) {
-                    items.forEach { item ->
-                        val isSelected = item == selected
-                        ShortNavigationBarItem(
-                            selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
-                            modifier = Modifier.testTag("navBar." + item.id),
-                        )
+                val barModifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(20f)
+                    .onSizeChanged { navBarMeasuredPx = it.height }
+                    .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                    // It fades quickly as the player grows over it.
+                    .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
+                    .testTag("navBar")
+                    .then(hiddenWhenCovered)
+                if (floatingBar) {
+                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier)
+                } else {
+                    // Transparent over the scrim, along the bottom edge.
+                    ShortNavigationBar(containerColor = Color.Transparent, modifier = barModifier) {
+                        items.forEach { item ->
+                            val isSelected = item == selected
+                            ShortNavigationBarItem(
+                                selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
+                                modifier = Modifier.testTag("navBar." + item.id),
+                            )
+                        }
                     }
                 }
                 }
