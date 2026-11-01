@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Save to Coordinator" uploads (ReportUploadService): a dataSync foreground service with a
+         progress notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" xmlns:tools="http://schemas.android.com/tools" />
 
     <!-- Package visibility (API 30+): whether the device has an equalizer panel to link to
@@ -45,6 +50,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/share_paths" />
         </provider>
+
+        <!-- Keeps a report upload (docs/reports.md) going outside the app; started and stopped by the app only. -->
+        <service
+            android:name="app.hocket.diagnostics.ReportUploadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <activity
             android:name="app.hocket.MainActivity"
