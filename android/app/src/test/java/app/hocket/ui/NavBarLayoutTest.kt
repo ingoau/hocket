@@ -65,7 +65,7 @@ class NavBarLayoutTest {
 
     @Test
     fun navBarHeightIsKnownBeforeItIsMeasured() {
-        // The shell lays out content and the sheet's anchor from the bar's fixed height (64 dp plus
+        // The shell lays out content and the sheet's anchor from the bar's fixed height (the 64 dp pill and its 8 dp margin, plus
         // the system navigation-bar inset, none here) on the first frame; measuring must agree, or
         // the layout jumps once at startup.
         val core = TestCore()
@@ -75,7 +75,7 @@ class NavBarLayoutTest {
         compose.waitForIdle()
         val bar = compose.onNodeWithTag("navBar").getBoundsInRoot()
         val height = (bar.bottom - bar.top).value
-        assertTrue("nav bar height $height should be 64dp", kotlin.math.abs(height - 64f) < 1f)
+        assertTrue("nav bar height $height should be 72dp", kotlin.math.abs(height - 72f) < 1f)
     }
 
     @Test

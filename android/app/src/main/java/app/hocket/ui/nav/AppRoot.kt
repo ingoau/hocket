@@ -23,8 +23,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalWideNavigationRail
-import androidx.compose.material3.ShortNavigationBar
-import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -50,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
@@ -308,12 +307,18 @@ val BottomOverlayInset: Dp
     @Composable get() = LocalBottomBarInset.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
 /**
- * The phone navigation bar's height before it has been measured: Material's short navigation bar
- * is 64 dp plus the edge-to-edge navigation-bar inset under it. Using it from the first frame means
+ * The phone navigation bar's height before it has been measured: the floating bar's pill and its
+ * bottom margin ([FloatingNavBarDefaults.Height]) plus the edge-to-edge navigation-bar inset under it. Using it from the first frame means
  * the content padding and the sheet's collapsed anchor do not jump when the bar is first measured
  * (the measurement only corrects it where the bar grows, e.g. at very large font sizes).
  */
-private val ShortNavBarHeight = 64.dp
+private val ShortNavBarHeight = FloatingNavBarDefaults.Height
+
+/** How much the page behind the full player shrinks as it opens (a share of its size). */
+private const val RecedeScale = 0.08f
+
+/** The receding page's corners with the player fully open. */
+private val RecedeCorner = 28.dp
 
 /** The collapsed wide navigation rail's width, before it is measured. */
 private val CollapsedRailWidth = 96.dp
@@ -416,7 +421,23 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
-            Row(Modifier.fillMaxSize().then(hiddenWhenCovered)) {
+            // As the full player rises, the page behind it recedes: it shrinks a little into rounded
+            // corners over black, as a card pushed back under the sheet (read in the draw phase, so
+            // dragging the sheet never recomposes the page).
+            val recede = !LocalReducedMotion.current
+            if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
+            Row(
+                Modifier.fillMaxSize().then(hiddenWhenCovered).graphicsLayer {
+                    val p = sheet.progress.coerceIn(0f, 1f)
+                    if (recede && p > 0f) {
+                        val s = 1f - RecedeScale * p
+                        scaleX = s
+                        scaleY = s
+                        shape = RoundedCornerShape(RecedeCorner * p)
+                        clip = true
+                    }
+                },
+            ) {
                 if (wide) {
                     val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
                     Box(Modifier.onSizeChanged { railWidthPx = it.width }) {
@@ -486,7 +507,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // eased in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -494,27 +515,20 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
                 MaterialTheme(colorScheme = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme)) {
-                ShortNavigationBar(
-                    // Transparent over the scrim (Navic's detached style).
-                    containerColor = Color.Transparent,
+                FloatingNavBar(
+                    items = items,
+                    selected = selected,
+                    onSelect = go,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .zIndex(20f)
                         .onSizeChanged { navBarMeasuredPx = it.height }
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        // Its icons fade quickly as the player grows over them.
+                        // It fades quickly as the player grows over it.
                         .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
                         .testTag("navBar")
                         .then(hiddenWhenCovered),
-                ) {
-                    items.forEach { item ->
-                        val isSelected = item == selected
-                        ShortNavigationBarItem(
-                            selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
-                            modifier = Modifier.testTag("navBar." + item.id),
-                        )
-                    }
-                }
+                )
                 }
             }
             // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
