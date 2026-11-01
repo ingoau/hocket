@@ -1553,6 +1553,7 @@ impl Engine {
                 text,
                 declined: declined.clone(),
                 asked: vec![],
+                report_grant: None,
             });
         }
         while self.diagnostics_out.len() > DIAGNOSTICS_QUEUE_PARTS {
@@ -2794,6 +2795,7 @@ impl Engine {
                 text,
                 declined,
                 asked,
+                report_grant: _,
             } => {
                 if to == self.cfg.device.id {
                     self.out.push(Output::DiagnosticsReply(ReplyPart {

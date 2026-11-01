@@ -55,6 +55,7 @@ impl Actor {
                     coordinator: None,
                     coordinator_log: false,
                     devices: vec![],
+                    report_upload: false,
                 },
             });
             let _ = reply.send(QueryResult::Text(text.into()));

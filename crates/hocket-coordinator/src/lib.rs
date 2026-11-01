@@ -496,6 +496,8 @@ impl App {
                     text,
                     declined: None,
                     asked: vec![],
+                    // TODO(reports): a grant on part 0 for report users.
+                    report_grant: None,
                 })
                 .encode()
                 .ok()

@@ -335,6 +335,7 @@ impl Collection {
                 .is_some_and(|c| c.text().contains(COORDINATOR_LOG_HEADING)),
             coordinator: coordinator.map(|c| c.status(done)),
             devices,
+            report_upload: false,
         }
     }
 

@@ -1567,6 +1567,7 @@ impl Room {
                             text,
                             declined,
                             asked: vec![],
+                            report_grant: None,
                         },
                     );
                 }
@@ -1598,6 +1599,7 @@ impl Room {
             text,
             declined,
             asked,
+            report_grant: None,
         };
         self.diagnostics_requests
             .retain(|_, t| now - *t < diagnostics::REQUEST_INTERVAL_MS);
