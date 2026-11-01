@@ -13,6 +13,13 @@
 //! hocket-coordinator --listen 0.0.0.0:7373 --data-dir /var/lib/hocket
 //!   GET /health          → 200 {"status":"ok","rooms":n}
 //!   GET /ws              → WebSocket, first frame must be Hello
+//!   POST /reports        → create a report (grant token), 201 {id, uploadKey, files}
+//!   PUT /reports/{id}/files/{index}
+//!                        → the next bytes of a file (upload key, Upload-Offset)
+//!   GET /reports/{id}    → what has arrived (upload key), to resume
+//!
+//! hocket-coordinator --data-dir /var/lib/hocket reports list
+//! hocket-coordinator --data-dir /var/lib/hocket reports show R-20261101-7k3f
 //! ```
 //!
 //! Hardening, since everything before `Welcome` is unauthenticated:
@@ -40,6 +47,14 @@
 //! named with `--diagnostics-user`. That log covers every room, so the
 //! account is matched against the credential this socket was verified with,
 //! never against anything the request says.
+//!
+//! Reports (`docs/reports.md`, [`reports`]): with a `--data-dir`, at least one
+//! `--diagnostics-user` and no `--no-reports`, the answer to such an account
+//! also carries a `reportGrant` on part 0. The grant lets that device save a
+//! report (note, bundle, screenshots, a recording) under
+//! `<data-dir>/reports/` over the HTTP routes above, together with this
+//! process's log at that moment. Reports are capped by `--reports-quota-mb`
+//! (oldest finished ones go first) and purged by age every hour.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -50,12 +65,13 @@ use std::time::{Duration, Instant};
 
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::DefaultBodyLimit;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::Router;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -75,6 +91,12 @@ use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
 pub use hocket_core::connect::transport::MAX_FRAME_BYTES;
+
+pub mod reports;
+
+/// Epoch milliseconds now; injectable so tests can move time (grant expiry,
+/// retention).
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// A socket that has not sent its `Hello` within this long is dropped.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -101,8 +123,9 @@ pub struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "0.0.0.0:7373")]
     pub listen: SocketAddr,
-    /// Directory for replica persistence. Omit for in-memory only.
-    #[arg(long)]
+    /// Directory for replica persistence (and reports, in `reports/`). Omit
+    /// for in-memory only.
+    #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
     /// Verify every credential against this Subsonic base URL instead of the
     /// one the client states (single-server deployments).
@@ -136,6 +159,38 @@ pub struct Args {
     /// `--no-verify`. Everyone else gets the coordinator's version only.
     #[arg(long = "diagnostics-user", value_name = "USER[@URL]")]
     pub diagnostics_users: Vec<String>,
+    /// Never keep reports, even with `--data-dir` and `--diagnostics-user`.
+    #[arg(long, default_value_t = false)]
+    pub no_reports: bool,
+    /// Cap on all reports together, in MiB; the oldest finished ones are
+    /// deleted to make room.
+    #[arg(long, default_value_t = 20480)]
+    pub reports_quota_mb: u64,
+    /// Without a subcommand the coordinator serves.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Offline commands (no subcommand: serve).
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Read the reports saved in `--data-dir`.
+    Reports {
+        #[command(subcommand)]
+        action: ReportsCommand,
+    },
+}
+
+/// `reports …`.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ReportsCommand {
+    /// One line per report, newest first.
+    List,
+    /// A report's metadata, note and the absolute path of every file.
+    Show {
+        /// `R-YYYYMMDD-xxxx`.
+        id: String,
+    },
 }
 
 /// One `--diagnostics-user`: a username and, unless every credential is
@@ -232,6 +287,9 @@ impl Args {
             per_ip_connections: 1024,
             per_ip_rate: 1_000_000,
             diagnostics_users: vec![],
+            no_reports: false,
+            reports_quota_mb: 20480,
+            command: None,
         }
     }
 }
@@ -383,17 +441,34 @@ pub struct App {
     saves: Mutex<HashMap<String, Arc<SaveSlot>>>,
     /// `--diagnostics-user`, parsed.
     diagnostics_users: Vec<DiagnosticsUser>,
+    /// Report storage and grants; `None` when reports are off.
+    reports: Option<reports::Reports>,
+    clock: Clock,
     started: Instant,
 }
 
 impl App {
     pub fn new(args: Args) -> anyhow::Result<Arc<App>> {
+        App::with_clock(args, Arc::new(|| hocket_core::util::now_ms() as u64))
+    }
+
+    /// [`App::new`] with another clock (tests).
+    pub fn with_clock(args: Args, clock: Clock) -> anyhow::Result<Arc<App>> {
         let store: Arc<dyn ReplicaStore> = match &args.data_dir {
             Some(dir) => Arc::new(FileReplicaStore::new(dir)?),
             None => Arc::new(MemoryReplicaStore::new()),
         };
         let http = http_client(None)?;
         let diagnostics_users = diagnostics_users(&args)?;
+        let reports = match &args.data_dir {
+            Some(dir) if !diagnostics_users.is_empty() && !args.no_reports && !args.no_verify => {
+                Some(reports::Reports::new(
+                    dir.join(reports::REPORTS_DIR),
+                    args.reports_quota_mb,
+                )?)
+            }
+            _ => None,
+        };
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -405,6 +480,8 @@ impl App {
             verifications: AtomicU64::new(0),
             saves: Mutex::new(HashMap::new()),
             diagnostics_users,
+            reports,
+            clock,
             started: Instant::now(),
         }))
     }
@@ -414,6 +491,24 @@ impl App {
         self.diagnostics_users
             .iter()
             .any(|u| u.matches(server_url, username, self.args.verify_url.is_some()))
+    }
+
+    /// Epoch milliseconds by this app's clock.
+    pub fn now_ms(&self) -> u64 {
+        (self.clock)()
+    }
+
+    /// Whether this coordinator keeps reports.
+    pub fn reports_enabled(&self) -> bool {
+        self.reports.is_some()
+    }
+
+    /// Apply report retention now (also run at startup and hourly by [`serve`]).
+    pub fn purge_reports(&self) -> reports::PurgeStats {
+        match &self.reports {
+            Some(r) => r.purge(self.now_ms()),
+            None => reports::PurgeStats::default(),
+        }
     }
 
     /// The coordinator's section of a diagnostics bundle.
@@ -450,6 +545,12 @@ impl App {
             a.per_ip_rate,
             self.diagnostics_users.len()
         ));
+        out.push_str(&format!(
+            "reports {} (no_reports {} reports_quota_mb {})\n",
+            if self.reports_enabled() { "on" } else { "off" },
+            a.no_reports,
+            a.reports_quota_mb
+        ));
         // The asking device looks for this heading to tell the full answer from the short one.
         out.push_str(&format!(
             "\n{}{} minutes)\n----------------------------\n",
@@ -480,6 +581,16 @@ impl App {
         if let Some((_, user)) = identity {
             info!(user, full, "diagnostics requested");
         }
+        // Report users are the diagnostics users; with --verify-url the account's server is that
+        // one, never the client's word.
+        let grant = match (&self.reports, identity) {
+            (Some(reports), Some((url, user))) if full => Some(reports.mint_grant(
+                self.args.verify_url.as_deref().unwrap_or(url),
+                user,
+                self.now_ms(),
+            )),
+            _ => None,
+        };
         let parts = diagnostics::parts(&self.diagnostics_text(full));
         let count = parts.len() as u32;
         let frames: Vec<String> = parts
@@ -496,8 +607,7 @@ impl App {
                     text,
                     declined: None,
                     asked: vec![],
-                    // TODO(reports): a grant on part 0 for report users.
-                    report_grant: None,
+                    report_grant: if i == 0 { grant.clone() } else { None },
                 })
                 .encode()
                 .ok()
@@ -1042,6 +1152,13 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws_upgrade))
+        .route("/reports", post(reports::create))
+        .route("/reports/{id}", get(reports::status))
+        // The upload streams its body to disk under its own caps, not axum's 2 MB default.
+        .route(
+            "/reports/{id}/files/{index}",
+            put(reports::upload).layer(DefaultBodyLimit::disable()),
+        )
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(app)
 }
@@ -1077,6 +1194,19 @@ pub async fn serve(
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => warn!(error = %e, "replica purge failed"),
                 Err(e) => warn!(error = %e, "replica purge task failed"),
+            }
+            // The first tick is immediate: this also purges at startup.
+            if purge_app.reports_enabled() {
+                let reports_app = purge_app.clone();
+                match tokio::task::spawn_blocking(move || reports_app.purge_reports()).await {
+                    Ok(s) if s.reports + s.recordings > 0 => info!(
+                        reports = s.reports,
+                        recordings = s.recordings,
+                        "old reports purged"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!(error = %e, "report purge task failed"),
+                }
             }
         }
     });

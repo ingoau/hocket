@@ -48,7 +48,8 @@ path segment removed, so `wss://hocket.example.com/ws` →
 
 Errors are JSON `{"error": "<code>", "detail": "<English>"}` with codes
 `unauthorized` (401), `notFound` (404), `badRequest` (400), `conflict` (409),
-`tooLarge` (413), `rateLimited` (429), `disabled` (503).
+`tooLarge` (413), `rateLimited` (429), `disabled` (503), and `internal` (500)
+when the coordinator cannot write to its disk.
 
 ### `POST /reports`
 
@@ -68,9 +69,10 @@ Errors are JSON `{"error": "<code>", "detail": "<English>"}` with codes
 ```
 
 - Exactly one `bundle`, first; at most 5 `screenshot`s and 1 `recording`.
-- `note` at most 8000 characters; `client`/`device` at most 200.
+- `note` at most 8000 characters; `client`/`device` at most 200; a file's
+  `name` at most 255 (it is only recorded, never used as a path).
 - Sizes: bundle at most 16 MiB, each screenshot at most 25 MiB, the recording
-  at most 1 GiB. Empty files are refused.
+  at most 1 GiB (413 beyond those). Empty files are refused.
 - The grant is good for any number of reports until it expires (6 h), with at
   most 20 new reports per account per hour.
 - The coordinator stores each file under a name it picks (`bundle.txt`,
@@ -91,7 +93,9 @@ Errors are JSON `{"error": "<code>", "detail": "<English>"}` with codes
 `Authorization: Bearer <uploadKey>`, `Upload-Offset: <bytes already sent>`,
 body: the next bytes of file `index` (at most 8 MiB per request; clients send
 4 MiB). A mismatched offset gets `409 {"error":"conflict","received":<n>}`;
-going past the declared size gets 413. Answers
+going past the declared size (or 8 MiB) gets 413 and nothing of that request
+is kept. A request that breaks off keeps what arrived, so `GET` then tells
+where to resume. Answers
 `200 {"received": <n>, "complete": <whole report received>}`.
 
 ### `GET /reports/{id}`
@@ -105,15 +109,20 @@ how a client resumes.
 ```text
 <data-dir>/reports/R-20261101-7k3f/
   report.json        id, createdAt, completedAt, username, serverUrl, note,
-                     client, device, files [{index, kind, name, file, size, received}]
+                     client, device, uploadKeySha256,
+                     files [{index, kind, name, file, size, received, deletedAt?}]
   bundle.txt
   screenshot-1.jpg
   recording.mp4
   coordinator.log
 ```
 
-- Recordings are deleted 30 days after their report was made, everything else
-  after 90 days; unfinished reports after 48 hours.
+- Times are epoch milliseconds (UTC). The upload key is kept only as its
+  SHA-256.
+- Recordings are deleted 30 days after their report was made (the file's
+  `deletedAt` is set), everything else after 90 days; unfinished reports
+  after 48 hours. The coordinator checks at startup and hourly, by the dates
+  in `report.json`.
 - `--reports-quota-mb` (default 20480) caps all reports together.
 
 ## Reading reports

@@ -235,10 +235,13 @@ impl Actor {
             Command::AnswerDiagnosticsRequest { request_id, text } => {
                 self.answer_diagnostics_request(request_id, text)
             }
-            // TODO(reports): implemented in core/handlers/reports.rs.
-            Command::StartReportUpload { .. }
-            | Command::RetryReportUpload
-            | Command::DismissReportUpload => {}
+            Command::StartReportUpload {
+                note,
+                bundle,
+                attachments,
+            } => self.start_report_upload(note, bundle, attachments),
+            Command::RetryReportUpload => self.retry_report_upload(),
+            Command::DismissReportUpload => self.dismiss_report_upload(),
 
             // -- audio --
             Command::SetAudioSettings { settings } => self.set_audio_settings(settings),

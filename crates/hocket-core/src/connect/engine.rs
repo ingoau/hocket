@@ -2795,7 +2795,7 @@ impl Engine {
                 text,
                 declined,
                 asked,
-                report_grant: _,
+                report_grant,
             } => {
                 if to == self.cfg.device.id {
                     self.out.push(Output::DiagnosticsReply(ReplyPart {
@@ -2807,6 +2807,7 @@ impl Engine {
                         text,
                         declined,
                         asked,
+                        report_grant,
                     }));
                 }
             }

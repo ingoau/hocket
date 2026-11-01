@@ -228,3 +228,27 @@ async fn asking_again_too_soon_answers_with_the_collection_before() {
     assert!(last.done && last.room_declined.is_none());
     assert_eq!(last.devices.len(), 2, "{last:?}");
 }
+
+/// A report grant counts only with a coordinator that answered and this
+/// device connected to it: a LAN room's collection never offers reports,
+/// whatever the core holds (the grant rule itself is tested in
+/// `hocket_core::reports`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lan_collection_never_offers_reports() {
+    let (a, b, c) = trio().await;
+    developer_mode(&a, true).await;
+    a.core
+        .post_internal(hocket_core::core::Internal::ReportGrant(
+            hocket_core::reports::HeldGrant {
+                token: "t".into(),
+                expires_at: a.clock.now_ms() + 3_600_000.0,
+                coordinator_url: "wss://c.example/ws".into(),
+            },
+        ))
+        .unwrap();
+    a.events.clear();
+    collect(&a, &[&a, &b, &c], |_| {}).await;
+    let seen = statuses(&a);
+    assert!(seen.last().unwrap().done);
+    assert!(seen.iter().all(|s| !s.report_upload), "{seen:?}");
+}

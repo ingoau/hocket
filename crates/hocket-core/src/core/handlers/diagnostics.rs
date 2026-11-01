@@ -79,14 +79,23 @@ impl Actor {
         else {
             return;
         };
+        // Only for a collection this device started: a grant never arrives unasked.
+        self.on_report_grant(&part);
         self.diagnostics_collections[i].0.add(part);
         if self.diagnostics_collections[i].0.is_complete() {
             let (c, reply) = self.diagnostics_collections.remove(i);
             self.finish_collection(c, reply);
         } else {
             let status = self.diagnostics_collections[i].0.status(self.now(), false);
+            let status = self.with_report_upload(status);
             self.emit(Event::RoomDiagnosticsChanged { status });
         }
+    }
+
+    /// `report_upload` as things stand now, for a collection the coordinator answered.
+    fn with_report_upload(&self, mut status: RoomDiagnosticsStatus) -> RoomDiagnosticsStatus {
+        status.report_upload = status.coordinator.is_some() && self.report_upload_allowed();
+        status
     }
 
     /// The final status, then the answer. A request the room turned away (asked again within its
@@ -105,6 +114,8 @@ impl Actor {
                 (status, text)
             }
         };
+        // As things stand now, also for the earlier collection answered in its place.
+        let status = self.with_report_upload(status);
         self.emit(Event::RoomDiagnosticsChanged { status });
         let _ = reply.send(QueryResult::Text(text));
     }

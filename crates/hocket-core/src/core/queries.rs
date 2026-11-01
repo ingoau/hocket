@@ -235,8 +235,7 @@ impl Actor {
                 QueryResult::Source(source)
             }
             Query::Diagnostics => QueryResult::Text(self.diagnostics()),
-            // TODO(reports): implemented in core/handlers/reports.rs.
-            Query::ReportUpload => QueryResult::ReportUpload(None),
+            Query::ReportUpload => QueryResult::ReportUpload(self.reports.status.clone()),
             Query::RoomDiagnostics => {
                 self.room_diagnostics_query(reply);
                 return;
