@@ -49,75 +49,85 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.hocket.ui.player.HeroGeometry
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.ColorScheme
+import androidx.compose.ui.graphics.lerp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.ui.player.nowPlayingScheme
 import app.hocket.ui.a11y.LocalReducedMotion
 
 /**
- * The phone's navigation bar as a floating pill (detached from the screen's edges, with a shadow),
- * in line with the floating mini player above it. The selected place shows as a filled capsule
- * holding its icon and label; the others are icons alone. Switching places slides the capsule's
- * label in on the new place as it folds away on the old one, so the bar's items shift sideways
- * to make room.
+ * The phone's navigation bar as a compact floating pill, centred under the mini player and only as
+ * wide as its places (it never spans the screen). While something plays, the bar takes the playing
+ * artwork's colours, as the mini player does ([nowPlayingScheme]); otherwise the page's.
+ *
+ * The selected place is a capsule holding its icon and label; the others are icons alone. On a
+ * switch the new place's capsule widens first and its label fades in once there is room, while the
+ * old one's label fades at once and its capsule folds away; the bar re-centres as its width changes.
  *
  * Each item is a selectable tab whose accessible name is its label (shown or not).
  */
 @Composable
 internal fun FloatingNavBar(items: List<NavItem>, selected: NavItem?, onSelect: (NavItem) -> Unit, modifier: Modifier = Modifier) {
-    val scheme = MaterialTheme.colorScheme
-    Box(
+    val client = app.hocket.ui.LocalCoreClient.current
+    val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
+    val colours = navBarColours(nowPlayingScheme(nowPlaying?.track?.coverArt) ?: MaterialTheme.colorScheme)
+    BoxWithConstraints(
         modifier
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(start = FloatingNavBarDefaults.SideMargin, end = FloatingNavBarDefaults.SideMargin, bottom = FloatingNavBarDefaults.BottomMargin),
         contentAlignment = Alignment.Center,
     ) {
+        // The selected label gets whatever the icon-only places leave (ellipsized past that), so
+        // five places fit on a narrow phone at a large font size.
+        val others = (items.size - 1).coerceAtLeast(0)
+        val labelMax = (maxWidth - FloatingNavBarDefaults.Padding * 2 - FloatingNavBarDefaults.ItemWidth * others - SelectedChrome).coerceIn(0.dp, 120.dp)
         Row(
             Modifier
-                .widthIn(max = HeroGeometry.MINI_MAX_WIDTH - FloatingNavBarDefaults.SideMargin * 2)
-                .fillMaxWidth()
                 .height(FloatingNavBarDefaults.PillHeight)
                 .shadow(FloatingNavBarDefaults.Elevation, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
-                .background(scheme.surfaceContainerHigh, CircleShape)
-                .border(0.5.dp, scheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
-                .padding(horizontal = 8.dp)
+                .background(colours.container, CircleShape)
+                .padding(FloatingNavBarDefaults.Padding)
                 .selectableGroup(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             items.forEach { item ->
-                val isSelected = item == selected
-                // The icon-only places are measured first; the selected one's label gets what is
-                // left (ellipsized), so five places fit on a narrow phone at a large font size.
-                FloatingNavItem(item, isSelected, onClick = { onSelect(item) }, modifier = if (isSelected) Modifier.weight(1f, fill = false) else Modifier)
+                FloatingNavItem(item, item == selected, colours, labelMax, onClick = { onSelect(item) })
             }
         }
     }
 }
 
+/** The selected capsule's room besides its label: side padding, the icon and the gap. */
+private val SelectedChrome = 16.dp + 24.dp + 8.dp + 16.dp
+
 @Composable
-private fun FloatingNavItem(item: NavItem, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val scheme = MaterialTheme.colorScheme
+private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarColours, labelMax: Dp, onClick: () -> Unit) {
     val reduced = LocalReducedMotion.current
     val label = item.barLabel()
     val colourSpec = if (reduced) snap() else spring<Color>(stiffness = Spring.StiffnessMediumLow)
-    val container by animateColorAsState(if (selected) scheme.secondaryContainer else scheme.secondaryContainer.copy(alpha = 0f), colourSpec, label = "navItemContainer")
-    val content by animateColorAsState(if (selected) scheme.onSecondaryContainer else scheme.onSurfaceVariant, colourSpec, label = "navItemContent")
+    val container by animateColorAsState(if (selected) colours.indicator else colours.indicator.copy(alpha = 0f), colourSpec, label = "navItemContainer")
+    val content by animateColorAsState(if (selected) colours.selected else colours.unselected, colourSpec, label = "navItemContent")
+    // An unselected place is a fixed-width cell; the selected one pads out around its label.
+    val sidePadding by androidx.compose.animation.core.animateDpAsState(if (selected) 16.dp else (FloatingNavBarDefaults.ItemWidth - 24.dp) / 2, if (reduced) snap() else spring(dampingRatio = 0.9f, stiffness = 500f), label = "navItemPadding")
     Row(
-        modifier
-            .heightIn(min = 48.dp)
-            .height(FloatingNavBarDefaults.PillHeight - 16.dp)
+        Modifier
+            .fillMaxHeight()
             .clip(CircleShape)
             .background(container)
             .selectable(selected = selected, onClick = onClick, role = Role.Tab, interactionSource = remember { MutableInteractionSource() }, indication = ripple())
             .semantics { contentDescription = label }
             .testTag("navBar." + item.id)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = sidePadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(item.icon(selected), null, tint = content, modifier = Modifier.size(24.dp))
         AnimatedVisibility(
             visible = selected,
-            enter = if (reduced) fadeIn() else fadeIn() + expandHorizontally(spring(dampingRatio = 0.85f, stiffness = 500f), expandFrom = Alignment.Start),
-            exit = if (reduced) fadeOut() else fadeOut() + shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 600f), shrinkTowards = Alignment.Start),
+            enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.9f, stiffness = 500f), expandFrom = Alignment.Start) + fadeIn(androidx.compose.animation.core.tween(160, delayMillis = 110)),
+            exit = if (reduced) fadeOut() else fadeOut(androidx.compose.animation.core.tween(70)) + shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 600f), shrinkTowards = Alignment.Start),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.width(8.dp))
@@ -128,18 +138,43 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, onClick: () -> Uni
                     color = content,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 104.dp).clearAndSetSemantics { },
+                    modifier = Modifier.widthIn(max = labelMax).clearAndSetSemantics { },
                 )
             }
         }
     }
 }
 
+/** The bar's colours: its pill, the selected capsule, and the selected and other places' content. */
+internal class NavBarColours(val container: Color, val indicator: Color, val selected: Color, val unselected: Color)
+
+/**
+ * The bar in [scheme]'s colours: a pill a little tinted towards the primary container (darker than
+ * the mini player), the selected capsule in the mini player's own container colour, its content in
+ * the primary colour. Crossfades ([Motion.COLOUR_MS]) when the scheme changes.
+ */
+@Composable
+private fun navBarColours(scheme: ColorScheme): NavBarColours {
+    val dark = app.hocket.ui.theme.LocalDarkTheme.current
+    val spec = androidx.compose.animation.core.tween<Color>(app.hocket.ui.theme.Motion.COLOUR_MS)
+    @Composable fun a(c: Color) = animateColorAsState(c, spec, label = "navBarColour").value
+    return NavBarColours(
+        container = a(lerp(if (dark) scheme.surfaceContainer else scheme.surfaceContainerHigh, scheme.primaryContainer, if (dark) 0.3f else 0.4f)),
+        indicator = a(app.hocket.ui.player.miniContainer(scheme, dark)),
+        selected = a(if (dark) scheme.primary else scheme.onPrimaryContainer),
+        unselected = a(scheme.onSurfaceVariant),
+    )
+}
+
 internal object FloatingNavBarDefaults {
-    val PillHeight: Dp = 64.dp
+    val PillHeight: Dp = 56.dp
+    /** Room around the places inside the pill. */
+    val Padding: Dp = 6.dp
+    /** An unselected place's width (its touch target is the pill's inner height tall). */
+    val ItemWidth: Dp = 48.dp
     val SideMargin: Dp = HeroGeometry.MINI_MARGIN
     val BottomMargin: Dp = 8.dp
-    val Elevation: Dp = 10.dp
+    val Elevation: Dp = 8.dp
     /** The bar's height above the system navigation bar: the pill and its bottom margin. */
     val Height: Dp = PillHeight + BottomMargin
 }

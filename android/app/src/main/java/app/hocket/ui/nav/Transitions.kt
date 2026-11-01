@@ -6,7 +6,10 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -14,9 +17,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,8 +45,8 @@ import kotlin.math.sqrt
  *   scrim settles over it. The incoming page's leading corners round while it travels.
  * - Pops reverse the same motion. Predictive back scrubs that pop 1:1 with the finger, always in
  *   that trailing-edge direction — never away from whichever edge the swipe started at.
- * - Switching places from the bottom bar or rail is a quick fade-through: the new place grows in
- *   from a little smaller as the old one fades away, so it reads as a lateral move, not a push.
+ * - Switching places from the bottom bar or rail is Material's shared axis (X): the new place
+ *   slides a short way in from its tab's side as it fades in, the old one fades out in place.
  * - With reduced motion everything is a plain short crossfade (predictive back scrubs a crossfade).
  */
 
@@ -84,8 +84,8 @@ internal const val PUSH_MS = 500
 internal const val PREDICTIVE_MS = 400
 private const val TAB_MS = 280
 private const val TAB_EXIT_MS = 100
-/** Where the incoming place starts its fade-through growth from. */
-private const val TAB_SCALE = 0.92f
+/** How far the incoming place slides in from the side of its tab. */
+private val TAB_SHIFT = 30.dp
 private const val REDUCED_MS = 150
 /** Covered page travels a quarter of the width toward the leading edge. */
 private const val COVER_PARALLAX = 0.25f
@@ -114,6 +114,8 @@ internal class ShellTransitionInfo {
     var tabForward: Boolean = true
     var reducedMotion: Boolean = false
     var layoutDirection: LayoutDirection = LayoutDirection.Ltr
+    /** Pixels per dp, for the tab switch's fixed slide. */
+    var density: Float = 1f
 
     /**
      * The in-flight motion and which entries are the sliding top vs the covered page, so
@@ -229,17 +231,16 @@ internal class ShellTransitionInfo {
     }
 
     /**
-     * A fade-through: the new place grows in from slightly smaller (from a point a little toward
-     * the side of the tab, so it still reads as a lateral move) as the old one fades out and sinks.
+     * Material's shared axis (X): the new place slides in a short way from the side of its tab
+     * while it fades in; the old one fades out where it is, quickly, so the two barely overlap.
      */
     private fun tabEnter(): EnterTransition {
-        val originX = if ((if (tabForward) sign else -sign) > 0) 0.65f else 0.35f
-        return fadeIn(tween(TAB_MS, delayMillis = TAB_EXIT_MS / 2, easing = LinearEasing)) +
-            scaleIn(tween(TAB_MS + 120, easing = MiuixEasing), initialScale = TAB_SCALE, transformOrigin = TransformOrigin(originX, 0.3f))
+        val dir = if (tabForward) sign else -sign
+        return fadeIn(tween(TAB_MS, delayMillis = TAB_EXIT_MS / 2, easing = LinearOutSlowInEasing)) +
+            slideInHorizontally(tween(TAB_MS + 60, easing = FastOutSlowInEasing)) { dir * (TAB_SHIFT.value * density).roundToInt() }
     }
 
-    private fun tabExit(): ExitTransition =
-        fadeOut(tween(TAB_EXIT_MS, easing = LinearEasing)) + scaleOut(tween(TAB_EXIT_MS + 60, easing = LinearEasing), targetScale = 0.97f)
+    private fun tabExit(): ExitTransition = fadeOut(tween(TAB_EXIT_MS, easing = FastOutLinearInEasing))
 }
 
 /**

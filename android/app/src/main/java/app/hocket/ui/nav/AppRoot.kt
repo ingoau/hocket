@@ -315,10 +315,10 @@ val BottomOverlayInset: Dp
 private val ShortNavBarHeight = FloatingNavBarDefaults.Height
 
 /** How much the page behind the full player shrinks as it opens (a share of its size). */
-private const val RecedeScale = 0.08f
+private const val RecedeScale = 0.05f
 
 /** The receding page's corners with the player fully open. */
-private val RecedeCorner = 28.dp
+private val RecedeCorner = 20.dp
 
 /** The collapsed wide navigation rail's width, before it is measured. */
 private val CollapsedRailWidth = 96.dp
@@ -387,6 +387,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val transitions = remember { ShellTransitionInfo() }
             transitions.reducedMotion = LocalReducedMotion.current
             transitions.layoutDirection = LocalLayoutDirection.current
+            transitions.density = density.density
             val reselected = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
             val currentSelected by rememberUpdatedState(selected)
             val currentItems by rememberUpdatedState(items)
