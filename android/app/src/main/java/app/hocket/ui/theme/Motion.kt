@@ -12,8 +12,8 @@ import androidx.compose.ui.unit.IntOffset
  * press feedback is allowed to bounce.
  */
 object Motion {
-    /** The player sheet: critically damped, so a settle never overshoots its anchor (Metrolist-like). */
-    val sheet: SpringSpec<Float> = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+    /** The player sheet: critically damped, so a settle never overshoots its anchor; brisk, so it opens with a snap. */
+    val sheet: SpringSpec<Float> = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 700f)
     /** Snapping small things back (swipe-to-skip, swipe-to-remove resistance, reorder drop): no bounce. */
     val snap: SpringSpec<Float> = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
     /** Values that must not overshoot (progress, alpha). */

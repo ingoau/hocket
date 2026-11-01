@@ -187,7 +187,7 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
                 )
             },
         )
-        val MINI_HEIGHT: Dp = 68.dp
+        val MINI_HEIGHT: Dp = 64.dp
         /** The gap the floating mini player keeps above the navigation bar (or the screen's bottom inset). */
         val MINI_GAP: Dp = 8.dp
         /** A release moves the sheet to the other anchor once it has travelled this share of the distance. */
@@ -344,9 +344,9 @@ internal class HeroGeometry {
     }
 
     companion object {
-        /** The mini player's artwork and its corners (square-ish, Navic). */
-        val THUMB_SIZE: Dp = 48.dp
-        val THUMB_CORNER: Dp = 8.dp
+        /** The mini player's artwork and its corners. */
+        val THUMB_SIZE: Dp = 44.dp
+        val THUMB_CORNER: Dp = 12.dp
         /**
          * The thumbnail beside the title in a non-artwork mode (before the title block has been
          * measured: it spans that block, about this at the default font size) and its corners.
@@ -357,10 +357,10 @@ internal class HeroGeometry {
         val HERO_CORNER: Dp = 28.dp
         val HERO_ELEVATION: Dp = 16.dp
         /** The floating mini player: side margin, gap above the navigation bar, corners, shadow and widest size. */
-        val MINI_MARGIN: Dp = 12.dp
+        val MINI_MARGIN: Dp = 16.dp
         val MINI_GAP: Dp = NowPlayingSheetState.MINI_GAP
-        val MINI_CORNER: Dp = 16.dp
-        val MINI_ELEVATION: Dp = 8.dp
+        val MINI_CORNER: Dp = 32.dp
+        val MINI_ELEVATION: Dp = 4.dp
         val MINI_MAX_WIDTH: Dp = 600.dp
         /** How much the artwork shrinks while paused (Navic). */
         const val PAUSED_SCALE = 0.86f
@@ -628,7 +628,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     val cardInset = maxOf(margin, (size.width - maxCard) / 2f + margin)
                     val screenBottom = maxHeightPx - sheetOffset()
                     shape = SheetShape(
-                        inset = cardInset * (1f - (p / 0.3f).coerceIn(0f, 1f)),
+                        inset = cardInset * (1f - (p / CARD_TO_SHEET).coerceIn(0f, 1f)),
                         topCorner = sheetTopCorner(p, corner, sheetCorner),
                         bottomCorner = corner * (1f - p),
                         bottom = lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)),
@@ -804,7 +804,10 @@ private const val FLY_EPSILON = 0.002f
 private fun backgroundAlpha(p: Float): Float = (1.4f * sqrt((p.coerceAtLeast(0.1f) - 0.1f))).coerceIn(0f, 1f)
 
 /** A moving sheet's top corners (Material's extra-large shape, as a bottom sheet being dragged keeps). */
-private val SHEET_CORNER = 28.dp
+private val SHEET_CORNER = 20.dp
+
+/** Sheet progress by which the floating card has spread to the screen's full width. */
+private const val CARD_TO_SHEET = 0.12f
 
 /** How much of the travel from fully open the top corners take to round (and to square off as it lands open). */
 private const val TOP_CORNER_RAMP = 0.05f
@@ -840,7 +843,7 @@ internal data class FlightTransform(val scale: Float, val x: Float, val y: Float
 /** Where the mini player's thumbnail is before it has been measured. */
 private fun fallbackThumb(density: Density): Rect = with(density) {
     val thumbSizePx = HeroGeometry.THUMB_SIZE.toPx()
-    val margin = HeroGeometry.MINI_MARGIN.toPx() + 10.dp.toPx()
+    val margin = HeroGeometry.MINI_MARGIN.toPx() + MINI_START_PADDING.toPx()
     Rect(Offset(margin, (NowPlayingSheetState.MINI_HEIGHT.toPx() - thumbSizePx) / 2), Size(thumbSizePx, thumbSizePx))
 }
 
