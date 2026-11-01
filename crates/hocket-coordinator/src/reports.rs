@@ -59,6 +59,8 @@ pub const RECORDING_RETENTION_MS: u64 = 30 * DAY_MS;
 pub const REPORT_RETENTION_MS: u64 = 90 * DAY_MS;
 /// Reports never finished are deleted this long after they were made.
 pub const INCOMPLETE_RETENTION_MS: u64 = 48 * HOUR_MS;
+/// An unfinished report idle this long may be deleted to make room.
+pub const STALE_INCOMPLETE_MS: u64 = HOUR_MS;
 
 /// The characters of an id's random part (no `i`, `l`, `o`, `u`).
 const ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
@@ -82,6 +84,9 @@ pub struct ReportMeta {
     pub files: Vec<StoredFile>,
     /// SHA-256 (hex) of the upload key; the key itself is never stored.
     pub upload_key_sha256: String,
+    /// Epoch ms of the last bytes received (or of creation).
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 /// One file of a report.
@@ -111,6 +116,18 @@ impl ReportMeta {
 
     fn declared(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
+    }
+
+    /// When bytes last arrived for it.
+    fn last_activity(&self) -> u64 {
+        self.updated_at.max(self.created_at)
+    }
+
+    /// Unfinished and untouched for [`STALE_INCOMPLETE_MS`]: its client gave
+    /// up on it (dismissed it, or made it again after losing the answer), so
+    /// it may be deleted to make room.
+    fn abandoned(&self, now: u64) -> bool {
+        !self.complete() && now.saturating_sub(self.last_activity()) > STALE_INCOMPLETE_MS
     }
 }
 
@@ -221,7 +238,7 @@ impl Reports {
         now: u64,
     ) -> Result<ReportMeta, ApiError> {
         let needed = meta.declared() + log.len() as u64;
-        self.make_room(needed)?;
+        self.make_room(needed, now)?;
         let date = &hocket_core::devlog::format_timestamp(now)[..10].replace('-', "");
         let mut made = None;
         for _ in 0..32 {
@@ -246,9 +263,10 @@ impl Reports {
         Ok(meta)
     }
 
-    /// Delete the oldest finished reports until `needed` more bytes fit
-    /// under the quota; `tooLarge` (deleting nothing) when they cannot.
-    fn make_room(&self, needed: u64) -> Result<(), ApiError> {
+    /// Delete the oldest finished (or abandoned, [`ReportMeta::abandoned`])
+    /// reports until `needed` more bytes fit under the quota; `tooLarge`
+    /// (deleting nothing) when they cannot.
+    fn make_room(&self, needed: u64, now: u64) -> Result<(), ApiError> {
         let too_large = || {
             ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -266,7 +284,7 @@ impl Reports {
         let evictable: u64 = all
             .iter()
             .zip(&usage)
-            .filter(|((_, m), _)| m.complete())
+            .filter(|((_, m), _)| m.complete() || m.abandoned(now))
             .map(|(_, u)| u)
             .sum();
         if total - evictable + needed > self.quota_bytes {
@@ -276,7 +294,7 @@ impl Reports {
             if total + needed <= self.quota_bytes {
                 break;
             }
-            if !meta.complete() {
+            if !(meta.complete() || meta.abandoned(now)) {
                 continue;
             }
             let lock = self.lock_for(&meta.id);
@@ -754,6 +772,7 @@ async fn create_inner(app: Arc<App>, headers: HeaderMap, body: Body) -> Result<R
         device: req.device,
         files,
         upload_key_sha256: sha256_hex(&key),
+        updated_at: now,
     };
 
     let _serial = reports.create_lock.lock().await;
@@ -799,6 +818,45 @@ async fn on_disk(dir: &FsPath, f: &StoredFile) -> u64 {
     f.received.min(len)
 }
 
+/// `DELETE /reports/{id}`: the client gave up on an unfinished report.
+pub(crate) async fn remove(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    remove_inner(app, id, headers)
+        .await
+        .unwrap_or_else(IntoResponse::into_response)
+}
+
+async fn remove_inner(app: Arc<App>, id: String, headers: HeaderMap) -> Result<Response, ApiError> {
+    let reports = reports_of(&app)?;
+    if !valid_id(&id) {
+        return Err(ApiError::not_found());
+    }
+    let dir = reports.dir.join(&id);
+    check_key(&load_meta_async(&dir).await?, &headers)?;
+    let lock = reports.lock_for(&id);
+    let _held = lock.lock().await;
+    let meta = load_meta_async(&dir).await?;
+    if meta.completed_at.is_some() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            "a finished report stays until retention removes it",
+        ));
+    }
+    tokio::fs::remove_dir_all(&dir)
+        .await
+        .map_err(ApiError::io)?;
+    info!(
+        id = meta.id,
+        user = meta.username,
+        "unfinished report deleted by its client"
+    );
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 /// `GET /reports/{id}`.
 pub(crate) async fn status(
     State(app): State<Arc<App>>,
@@ -815,11 +873,12 @@ async fn status_inner(app: Arc<App>, id: String, headers: HeaderMap) -> Result<R
     if !valid_id(&id) {
         return Err(ApiError::not_found());
     }
+    let dir = reports.dir.join(&id);
+    // The key first, so nobody without it waits on an upload's lock.
+    check_key(&load_meta_async(&dir).await?, &headers)?;
     let lock = reports.lock_for(&id);
     let _held = lock.lock().await;
-    let dir = reports.dir.join(&id);
     let mut meta = load_meta_async(&dir).await?;
-    check_key(&meta, &headers)?;
     for f in meta.files.iter_mut() {
         if f.deleted_at.is_none() {
             f.received = on_disk(&dir, f).await;
@@ -856,11 +915,12 @@ async fn upload_inner(
     if !valid_id(&id) {
         return Err(ApiError::not_found());
     }
+    let dir = reports.dir.join(&id);
+    // The key first, so nobody without it waits on an upload's lock.
+    check_key(&load_meta_async(&dir).await?, &headers)?;
     let lock = reports.lock_for(&id);
     let _held = lock.lock().await;
-    let dir = reports.dir.join(&id);
     let mut meta = load_meta_async(&dir).await?;
-    check_key(&meta, &headers)?;
     let index: usize = index.parse().map_err(|_| ApiError::bad("bad file index"))?;
     let f = match meta.files.get(index) {
         Some(f) if f.deleted_at.is_none() => f.clone(),
@@ -940,6 +1000,7 @@ async fn upload_inner(
     drop(file);
     let now_received = received + written;
     meta.files[index].received = now_received;
+    meta.updated_at = app.now_ms();
     let complete = meta.complete();
     let finished_now = complete && meta.completed_at.is_none();
     if finished_now {
@@ -956,7 +1017,11 @@ async fn upload_inner(
     }
     if broken {
         // The client is most likely gone; what arrived is kept for the resume.
-        return Err(ApiError::bad("the request body ended early"));
+        return Err(ApiError::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "timeout",
+            "the request body stalled or ended early; what arrived is kept",
+        ));
     }
     Ok(
         axum::Json(serde_json::json!({ "received": now_received, "complete": complete }))
@@ -965,6 +1030,21 @@ async fn upload_inner(
 }
 
 // --- CLI --------------------------------------------------------------------
+
+/// What a client wrote, safe to print on the operator's terminal: control
+/// characters (escape sequences included) are shown escaped; newlines stay
+/// when `multiline`.
+fn printable(s: &str, multiline: bool) -> String {
+    s.chars()
+        .map(|c| {
+            if (c == '\n' && multiline) || !c.is_control() {
+                c.to_string()
+            } else {
+                c.escape_unicode().to_string()
+            }
+        })
+        .collect()
+}
 
 fn human_bytes(n: u64) -> String {
     if n < 1024 {
@@ -1018,11 +1098,12 @@ pub fn list(data_dir: &FsPath) -> anyhow::Result<String> {
         } else {
             first.to_string()
         };
+        let note = printable(&note, false);
         out.push_str(&format!(
             "{}  {}  {}  {}  {}  {}  {}\n",
             m.id,
             utc(m.created_at),
-            m.username,
+            printable(&m.username, false),
             file_summary(m),
             human_bytes(m.declared()),
             if m.completed_at.is_some() {
@@ -1050,12 +1131,16 @@ pub fn show(data_dir: &FsPath, id: &str) -> anyhow::Result<String> {
         m.id,
         utc(m.created_at),
         m.completed_at.map(utc).unwrap_or_else(|| "no (incomplete)".into()),
-        m.username,
-        m.server_url,
-        m.client,
-        m.device,
+        printable(&m.username, false),
+        printable(&m.server_url, false),
+        printable(&m.client, false),
+        printable(&m.device, false),
         human_bytes(m.declared()),
-        if m.note.is_empty() { "(none)" } else { &m.note },
+        if m.note.is_empty() {
+            "(none)".to_string()
+        } else {
+            printable(&m.note, true)
+        },
     );
     for f in &m.files {
         let state = match f.deleted_at {
@@ -1115,6 +1200,12 @@ mod tests {
         assert_eq!(stored_name("recording", 1, "x.mp4"), "recording.mp4");
         assert_eq!(stored_name("recording", 1, "x.png"), "recording.bin");
         assert_eq!(stored_name("recording", 1, "noext"), "recording.bin");
+    }
+
+    #[test]
+    fn printed_client_text_cannot_drive_the_terminal() {
+        assert_eq!(printable("a\u{1b}[2Jb\nc", false), "a\\u{1b}[2Jb\\u{a}c");
+        assert_eq!(printable("line\nnext\u{7}", true), "line\nnext\\u{7}");
     }
 
     #[test]

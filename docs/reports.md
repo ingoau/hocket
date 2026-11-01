@@ -46,10 +46,16 @@ they use: `wss://` → `https://` (`ws://` → `http://`) with a trailing `/ws`
 path segment removed, so `wss://hocket.example.com/ws` →
 `https://hocket.example.com`.
 
+The proxy must let request bodies of at least 9 MB through (uploads go in
+4 MiB requests; nginx's default `client_max_body_size` of 1 MB is too small,
+Traefik has no limit by default) and keep a stalled request open for at least
+a minute.
+
 Errors are JSON `{"error": "<code>", "detail": "<English>"}` with codes
 `unauthorized` (401), `notFound` (404), `badRequest` (400), `conflict` (409),
-`tooLarge` (413), `rateLimited` (429), `disabled` (503), and `internal` (500)
-when the coordinator cannot write to its disk.
+`timeout` (408), `tooLarge` (413), `rateLimited` (429), `disabled` (503), and
+`internal` (500) when the coordinator cannot write to its disk. Clients retry
+408 and 5xx on their own (resuming from `GET`); the rest are final.
 
 ### `POST /reports`
 
@@ -80,7 +86,8 @@ when the coordinator cannot write to its disk.
   name when it is a known image or video type, otherwise `.bin`) and writes
   its own process log as `coordinator.log`.
 - If the new report would take the reports over `--reports-quota-mb`, the
-  oldest finished reports are deleted until it fits (413 when it cannot).
+  oldest finished reports, and unfinished ones nothing has arrived for in an
+  hour (abandoned), are deleted until it fits (413 when it cannot).
 
 `201 Created`:
 
@@ -94,8 +101,8 @@ when the coordinator cannot write to its disk.
 body: the next bytes of file `index` (at most 8 MiB per request; clients send
 4 MiB). A mismatched offset gets `409 {"error":"conflict","received":<n>}`;
 going past the declared size (or 8 MiB) gets 413 and nothing of that request
-is kept. A request that breaks off keeps what arrived, so `GET` then tells
-where to resume. Answers
+is kept. A request whose body stalls for a minute or breaks off keeps what
+arrived and answers 408, so `GET` then tells where to resume. Answers
 `200 {"received": <n>, "complete": <whole report received>}`.
 
 ### `GET /reports/{id}`
@@ -103,6 +110,13 @@ where to resume. Answers
 `Authorization: Bearer <uploadKey>`. Answers
 `200 {"id", "files": [{"index","size","received"}], "complete"}`, which is
 how a client resumes.
+
+### `DELETE /reports/{id}`
+
+`Authorization: Bearer <uploadKey>`. Deletes an unfinished report: clients
+send it when the user dismisses (or replaces) an upload that has not
+finished. `204`; `409` for a finished report, which stays until retention
+removes it.
 
 ## Storage and retention
 

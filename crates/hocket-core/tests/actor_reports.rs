@@ -76,6 +76,7 @@ struct Fake {
     puts: usize,
     gets: usize,
     posts: usize,
+    deletes: usize,
 }
 
 type Shared = Arc<Mutex<Fake>>;
@@ -114,6 +115,23 @@ async fn create(State(s): State<Shared>, headers: HeaderMap, Json(body): Json<Va
     let answer = json!({"id": id, "uploadKey": report.key, "files": report.files_json()});
     f.reports.insert(id, report);
     (StatusCode::CREATED, Json(answer)).into_response()
+}
+
+async fn remove(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    let mut f = s.lock();
+    f.deletes += 1;
+    match f.reports.get(&id) {
+        None => error(StatusCode::NOT_FOUND, "notFound"),
+        Some(r) if bearer(&headers) != r.key => error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Some(_) => {
+            f.reports.remove(&id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+    }
 }
 
 async fn status(
@@ -196,7 +214,7 @@ async fn serve_fake(faults: Faults) -> (Shared, String) {
     }));
     let app = Router::new()
         .route("/reports", post(create))
-        .route("/reports/{id}", get(status))
+        .route("/reports/{id}", get(status).delete(remove))
         .route("/reports/{id}/files/{index}", put(upload))
         .layer(axum::extract::DefaultBodyLimit::max(16 * MIB))
         .with_state(shared.clone());
@@ -551,6 +569,9 @@ async fn a_second_report_is_ignored_while_one_uploads_and_dismiss_cancels_it() {
     assert_eq!(status_of(&t).await, None);
     assert!(!staging(&t).exists());
     assert!(!recording.exists());
+    // the coordinator is told to drop the unfinished report
+    wait_until(|| fake.lock().deletes == 1).await;
+    assert!(fake.lock().reports.is_empty());
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         status_of(&t).await,

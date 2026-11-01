@@ -1,6 +1,5 @@
 package app.hocket.diagnostics
 
-import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -16,7 +15,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import app.hocket.HocketApp
 import app.hocket.MainActivity
 import app.hocket.R
@@ -153,12 +151,14 @@ class ReportUploadService : Service() {
 
         /** Starts the service for an upload that is Uploading; refused from the background, which is fine. */
         fun start(context: Context) {
+            // A plain start, not startForegroundService: the upload starts from the app's own
+            // screen, where the service may go foreground; and if going foreground fails
+            // there, stopping is safe (no startForegroundService promise to break).
             try {
-                ContextCompat.startForegroundService(context, Intent(context, ReportUploadService::class.java))
+                context.startService(Intent(context, ReportUploadService::class.java))
             } catch (e: IllegalStateException) {
-                // ForegroundServiceStartNotAllowedException (API 31+) is one of these.
-                val refused = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException
-                Log.w(TAG, "couldn't start the upload service (${if (refused) "not allowed from the background" else e.javaClass.simpleName}); the upload runs while the app does")
+                // Not allowed from the background (a resumed upload with no app on screen).
+                Log.w(TAG, "couldn't start the upload service (${e.javaClass.simpleName}); the upload runs while the app does")
             } catch (e: SecurityException) {
                 Log.w(TAG, "couldn't start the upload service: ${e.message}")
             }

@@ -412,8 +412,17 @@ impl Actor {
             }
         }
         let job = self.reports.job.take();
-        reports::clean_up(&self.report_dir(), job.as_ref());
+        let dir = self.report_dir();
+        // job.json has the upload key from the moment the report exists.
+        let saved = reports::load_job(&dir).ok().flatten();
+        reports::clean_up(&dir, job.as_ref());
         self.reports.status = None;
+        if let (Some(job), Ok(client)) = (saved.or(job), self.report_http()) {
+            if job.report_id.is_some() && job.state != ReportUploadState::Done {
+                self.rt
+                    .spawn(async move { reports::abandon(&client, &job).await });
+            }
+        }
     }
 
     /// `Command::DismissReportUpload`.

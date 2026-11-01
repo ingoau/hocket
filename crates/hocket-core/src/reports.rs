@@ -773,6 +773,32 @@ async fn create(
     Ok(())
 }
 
+/// Tell the coordinator an unfinished report was given up on
+/// (`DELETE /reports/{id}`), so it stops holding room for it. Best effort:
+/// a coordinator that misses it deletes the report once it sits idle.
+pub async fn abandon(client: &reqwest::Client, job: &Job) {
+    if job.state == ReportUploadState::Done {
+        return;
+    }
+    let Ok((id, key)) = ids(job) else {
+        return;
+    };
+    match client
+        .delete(format!("{}/reports/{id}", job.base_url))
+        .bearer_auth(key)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+    {
+        Ok(r) => {
+            tracing::debug!(target: "hocket::reports", status = r.status().as_u16(), "abandoned report deleted")
+        }
+        Err(e) => {
+            tracing::debug!(target: "hocket::reports", error = %e.without_url(), "could not delete the abandoned report")
+        }
+    }
+}
+
 /// `GET /reports/{id}`; `None` when the coordinator does not have it.
 async fn fetch_state(client: &reqwest::Client, job: &Job) -> Result<Option<ReportState>, Failure> {
     let (id, key) = ids(job)?;
@@ -891,12 +917,15 @@ async fn failure(status: reqwest::StatusCode, resp: reqwest::Response) -> Failur
     let error = match status.as_u16() {
         401 | 403 => ReportUploadError::NotAllowed,
         413 => ReportUploadError::TooLarge,
+        408 => ReportUploadError::Network,
         _ => ReportUploadError::Server,
     };
     Failure {
         error,
         detail,
-        transient: status.is_server_error(),
+        // 408: the coordinator kept what arrived of a stalled request; the
+        // next attempt asks how far it got.
+        transient: status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT,
     }
 }
 

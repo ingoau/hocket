@@ -681,6 +681,48 @@ async fn the_quota_deletes_the_oldest_finished_reports() {
     assert_eq!(s, 413);
     assert!(report_dir(data.path(), &b).exists());
     assert!(report_dir(data.path(), &unfinished).exists());
+    // … until it has sat untouched for over an hour: then it counts as abandoned
+    c.advance(61 * 60 * 1000);
+    let (s, v) = create(&c, &token, bundle_only(600_000)).await;
+    assert_eq!(s, 201, "{v}");
+    assert!(!report_dir(data.path(), &unfinished).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_deletes_an_unfinished_report_with_its_key_only() {
+    let subsonic = fake_subsonic().await;
+    let server = format!("http://{subsonic}");
+    let data = tempfile::tempdir().unwrap();
+    let c = start(report_args(&server, data.path())).await;
+    let token = grant_for_alice(&c, &server).await;
+    let delete = |id: String, key: String| {
+        let url = format!("{}/reports/{id}", c.http);
+        async move {
+            client()
+                .delete(url)
+                .bearer_auth(key)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+
+    let (s, v) = create(&c, &token, bundle_only(10)).await;
+    assert_eq!(s, 201, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let key = v["uploadKey"].as_str().unwrap().to_string();
+    assert_eq!(delete(id.clone(), "0".repeat(64)).await, 401);
+    assert!(report_dir(data.path(), &id).exists());
+    assert_eq!(delete(id.clone(), key.clone()).await, 204);
+    assert!(!report_dir(data.path(), &id).exists());
+    assert_eq!(delete(id, key).await, 404);
+
+    // a finished one stays
+    let (done, done_key) = complete_report(&c, &token, 10).await;
+    assert_eq!(delete(done.clone(), done_key).await, 409);
+    assert!(report_dir(data.path(), &done).exists());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

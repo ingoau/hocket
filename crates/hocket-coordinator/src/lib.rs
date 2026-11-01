@@ -17,6 +17,7 @@
 //!   PUT /reports/{id}/files/{index}
 //!                        → the next bytes of a file (upload key, Upload-Offset)
 //!   GET /reports/{id}    → what has arrived (upload key), to resume
+//!   DELETE /reports/{id} → drop an unfinished report (upload key), 204
 //!
 //! hocket-coordinator --data-dir /var/lib/hocket reports list
 //! hocket-coordinator --data-dir /var/lib/hocket reports show R-20261101-7k3f
@@ -1153,7 +1154,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/health", get(health))
         .route("/ws", get(ws_upgrade))
         .route("/reports", post(reports::create))
-        .route("/reports/{id}", get(reports::status))
+        .route(
+            "/reports/{id}",
+            get(reports::status).delete(reports::remove),
+        )
         // The upload streams its body to disk under its own caps, not axum's 2 MB default.
         .route(
             "/reports/{id}/files/{index}",
