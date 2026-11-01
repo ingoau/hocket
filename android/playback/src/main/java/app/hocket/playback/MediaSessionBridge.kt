@@ -150,8 +150,13 @@ class MediaSessionBridge(
             override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo, playerCommand: Int): Int {
                 // Every transport request reaches the core as a plain command; this is the one place
                 // that knows which app (or key, through Media3's stand-in controller) asked.
-                if (playerCommand != Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM) {
-                    PlaybackLog.i("${PlaybackLog.command(playerCommand)} from ${who(session, controller)}")
+                // Seeks and volume steps (a slider sends many) only in developer mode.
+                val line = "${PlaybackLog.command(playerCommand)} from ${who(session, controller)}"
+                when (playerCommand) {
+                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SET_VOLUME,
+                    Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS, Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
+                    -> PlaybackLog.d(line)
+                    else -> PlaybackLog.i(line)
                 }
                 return super.onPlayerCommandRequest(session, controller, playerCommand)
             }
