@@ -429,9 +429,10 @@ private fun MainShell(snackbar: SnackbarHostState) {
             Row(
                 Modifier.fillMaxSize().then(hiddenWhenCovered).graphicsLayer {
                     val p = sheet.progress.coerceIn(0f, 1f)
-                    // Fully under the open player: not drawn at all.
+                    // Fully under the open player: not drawn at all (and left at its own size,
+                    // so whatever reads its bounds meanwhile sees the page as laid out).
                     alpha = if (p >= 1f) 0f else 1f
-                    if (recede && p > 0f) {
+                    if (recede && p > 0f && p < 1f) {
                         val s = 1f - RecedeScale * p
                         scaleX = s
                         scaleY = s
