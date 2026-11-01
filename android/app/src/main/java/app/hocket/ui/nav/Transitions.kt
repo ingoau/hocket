@@ -14,6 +14,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,8 +45,8 @@ import kotlin.math.sqrt
  *   scrim settles over it. The incoming page's leading corners round while it travels.
  * - Pops reverse the same motion. Predictive back scrubs that pop 1:1 with the finger, always in
  *   that trailing-edge direction — never away from whichever edge the swipe started at.
- * - Switching places from the bottom bar or rail is a quick fade-through with a short slide in the
- *   direction of the tab, so it reads as a lateral move, not a push.
+ * - Switching places from the bottom bar or rail is a quick fade-through: the new place grows in
+ *   from a little smaller as the old one fades away, so it reads as a lateral move, not a push.
  * - With reduced motion everything is a plain short crossfade (predictive back scrubs a crossfade).
  */
 
@@ -81,6 +84,8 @@ internal const val PUSH_MS = 500
 internal const val PREDICTIVE_MS = 400
 private const val TAB_MS = 280
 private const val TAB_EXIT_MS = 100
+/** Where the incoming place starts its fade-through growth from. */
+private const val TAB_SCALE = 0.92f
 private const val REDUCED_MS = 150
 /** Covered page travels a quarter of the width toward the leading edge. */
 private const val COVER_PARALLAX = 0.25f
@@ -223,13 +228,18 @@ internal class ShellTransitionInfo {
         }
     }
 
+    /**
+     * A fade-through: the new place grows in from slightly smaller (from a point a little toward
+     * the side of the tab, so it still reads as a lateral move) as the old one fades out and sinks.
+     */
     private fun tabEnter(): EnterTransition {
-        val dir = if (tabForward) sign else -sign
+        val originX = if ((if (tabForward) sign else -sign) > 0) 0.65f else 0.35f
         return fadeIn(tween(TAB_MS, delayMillis = TAB_EXIT_MS / 2, easing = LinearEasing)) +
-            slideInHorizontally(tween(TAB_MS + 40, easing = MiuixEasing)) { w -> dir * w / 12 }
+            scaleIn(tween(TAB_MS + 120, easing = MiuixEasing), initialScale = TAB_SCALE, transformOrigin = TransformOrigin(originX, 0.3f))
     }
 
-    private fun tabExit(): ExitTransition = fadeOut(tween(TAB_EXIT_MS, easing = LinearEasing))
+    private fun tabExit(): ExitTransition =
+        fadeOut(tween(TAB_EXIT_MS, easing = LinearEasing)) + scaleOut(tween(TAB_EXIT_MS + 60, easing = LinearEasing), targetScale = 0.97f)
 }
 
 /**
