@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -109,8 +110,11 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     val durationMs = track?.durationMs?.toFloat()?.takeIf { it > 0f } ?: 1f
     // Waiting for the room's position (ConnectSync): the line shows, dimmed.
     val syncing = rememberConnectSyncing()
-    val line = MaterialTheme.colorScheme.primary.let { if (syncing) it.copy(alpha = CONNECT_SYNC_ALPHA) else it }
-    val lineTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    // The card in the artwork's colours (a tinted container that stands out from the page),
+    // crossfading as the track changes.
+    val colours = miniPlayerColours(track?.coverArt)
+    val line = colours.accent.let { if (syncing) it.copy(alpha = CONNECT_SYNC_ALPHA) else it }
+    val lineTrack = colours.content.copy(alpha = 0.12f)
     // The item's description already carries both lines; the scrolling texts themselves stay out of
     // the tree (a marquee is laid out wider than its box on purpose).
     val marquee = if (reducedMotion) Modifier else Modifier.clearAndSetSemantics { }.basicMarquee(iterations = 1, initialDelayMillis = 3_000, velocity = 30.dp)
@@ -120,7 +124,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                 .widthIn(max = HeroGeometry.MINI_MAX_WIDTH)
                 .fillMaxSize()
                 .padding(horizontal = HeroGeometry.MINI_MARGIN)
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .background(colours.container)
                 // The progress line along the bottom edge (the sheet's clip rounds its ends).
                 .drawWithContent {
                     drawContent()
@@ -136,8 +140,9 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                 .pointerInput(onExpand) { detectTapGestures(onTap = { onExpand() }) }
                 .testTag("miniPlayer"),
         ) {
-            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-            Row(Modifier.fillMaxSize().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(onSurface = colours.content, onSurfaceVariant = colours.contentVariant)) {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides colours.content) {
+            Row(Modifier.fillMaxSize().padding(end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 // The strip: the current track's artwork and text, its neighbours a strip's width
                 // either side (off view, clipped, until a swipe brings one in).
                 Box(
@@ -151,7 +156,7 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                         Modifier
                             .fillMaxSize()
                             .graphicsLayer { translationX = carousel.offset.value }
-                            .padding(start = 10.dp),
+                            .padding(start = MINI_START_PADDING),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Artwork(
@@ -190,18 +195,23 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
                         neighbours.next?.track?.let { MiniNeighbour(it, carousel, side = 1f, tag = "miniPlayer.next") }
                     }
                 }
-                val colors = IconButtonDefaults.iconButtonVibrantColors()
                 val playLabel = stringResource(if (playing) R.string.action_pause else R.string.action_play)
                 val bufferingLabel = stringResource(R.string.player_buffering)
-                IconButton(
+                // Play/pause in its own filled container: a rounded square while playing that
+                // softens into a pill when paused.
+                val playCorner by androidx.compose.animation.core.animateDpAsState(if (playing) 14.dp else 20.dp, Motion.pressDp, label = "miniPlayCorner")
+                androidx.compose.material3.FilledIconButton(
                     onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); client.dispatch(Command.TogglePlay) },
-                    colors = colors,
-                    modifier = Modifier.testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (buffering) stateDescription = bufferingLabel },
+                    shape = RoundedCornerShape(playCorner),
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = colours.button, contentColor = colours.onButton),
+                    modifier = Modifier.size(width = 56.dp, height = 44.dp).testTag("miniPlayer.playPause").semantics { contentDescription = playLabel; if (buffering) stateDescription = bufferingLabel },
                 ) {
                     if (buffering) LoadingIndicator(Modifier.size(28.dp), color = androidx.compose.material3.LocalContentColor.current)
                     else Icon(if (playing) HocketIcons.Filled.Pause else HocketIcons.Filled.PlayArrow, null)
                 }
-                IconButton(onClick = { client.dispatch(Command.Next) }, colors = colors) { Icon(HocketIcons.Filled.SkipNext, stringResource(R.string.action_next)) }
+                Spacer(Modifier.width(2.dp))
+                IconButton(onClick = { client.dispatch(Command.Next) }) { Icon(HocketIcons.Filled.SkipNext, stringResource(R.string.action_next)) }
+            }
             }
             }
         }
@@ -218,7 +228,7 @@ private fun MiniNeighbour(track: app.hocket.core.api.TrackSummary, carousel: Ski
         Modifier
             .fillMaxSize()
             .graphicsLayer { translationX = carousel.offset.value + side * carousel.span }
-            .padding(start = 10.dp)
+            .padding(start = MINI_START_PADDING)
             .testTag(tag)
             .clearAndSetSemantics { },
         verticalAlignment = Alignment.CenterVertically,
@@ -232,3 +242,34 @@ private fun MiniNeighbour(track: app.hocket.core.api.TrackSummary, carousel: Ski
     }
 }
 
+
+/** The mini player's content inset from the card's leading edge (before the thumbnail). */
+internal val MINI_START_PADDING = 12.dp
+
+/** The mini player card's colours, from its artwork. */
+internal class MiniPlayerColours(val container: Color, val content: Color, val contentVariant: Color, val accent: Color, val button: Color, val onButton: Color)
+
+/**
+ * The mini player's colours for [coverArt]: a container tinted with the artwork's primary colour
+ * (stronger than the page's surfaces, so the card stands out), its text, the progress line and
+ * the play/pause button's container. Falls back to the app's own scheme with no artwork, and
+ * crossfades ([Motion.COLOUR_MS]) when the track changes.
+ */
+@Composable
+internal fun miniPlayerColours(coverArt: String?): MiniPlayerColours {
+    val dark = app.hocket.ui.theme.LocalDarkTheme.current
+    val appScheme = MaterialTheme.colorScheme
+    val seed by artworkSeed(coverArt)
+    val scheme = remember(seed, dark) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark) } } ?: appScheme
+    val container = androidx.compose.ui.graphics.lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, if (dark) 0.6f else 0.75f)
+    val spec = androidx.compose.animation.core.tween<Color>(Motion.COLOUR_MS)
+    @Composable fun a(c: Color) = androidx.compose.animation.animateColorAsState(c, spec, label = "miniColour").value
+    return MiniPlayerColours(
+        container = a(container),
+        content = a(scheme.onPrimaryContainer),
+        contentVariant = a(scheme.onPrimaryContainer.copy(alpha = 0.72f)),
+        accent = a(scheme.primary),
+        button = a(scheme.primary),
+        onButton = a(scheme.onPrimary),
+    )
+}

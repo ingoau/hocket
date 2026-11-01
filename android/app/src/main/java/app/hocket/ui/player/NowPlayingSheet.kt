@@ -357,7 +357,7 @@ internal class HeroGeometry {
         val HERO_CORNER: Dp = 28.dp
         val HERO_ELEVATION: Dp = 16.dp
         /** The floating mini player: side margin, gap above the navigation bar, corners, shadow and widest size. */
-        val MINI_MARGIN: Dp = 12.dp
+        val MINI_MARGIN: Dp = 16.dp
         val MINI_GAP: Dp = NowPlayingSheetState.MINI_GAP
         val MINI_CORNER: Dp = 16.dp
         val MINI_ELEVATION: Dp = 8.dp
@@ -840,7 +840,7 @@ internal data class FlightTransform(val scale: Float, val x: Float, val y: Float
 /** Where the mini player's thumbnail is before it has been measured. */
 private fun fallbackThumb(density: Density): Rect = with(density) {
     val thumbSizePx = HeroGeometry.THUMB_SIZE.toPx()
-    val margin = HeroGeometry.MINI_MARGIN.toPx() + 10.dp.toPx()
+    val margin = HeroGeometry.MINI_MARGIN.toPx() + MINI_START_PADDING.toPx()
     Rect(Offset(margin, (NowPlayingSheetState.MINI_HEIGHT.toPx() - thumbSizePx) / 2), Size(thumbSizePx, thumbSizePx))
 }
 
