@@ -85,6 +85,9 @@ pub mod keys {
     /// An album's tracks name their artist on every row; off names it only where it is not the
     /// album's artist. Synced: a preference, not a device's.
     pub const DISPLAY_ALBUM_TRACK_ARTISTS: &str = "display.albumTrackArtists";
+    /// The phone's navigation bar: a compact pill floating over the content (on), or the standard
+    /// full-width bar along the bottom edge (off). Local: a phone's own look.
+    pub const DISPLAY_FLOATING_NAV_BAR: &str = "display.floatingNavBar";
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
@@ -573,6 +576,9 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Bool,
         || json!(false),
     ),
+    def(DISPLAY_FLOATING_NAV_BAR, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,
         Synced,
