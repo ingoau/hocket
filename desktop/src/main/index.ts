@@ -155,6 +155,7 @@ async function main(): Promise<void> {
     artworkLayout: classify,
     devlog,
     diagnosticsDir: join(logDir, "diagnostics"),
+    reportStagingDir: join(userData, "report-staging"),
     diagnosticsExtra: () => ({
       core: core.kind === "native" ? `native addon ${native?.module.coreVersion() ?? "?"} (${native?.path ?? "?"})` : "fake core",
       "media session": mediaSession.status,

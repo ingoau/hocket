@@ -573,6 +573,16 @@ pub struct PlaylistEdit {
 // ---------------------------------------------------------------------------
 
 /// Everything that crosses the wire. Struct variants keep the JSON readable.
+/// Leave to create reports on the hosted coordinator (`POST /reports`,
+/// `docs/reports.md`), good until `expires_in_ms` after it was sent.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportGrant {
+    pub token: String,
+    pub expires_in_ms: u64,
+}
+
 #[typeshare]
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -898,6 +908,13 @@ pub enum Msg {
         /// The room's own answer only: the devices it passed the request to.
         #[serde(default)]
         asked: Vec<DeviceInfo>,
+        /// The hosted coordinator's answer only (part 0), and only to an
+        /// account named with `--diagnostics-user` on a coordinator that
+        /// keeps reports: leave to save reports there. The room strips it
+        /// from everything it relays; a client takes it only from
+        /// [`crate::connect::diagnostics::COORDINATOR`]. See `docs/reports.md`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report_grant: Option<ReportGrant>,
     },
 
     /// Anything this build does not know. Ignored.

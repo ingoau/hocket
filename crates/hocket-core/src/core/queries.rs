@@ -235,6 +235,7 @@ impl Actor {
                 QueryResult::Source(source)
             }
             Query::Diagnostics => QueryResult::Text(self.diagnostics()),
+            Query::ReportUpload => QueryResult::ReportUpload(self.reports.status.clone()),
             Query::RoomDiagnostics => {
                 self.room_diagnostics_query(reply);
                 return;

@@ -2133,6 +2133,24 @@ pub enum Command {
         request_id: String,
         text: String,
     },
+    /// Save a report on the hosted coordinator: the user's `note`, the
+    /// platform's diagnostics `bundle` (what Save to file would write) and
+    /// `attachments`. Needs the leave the coordinator sent with the latest
+    /// room diagnostics ([`RoomDiagnosticsStatus::report_upload`]). Runs in
+    /// the background, resuming across restarts; progress goes out as
+    /// [`Event::ReportUploadChanged`]. One at a time: ignored (with a
+    /// warning in the log) while another is uploading, so platforms hide the
+    /// action then. See `docs/reports.md`.
+    StartReportUpload {
+        note: String,
+        bundle: String,
+        attachments: Vec<ReportAttachment>,
+    },
+    /// Try the failed report upload again, from where it stopped.
+    RetryReportUpload,
+    /// Forget the report upload (cancelling it if it is still running) and
+    /// delete what the core staged for it.
+    DismissReportUpload,
     /// Import a config document (`ExportConfig` output). Account-synced
     /// settings it changes are broadcast to the other devices like a local
     /// edit. Device-local settings (audio output, transcoding, storage,
@@ -2395,6 +2413,8 @@ pub enum Query {
     /// only while its own is on. The room turns away a request within 10 s of
     /// the last: then the previous collection answers again.
     RoomDiagnostics,
+    /// Where the report upload stands: `QueryResult::ReportUpload`.
+    ReportUpload,
     /// Export a config document.
     ConfigDocument {
         include_secrets: bool,
@@ -2570,6 +2590,7 @@ pub enum QueryResult {
     Share(Option<CreatedShare>),
     /// A track's original file, ready to hand to the platform share sheet.
     AudioFile(Option<ExportedAudio>),
+    ReportUpload(Option<ReportUploadStatus>),
 }
 
 // ---------------------------------------------------------------------------
@@ -2698,6 +2719,81 @@ pub struct RoomDiagnosticsStatus {
     pub coordinator_log: bool,
     /// The other devices the room asked, in its order.
     pub devices: Vec<DiagnosticsSourceStatus>,
+    /// The coordinator lets this account save reports there, and its leave
+    /// is still good: offer [`Command::StartReportUpload`]. Only ever set by
+    /// a coordinator that answered this collection.
+    #[serde(default)]
+    pub report_upload: bool,
+}
+
+/// A file going up with a report ([`Command::StartReportUpload`]).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportAttachment {
+    /// A file the core can read, as it is sent (platforms resize screenshots
+    /// and strip their metadata first; recordings go as they are).
+    pub path: String,
+    pub kind: ReportAttachmentKind,
+    /// The platform made this copy for the upload: the core deletes it once
+    /// the upload is done or dismissed.
+    #[serde(default)]
+    pub delete_after: bool,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportAttachmentKind {
+    /// A JPEG or PNG image. At most 5 per report.
+    Screenshot,
+    /// A screen recording (MP4, WebM, MOV, MKV). At most 1 per report.
+    Recording,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportUploadState {
+    Uploading,
+    Done,
+    Failed,
+}
+
+/// Why a report upload failed.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportUploadError {
+    /// No leave from the coordinator (or it ran out, or the coordinator
+    /// refused it): open diagnostics again while connected to it.
+    NotAllowed,
+    /// An attachment could not be read (or there are too many).
+    Unreadable,
+    /// Over what the coordinator takes (per file, per report or in total).
+    TooLarge,
+    /// The coordinator could not be reached, or the connection broke.
+    Network,
+    /// The coordinator answered with an error.
+    Server,
+}
+
+/// Where the report upload stands ([`Event::ReportUploadChanged`],
+/// `Query::ReportUpload`).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportUploadStatus {
+    pub state: ReportUploadState,
+    pub sent_bytes: f64,
+    pub total_bytes: f64,
+    /// The coordinator's id for it (`R-20261101-7k3f`), once it made one.
+    pub report_id: Option<String>,
+    pub error: Option<ReportUploadError>,
+    /// More about `error`, in English, for logs and developers.
+    pub error_detail: Option<String>,
+    /// Epoch ms the user sent it.
+    pub started_at: f64,
 }
 
 #[typeshare]
@@ -2886,6 +2982,11 @@ pub enum Event {
     /// arrive, and once more (`done`) when the query answers.
     RoomDiagnosticsChanged {
         status: RoomDiagnosticsStatus,
+    },
+    /// The report upload moved on: started, progressed (at most about four
+    /// times a second), finished, failed, or was dismissed (`None`).
+    ReportUploadChanged {
+        status: Option<ReportUploadStatus>,
     },
 
     /// Drive an external backend (Android). Not emitted in native mode.

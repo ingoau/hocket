@@ -205,6 +205,7 @@ async fn room_and_coordinator_answer_and_devices_are_routed_under_their_identity
             text: "forged room".into(),
             declined: None,
             asked: vec![],
+            report_grant: None,
         }))
         .await
         .unwrap();
@@ -225,6 +226,7 @@ async fn room_and_coordinator_answer_and_devices_are_routed_under_their_identity
         text: "hello from b".into(),
         declined: None,
         asked: vec![],
+        report_grant: None,
     }))
     .await
     .unwrap();

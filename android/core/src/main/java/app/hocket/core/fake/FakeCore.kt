@@ -263,6 +263,7 @@ class FakeCore(
             requestId = requestId, done = step >= 4, elapsedMs = now() - started, unavailable = null, roomAnswered = step >= 1,
             coordinator = if (viaCoordinator && step >= 1) source("coordinator", "Coordinator", if (step >= 2) DiagnosticsSourceState.Received else DiagnosticsSourceState.Receiving, if (step >= 2) 2 else 1, 2) else null,
             coordinatorLog = viaCoordinator && step >= 2,
+            reportUpload = viaCoordinator && step >= 2,
             devices = if (step < 1) emptyList() else others.mapIndexed { i, d ->
                 when {
                     i % 2 == 1 -> if (step >= 2) source(d.id, d.name, DiagnosticsSourceState.Declined, 0, 1, "developer mode is off on this device") else source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
@@ -281,6 +282,39 @@ class FakeCore(
         }
         val coordinator = if (viaCoordinator) "Coordinator\nhocket-coordinator (fake)\nProcess log (last 60 minutes)\n" else ""
         return "Other devices in the Connect room (${(others.size + 1) / 2} of ${others.size} sent a bundle)\n\n" + coordinator + sections.joinToString("\n")
+    }
+
+    // -- report upload -----------------------------------------------------------------------------
+    private var reportUpload: ReportUploadStatus? = null
+    private var reportUploadJob: kotlinx.coroutines.Job? = null
+
+    private fun setReportUpload(status: ReportUploadStatus?) {
+        reportUpload = status
+        emit(Event.ReportUploadChanged(EventReportUploadChangedInner(status)))
+    }
+
+    /**
+     * As the native core's report upload, without a network: the note, bundle and attachments are
+     * "sent" over about three seconds (at once without timers) and saved as [FAKE_REPORT_ID].
+     * Ignored while one is uploading, like the core.
+     */
+    private fun startReportUpload(c: CommandStartReportUploadInner) {
+        if (reportUpload?.state == ReportUploadState.Uploading) return
+        val total = c.bundle.length.toDouble() + c.note.length + c.attachments.size * 400_000.0
+        runReportUpload(total, 0.0, now())
+    }
+
+    private fun runReportUpload(total: Double, from: Double, startedAt: Double) {
+        reportUploadJob?.cancel()
+        reportUploadJob = scope.launch {
+            val steps = 10
+            for (i in 0..steps) {
+                val sent = from + (total - from) * i / steps
+                setReportUpload(ReportUploadStatus(ReportUploadState.Uploading, sent, total, if (i > 0) FAKE_REPORT_ID else null, null, null, startedAt))
+                if (timers) delay(300)
+            }
+            setReportUpload(ReportUploadStatus(ReportUploadState.Done, total, total, FAKE_REPORT_ID, null, null, startedAt))
+        }
     }
 
     override fun close() {
@@ -899,6 +933,9 @@ class FakeCore(
             is Command.SetSettingsSync -> setSetting(SettingKeys.SYNC_ENABLED, c.data.enabled.toString())
             is Command.ExportConfig -> emit(Event.ConfigExported(EventConfigExportedInner(configDocument(c.data.include_secrets))))
             is Command.AnswerDiagnosticsRequest -> Unit
+            is Command.StartReportUpload -> startReportUpload(c.data)
+            Command.RetryReportUpload -> reportUpload?.takeIf { it.state == ReportUploadState.Failed }?.let { runReportUpload(it.totalBytes, it.sentBytes, it.startedAt) }
+            Command.DismissReportUpload -> { reportUploadJob?.cancel(); reportUploadJob = null; setReportUpload(null) }
             is Command.ImportConfig -> toast("Configuration restored")
             is Command.SetAudioSettings -> { audio = c.data.settings; emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             is Command.SetOutputDevice -> { audio = audio.copy(outputDevice = c.data.id); emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
@@ -1492,6 +1529,7 @@ class FakeCore(
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
         Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")
+        Query.ReportUpload -> QueryResult.ReportUpload(reportUpload)
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
         is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
         is Query.ExportAudio -> QueryResult.AudioFile(null)
@@ -1540,6 +1578,8 @@ class FakeCore(
         /** The core's automatic stream-cache budget on a roomy volume: min(2 GiB, 10% of the space). */
         const val AUTO_CACHE_BUDGET = 2.0 * 1024 * 1024 * 1024
         const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
+        /** The id the fake core's report uploads end with. */
+        const val FAKE_REPORT_ID = "R-20261101-test"
         /** The core's English texts for the offline PlayerNotices (core/handlers/cache.rs); platforms match on the code. */
         const val OFFLINE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
         const val OFFLINE_NOTHING = "Nothing in the queue is available offline"

@@ -234,6 +234,8 @@ pub(crate) struct Actor {
     pub last_room_diagnostics: Option<(RoomDiagnosticsStatus, String)>,
     /// Other devices' diagnostics requests waiting for the platform's bundle.
     pub diagnostics_answers: Vec<crate::core::handlers::diagnostics::PendingAnswer>,
+    /// Save to Coordinator: the coordinator's grant and the upload.
+    pub reports: crate::core::handlers::reports::ReportsState,
 
     pub started: bool,
     pub shutting_down: bool,
@@ -505,6 +507,7 @@ impl Actor {
             diagnostics_collections: vec![],
             last_room_diagnostics: None,
             diagnostics_answers: vec![],
+            reports: Default::default(),
             started: false,
             shutting_down: false,
             in_flight: 0,
@@ -685,6 +688,9 @@ impl Actor {
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
+            Internal::ReportUpload(msg) => self.on_report_upload(msg),
+            #[cfg(any(feature = "sim", test))]
+            Internal::ReportGrant(grant) => self.reports.grant = Some(grant),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
@@ -776,6 +782,7 @@ impl Actor {
             self.log("debug", format!("set_volume: {e}"));
         }
         self.output_devices = self.backend.output_devices();
+        self.restore_report_upload();
         self.emit_everything(true);
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
@@ -806,6 +813,8 @@ impl Actor {
         let _ = self.backend.stop();
         self.cancel_prefetch();
         self.cancel_prime();
+        // An upload still running carries on from `job.json` next time.
+        self.reports.abort();
         if let Some(r) = &self.stream_reader {
             r.stop();
         }
@@ -894,6 +903,9 @@ impl Actor {
         });
         self.emit(Event::OutputDevicesChanged {
             devices: self.output_devices.clone(),
+        });
+        self.emit(Event::ReportUploadChanged {
+            status: self.reports.status.clone(),
         });
         self.emit(Event::SleepTimerChanged {
             timer: snapshot.sleep_timer.clone(),

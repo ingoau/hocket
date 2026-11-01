@@ -1,4 +1,4 @@
-// Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info.
+// Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info, Save to Coordinator.
 import { useEffect, useRef, useState } from "react";
 import type { Album, DeviceInfo } from "@core/api";
 import { t } from "@shared/strings";
@@ -12,6 +12,7 @@ import { deviceIcon } from "./ConnectPill";
 import { Slider } from "./controls";
 import { useVolumeControl } from "../lib/volume";
 import { SongInfo } from "./SongInfo";
+import { ReportDialog } from "./ReportDialog";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 
@@ -47,13 +48,14 @@ export function Dialogs() {
   const popoverStyle = playerTop !== undefined ? ({ "--popover-bottom": `${Math.max(0, window.innerHeight - playerTop)}px` } as React.CSSProperties) : undefined;
   return (
     <div className={`overlay ${dialog.kind === "connect" ? "overlay-popover" : ""} ${closing ? "closing" : ""}`} style={popoverStyle} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div {...exitProps} className={`dialog ${dialog.kind === "trackInfo" ? "dialog-wide" : ""} ${dialog.kind === "connect" ? "dialog-popover connect-popover" : ""} ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
+      <div {...exitProps} className={`dialog ${dialog.kind === "trackInfo" ? "dialog-wide" : ""} ${dialog.kind === "report" ? "dialog-report" : ""} ${dialog.kind === "connect" ? "dialog-popover connect-popover" : ""} ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
         {dialog.kind === "sleepTimer" ? <SleepTimerDialog /> : null}
         {dialog.kind === "connect" ? <ConnectDialog /> : null}
         {dialog.kind === "trackInfo" ? <SongInfo trackId={dialog.trackId} /> : null}
         {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
+        {dialog.kind === "report" ? <ReportDialog allDevices={dialog.allDevices} /> : null}
       </div>
     </div>
   );

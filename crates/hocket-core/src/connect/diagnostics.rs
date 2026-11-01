@@ -17,11 +17,19 @@
 //! Devices that know the request say so in their `Hello` ([`HELLO_FLAG`] in
 //! its extra fields): the room asks only those, and names the others in its
 //! own answer, so an older build never leaves the asking device waiting.
+//!
+//! The coordinator's answer to an account it keeps reports for also carries a
+//! [`ReportGrant`] on its part 0: leave to save reports there
+//! (`docs/reports.md`). The room never relays one, and the asking core takes
+//! it only from [`COORDINATOR`] (see [`crate::reports::grant_update`]); it
+//! holds it itself and only says, in [`RoomDiagnosticsStatus::report_upload`],
+//! whether it has a good one.
 
 use crate::api::{
     DeviceId, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, EpochMs,
     RoomDiagnosticsStatus,
 };
+use crate::connect::wire::ReportGrant;
 
 /// `from` of the room's own answer.
 pub const ROOM: &str = "room";
@@ -66,6 +74,8 @@ pub struct ReplyPart {
     pub text: String,
     pub declined: Option<String>,
     pub asked: Vec<DeviceInfo>,
+    /// Only believed from [`COORDINATOR`], part 0.
+    pub report_grant: Option<ReportGrant>,
 }
 
 /// Whether a device id would pass for the room's or the coordinator's answer.
@@ -335,6 +345,8 @@ impl Collection {
                 .is_some_and(|c| c.text().contains(COORDINATOR_LOG_HEADING)),
             coordinator: coordinator.map(|c| c.status(done)),
             devices,
+            // The core sets it: it holds the grant.
+            report_upload: false,
         }
     }
 
@@ -441,6 +453,7 @@ mod tests {
             text: text.into(),
             declined: None,
             asked: vec![],
+            report_grant: None,
         }
     }
 

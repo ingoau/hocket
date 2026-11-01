@@ -753,7 +753,7 @@
     <string name="settings_developer_diagnostics">Developer diagnostics</string>
     <string name="settings_developer_diagnostics_body">Save or share the last hour of logs, with versions and device details.</string>
     <string name="developer_title">Developer diagnostics</string>
-    <string name="developer_subtitle">The last hour of logs, with versions and device details. Nothing leaves this phone unless you share, save or copy it, or another of your devices asks for it while developer mode is on here.</string>
+    <string name="developer_subtitle">The last hour of logs, with versions and device details. Nothing leaves this phone unless you share, copy or save it (to a file, or to your coordinator when it allows), or another of your devices asks for it while developer mode is on here.</string>
     <string name="developer_wait_for_others">Waiting for the other devices…</string>
     <string name="developer_others">Other devices</string>
     <string name="developer_others_hint">Asked as this page opens, so their bundles go with whatever you share, save or copy. A device answers only while its own developer mode is on; this waits up to 45 seconds for them.</string>
@@ -781,7 +781,8 @@
     <string name="developer_mode_on">Developer mode is on: logs are detailed, and shaking the phone opens this page.</string>
     <string name="developer_mode_off">Developer mode is off, so logs are at the normal level.</string>
     <string name="developer_share">Share</string>
-    <string name="developer_save">Save</string>
+    <string name="developer_save">Save to file</string>
+    <string name="developer_save_coordinator">Save to Coordinator</string>
     <string name="developer_copy">Copy</string>
     <string name="developer_refresh">Refresh</string>
     <string name="developer_share_title">Share diagnostics</string>
@@ -796,6 +797,34 @@
     <string name="developer_log_tail">Newest %1$d lines. Share or save for the full hour, with logcat.</string>
     <string name="developer_loading">Collecting…</string>
     <string name="developer_empty">Nothing captured yet.</string>
+    <!-- Save to Coordinator: the report dialog (docs/reports.md). -->
+    <string name="report_title">Save to Coordinator</string>
+    <string name="report_body">Your note, these diagnostics and what you attach are saved on your coordinator. Nothing goes to anyone else.</string>
+    <string name="report_note">What went wrong?</string>
+    <string name="report_add_screenshot">Add screenshot</string>
+    <string name="report_add_recording">Add recording</string>
+    <string name="report_screenshot">Screenshot %1$d</string>
+    <string name="report_recording">Screen recording</string>
+    <string name="report_remove">Remove %1$s</string>
+    <string name="report_send">Send</string>
+    <string name="report_prepare_failed">Couldn\'t prepare the report</string>
+    <!-- The upload bar across the top of the app, and the upload's notification. -->
+    <string name="report_upload_starting">Uploading report…</string>
+    <string name="report_upload_progress">Uploading report… %1$d%%</string>
+    <string name="report_upload_done">Report %1$s saved to the coordinator</string>
+    <string name="report_upload_copy_id">Copy ID</string>
+    <string name="report_upload_id_copied">Report ID copied</string>
+    <string name="report_upload_cancel">Cancel</string>
+    <string name="report_upload_retry">Retry</string>
+    <string name="report_upload_dismiss">Dismiss</string>
+    <string name="report_upload_failed">Couldn\'t save the report</string>
+    <string name="report_upload_failed_not_allowed">Couldn\'t save the report: the coordinator no longer allows it. Open diagnostics again while connected to it.</string>
+    <string name="report_upload_failed_unreadable">Couldn\'t save the report: an attachment couldn\'t be read</string>
+    <string name="report_upload_failed_too_large">Couldn\'t save the report: it\'s more than the coordinator takes</string>
+    <string name="report_upload_failed_network">Couldn\'t save the report: the coordinator couldn\'t be reached</string>
+    <string name="report_upload_failed_server">Couldn\'t save the report: the coordinator answered with an error</string>
+    <string name="report_upload_channel">Report uploads</string>
+    <string name="report_upload_notification_text">Saving your report on the coordinator</string>
     <string name="settings_sleep_default">Default sleep timer</string>
     <string name="settings_lyrics_default_offset">Default timing offset</string>
     <string name="settings_lyrics_translations">Show translations</string>

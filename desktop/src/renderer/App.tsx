@@ -29,6 +29,7 @@ import { useTheme } from "./lib/theme";
 import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ReportUploadBar } from "./components/ReportUploadBar";
 
 // One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
 const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
@@ -74,6 +75,7 @@ export function App() {
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
         <OfflineBanner offline={network?.kind === "offline"} />
+        <ReportUploadBar />
         <TopBar />
       </header>
         <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">

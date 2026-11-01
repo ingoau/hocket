@@ -5,15 +5,27 @@ use std::io::IsTerminal;
 use clap::Parser;
 use tracing::info;
 
-use hocket_coordinator::{serve, App, Args};
+use hocket_coordinator::{reports, serve, App, Args, Command, ReportsCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    if let Some(Command::Reports { action }) = &args.command {
+        let dir = args
+            .data_dir
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("reports need --data-dir"))?;
+        let out = match action {
+            ReportsCommand::List => reports::list(dir)?,
+            ReportsCommand::Show { id } => reports::show(dir, id)?,
+        };
+        print!("{out}");
+        return Ok(());
+    }
     // The usual stderr log, plus the in-memory capture of the last hour that
     // `--diagnostics-user` accounts can receive (nothing is written to disk).
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=warn".into());
     hocket_core::devlog::install(&filter, None, std::io::stderr().is_terminal());
-    let args = Args::parse();
     let app = App::new(args.clone())?;
     let shutdown = async {
         let ctrl_c = tokio::signal::ctrl_c();

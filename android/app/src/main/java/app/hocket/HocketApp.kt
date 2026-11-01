@@ -5,6 +5,12 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import app.hocket.core.CoreHandle
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandAnswerDiagnosticsRequestInner
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
+import app.hocket.core.api.ReportUploadState
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import app.hocket.core.client.CoreClient
 import app.hocket.playback.CoreHost
 import app.hocket.playback.ForegroundBinder
@@ -64,6 +70,29 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         // process can go after the task is removed. Media3 keeps it alive while playing.
         ProcessLifecycleOwner.get().lifecycle.addObserver(ForegroundBinder(connection))
         scope.launch { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
+        followReportUploads()
+    }
+
+    /**
+     * A report upload (docs/reports.md) that is Uploading gets [app.hocket.diagnostics.ReportUploadService]
+     * (foreground, progress notification), which stops itself once it is anything else. The first
+     * time a core answers that no upload is pending, what an earlier process staged for one goes.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun followReportUploads() {
+        val processStart = System.currentTimeMillis()
+        scope.launch {
+            client.flatMapLatest { it?.reportUpload ?: flowOf(null) }
+                .map { it?.state == ReportUploadState.Uploading }
+                .distinctUntilChanged()
+                .collect { uploading -> if (uploading) app.hocket.diagnostics.ReportUploadService.start(this@HocketApp) }
+        }
+        scope.launch {
+            val client = client.filterNotNull().first()
+            client.started.first { it }
+            val pending = client.query(Query.ReportUpload) as? QueryResult.ReportUpload ?: return@launch
+            if (pending.data == null) withContext(Dispatchers.IO) { runCatching { app.hocket.diagnostics.ReportStaging.clearStale(this@HocketApp, processStart) } }
+        }
     }
 
     /**

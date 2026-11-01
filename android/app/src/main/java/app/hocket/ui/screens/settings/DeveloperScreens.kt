@@ -1,8 +1,12 @@
 package app.hocket.ui.screens.settings
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -58,11 +62,15 @@ import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.DiagnosticsSourceState
 import app.hocket.core.api.DiagnosticsSourceStatus
 import app.hocket.core.api.Platform
+import app.hocket.core.api.ReportAttachment
+import app.hocket.core.api.ReportUploadState
 import app.hocket.core.api.RoomDiagnosticsStatus
 import app.hocket.core.api.RoomDiagnosticsUnavailable
 import app.hocket.core.client.CoreClient
 import app.hocket.diagnostics.DiagnosticsBundle
 import app.hocket.diagnostics.DiagnosticsReport
+import app.hocket.diagnostics.ReportPick
+import app.hocket.diagnostics.ReportStaging
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.LocalAppSnackbar
 import app.hocket.ui.components.formatBytes
@@ -92,17 +100,23 @@ private const val CLIPBOARD_MAX_CHARS = 100_000
 
 /**
  * Developer diagnostics: the device and app, the core's diagnostics and the newest log lines, with
- * Share (the share sheet, as a text file), Save (a document the user picks) and Copy. With developer
+ * Share (the share sheet, as a text file), Save to file (a document the user picks) and Copy. With developer
  * mode on, the page asks the other devices in the Connect room and its coordinator for theirs as it
  * opens (and on Refresh), shows where each answer stands, and holds the actions until they are in:
- * every action then carries them. Reached from Advanced, or by shaking the phone in developer mode.
- * [collect] and [collectOthers] are swappable for tests (no logcat or native core under Robolectric).
+ * every action then carries them. When the coordinator allows this account (the newest collection's
+ * `reportUpload`, connected to it), Save to Coordinator sends a note, the same bundle Save to file
+ * writes and picked screenshots and a recording there instead (`docs/reports.md`); it is hidden, never
+ * greyed out, whenever it can't run. Reached from Advanced, or by shaking the phone in developer mode.
+ * [collect], [collectOthers], [stageReport] and [startReport] are swappable for tests (no logcat,
+ * photo picker or native core under Robolectric).
  */
 @Composable
 fun DeveloperDiagnosticsScreen(
     nav: NavHostController,
     collect: suspend (Context, CoreClient) -> DiagnosticsReport = { context, client -> DiagnosticsBundle.collect(context, client) },
     collectOthers: suspend (CoreClient, Boolean) -> String = { client, force -> DiagnosticsBundle.otherDevices(client, force) },
+    stageReport: suspend (Context, List<ReportPick>) -> List<ReportAttachment> = { context, picks -> ReportStaging.stage(context, picks) },
+    startReport: (CoreClient, String, String, List<ReportAttachment>) -> Unit = { client, note, bundle, attachments -> client.startReportUpload(note, bundle, attachments) },
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -160,7 +174,7 @@ fun DeveloperDiagnosticsScreen(
     val copyFailedText = stringResource(R.string.developer_copy_failed)
     val shareTitle = stringResource(R.string.developer_share_title)
     /** Collects a fresh report (with the other devices' bundles), runs [action] on it, then refreshes the preview to match. */
-    fun withFresh(action: suspend (DiagnosticsReport) -> Unit) {
+    fun withFresh(failed: String = failedText, action: suspend (DiagnosticsReport) -> Unit) {
         // State, not [enabled]: two taps before the next frame must not both get through.
         if (busy || (on && collecting)) return
         busy = true
@@ -178,9 +192,9 @@ fun DeveloperDiagnosticsScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {
-                notify(failedText)
+                notify(failed)
             } catch (e: Exception) {
-                notify(failedText + ": " + (e.message ?: e.javaClass.simpleName))
+                notify(failed + ": " + (e.message ?: e.javaClass.simpleName))
             } finally {
                 busy = false
             }
@@ -193,6 +207,30 @@ fun DeveloperDiagnosticsScreen(
         if (uri == null || toSave == null) return@rememberLauncherForActivityResult
         scope.launch { notify(if (DiagnosticsBundle.writeTo(context, uri, toSave)) savedText else failedText) }
     }
+    val connection by client.connection.collectAsState()
+    val viaCoordinator = connection.tier == ConnectionTier.Coordinator && connection.connected
+    val upload by client.reportUpload.collectAsState()
+    // Only once the coordinator has said this account may, and never while an upload (or anything
+    // else on this page) is under way: hidden rather than greyed out.
+    val canReport = on && roomStatus?.reportUpload == true && viaCoordinator && upload?.state != ReportUploadState.Uploading && enabled
+    var reporting by remember { mutableStateOf(false) }
+    val prepareFailedText = stringResource(R.string.report_prepare_failed)
+    // Asked for at Send (API 33+), for the upload's progress notification; the upload goes ahead whatever the answer.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val sendReport: (String, List<ReportPick>) -> Unit = { note, picks ->
+        reporting = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            runCatching { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
+        }
+        withFresh(prepareFailedText) { fresh ->
+            val attachments = stageReport(context, picks)
+            val bundle = withContext(Dispatchers.Default) { fresh.text }
+            startReport(client, note, bundle, attachments)
+        }
+    }
+    if (reporting) ReportDialog(onSend = sendReport, onDismiss = { reporting = false })
 
     SubScreen(nav, stringResource(R.string.developer_title)) {
         Text(
@@ -220,6 +258,11 @@ fun DeveloperDiagnosticsScreen(
             }
             FilledTonalButton(onClick = { withFresh { pendingSave = it; saveLauncher.launch(it.fileName) } }, enabled = enabled, modifier = Modifier.testTag("developer.save")) {
                 Icon(HocketIcons.Filled.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_save))
+            }
+            if (canReport) {
+                FilledTonalButton(onClick = { reporting = true }, modifier = Modifier.testTag("developer.saveCoordinator")) {
+                    Icon(HocketIcons.Filled.Dns, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.developer_save_coordinator))
+                }
             }
             FilledTonalButton(onClick = {
                 withFresh {
@@ -263,9 +306,8 @@ fun DeveloperDiagnosticsScreen(
             )
         }
         val devices by client.devices.collectAsState()
-        val connection by client.connection.collectAsState()
         // The client asks one collection at a time (and reuses one that just finished), so the newest status is this page's.
-        RoomCard(on, waiting, roomStatus, devices, viaCoordinator = connection.tier == ConnectionTier.Coordinator && connection.connected)
+        RoomCard(on, waiting, roomStatus, devices, viaCoordinator = viaCoordinator)
         Block(stringResource(R.string.developer_environment), r?.head?.trimEnd() ?: stringResource(R.string.developer_loading), "developer.head")
         Block(
             stringResource(R.string.developer_log),

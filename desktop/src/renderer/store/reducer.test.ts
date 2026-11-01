@@ -105,6 +105,13 @@ describe("reducer", () => {
     expect(s.network).toBeUndefined();
   });
 
+  it("follows the report upload, and forgets it when the core does", () => {
+    const status = { state: "uploading" as const, sentBytes: 5, totalBytes: 10, reportId: undefined, error: undefined, errorDetail: undefined, startedAt: 1 };
+    const s = reduce(initialCoreState, { type: "reportUploadChanged", data: { status } } as Event);
+    expect(s.reportUpload).toEqual(status);
+    expect(reduce(s, { type: "reportUploadChanged", data: { status: undefined } } as Event).reportUpload).toBeUndefined();
+  });
+
   it("tracks battery saver from its event, without waiting for a snapshot", () => {
     let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { enabled: true } });
     expect(s.batterySaver).toBe(true);

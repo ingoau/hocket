@@ -27,6 +27,7 @@ pub mod jobs;
 pub mod lyrics;
 pub mod media_session;
 pub mod outbox;
+pub mod reports;
 pub mod session;
 pub mod settings;
 pub mod stats;

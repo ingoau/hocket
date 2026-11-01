@@ -15,6 +15,7 @@ import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
 import type { DevLog, DiagnosticsBundle } from "./devlog";
+import { installReportIpc } from "./report";
 import type { Windows } from "./windows";
 
 export interface IpcDeps {
@@ -32,6 +33,8 @@ export interface IpcDeps {
   devlog: DevLog;
   /** Where "show in folder" and the share sheet write bundles (`<userData>/logs/diagnostics`). */
   diagnosticsDir: string;
+  /** Where Save to Coordinator stages its screenshots (`<userData>/report-staging`). */
+  reportStagingDir: string;
   /** Host facts for the bundle's header (core kind, media session, windows…). */
   diagnosticsExtra: () => Record<string, string>;
   /** The core's immersive-artwork classifier (JSON in and out), when the native core has it. */
@@ -407,6 +410,8 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     await Promise.all(old.map((f) => rm(join(deps.diagnosticsDir, f), { force: true })));
     return path;
   };
+
+  installReportIpc({ core, stagingDir: deps.reportStagingDir, isOurs: (sender) => isOurs(windows, sender), build });
 
   ipcMain.handle(IPC.diagnosticsSummary, async (e): Promise<DiagnosticsSummary> => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");

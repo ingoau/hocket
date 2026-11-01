@@ -127,10 +127,10 @@ impl Host {
                     }
                 }
             }
-            Output::Disconnect { peer } => {
-                if self.conn.as_ref().map(|c| c.peer == peer).unwrap_or(false) {
-                    self.conn = None;
-                }
+            Output::Disconnect { peer }
+                if self.conn.as_ref().map(|c| c.peer == peer).unwrap_or(false) =>
+            {
+                self.conn = None;
             }
             _ => {}
         }

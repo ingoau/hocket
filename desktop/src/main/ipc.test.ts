@@ -69,6 +69,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     credentials: store,
     devlog: devlog as never,
     diagnosticsDir: "/data/logs/diagnostics",
+    reportStagingDir: "/data/report-staging",
     diagnosticsExtra: () => ({ core: "fake core" }),
   });
   return { dispatch, query, onCommand, artwork, passwordFor, emit };

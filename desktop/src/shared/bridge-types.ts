@@ -77,6 +77,40 @@ export interface DiagnosticsOptions {
   allDevices?: boolean;
 }
 
+/** A screenshot main resized and re-encoded for a report, staged until it is sent or removed. */
+export interface StagedScreenshot {
+  /** What the page names it by (it never sees the path). */
+  id: string;
+  name: string;
+  /** A small JPEG `data:` URL for the dialog's thumbnail. */
+  thumbnailDataUrl: string;
+}
+
+/** A screen recording picked for a report: sent as it is, from where it is. */
+export interface PickedRecording {
+  id: string;
+  name: string;
+  size: number;
+}
+
+/** A picked image main couldn't decode (WebP): the page decodes it and hands it back with `stageImage`. */
+export interface UndecodedImage {
+  name: string;
+  bytes: Uint8Array;
+}
+
+/** What the Save to Coordinator dialog sends: the staged files by id. */
+export interface ReportSendRequest {
+  note: string;
+  screenshots: string[];
+  recording?: string;
+  /** As `DiagnosticsOptions.allDevices`, for the bundle that goes with it. */
+  allDevices: boolean;
+}
+
+/** At most this many screenshots go with one report. */
+export const REPORT_MAX_SCREENSHOTS = 5;
+
 export interface HocketBridge {
   prefs: {
     get(): Promise<AppPrefs>;
@@ -165,6 +199,25 @@ export interface HocketBridge {
     /** macOS: write the bundle and open the share sheet with it. False where there is none. */
     share(options?: DiagnosticsOptions): Promise<boolean>;
   };
+  /**
+   * Save to Coordinator (docs/reports.md): main stages the attachments (screenshots resized to
+   * at most 2000 px a side and re-encoded as JPEG, which drops their metadata) and starts the
+   * core's upload; progress arrives as `reportUploadChanged` events.
+   */
+  report: {
+    /** Pick screenshots (PNG, JPEG, WebP), as many as `room` allows. */
+    pickScreenshots(room: number): Promise<(StagedScreenshot | UndecodedImage)[]>;
+    /** Stage the image on the clipboard; undefined when it holds none. */
+    pasteScreenshot(): Promise<StagedScreenshot | undefined>;
+    /** Stage an image from its encoded bytes (PNG or JPEG); undefined when they don't decode. */
+    stageImage(bytes: Uint8Array, name: string): Promise<StagedScreenshot | undefined>;
+    /** Pick one screen recording (mp4, webm, mov, mkv). */
+    pickRecording(): Promise<PickedRecording | undefined>;
+    /** Forget staged attachments (deleting the screenshots' copies). */
+    discard(ids: string[]): Promise<void>;
+    /** Build the bundle and start the upload. False when one is already running or nothing matched. */
+    send(request: ReportSendRequest): Promise<boolean>;
+  };
   onDeepLink(listener: (url: string) => void): () => void;
   /**
    * How the full player shows a cover (the core's immersive-artwork classifier): its pixels as
@@ -205,6 +258,12 @@ export const IPC = {
   diagnosticsReveal: "hocket:diagnostics:reveal",
   diagnosticsShare: "hocket:diagnostics:share",
   shareAudio: "hocket:share:audio",
+  reportPickScreenshots: "hocket:report:pick-screenshots",
+  reportPasteScreenshot: "hocket:report:paste-screenshot",
+  reportStageImage: "hocket:report:stage-image",
+  reportPickRecording: "hocket:report:pick-recording",
+  reportDiscard: "hocket:report:discard",
+  reportSend: "hocket:report:send",
 } as const;
 
 /** The largest cover (each side) the renderer may hand `artworkLayout`; it decodes to 256. */

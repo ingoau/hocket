@@ -2,6 +2,8 @@
 #   docker build -f crates/hocket-coordinator/Dockerfile -t hocket-coordinator .
 # Run:
 #   docker run -p 7373:7373 -v hocket-data:/data hocket-coordinator
+# Reports (with --diagnostics-user) are kept in /data/reports; read them with:
+#   docker exec <container> hocket-coordinator --data-dir /data reports list
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

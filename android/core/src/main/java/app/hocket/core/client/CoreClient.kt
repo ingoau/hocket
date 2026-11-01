@@ -178,6 +178,15 @@ class CoreClient(
      * time, so this is always the one it is running (or ran last).
      */
     val roomDiagnostics: StateFlow<RoomDiagnosticsStatus?> = _roomDiagnostics.asStateFlow()
+    private val _reportUpload = MutableStateFlow<ReportUploadStatus?>(null)
+    /**
+     * Where the "Save to Coordinator" report upload stands (`null`: none), from
+     * `ReportUploadChanged` and a `Query.ReportUpload` when the core starts (an upload interrupted by
+     * quitting resumes then). Drives the app-wide upload bar and the upload's foreground service.
+     */
+    val reportUpload: StateFlow<ReportUploadStatus?> = _reportUpload.asStateFlow()
+    /** Bumped by every `ReportUploadChanged`, so a slower startup query never overwrites a newer event. */
+    @Volatile private var reportUploadEvents = 0
     private var roomCollection: Deferred<String?>? = null
     /** The newest finished collection's text, and when it finished. */
     private var lastRoomCollection: Pair<String, Double>? = null
@@ -354,6 +363,25 @@ class CoreClient(
 
     fun dispatch(command: Command) = core.dispatch(command)
 
+    /** Saves a report on the coordinator (`docs/reports.md`); progress arrives on [reportUpload]. */
+    fun startReportUpload(note: String, bundle: String, attachments: List<ReportAttachment>) =
+        dispatch(Command.StartReportUpload(CommandStartReportUploadInner(note, bundle, attachments)))
+
+    /** Tries the failed report upload again, from where it stopped. */
+    fun retryReportUpload() = dispatch(Command.RetryReportUpload)
+
+    /** Forgets the report upload, cancelling it if it is still running. */
+    fun dismissReportUpload() = dispatch(Command.DismissReportUpload)
+
+    /** Asks where the report upload stands (core start, snapshots), unless an event answers first. */
+    private fun refreshReportUpload() {
+        val seen = reportUploadEvents
+        scope.launch {
+            val result = query(Query.ReportUpload) as? QueryResult.ReportUpload ?: return@launch
+            if (reportUploadEvents == seen) _reportUpload.value = result.data
+        }
+    }
+
     /**
      * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
      * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
@@ -437,8 +465,8 @@ class CoreClient(
     fun onEvent(event: Event) {
         when (event) {
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
-            is Event.Started -> applySnapshot(event.data.snapshot)
-            is Event.Snapshot -> applySnapshot(event.data.snapshot)
+            is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload() }
+            is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload() }
             is Event.ServersChanged -> _servers.value = event.data.servers
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
@@ -516,6 +544,7 @@ class CoreClient(
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
             is Event.DiagnosticsRequested -> _diagnosticsRequests.tryEmit(event.data)
             is Event.RoomDiagnosticsChanged -> _roomDiagnostics.value = event.data.status
+            is Event.ReportUploadChanged -> { reportUploadEvents++; _reportUpload.value = event.data.status }
             // Who owns transport after a handoff, and voice search waiting for playback, follow this
             // (not only snapshots). The core sends it on real changes, never on position reports.
             is Event.MediaSession -> _mediaSession.value = event.data.state

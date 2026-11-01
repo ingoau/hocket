@@ -120,6 +120,7 @@ impl Actor {
             }
             keys::CONNECT_COORDINATOR_URL => {
                 let url = self.settings.get_string(key);
+                self.coordinator_url_changed(url.as_deref());
                 self.engine_input(Input::SetCoordinatorUrl(url));
             }
             keys::DEVELOPER_MODE => {

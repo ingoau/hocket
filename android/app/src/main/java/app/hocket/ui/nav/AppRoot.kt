@@ -176,9 +176,13 @@ fun AppRoot(
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
             // the status-bar inset and consumes it, so the screens below do not pad for it again.
+            // The report upload bar (docs/reports.md) sits the same way, under the banner when both show.
+            val upload by client.reportUpload.collectAsStateWithLifecycle()
+            val topBar = fakeBanner || upload != null
             Column(Modifier.fillMaxSize()) {
                 if (fakeBanner) FakeCoreBanner()
-                Box(Modifier.weight(1f).fillMaxWidth().then(if (fakeBanner) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
+                app.hocket.ui.components.ReportUploadBarHost(client, insets = if (fakeBanner) null else BannerInsets)
+                Box(Modifier.weight(1f).fillMaxWidth().then(if (topBar) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
                     when {
                         !started || !ready -> LoadingScreen()
                         !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
