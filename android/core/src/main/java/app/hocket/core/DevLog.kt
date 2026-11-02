@@ -33,8 +33,9 @@ object DevLog {
 
     /**
      * Installs the core's capture (idempotent; [NativeCore.create] calls it too). Started early from
-     * `Application.onCreate` (on a thread of its own: it loads the library and reads back the
-     * previous log), so a crash before the core starts is still captured and kept on disk.
+     * `Application.onCreate` on a thread of its own (it loads the library and reads back the previous
+     * log), so a crash before the core starts is still captured and kept on disk; one in the first
+     * moments, before that thread is done, only reaches the in-memory fallback.
      */
     @Synchronized
     fun install(dataDir: java.io.File, level: String = "info") {

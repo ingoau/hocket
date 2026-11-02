@@ -298,20 +298,25 @@ object CoreHost {
     /**
      * Detaches the running core and flushes it on a worker thread: [NativeCore.close] blocks until
      * the actor has written the session document, position and settings (bounded by its timeout),
-     * which must not happen on the main thread in `Service.onDestroy`.
+     * which must not happen on the main thread in `Service.onDestroy`. A [prewarm]ed core that was
+     * never started goes with it.
      */
     @Synchronized
     fun shutdown() {
         replayJob?.cancel()
         replayJob = null
         pendingLogin = null
-        val core = _handle.value ?: return
+        val cores = listOfNotNull(_handle.value, prewarmed)
         _handle.value = null
+        prewarmed = null
+        if (cores.isEmpty()) return
         pendingShutdown = scope.launch(Dispatchers.IO) {
-            try {
-                core.close()
-            } catch (t: Throwable) {
-                Log.e(TAG, "core shutdown failed", t)
+            cores.forEach { core ->
+                try {
+                    core.close()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "core shutdown failed", t)
+                }
             }
         }
     }

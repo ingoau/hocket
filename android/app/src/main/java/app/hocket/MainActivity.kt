@@ -31,7 +31,11 @@ class MainActivity : ComponentActivity() {
         (application as HocketApp).prewarmCore()
         val splash = installSplashScreen()
         val splashStart = SystemClock.uptimeMillis()
-        splash.setKeepOnScreenCondition { !firstScreenReady && SystemClock.uptimeMillis() - splashStart < SPLASH_MAX_MS }
+        // Only on a fresh start: a recreation has no system splash to hold, and holding the first
+        // draw would leave the window blank instead.
+        if (savedInstanceState == null) {
+            splash.setKeepOnScreenCondition { !firstScreenReady && SystemClock.uptimeMillis() - splashStart < SPLASH_MAX_MS }
+        }
         splash.setOnExitAnimationListener(::exitSplash)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -69,8 +73,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun exitSplash(provider: SplashScreenViewProvider) {
         val view = provider.view
+        // The icon animation's start is wall-clock time (API 31+; no animation below that).
         val remaining = if (provider.iconAnimationDurationMillis > 0) {
-            (provider.iconAnimationStartMillis + provider.iconAnimationDurationMillis - SystemClock.uptimeMillis()).coerceIn(0, SPLASH_MAX_WAIT_FOR_ICON_MS)
+            (provider.iconAnimationStartMillis + provider.iconAnimationDurationMillis - System.currentTimeMillis()).coerceIn(0, SPLASH_MAX_WAIT_FOR_ICON_MS)
         } else 0L
         val icon: View? = runCatching { provider.iconView }.getOrNull()
         val ease = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
