@@ -105,13 +105,21 @@ impl Actor {
     }
 
     /// Continue `album_id` at its saved track and position, or from the start when there is
-    /// nothing to resume. Already being in that album just continues: playback is already
-    /// at the live position, and rebuilding the queue would jump back to the last sample.
+    /// nothing to resume. Already being in that album just continues when some device still
+    /// holds the track: playback is already at the live position, and rebuilding the queue
+    /// would jump back to the last sample. Stop rewinds and gives the track up, so that case
+    /// falls through and loads the saved point instead of the rewound 0.
     pub(crate) fn resume_album(&mut self, album_id: AlbumId) {
-        if self.doc().is_some_and(|d| {
+        let in_album = self.doc().is_some_and(|d| {
             matches!(&d.context, Some(c) if matches!(&c.kind, ContextKind::Album { id } if id == &album_id))
-        }) {
-            if self.owns_transport() {
+        });
+        let held_here = self.owns_transport() && self.playback.loaded;
+        let held_elsewhere = self
+            .engine
+            .as_ref()
+            .is_some_and(|e| e.remote_owner().is_some());
+        if in_album && (held_here || held_elsewhere) {
+            if held_here {
                 self.capture_album_resume(true);
             }
             self.playback.want_playing = true;

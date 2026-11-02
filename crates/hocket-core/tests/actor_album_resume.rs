@@ -192,6 +192,23 @@ async fn stop_keeps_the_position_it_paused_on() {
     assert_eq!(p.track_id, "t1");
     assert_eq!(p.position_ms, 45_000);
     assert_eq!(t.snapshot().await.transport.position.position_ms, 0);
+
+    // Stop released the track, so Resume must load the saved point, not play the rewind.
+    t.run(Command::ResumeAlbum {
+        album_id: "al0".into(),
+    })
+    .await;
+    t.run_for(300.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    let at = t.snapshot().await.transport.position.position_ms;
+    assert!(
+        (40_000..50_000).contains(&at),
+        "resume after stop is near 45s, got {at}"
+    );
+    let p = point(&t, "al0")
+        .await
+        .expect("the point survives the resume");
+    assert_eq!(p.position_ms, 45_000);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
