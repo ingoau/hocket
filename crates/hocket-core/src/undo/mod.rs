@@ -350,16 +350,12 @@ impl UndoableCommand for SnoozeUndo {
             return false;
         }
         for (id, after) in &n.after {
-            let prior = n
-                .before
-                .iter()
-                .find(|(i, _)| i == id)
-                .map(|(_, s)| s.clone());
+            let prior = n.before.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
             match self.after.iter_mut().find(|(i, _)| i == id) {
-                Some(existing) => existing.1 = after.clone(),
+                Some(existing) => existing.1 = *after,
                 None => {
                     self.before.push((id.clone(), prior.unwrap_or(None)));
-                    self.after.push((id.clone(), after.clone()));
+                    self.after.push((id.clone(), *after));
                 }
             }
         }

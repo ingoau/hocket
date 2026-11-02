@@ -150,7 +150,7 @@ pub fn set(
 }
 
 /// Unsnooze `track_id`. Returns whether it was snoozed.
-pub fn clear(entries: &mut Vec<Snooze>, track_id: &str, now: EpochMs) -> bool {
+pub fn clear(entries: &mut [Snooze], track_id: &str, now: EpochMs) -> bool {
     if state_of(entries, track_id, now).is_none() {
         return false;
     }
